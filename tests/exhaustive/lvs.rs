@@ -651,6 +651,32 @@ struct Reduced {
     area: Option<i64>,
     value: Option<f64>,
     params: Vec<(&'static str, f64)>,
+    /// A MOS's [`DIFFUSIONS`] in SI, where stated: drawn, or written.
+    sd: [Option<f64>; 4],
+}
+
+/// A MOS's source and drain diffusion area and perimeter, in the order a
+/// merge or a swapped card trades `as` with `ad` and `ps` with `pd` (F16).
+const DIFFUSIONS: [&str; 4] = ["as", "ad", "ps", "pd"];
+
+/// What the layout measures on a drawn MOS's diffusion [`DIFFUSIONS`]`[i]`,
+/// in SI: [`draw_mos`]'s source and drain, each [`SD`] by `w` nm, of area
+/// `SD · w` and perimeter `2 (SD + w)`. Each device has a column of its own,
+/// so no diffusion is shared.
+#[allow(clippy::cast_precision_loss, reason = "nanometre sizes are small")]
+fn drawn_diffusion(i: usize, w: i64) -> f64 {
+    if i < 2 {
+        (SD * w) as f64 * 1e-18
+    } else {
+        (2 * (SD + w)) as f64 * 1e-9
+    }
+}
+
+/// Whether `b`'s source is on `a`'s drain net, `a`'s nets read through
+/// `map`: `b`'s `as` is then `a`'s `ad`, and so on. A MOS whose source and
+/// drain share a net is never crossed.
+fn crossed(a: &Reduced, b: &Reduced, map: impl Fn(usize) -> usize) -> bool {
+    a.model.is_mos() && a.pins[1] != a.pins[2] && map(a.pins[2]) == b.pins[1]
 }
 
 /// Whether two devices of `model` land on the same nets role for role: a
@@ -735,8 +761,26 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool) -> Reduction {
             let (w, l) = (sized(d.writes.0, "w", d.w), sized(d.writes.1, "l", d.l));
             // A drawn device is one device; only a card counts more.
             let m = if drawn { 1 } else { d.m };
+            let mut sd = [None; 4];
+            let mut params = d.params.clone();
+            if d.model.is_mos() {
+                for (i, name) in DIFFUSIONS.into_iter().enumerate() {
+                    sd[i] = if drawn {
+                        declared.has(d.model, name).then(|| drawn_diffusion(i, d.w))
+                    } else {
+                        params.iter().find(|p| p.0 == name).map(|p| p.1)
+                    };
+                }
+                params.retain(|p| !DIFFUSIONS.contains(&p.0));
+            }
+            // `m` folds into `W` and the diffusions where there is a `W`.
             let (w, mult) = match w {
-                Some(w) => (Some(w * f64::from(m)), 1),
+                Some(w) => {
+                    for v in sd.iter_mut().flatten() {
+                        *v *= f64::from(m);
+                    }
+                    (Some(w * f64::from(m)), 1)
+                }
                 None => (None, m),
             };
             Reduced {
@@ -747,7 +791,8 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool) -> Reduction {
                 mult,
                 area: d.area,
                 value: d.value,
-                params: d.params.clone(),
+                params,
+                sd,
             }
         })
         .collect();
@@ -756,17 +801,34 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool) -> Reduction {
         for i in 0..devs.len() {
             for j in i + 1..devs.len() {
                 let (a, b) = (&devs[i], &devs[j]);
+                // A `W` sums the diffusions end by end, all four or none
+                // stated; without one they must be the same, as any value.
+                let stated = a.sd.iter().flatten().count();
+                let presence = |r: &Reduced| r.sd.map(|v| v.is_some());
+                #[allow(clippy::float_cmp, reason = "equal means drawn or written the same")]
+                let diffusions = match a.w {
+                    Some(_) => presence(a) == presence(b) && (stated == 0 || stated == 4),
+                    None => a.sd == b.sd,
+                };
                 #[allow(clippy::float_cmp, reason = "equal means drawn or written the same")]
                 let params = a.l == b.l
                     && a.w.is_some() == b.w.is_some()
+                    && diffusions
                     && a.area == b.area
                     && a.value == b.value
                     && a.params == b.params;
                 if a.model == b.model && params && same_pins(a.model, &a.pins, &b.pins, |n| n) {
+                    let across = usize::from(crossed(a, b, |n| n));
                     let b = devs.remove(j);
-                    match (&mut devs[i].w, b.w) {
-                        (Some(w), Some(more)) => *w += more,
-                        _ => devs[i].mult += b.mult,
+                    let a = &mut devs[i];
+                    match (&mut a.w, b.w) {
+                        (Some(w), Some(more)) => {
+                            *w += more;
+                            for k in 0..4 {
+                                a.sd[k] = a.sd[k].zip(b.sd[k ^ across]).map(|(x, y)| x + y);
+                            }
+                        }
+                        _ => a.mult += b.mult,
                     }
                     continue 'pass;
                 }
@@ -789,6 +851,8 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool) -> Reduction {
                     && a.pins[3..] == b.pins[3..]
                     && a.l.is_some()
                     && b.l.is_some()
+                    && a.sd == [None; 4]
+                    && b.sd == [None; 4]
                     && a.w == b.w
                     && a.mult == b.mult;
                 if !mergeable {
@@ -873,9 +937,11 @@ fn pairs(a: &Reduced, b: &Reduced, map: &[usize]) -> bool {
         .into_iter()
         .all(|(name, v)| measured(b.model, name).is_some_and(|d| close(d, v)));
     // A size the card writes, against the layout's, which measures it since
-    // the card's model declares it.
+    // the card's model declares it; a diffusion at its channel end.
     let size = |a: Option<f64>, b: Option<f64>| b.is_none_or(|b| a.is_some_and(|a| close(a, b)));
-    area && sized && size(a.w, b.w) && size(a.l, b.l)
+    let across = usize::from(crossed(a, b, |n| map[n]));
+    let diffusions = (0..4).all(|k| size(a.sd[k ^ across], b.sd[k]));
+    area && sized && size(a.w, b.w) && size(a.l, b.l) && diffusions
 }
 
 /// What the layout measures on a drawn passive or bipolar of `model`, in SI,
@@ -883,7 +949,8 @@ fn pairs(a: &Reduced, b: &Reduced, map: &[usize]) -> bool {
 /// [`EXTRA_DECK`]'s coefficients: the marker's `area` and `perim`; a
 /// resistor's body along its pads, `l` 800 nm, across them `w` 400 nm, and
 /// `r` = 100 ohm/sq x 800 / 400 = 200 ohm; a capacitor's `c` = 1 fF/um² x
-/// 0.32 um² + 0.1 fF/um x 2.4 um = 0.56 fF. Nothing else.
+/// 0.32 um² + 0.1 fF/um x 2.4 um = 0.56 fF; a bipolar's emitter, its middle
+/// pad 400 nm square, `ae` 0.16 um² and `pe` 1.6 um. Nothing else.
 fn measured(model: Model, name: &str) -> Option<f64> {
     let (along, across) = match model {
         Model::Q => (1600e-9, 400e-9),
@@ -897,6 +964,9 @@ fn measured(model: Model, name: &str) -> Option<f64> {
         (Model::R, "w") => Some(across),
         (Model::R, "r") => Some(100.0 * along / across),
         (Model::C, "c") => Some(1e-3 * area + 1e-10 * perim),
+        // The emitter, the middle pad, 400 nm square.
+        (Model::Q, "ae") => Some(400e-9 * 400e-9),
+        (Model::Q, "pe") => Some(1600e-9),
         _ => None,
     }
 }
@@ -1785,6 +1855,121 @@ fn curated() -> Vec<Fixture> {
         .expect(Expect::Lvs(true))
         .expect(Expect::clean("lvs.terminal_net")),
     );
+
+    // F16 (fixed in B27): a MOS's diffusions, each drawn 500 by 1000 nm:
+    // `as` = `ad` = 0.5 um² and `ps` = `pd` = 3 um. Two in parallel sum them,
+    // a card's `m` multiplies them, a stack stating them does not merge (the
+    // diffusion between would be lost), and 10 % over is a mismatch. A
+    // bipolar's emitter, its middle pad 400 nm square: `ae` 0.16 um², `pe`
+    // 1.6 um.
+    let diffused = |dev: Dev, area: f64, perim: f64| {
+        dev.param("as", area)
+            .param("ad", area)
+            .param("ps", perim)
+            .param("pd", perim)
+    };
+    let mos = |dev: Dev| Circuit::new(3, vec![dev]);
+    let diffusion_cases = [
+        (
+            "params/mos_diffusion_exact",
+            &one,
+            mos(diffused(Dev::mos(N, 0, 1, 2), 5e-13, 3e-6)),
+        ),
+        (
+            "params/mos_diffusion_10pct_over",
+            &one,
+            mos(diffused(Dev::mos(N, 0, 1, 2), 5.5e-13, 3e-6)),
+        ),
+        (
+            "parallel/mos_two_diffused_vs_wide",
+            &two,
+            mos(diffused(Dev::mos(N, 0, 1, 2).sized(2000, 150), 1e-12, 6e-6)),
+        ),
+        (
+            "multiplier/mos_m2_diffused_vs_two",
+            &two,
+            mos(diffused(Dev::mos(N, 0, 1, 2).times(2), 5e-13, 3e-6)),
+        ),
+        (
+            "series/stack_diffused_vs_long",
+            &inner,
+            mos(diffused(Dev::mos(N, 0, 1, 2).sized(1000, 300), 5e-13, 3e-6)),
+        ),
+    ];
+    for (name, drawn, written) in diffusion_cases {
+        out.push(compared(name, &["LVS-060"], drawn, &written));
+    }
+    let bjt_alone = Circuit::new(3, vec![Dev::pins(Q, &[0, 1, 2])]);
+    for (case, ae) in [("exact", 1.6e-13), ("10pct_over", 1.76e-13)] {
+        let written = Circuit::new(
+            3,
+            vec![Dev::pins(Q, &[0, 1, 2]).param("ae", ae).param("pe", 1.6e-6)],
+        );
+        let name = format!("params/Q_ae_pe_{case}");
+        out.push(compared(&name, &["LVS-064"], &bjt_alone, &written));
+    }
+    // Two fingers sharing their middle diffusion, both gated by n0, the outer
+    // diffusions on n1 and the middle on n2, and an nmos gated by n1 that
+    // tells n1 from n2. Derived by hand: each diffusion is 500 by 1000 nm,
+    // the middle one shared two ways, so merged the fingers have 1 um² and
+    // 6 um on n1 and 0.5 um² and 3 um on n2. A card with those at its source
+    // (n1) and drain (n2) matches; one with them the other way round does
+    // not.
+    let mut shared = Layout::default()
+        .rect("diff", 0, 0, 1800, 1000)
+        .rect("poly", 500, -200, 650, 1500)
+        .rect("poly", 1150, -200, 1300, 1500)
+        .rect("nsdm", -200, -300, 2000, 1200);
+    for (x, net) in [(100, 1), (750, 2), (1400, 1)] {
+        shared = stub(
+            shared.rect("cont", x, 100, x + 300, 400),
+            x,
+            x + 300,
+            100,
+            net,
+        );
+    }
+    for x in [500, 1150] {
+        shared = stub(
+            shared.rect("cont", x, 1250, x + 150, 1400),
+            x,
+            x + 150,
+            1250,
+            0,
+        );
+    }
+    let sensor = Dev::mos(N, 1, 0, 0);
+    shared = draw_mos(shared, column(1), &sensor);
+    for net in 0..3 {
+        let t = track(net);
+        shared = shared.rect("met2", -1000, t, column(2), t + 200).label(
+            "met2_label",
+            -900,
+            t + 100,
+            &format!("n{net}"),
+        );
+    }
+    for (case, ends, matched) in [
+        ("source_and_drain", [1e-12, 5e-13, 6e-6, 3e-6], true),
+        ("the_other_way_round", [5e-13, 1e-12, 3e-6, 6e-6], false),
+    ] {
+        let card = DIFFUSIONS
+            .into_iter()
+            .zip(ends)
+            .fold(Dev::mos(N, 0, 1, 2).sized(2000, 150), |dev, (name, v)| {
+                dev.param(name, v)
+            });
+        let written = Circuit::new(3, vec![card, sensor.clone()]);
+        out.push(
+            with_text(
+                &format!("parallel/shared_diffusion_{case}"),
+                &["LVS-060", "LVS-040"],
+                shared.clone(),
+                spice(&written),
+            )
+            .expect(Expect::Lvs(matched)),
+        );
+    }
 
     let nf = edited(&spice(&one), "l=150n", "l=150n nf=1");
     out.push(

@@ -536,13 +536,21 @@ fn an_unsized_stack_stays_two_and_does_not_match_one_unsized_card() {
     );
 }
 
-/// The names the sized tests merge by; `nf` and `m` are two spare ids.
+/// The names the sized tests merge by; `nf`, `m` and the diffusions are
+/// spare ids.
 const NAMES: gpurify_check::lvs::ParamNames = gpurify_check::lvs::ParamNames {
     width: Some(WIDTH),
     length: Some(LENGTH),
     fingers: Some(StrId(90)),
     multiplier: Some(StrId(91)),
+    diffusion: [Some(AS), Some(AD), Some(PS), Some(PD)],
 };
+
+/// [`NAMES`]'s `as`, `ad`, `ps` and `pd`.
+const AS: StrId = StrId(93);
+const AD: StrId = StrId(94);
+const PS: StrId = StrId(95);
+const PD: StrId = StrId(96);
 
 /// Two sized fingers across one pair of nets, the upper with source and drain
 /// swapped (which end is which is bias, not structure).
@@ -884,4 +892,107 @@ fn parallel_transistors_with_source_and_drain_shorted_merge() {
     };
     let verdict = compare(&shorted(&[1e-6, 1e-6]), &shorted(&[2e-6]), options);
     assert_eq!(verdict, Verdict::Match, "{verdict:?}");
+}
+
+/// Oracle: construct-from-answer, testing-plan F16. A diffusion belongs to
+/// its channel end. Two 1 µm fingers between nets 1 and 2, the upper with
+/// source and drain swapped: the lower's source is net 1 (`as` 1, `ps` 10)
+/// and drain net 2 (`ad` 2, `pd` 20); the upper's source is net 2 (`as`
+/// 30, `ps` 300) and drain net 1 (`ad` 4, `pd` 40). Merged with the lower's
+/// terminals, net 1 holds 1 + 4 = 5 and 10 + 40 = 50, net 2 holds 2 + 30 =
+/// 32 and 20 + 300 = 320; summing name by name would say 31 and 6. A card's
+/// `m = 2` multiplies its diffusions as it does its `W`, and a stack stating
+/// diffusions does not merge in series, the shared one having no law.
+#[test]
+fn diffusions_are_summed_at_their_channel_end_and_stop_a_series_merge() {
+    use gpurify_check::lvs::reduce::reduce_with;
+    let finger = |builder: &mut GraphBuilder, (source, drain): (u32, u32), sd: [f64; 4]| {
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, source), (Drain, drain), (Bulk, 3)],
+            &[
+                (WIDTH, 1e-6),
+                (AS, sd[0]),
+                (AD, sd[1]),
+                (PS, sd[2]),
+                (PD, sd[3]),
+            ],
+        );
+    };
+    let mut pair = GraphBuilder::new(4);
+    finger(&mut pair, (1, 2), [1.0, 2.0, 10.0, 20.0]);
+    finger(&mut pair, (2, 1), [30.0, 4.0, 300.0, 40.0]);
+    let (out, merges) = reduce_with(&pair.finish(), NAMES);
+    assert_eq!(merges.len(), 1);
+    assert_eq!(
+        sorted_params(&out, 0),
+        [
+            (WIDTH, 2e-6),
+            (AS, 5.0),
+            (AD, 32.0),
+            (PS, 50.0),
+            (PD, 320.0)
+        ]
+    );
+
+    let mut card = GraphBuilder::new(4);
+    card.device_with_params(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+        &[(WIDTH, 1e-6), (AS, 1.0), (PD, 20.0), (M, 2.0)],
+    );
+    let out = reduce_with(&card.finish(), NAMES).0;
+    assert_eq!(
+        sorted_params(&out, 0),
+        [(WIDTH, 2e-6), (AS, 2.0), (PD, 40.0)]
+    );
+
+    let mut stack = GraphBuilder::new(5);
+    for (source, drain) in [(1, 2), (2, 3)] {
+        stack.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, source), (Drain, drain), (Bulk, 4)],
+            &[(LENGTH, 1.5e-7), (AS, 1.0), (AD, 1.0), (PS, 1.0), (PD, 1.0)],
+        );
+    }
+    let stack = stack.finish();
+    assert_eq!(reduce_with(&stack, NAMES).0, stack);
+}
+
+/// Oracle: construct-from-answer, testing-plan F16. A transistor gated by
+/// net 0, its source on net 1 and drain on net 2, with 1 of diffusion on net
+/// 1 and 2 on net 2; a resistor from net 1 to net 0 tells net 1 from net 2.
+/// A card that writes it drain first, `as` 2 on its source (net 2) and `ad`
+/// 1, is the same transistor; one with `as` 1 on net 2 is not. Compared
+/// name by name, the first used to mismatch and the second to match.
+#[test]
+fn a_diffusion_is_compared_at_its_channel_end() {
+    let options = CompareOptions {
+        params: NAMES,
+        ..CompareOptions::default()
+    };
+    let circuit = |source: u32, drain: u32, sd: [f64; 2]| {
+        let mut builder = GraphBuilder::new(4);
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, source), (Drain, drain), (Bulk, 3)],
+            &[(AS, sd[0]), (AD, sd[1])],
+        );
+        builder.device(DeviceKind::Resistor, RES, &[(Pin(0), 1), (Pin(0), 0)]);
+        builder.finish()
+    };
+    let layout = circuit(1, 2, [1e-12, 2e-12]);
+    assert_eq!(
+        compare(&layout, &circuit(2, 1, [2e-12, 1e-12]), options),
+        Verdict::Match
+    );
+    assert_ne!(
+        compare(&layout, &circuit(2, 1, [1e-12, 2e-12]), options),
+        Verdict::Match,
+        "the diffusions were read at the wrong ends"
+    );
 }

@@ -316,7 +316,9 @@ fn assert_the_base_run_can_fail_a_law(
 /// second — `(1, 1)` for an isometry, whose extents (and channel axis, which
 /// moves with the source/drain geometry) are preserved. Every marker here is
 /// a `W` by `L` rectangle, so its `Perimeter` is `2 (W + L)` of the scaled
-/// extents.
+/// extents; every source and drain a rectangle 110 along the channel and 100
+/// across it, so its area scales as the marker's and its perimeter is
+/// `2 (110 L-factor + 100 W-factor)`, shared as before.
 ///
 /// Column by column rather than through a derived `PartialEq`, because
 /// `DeviceTable` has none and adding one would be a signature change.
@@ -362,6 +364,13 @@ fn assert_device_columns_agree(
                 (DeviceParam::Perimeter, DeviceMeasure::Length(_)) => {
                     DeviceMeasure::Length(Dbu::new_unchecked(2 * (extents.0 + extents.1)))
                 }
+                (_, DeviceMeasure::AreaShare(a, ways)) => {
+                    DeviceMeasure::AreaShare(DbuArea::new(a.raw() * area_scale), ways)
+                }
+                (_, DeviceMeasure::LengthShare(_, ways)) => DeviceMeasure::LengthShare(
+                    Dbu::new_unchecked(2 * (110 * wl_scale.1 + 100 * wl_scale.0)),
+                    ways,
+                ),
                 (_, unchanged) => unchanged,
             };
             (param, scaled)

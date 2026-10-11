@@ -5,7 +5,7 @@
 //! discrepancy order is user-visible: class imbalances, then per-pair joins in
 //! layout order, then unpaired layout nodes, then unpaired reference nodes.
 
-use crate::lvs::graph::{drop_unextracted_bulk, keep_declared_params, narrow, Graph};
+use crate::lvs::graph::{channel_ends, drop_unextracted_bulk, keep_declared_params, narrow, Graph};
 use crate::lvs::reduce::{reduce_with, Merge, ParamNames};
 use crate::lvs::refine::{refine_into, role_code, Partition};
 use crate::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
@@ -16,7 +16,8 @@ use std::cmp::Ordering;
 /// How to run a comparison.
 ///
 /// The default is 1000 rounds, a 2% tolerance and no parameter names. The
-/// `gpurify` binary keeps the first two and names `w`, `l`, `nf` and `m`.
+/// `gpurify` binary keeps the first two and names `w`, `l`, `nf`, `m`, `as`,
+/// `ad`, `ps` and `pd`.
 #[derive(Debug, Clone, Copy)]
 pub struct CompareOptions {
     /// The most refinement passes in a row that may split a class without the
@@ -35,9 +36,9 @@ pub struct CompareOptions {
     /// the larger, so its `2 tol / (2 - tol)` is this `tol` exactly; the Netgen
     /// differential (testing-plan F3) sets it so.
     pub param_tolerance: f64,
-    /// Which parameters are `W`, `L`, `nf` and `m`, so sized devices can be
-    /// merged in parallel and series. Default: none, and sized devices never
-    /// merge.
+    /// Which parameters are `W`, `L`, `nf`, `m` and the diffusions, so
+    /// devices can be merged in parallel and series, and a diffusion read at
+    /// its channel end. Default: none, and nothing merges.
     pub params: ParamNames,
 }
 
@@ -139,11 +140,16 @@ pub fn compare_logged(
         .collect();
     let mut partition = Partition::default();
     let budget = (options.max_rounds, options.param_tolerance);
-    if !refine_into(&layout, &reference, budget, &mut partition) {
+    if !refine_into(
+        (&layout, &reference),
+        budget,
+        options.params,
+        &mut partition,
+    ) {
         return (Verdict::Inconclusive(Inconclusive::RoundLimit), merges);
     }
     (
-        interpret(&layout, &reference, &partition, options.param_tolerance),
+        interpret((&layout, &reference), &partition, options),
         merges,
     )
 }
@@ -173,7 +179,11 @@ fn state_count(graph: &mut Graph, multiplier: StrId) {
 /// A node no class paired with anything.
 const UNPAIRED: u32 = u32::MAX;
 
-fn interpret(layout: &Graph, reference: &Graph, partition: &Partition, tolerance: f64) -> Verdict {
+fn interpret(
+    (layout, reference): (&Graph, &Graph),
+    partition: &Partition,
+    options: CompareOptions,
+) -> Verdict {
     let layout_devices = narrow(layout.device_count());
     let ref_devices = narrow(reference.device_count());
     let mut found: Vec<Discrepancy> = Vec::new();
@@ -220,11 +230,16 @@ fn interpret(layout: &Graph, reference: &Graph, partition: &Partition, tolerance
             &mut scratch,
             &mut found,
         );
-        compare_params(
-            layout,
-            reference,
+        let crossed = crossed(
+            (layout, reference),
             (layout_node, ref_node),
-            tolerance,
+            (layout_devices, ref_devices),
+            &layout_mate,
+        );
+        compare_params(
+            (layout, reference),
+            (layout_node, ref_node),
+            (options, crossed),
             &mut scratch,
             &mut found,
         );
@@ -350,22 +365,58 @@ fn compare_terminals(
     }
 }
 
+/// Whether a paired MOS's layout source is on its reference drain's net:
+/// then the layout's `as` is the card's `ad`, and so on. A device whose
+/// source and drain share a net, or that is no MOS, is never crossed.
+fn crossed(
+    (layout, reference): (&Graph, &Graph),
+    pair: (u32, u32),
+    (layout_devices, ref_devices): (u32, u32),
+    layout_mate: &[u32],
+) -> bool {
+    let ((Some(source), Some(drain)), (_, Some(ref_drain))) = (
+        channel_ends(layout, pair.0),
+        channel_ends(reference, pair.1),
+    ) else {
+        return false;
+    };
+    let mate = |net: u32| {
+        layout_devices
+            .checked_add(net)
+            .and_then(|node| layout_mate.get(node as usize).copied())
+    };
+    source != drain && mate(source) == ref_devices.checked_add(ref_drain)
+}
+
 /// The parameters the reference card states, each joined by name to the
-/// layout's within relative tolerance (`NaN` fails). One the layout does not
-/// measure is [`Discrepancy::UndeclaredParam`], never a pass. One only the
+/// layout's within relative tolerance (`NaN` fails), the layout's diffusions
+/// read the other way round when the pair is `crossed`. One the layout does
+/// not measure is [`Discrepancy::UndeclaredParam`], never a pass. One only the
 /// layout measures is not compared: presence is per device, and a card that
 /// omits a parameter states nothing about it (testing-plan F68).
 fn compare_params(
-    layout: &Graph,
-    reference: &Graph,
+    (layout, reference): (&Graph, &Graph),
     pair: (u32, u32),
-    tolerance: f64,
+    (options, crossed): (CompareOptions, bool),
     scratch: &mut JoinScratch,
     found: &mut Vec<Discrepancy>,
 ) {
+    let tolerance = options.param_tolerance;
     let (mine, theirs) = (&mut scratch.layout_params, &mut scratch.ref_params);
     mine.clear();
-    mine.extend_from_slice(layout.params_of(pair.0));
+    mine.extend(
+        layout
+            .params_of(pair.0)
+            .iter()
+            .filter_map(|&(name, value)| {
+                let name = if crossed {
+                    options.params.across(name)?
+                } else {
+                    name
+                };
+                Some((name, value))
+            }),
+    );
     theirs.clear();
     theirs.extend_from_slice(reference.params_of(pair.1));
 

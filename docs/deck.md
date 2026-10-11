@@ -393,13 +393,20 @@ compares each value a schematic card states under the card's name for it:
 | `w`, `l` | `mos`, `resistor` | The marker's extent across and along the current, which runs toward the first source or drain (a resistor's first end). Exact for a straight rectangle; a bent resistor body reads its bounding box. |
 | `nf` | `mos` | 1: a marker is one channel, and fingers in parallel add up. |
 | `area`, `perim` | every kind | The marker's area, less any hole in it, and its perimeter, a hole's edge included. A hole is part of its marker, never a device of its own. A resistor, capacitor or diode card may also write them `A` and `P` (KLayout), or the perimeter `pj` (ngspice). |
+| `as`, `ad`, `ps`, `pd` | `mos` | The area and perimeter of the source's and the drain's polygon on its terminal layer, the edge along the channel included. A diffusion between fingers is shared evenly by the transistors it serves, as KLayout shares it, so fingers in parallel add up to it. |
+| `ae`, `pe` | `bjt` | The area and perimeter of the emitter's polygon, the second terminal layer's. |
 | `r` | `resistor` with `sheet` | `sheet × l / w`. |
 | `c` | `capacitor` with `area_cap` or `fringe_cap` | `area_cap × area + fringe_cap × perim`, of the terms given. |
 
+A source, drain or emitter is measured only where it is one polygon that no
+other polygon of its layer touches; drawn in pieces, it is not measured.
+The terminal layers are the deck's own: list the source and drain diffusion
+(for example `diff not poly`) as a `mos`'s second and third terminal, and
+the emitter region as a `bjt`'s second, and these are their measures.
+
 A value the deck does not give is not computed, never taken as zero, so a
 schematic that states it is reported (`lvs.undeclared_param`). Nothing
-measures a bipolar's emitter area, a capacitor's `w` and `l`, or a
-transistor's `as`, `ad`, `ps` and `pd`.
+measures a capacitor's `w` and `l`.
 
 ## Parasitic stack
 

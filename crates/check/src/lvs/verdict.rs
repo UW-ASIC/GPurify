@@ -157,9 +157,9 @@ pub enum Discrepancy {
     /// does not measure. A value stated on one side is never taken as
     /// agreement with silence on the other.
     ///
-    /// Every reference parameter the layout does not measure (`as`, `ad`,
-    /// `ps`, `pd`, a bipolar's emitter area, a resistor's `r` or a
-    /// capacitor's `c` the deck gives no coefficients for) lands here
+    /// Every reference parameter the layout does not measure (a capacitor's
+    /// `w` and `l`, a diffusion or emitter drawn in pieces, a resistor's `r`
+    /// or a capacitor's `c` the deck gives no coefficients for) lands here
     /// (testing-plan F16). Presence is per
     /// device: a layout measure the partner's card omits is not compared,
     /// even when another card of the same model states it (testing-plan

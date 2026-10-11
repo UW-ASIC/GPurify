@@ -950,13 +950,20 @@ impl<'a> Builder<'a> {
                 device.nodes.push(node);
             }
             for &(param, measure) in table.params_of(id) {
-                // A MOS's area and perimeter are its diffusions', measured below.
-                if device.kind == DeviceKind::Mos
-                    && matches!(param, DeviceParam::Area | DeviceParam::Perimeter)
-                {
-                    continue;
-                }
+                // A MOS's area and perimeter are its diffusions', measured below
+                // with this circuit's own rectangles; a bipolar's emitter
+                // measures are no ngspice instance parameter.
                 let key = match (device.kind, param) {
+                    (DeviceKind::Mos, DeviceParam::Area | DeviceParam::Perimeter)
+                    | (
+                        _,
+                        DeviceParam::SourceArea
+                        | DeviceParam::DrainArea
+                        | DeviceParam::SourcePerimeter
+                        | DeviceParam::DrainPerimeter
+                        | DeviceParam::EmitterArea
+                        | DeviceParam::EmitterPerimeter,
+                    ) => continue,
                     (_, DeviceParam::Width) => "w",
                     (_, DeviceParam::Length) => "l",
                     (_, DeviceParam::Fingers) => "nf",
@@ -964,11 +971,17 @@ impl<'a> Builder<'a> {
                     (_, DeviceParam::Perimeter) => "perim",
                     (_, DeviceParam::Area) => "area",
                 };
+                #[expect(clippy::cast_precision_loss, reason = "a device area below 2^80")]
                 let value = match measure {
                     DeviceMeasure::Length(v) => Param::Length(as_f64(v.raw()) * self.um),
-                    #[expect(clippy::cast_precision_loss, reason = "a device area below 2^80")]
                     DeviceMeasure::Area(v) => Param::Area(v.raw() as f64 * self.um * self.um),
                     DeviceMeasure::Count(n) => Param::Count(n),
+                    DeviceMeasure::LengthShare(v, ways) => {
+                        Param::Length(as_f64(v.raw()) * self.um / f64::from(ways))
+                    }
+                    DeviceMeasure::AreaShare(v, ways) => {
+                        Param::Area(v.raw() as f64 * self.um * self.um / f64::from(ways))
+                    }
                 };
                 device.params.push((key, value));
             }

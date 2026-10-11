@@ -212,14 +212,27 @@ pub fn write_spice(
                 DeviceParam::Area => "area",
                 DeviceParam::Perimeter => "perim",
                 DeviceParam::Fingers => "nf",
+                DeviceParam::SourceArea => "as",
+                DeviceParam::DrainArea => "ad",
+                DeviceParam::SourcePerimeter => "ps",
+                DeviceParam::DrainPerimeter => "pd",
+                DeviceParam::EmitterArea => "ae",
+                DeviceParam::EmitterPerimeter => "pe",
             };
             // Integers, exactly as measured: these are `Dbu` and `DbuArea`, and
             // `format_f64` would round a coordinate into a physical quantity it
-            // has no `Grid` to become.
-            let _ = match measure {
-                DeviceMeasure::Length(value) => write!(out, " {key}={}", value.raw()),
-                DeviceMeasure::Area(value) => write!(out, " {key}={}", value.raw()),
-                DeviceMeasure::Count(value) => write!(out, " {key}={value}"),
+            // has no `Grid` to become. A share is the exact quotient, quoted.
+            let (raw, ways) = match measure {
+                DeviceMeasure::Length(value) => (i128::from(value.raw()), 1),
+                DeviceMeasure::Area(value) => (value.raw(), 1),
+                DeviceMeasure::Count(value) => (i128::from(value), 1),
+                DeviceMeasure::LengthShare(value, ways) => (i128::from(value.raw()), ways),
+                DeviceMeasure::AreaShare(value, ways) => (value.raw(), ways),
+            };
+            let _ = if ways == 1 {
+                write!(out, " {key}={raw}")
+            } else {
+                write!(out, " {key}='{raw}/{ways}'")
             };
         }
         out.push('\n');

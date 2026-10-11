@@ -8,7 +8,7 @@ use crate::drc::rules::{owners_of, LayerRects};
 use crate::topology::csr_run;
 use crate::topology::net::{polys_intersect, retain_intersecting_into, Holes, NetId, NetTable};
 use gpurify_geom::boolean::{intersection_into, BooleanError};
-use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
+use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{area2, isqrt};
 use gpurify_geom::view::validate_layer_into;
 use gpurify_geom::{Dbu, DbuArea};
@@ -86,7 +86,9 @@ pub struct DeviceTable {
     /// `(parameter, measure)` per measured parameter. A MOS gets `Width` and
     /// `Length` when a source or drain polygon fixes its channel direction,
     /// and a resistor when one of its ends does; a MOS gets `Fingers`, 1;
-    /// every device gets `Area` and `Perimeter`.
+    /// every device gets `Area` and `Perimeter`; a MOS its source's and
+    /// drain's, and a bipolar its emitter's, where that terminal is one
+    /// polygon.
     pub param: Vec<(DeviceParam, DeviceMeasure)>,
     /// The coefficients each device's recogniser states (`sheet`,
     /// `area_cap`, `fringe_cap`), from which LVS computes a resistor's `r`
@@ -105,12 +107,14 @@ pub struct DeviceTable {
 }
 
 /// A measured device parameter, and the SPICE name LVS compares it under:
-/// Netgen's, as the sky130 setup compares them (`w`, `l`, `nf`, `area`,
-/// `perim`). LVS also computes a resistor's `r` and a capacitor's `c` from
-/// these and the deck's [`DeviceValue`].
+/// Netgen's and ngspice's (`w`, `l`, `nf`, `area`, `perim`, `as`, `ad`,
+/// `ps`, `pd`), and `KLayout`'s for a bipolar's emitter (`ae`, `pe`). LVS
+/// also computes a resistor's `r` and a capacitor's `c` from these and the
+/// deck's [`DeviceValue`].
 ///
-/// A BJT's emitter area and a MOS's `as`, `ad`, `ps`, `pd` are not measured
-/// (testing-plan F16).
+/// A terminal's area and perimeter are its polygon's, holes taken out of the
+/// area and added to the perimeter, and are measured only where the terminal
+/// is one polygon under the marker, never where it is drawn in pieces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceParam {
     /// `w`: a MOS or resistor marker's bounding-box extent across the
@@ -128,6 +132,21 @@ pub enum DeviceParam {
     /// `nf`: 1 per MOS, since one marker polygon is one channel. A parallel
     /// merge sums it, so fingers drawn apart match a card's `nf`.
     Fingers,
+    /// `as`: a MOS source's diffusion area, the source polygon's area shared
+    /// evenly by every MOS whose source or drain it is, as `KLayout`
+    /// distributes it, so fingers sharing a diffusion sum to it.
+    SourceArea,
+    /// `ad`: the drain's, as `as` is the source's.
+    DrainArea,
+    /// `ps`: the source polygon's perimeter, its edge along the channel
+    /// included, shared as `as` is.
+    SourcePerimeter,
+    /// `pd`: the drain's, as `ps` is the source's.
+    DrainPerimeter,
+    /// `ae`: a bipolar's emitter area, the emitter terminal's polygon's.
+    EmitterArea,
+    /// `pe`: the emitter polygon's perimeter.
+    EmitterPerimeter,
 }
 
 /// A measurement, exact and in layout units; tolerance is the comparator's job.
@@ -139,6 +158,11 @@ pub enum DeviceMeasure {
     Area(DbuArea),
     /// A plain count.
     Count(u32),
+    /// An area in square database units shared evenly by this many devices:
+    /// each has that fraction of it.
+    AreaShare(DbuArea, u32),
+    /// A length in database units shared evenly by this many devices.
+    LengthShare(Dbu, u32),
 }
 
 impl DeviceTable {
@@ -191,6 +215,9 @@ impl DeviceTable {
 
 /// `(marker polygon, recogniser row, offset into `bound`, channel axis)`.
 type Match = (PolyId, u32, u32, Axis);
+
+/// No polygon: a terminal drawn in pieces, or not measured.
+const NO_POLY: PolyId = PolyId(u32::MAX);
 
 /// Which axis a MOS channel's or a resistor body's current flows along.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,8 +272,9 @@ fn channel_axis(store: &GeometryStore, marker: PolyId, terminal: PolyId) -> Axis
 /// # Limits
 ///
 /// - `W` and `L` are the marker's bounding box, exact for a straight
-///   rectangle; a bent resistor body reads its box. A BJT's emitter area is
-///   not measured (testing-plan F16).
+///   rectangle; a bent resistor body reads its box.
+/// - A source, drain or emitter is measured only where it is one polygon no
+///   other polygon of its layer touches (testing-plan F16).
 /// - With three or more positions on one layer, a surplus of shapes on fewer
 ///   nets than positions refuses the marker, even when each position could
 ///   have had a shape of its own.
@@ -273,11 +301,17 @@ pub fn recognise_into(
     }
 
     let mut marker_index = SpatialIndex::default();
-    // One index per terminal layer, shared by every recogniser naming it.
-    let mut terminal_index: Vec<(LayerId, SpatialIndex)> = Vec::new();
+    // One index per terminal layer, shared by every recogniser naming it, and
+    // that layer's polygons touching another of it, once a recogniser
+    // measures a terminal there.
+    let mut terminal_index: Vec<(LayerId, SpatialIndex, Option<Vec<PolyId>>)> = Vec::new();
     let mut pairs: Vec<(PolyId, PolyId)> = Vec::new();
     let mut exact: Vec<(PolyId, PolyId)> = Vec::new();
     let mut bind: Vec<NetId> = Vec::new();
+    // `bind`'s polygon: a terminal's one polygon, or `NO_POLY`.
+    let mut bind_poly: Vec<PolyId> = Vec::new();
+    let mut alone: Vec<bool> = Vec::new();
+    let mut bound_poly: Vec<PolyId> = Vec::new();
     let mut positions: Vec<usize> = Vec::new();
     let mut distinct: Vec<NetId> = Vec::new();
     let mut group: Vec<usize> = Vec::new();
@@ -303,6 +337,8 @@ pub fn recognise_into(
         // `NONE` when unfilled or poisoned.
         bind.clear();
         bind.resize(marker_count * width, NetId::NONE);
+        bind_poly.clear();
+        bind_poly.resize(marker_count * width, NO_POLY);
         sd_axis.clear();
         sd_axis.resize(marker_count, Axis::Unknown);
 
@@ -337,14 +373,38 @@ pub fn recognise_into(
 
             let at = terminal_index
                 .iter()
-                .position(|(built, _)| *built == layer)
+                .position(|(built, ..)| *built == layer)
                 .unwrap_or_else(|| {
                     let mut index = SpatialIndex::default();
                     SpatialIndex::build_into(store, layer, &mut index);
-                    terminal_index.push((layer, index));
+                    terminal_index.push((layer, index, None));
                     terminal_index.len() - 1
                 });
-            let index = &terminal_index[at].1;
+            // A source, drain or emitter is measured where it is one polygon,
+            // which no other polygon of its layer touches: a piece is not the
+            // terminal (testing-plan F16).
+            let measured = positions.iter().any(|&position| {
+                let position =
+                    u8::try_from(position).expect("a device family has fewer than 256 terminals");
+                matches!(
+                    (
+                        recognition.kind[row],
+                        role_at(recognition.kind[row], position)
+                    ),
+                    (DeviceKind::Mos, TerminalRole::Source | TerminalRole::Drain)
+                        | (DeviceKind::Bjt, TerminalRole::Emitter)
+                )
+            });
+            let (_, index, pieced) = &mut terminal_index[at];
+            if measured && pieced.is_none() {
+                candidate_pairs_into(store, index, touching, &mut pairs);
+                retain_intersecting_into(store, &nets.holes, &pairs, &mut exact);
+                let mut touched: Vec<PolyId> = exact.iter().flat_map(|&(a, b)| [a, b]).collect();
+                touched.sort_unstable();
+                touched.dedup();
+                *pieced = Some(touched);
+            }
+            let (index, pieced) = (&*index, pieced.as_deref().unwrap_or_default());
             cross_layer_pairs_into(store, &marker_index, index, touching, &mut pairs);
             // Box-only hits must not bind: a spurious low-id pair would win.
             retain_intersecting_into(store, &nets.holes, &pairs, &mut exact);
@@ -359,6 +419,7 @@ pub fn recognise_into(
                 from = to;
                 let offset = (marker.0 - markers.start) as usize;
                 let slots = &mut bind[offset * width..(offset + 1) * width];
+                let polys = &mut bind_poly[offset * width..(offset + 1) * width];
                 // The first source/drain polygon under a marker decides the axis.
                 if votes_axis && sd_axis[offset] == Axis::Unknown {
                     sd_axis[offset] = channel_axis(store, marker, run[0].1);
@@ -379,16 +440,18 @@ pub fn recognise_into(
                     }
                 }
                 shapes.clear();
-                shapes.extend(
-                    (0..run.len())
-                        .filter(|&i| root(&group, i) == i)
-                        .map(|i| run[i].1),
-                );
+                alone.clear();
+                for i in (0..run.len()).filter(|&i| root(&group, i) == i) {
+                    shapes.push(run[i].1);
+                    alone.push((0..run.len()).all(|j| j == i || root(&group, j) != i));
+                }
                 if shapes.len() <= positions.len() {
                     // The r-th shape fills the r-th position; too few leave
                     // one with no shape of its own, which refuses the marker.
-                    for (&position, &terminal) in positions.iter().zip(&shapes) {
+                    for (r, (&position, &terminal)) in positions.iter().zip(&shapes).enumerate() {
                         slots[position] = nets.net_of(terminal);
+                        let whole = alone[r] && pieced.binary_search(&terminal).is_err();
+                        polys[position] = if whole { terminal } else { NO_POLY };
                     }
                     continue;
                 }
@@ -441,6 +504,7 @@ pub fn recognise_into(
                 sd_axis[offset],
             ));
             bound.extend_from_slice(slots);
+            bound_poly.extend_from_slice(&bind_poly[offset * width..offset * width + width]);
         }
     }
 
@@ -457,6 +521,25 @@ pub fn recognise_into(
             .is_err()
     });
 
+    // Every source or drain polygon once per MOS it serves, sorted, so a
+    // shared diffusion's count is the length of its run.
+    let mut served: Vec<PolyId> = Vec::new();
+    for &(_, row, at, _) in &matched {
+        let row = row as usize;
+        if recognition.kind[row] == DeviceKind::Mos {
+            let (from, to) = csr_run(&recognition.terminal_start, row);
+            served.extend(
+                (from..to)
+                    .filter(|&slot| {
+                        matches!(role[slot], TerminalRole::Source | TerminalRole::Drain)
+                    })
+                    .map(|slot| bound_poly[at as usize + slot - from])
+                    .filter(|&poly| poly != NO_POLY),
+            );
+        }
+    }
+    served.sort_unstable();
+
     // Deduplicated: a device with two terminals on one net attaches once.
     let mut attach: Vec<(NetId, DeviceId)> = Vec::with_capacity(bound.len());
 
@@ -470,7 +553,7 @@ pub fn recognise_into(
         out.marker.push(marker);
         out.model.push(recognition.model[row]);
         out.terminal_net.extend_from_slice(nets_of_device);
-        out.terminal_role.extend_from_slice(&role[span]);
+        out.terminal_role.extend_from_slice(&role[span.clone()]);
         out.terminal_start.push(narrow(out.terminal_net.len()));
 
         // W/L from the marker's bbox extents: L runs along the channel or
@@ -509,6 +592,41 @@ pub fn recognise_into(
             .push((DeviceParam::Area, DeviceMeasure::Area(area)));
         out.param
             .push((DeviceParam::Perimeter, DeviceMeasure::Length(perimeter)));
+
+        // A terminal's own area and perimeter: a MOS's source and drain, a
+        // bipolar's emitter, each where it is one polygon (testing-plan F16).
+        for (slot, &terminal_role) in role[span.clone()].iter().enumerate() {
+            let poly = bound_poly[at as usize + slot];
+            let names = match (kind, terminal_role) {
+                (DeviceKind::Mos, TerminalRole::Source) => {
+                    (DeviceParam::SourceArea, DeviceParam::SourcePerimeter)
+                }
+                (DeviceKind::Mos, TerminalRole::Drain) => {
+                    (DeviceParam::DrainArea, DeviceParam::DrainPerimeter)
+                }
+                (DeviceKind::Bjt, TerminalRole::Emitter) => {
+                    (DeviceParam::EmitterArea, DeviceParam::EmitterPerimeter)
+                }
+                _ => continue,
+            };
+            if poly == NO_POLY {
+                continue;
+            }
+            let (area, perimeter) = area_and_perimeter(store, &nets.holes, poly);
+            let measures = if kind == DeviceKind::Mos {
+                let ways =
+                    served.partition_point(|&p| p <= poly) - served.partition_point(|&p| p < poly);
+                let ways = narrow(ways);
+                (
+                    DeviceMeasure::AreaShare(area, ways),
+                    DeviceMeasure::LengthShare(perimeter, ways),
+                )
+            } else {
+                (DeviceMeasure::Area(area), DeviceMeasure::Length(perimeter))
+            };
+            out.param.push((names.0, measures.0));
+            out.param.push((names.1, measures.1));
+        }
         out.param_start.push(narrow(out.param.len()));
         out.value
             .push(recognition.value.get(row).copied().unwrap_or_default());

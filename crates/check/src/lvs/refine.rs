@@ -19,8 +19,10 @@
 //! and no later stall tries again, since a match is then out of reach.
 
 use crate::lvs::graph::{narrow, Graph};
+use crate::lvs::reduce::ParamNames;
 use crate::topology::TerminalRole;
 use gpurify_ingest::deck::DeviceKind;
+use gpurify_ingest::StrId;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ClassId(pub(crate) u32);
@@ -135,6 +137,8 @@ struct Sides<'a> {
     layout: &'a Graph,
     reference: &'a Graph,
     split: u32,
+    /// Which names trade places with source and drain.
+    names: ParamNames,
 }
 
 impl Sides<'_> {
@@ -167,7 +171,8 @@ impl Sides<'_> {
     /// `reference` are: per name the reference states, the relative difference
     /// when the layout states it too and one when it does not, summed. A name
     /// only the layout states is not compared (testing-plan F68). Zero for
-    /// nets.
+    /// nets. Which channel end is which is not known yet, so diffusions are
+    /// read both ways round and the closer taken.
     fn distance(self, layout: u32, reference: u32) -> f64 {
         let reference = reference - self.split;
         let (layout_devices, ref_devices) = (
@@ -189,20 +194,35 @@ impl Sides<'_> {
                 (a - b).abs() / scale
             }
         };
-        theirs
-            .iter()
-            .map(|&(name, b)| {
-                mine.iter()
-                    .find(|&&(n, _)| n == name)
-                    .map_or(1.0, |&(_, a)| relative(a, b))
-            })
-            .sum()
+        let apart = |crossed: bool| -> f64 {
+            theirs
+                .iter()
+                .map(|&(name, b)| {
+                    let read = self.read(name, crossed);
+                    mine.iter()
+                        .find(|&&(n, _)| Some(n) == read)
+                        .map_or(1.0, |&(_, a)| relative(a, b))
+                })
+                .sum()
+        };
+        apart(false).min(apart(true))
+    }
+
+    /// The layout name a reference parameter `name` is read under: itself,
+    /// or, `crossed`, its other channel end's.
+    fn read(self, name: StrId, crossed: bool) -> Option<StrId> {
+        if crossed {
+            self.names.across(name)
+        } else {
+            Some(name)
+        }
     }
 
     /// Whether layout node `layout` and reference node `reference` would pass
     /// the verdict's parameter comparison: every name the reference states
     /// stated by the layout too, each value within `tolerance` of the other
-    /// relatively (`NaN` never is). Nets always do.
+    /// relatively (`NaN` never is), diffusions either way round. Nets always
+    /// do.
     fn agrees(self, layout: u32, reference: u32, tolerance: f64) -> bool {
         let reference = reference - self.split;
         if layout >= narrow(self.layout.device_count())
@@ -214,11 +234,15 @@ impl Sides<'_> {
             self.layout.params_of(layout),
             self.reference.params_of(reference),
         );
-        theirs.iter().all(|&(name, b)| {
-            mine.iter().any(|&(other, a)| {
-                other == name && (a - b).abs() <= tolerance * a.abs().max(b.abs())
+        let agree = |crossed: bool| {
+            theirs.iter().all(|&(name, b)| {
+                let read = self.read(name, crossed);
+                mine.iter().any(|&(other, a)| {
+                    Some(other) == read && (a - b).abs() <= tolerance * a.abs().max(b.abs())
+                })
             })
-        })
+        };
+        agree(false) || agree(true)
     }
 }
 
@@ -603,9 +627,9 @@ impl Partition {
 /// not spend it. `tolerance` is the verdict's, which a trial pairing's devices
 /// must meet.
 pub(crate) fn refine_into(
-    layout: &Graph,
-    reference: &Graph,
+    (layout, reference): (&Graph, &Graph),
     (max_rounds, tolerance): (u32, f64),
+    names: ParamNames,
     out: &mut Partition,
 ) -> bool {
     let split = narrow(layout.device_count() + layout.net_count());
@@ -613,6 +637,7 @@ pub(crate) fn refine_into(
         layout,
         reference,
         split,
+        names,
     };
     out.seed(sides);
 

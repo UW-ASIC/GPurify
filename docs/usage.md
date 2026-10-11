@@ -78,13 +78,17 @@ Before matching, both sides are reduced, mostly the way netgen reduces them
   a card with `m=2` but not one card of twice the capacitance. A transistor
   whose card states no W has no width to sum and counts the same way: two
   unsized transistors in parallel match a card with `m=2`, not a card
-  without it.
+  without it. A transistor's source and drain diffusions (`as`, `ad`, `ps`,
+  `pd`) are summed with its W, each on its own net, whichever end each
+  finger calls its source.
 - **Series:** transistors stacked through a node nothing else touches, with
   their gates strapped, become one device whose L is the sum, if every other
   parameter agrees. Both must state L: with no length to add, two transistors
   in series stay two, so a stack does not match one unsized transistor.
-- **Multiplier:** a transistor card's `m` multiplies its `W` where it states
-  one, and `m` is then dropped (`nf` is untouched). Any other card's `m`, an
+  Transistors stating a diffusion do not merge in series: the diffusion
+  between them would vanish, and no rule says what becomes of it.
+- **Multiplier:** a transistor card's `m` multiplies its `W` and diffusions
+  where it states a W, and `m` is then dropped (`nf` is untouched). Any other card's `m`, an
   unsized transistor's included, is its count of devices in parallel, so `m=2` matches two drawn devices and not one. `m=1` is the
   same as no `m`, and a card without `m` is one device whatever other cards
   state.
@@ -115,9 +119,13 @@ netgen's):
 ## LVS parameters
 
 The layout's devices are sized from what is drawn: transistor and resistor
-`w` and `l`, a transistor's `nf` (one per drawn channel), every device's
-`area` and `perim`, and a resistor's `r` and a capacitor's `c` where the deck
-gives their coefficients (see [deck.md](deck.md#devices)). Each parameter a
+`w` and `l`, a transistor's `nf` (one per drawn channel) and its source and
+drain diffusions `as`, `ad`, `ps` and `pd`, a bipolar's emitter `ae` and
+`pe`, every device's `area` and `perim`, and a resistor's `r` and a
+capacitor's `c` where the deck gives their coefficients (see
+[deck.md](deck.md#devices)). A diffusion is compared on the net it is drawn
+on: a card that writes the transistor drain first gives its `as` to that
+net. Each parameter a
 schematic card states is compared on that device, within 2 % of the larger
 value. A card that
 leaves a parameter out says nothing about it, whatever other cards of the

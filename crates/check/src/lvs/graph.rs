@@ -109,6 +109,13 @@ impl Graph {
     }
 }
 
+/// The nets of a device's source and drain, where it has them.
+pub(crate) fn channel_ends(graph: &Graph, device: u32) -> (Option<u32>, Option<u32>) {
+    let (nets, roles) = graph.terminals_of(device);
+    let net = |role| roles.iter().position(|&r| r == role).map(|at| nets[at]);
+    (net(TerminalRole::Source), net(TerminalRole::Drain))
+}
+
 /// The SPICE parameter name each measured [`DeviceParam`] compares under.
 const fn spice_param_name(param: DeviceParam) -> &'static str {
     match param {
@@ -117,6 +124,12 @@ const fn spice_param_name(param: DeviceParam) -> &'static str {
         DeviceParam::Area => "area",
         DeviceParam::Perimeter => "perim",
         DeviceParam::Fingers => "nf",
+        DeviceParam::SourceArea => "as",
+        DeviceParam::DrainArea => "ad",
+        DeviceParam::SourcePerimeter => "ps",
+        DeviceParam::DrainPerimeter => "pd",
+        DeviceParam::EmitterArea => "ae",
+        DeviceParam::EmitterPerimeter => "pe",
     }
 }
 
@@ -130,7 +143,8 @@ const fn spice_param_name(param: DeviceParam) -> &'static str {
 /// A measured parameter is emitted in metres (area in m²) only when its SPICE
 /// name is already interned in `strings` (so the reference can declare it) and a
 /// grid is given; otherwise it is omitted. The names are `w`, `l`, `area`,
-/// `perim` and `nf`. Interned anywhere means every device carries it, so
+/// `perim`, `nf`, a MOS's `as`, `ad`, `ps` and `pd`, and a bipolar's `ae` and
+/// `pe`; a share of a diffusion is its fraction. Interned anywhere means every device carries it, so
 /// [`compare`](crate::lvs::compare) keeps a measure only on devices whose
 /// kind and model the reference declares it for, and compares it only on a
 /// device whose own reference card states it.
@@ -143,8 +157,8 @@ const fn spice_param_name(param: DeviceParam) -> &'static str {
 ///
 /// # Limits
 ///
-/// No BJT emitter area, MOS `as`/`ad`/`ps`/`pd` or capacitor `w`/`l` is
-/// measured (testing-plan F16).
+/// No capacitor `w`/`l` is measured (testing-plan F16), and no terminal's
+/// area or perimeter where it is drawn in pieces.
 ///
 /// [`DeviceValue`]: gpurify_ingest::deck::DeviceValue
 ///
@@ -200,6 +214,12 @@ pub fn from_layout(
                 (DeviceMeasure::Count(count), _) => f64::from(count),
                 (DeviceMeasure::Length(length), Some(scale)) => length.raw() as f64 * scale,
                 (DeviceMeasure::Area(area), Some(scale)) => area.raw() as f64 * scale * scale,
+                (DeviceMeasure::LengthShare(length, ways), Some(scale)) => {
+                    length.raw() as f64 * scale / f64::from(ways)
+                }
+                (DeviceMeasure::AreaShare(area, ways), Some(scale)) => {
+                    area.raw() as f64 * scale * scale / f64::from(ways)
+                }
                 (_, None) => continue,
             };
             match param {
@@ -207,7 +227,7 @@ pub fn from_layout(
                 DeviceParam::Length => l = Some(value),
                 DeviceParam::Area => area = Some(value),
                 DeviceParam::Perimeter => perim = Some(value),
-                DeviceParam::Fingers => {}
+                _ => {}
             }
             if let Some(name) = strings.get(spice_param_name(param)) {
                 graph.param.push((name, value));

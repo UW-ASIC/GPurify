@@ -175,10 +175,14 @@ impl World {
             TerminalRole::Drain,
             TerminalRole::Bulk,
         ];
-        devices.param_start = vec![0, 2];
+        devices.param_start = vec![0, 3];
         devices.param = vec![
             (DeviceParam::Width, DeviceMeasure::Length(dbu(100))),
             (DeviceParam::Length, DeviceMeasure::Length(dbu(50))),
+            (
+                DeviceParam::SourceArea,
+                DeviceMeasure::AreaShare(gpurify_geom::DbuArea::new(70_000), 2),
+            ),
         ];
         let mut out = String::new();
         netlist::write_spice(
@@ -276,7 +280,8 @@ fn the_spef_and_dspf_files_are_exactly_these_bytes() {
 
 /// The device card goes out drain, gate, source, bulk whatever order the
 /// recogniser listed the terminals in; with parasitics, terminals and pins
-/// attach at each net's first node.
+/// attach at each net's first node. A source diffusion shared two ways is
+/// written as the exact quotient, `as='70000/2'` (testing-plan F16).
 #[test]
 fn the_spice_netlist_is_exactly_these_bytes() {
     let head =
@@ -285,12 +290,14 @@ fn the_spice_netlist_is_exactly_these_bytes() {
     let mut world = World::new(Some("VSS"));
     assert_eq!(
         world.spice(Detail::Schematic).expect("writable"),
-        format!("{head}.subckt TOP VDD VSS\nM0 VDD VSS VDD VDD nch w=100 l=50\n.ends TOP\n")
+        format!(
+            "{head}.subckt TOP VDD VSS\nM0 VDD VSS VDD VDD nch w=100 l=50 as='70000/2'\n.ends TOP\n"
+        )
     );
     assert_eq!(
         world.spice(Detail::WithParasitics).expect("writable"),
         format!(
-            "{head}.subckt TOP VDD:0 VSS:0\nM0 VDD:0 VSS:0 VDD:0 VDD:0 nch w=100 l=50\n\
+            "{head}.subckt TOP VDD:0 VSS:0\nM0 VDD:0 VSS:0 VDD:0 VDD:0 nch w=100 l=50 as='70000/2'\n\
              Cp0 VDD:0 0 0.250000f\nRp1 VDD:0 VDD:1 12.500000\nCp2 VDD:1 VSS:0 0.125000f\n.ends TOP\n"
         )
     );

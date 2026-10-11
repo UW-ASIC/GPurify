@@ -99,11 +99,19 @@
 //!   a block placed by instance is compared device by device, never cell by
 //!   cell (catalog LVS-010, LVS-017).
 //! - **F16, parameters the deck cannot define.** The layout measures MOS and
-//!   resistor `w` and `l`, MOS `nf`, every marker's `area` and `perim`, and
-//!   a resistor's `r` and a capacitor's `c` where the deck gives their
-//!   coefficients. A bipolar's emitter area, a capacitor's `w` and `l` and a
-//!   MOS's `as`, `ad`, `ps` and `pd` are not measured, so a card stating one
-//!   is `lvs.undeclared_param`.
+//!   resistor `w` and `l`, MOS `nf`, every marker's `area` and `perim`, a
+//!   MOS's `as`, `ad`, `ps` and `pd` and a bipolar's `ae` and `pe` where
+//!   the terminal is one polygon, and a resistor's `r` and a capacitor's `c`
+//!   where the deck gives their coefficients. A capacitor's `w` and `l` are
+//!   not measured, so a card stating one is `lvs.undeclared_param`.
+//! - **Diffusions on symmetric nets.** A diffusion is compared at the
+//!   channel end the net pairing puts it on. Where nothing tells the two
+//!   channel nets apart, which reference net each pairs with is a tie-break,
+//!   and a transistor whose source and drain diffusions differ can then be
+//!   compared the wrong way round: a false mismatch, never a false match.
+//!   A parallel merge sums diffusions end by end; a series merge of
+//!   transistors stating them is refused, so such a stack never matches one
+//!   long card.
 //! - **Bounded symmetry search.** A tie-break takes back only a pairing whose
 //!   own refinement shows it wrong, and tries at most eight candidates; a
 //!   wrong pairing exposed only after a later tie-break, or a right one past

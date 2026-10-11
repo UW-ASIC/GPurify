@@ -7,7 +7,7 @@
 //!
 //! | Kind | Parallel | Series | `m` |
 //! |---|---|---|---|
-//! | MOS stating `W` | sums `W` and `nf`; every other parameter, `L` included, agrees | sums `L`, which both state; every other parameter agrees | folded into `W` |
+//! | MOS stating `W` | sums `W`, `nf` and the diffusions `as`, `ad`, `ps`, `pd`, each to its channel end; every other parameter, `L` included, agrees | sums `L`, which both state; every other parameter agrees; never with a diffusion stated | folded into `W` and the diffusions |
 //! | MOS stating no `W` | sums the count `m` (1 when the card states none); every other parameter agrees | as above | kept: that many in parallel |
 //! | resistor, capacitor, diode, bipolar | sums the count `m`; every other parameter agrees | never | kept |
 //!
@@ -21,7 +21,10 @@
 //! one transistor (testing-plan F83). A series merge needs `L` stated on both
 //! devices: with no length to sum, two transistors in series would read as
 //! one and the stack count would be lost, so they stay two (testing-plan
-//! F67). A
+//! F67). A MOS's diffusions belong to its channel ends, so a parallel merge
+//! adds each member's to the head's end on the same net, and one that states
+//! some of the four and not all never merges; a series merge would swallow
+//! the shared diffusion, and is refused (testing-plan F16). A
 //! passive's value is kept, not combined: two capacitors of one `c` in
 //! parallel are one of that `c` with `m = 2`, as a card stating `m = 2` is,
 //! and do not match one card of twice the `c`.
@@ -83,6 +86,32 @@ pub struct ParamNames {
     /// sums; without this name they do not merge in parallel, since the count
     /// would have nowhere to go.
     pub multiplier: Option<StrId>,
+    /// `as`, `ad`, `ps` and `pd`, in that order: a MOS's source and drain
+    /// diffusion area and perimeter. Each belongs to one end of the channel,
+    /// so where source and drain trade places, `as` trades with `ad` and `ps`
+    /// with `pd`.
+    pub diffusion: [Option<StrId>; 4],
+}
+
+impl ParamNames {
+    /// The name at the channel's other end: `ad` for `as`, `pd` for `ps` and
+    /// back; any other name is itself. `None` where that name is no name of
+    /// the run, so no device states it.
+    pub(crate) fn across(self, name: StrId) -> Option<StrId> {
+        match self.diffusion.iter().position(|&d| d == Some(name)) {
+            Some(at) => self.diffusion[at ^ 1],
+            None => Some(name),
+        }
+    }
+
+    /// How many of the four diffusion names `params` states.
+    fn diffusions_in(self, params: &[(StrId, f64)]) -> usize {
+        self.diffusion
+            .iter()
+            .flatten()
+            .filter(|&&name| params.iter().any(|&(stated, _)| stated == name))
+            .count()
+    }
 }
 
 /// Which law a merge applied.
@@ -135,7 +164,7 @@ fn signature(
     out
 }
 
-use crate::lvs::graph::{narrow, transpose_into, Graph};
+use crate::lvs::graph::{channel_ends, narrow, transpose_into, Graph};
 use crate::lvs::refine::{kind_code, role_code};
 use gpurify_ingest::deck::DeviceKind;
 
@@ -150,13 +179,14 @@ fn sums_width(kind: DeviceKind, params: &[(StrId, f64)], names: ParamNames) -> b
 }
 
 /// The parameters a parallel merge sums, each stated by every member or by
-/// none: a MOS's `W` and `nf` when it [`sums_width`]. Any other device sums
-/// its count `m` instead, which [`count_of`] reads.
-fn parallel_sums(wide: bool, names: ParamNames) -> [Option<StrId>; 2] {
+/// none: a MOS's `W`, `nf` and diffusions when it [`sums_width`]. Any other
+/// device sums its count `m` instead, which [`count_of`] reads.
+fn parallel_sums(wide: bool, names: ParamNames) -> [Option<StrId>; 6] {
     if wide {
-        [names.width, names.fingers]
+        let [area_s, area_d, perim_s, perim_d] = names.diffusion;
+        [names.width, names.fingers, area_s, area_d, perim_s, perim_d]
     } else {
-        [None; 2]
+        [None; 6]
     }
 }
 
@@ -367,8 +397,8 @@ pub fn reduce_with(src: &Graph, names: ParamNames) -> (Graph, Vec<Merge>) {
     (out, merges)
 }
 
-/// Each MOS's `m` folded into its `W`: `m` devices in parallel are one of `m`
-/// times the width. Every other `m` is kept as the device's count, except an
+/// Each MOS's `m` folded into its `W` and its diffusions: `m` devices in
+/// parallel are one of `m` times the width and the diffusion. Every other `m` is kept as the device's count, except an
 /// `m` of 1, which every card has and is dropped so that stating it or not is
 /// one device. Untouched without the `m` name.
 fn fold_multiplier(src: &Graph, names: ParamNames) -> Graph {
@@ -392,7 +422,9 @@ fn fold_multiplier(src: &Graph, names: ParamNames) -> Graph {
                 if into.is_none() && m != 1.0 {
                     out.param.push((name, value));
                 }
-            } else if Some(name) == into {
+            } else if into.is_some()
+                && (Some(name) == into || names.diffusion.contains(&Some(name)))
+            {
                 out.param.push((name, value * m));
             } else {
                 out.param.push((name, value));
@@ -476,16 +508,21 @@ fn prepare(src: &Graph, names: ParamNames, plan: &mut Plan, devices: usize, nets
         // name to be kept under (testing-plan F83); one with a `W` needs
         // nothing else (F84).
         let wide = sums_width(kind, params, names);
+        // Diffusions are summed end by end, which needs all four or none.
+        let diffusions = names.diffusions_in(params);
+        let whole = diffusions == 0 || diffusions == names.diffusion.len();
         plan.parallel_ok
-            .push(bound & (wide || names.multiplier.is_some()));
+            .push(bound & ((wide && whole) || (!wide && names.multiplier.is_some())));
         let counted = names.multiplier.filter(|_| !wide);
         plan.parallel_sig
             .push(signature(params, &parallel_sums(wide, names), counted));
         let states_length = names
             .length
             .is_some_and(|length| params.iter().any(|&(name, _)| name == length));
-        plan.series_sig
-            .push((states_length && bound).then(|| signature(params, &[names.length], None)));
+        plan.series_sig.push(
+            (states_length && bound && diffusions == 0)
+                .then(|| signature(params, &[names.length], None)),
+        );
     }
 }
 
@@ -804,8 +841,14 @@ fn emit_into(src: &Graph, plan: &Plan, names: ParamNames, out: &mut Graph) {
             let wide = sums_width(src.device_kind[head as usize], src.params_of(head), names);
             let group = &plan.order[at..end];
             let summed = match plan.mode {
-                Some(MergeKind::Series) => [names.length, None],
+                Some(MergeKind::Series) => [names.length, None, None, None, None, None],
                 _ => parallel_sums(wide, names),
+            };
+            // A member whose source is on the head's drain adds its `as` to
+            // the head's `ad`, and so on: a diffusion is its net's.
+            let (head_source, head_drain) = channel_ends(src, head);
+            let crossed = |device: u32| {
+                head_source != head_drain && channel_ends(src, device).0 == head_drain
             };
             // A device with no `W` to sum keeps its count in `m`, which a card
             // may leave out: summed with a missing one read as 1, and written
@@ -820,8 +863,16 @@ fn emit_into(src: &Graph, plan: &Plan, names: ParamNames, out: &mut Graph) {
                 let total = if summed.contains(&Some(name)) {
                     group
                         .iter()
-                        .flat_map(|&d| src.params_of(d))
-                        .filter(|(other, _)| *other == name)
+                        .flat_map(|&d| {
+                            let read = if crossed(d) {
+                                names.across(name)
+                            } else {
+                                Some(name)
+                            };
+                            src.params_of(d)
+                                .iter()
+                                .filter(move |&&(other, _)| Some(other) == read)
+                        })
                         .map(|&(_, v)| v)
                         .sum()
                 } else {

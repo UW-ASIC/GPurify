@@ -671,7 +671,11 @@ fn a_marker_drawn_per_channel_recognises_one_device_per_finger() {
     // was the whole active region, 33x too large, the measuring half of F8 —
     // and the flanking diffusion is offset in x, which names x the channel
     // axis: L = 50 along the current, W = 200 across it. One channel is one
-    // finger, and the marker's perimeter is 2 (W + L).
+    // finger, and the marker's perimeter is 2 (W + L). Its source, the left
+    // region 200 by 200, is its own: area 40 000, perimeter 800. Its drain,
+    // the middle region 350 by 200, is the second finger's source too, so
+    // each has half: area 70 000 and perimeter 1100, shared two ways
+    // (testing-plan F16, as `KLayout` distributes a shared diffusion).
     assert_eq!(
         devices.params_of(DeviceId(0)),
         [
@@ -692,8 +696,25 @@ fn a_marker_drawn_per_channel_recognises_one_device_per_finger() {
                 DeviceParam::Perimeter,
                 DeviceMeasure::Length(gpurify_geom::Dbu::new_unchecked(2 * (50 + 200)))
             ),
+            (
+                DeviceParam::SourceArea,
+                DeviceMeasure::AreaShare(gpurify_geom::DbuArea::new(40_000), 1)
+            ),
+            (
+                DeviceParam::SourcePerimeter,
+                DeviceMeasure::LengthShare(gpurify_geom::Dbu::new_unchecked(800), 1)
+            ),
+            (
+                DeviceParam::DrainArea,
+                DeviceMeasure::AreaShare(gpurify_geom::DbuArea::new(70_000), 2)
+            ),
+            (
+                DeviceParam::DrainPerimeter,
+                DeviceMeasure::LengthShare(gpurify_geom::Dbu::new_unchecked(1100), 2)
+            ),
         ],
-        "a channel marker measures W, L, one finger, W x L and 2 (W + L)"
+        "a channel marker measures W, L, one finger, W x L and 2 (W + L), and \
+         its diffusions with the shared one halved"
     );
 }
 
@@ -924,6 +945,81 @@ fn a_marker_with_a_hole_is_one_device_measured_without_the_hole() {
             ),
         ]
     );
+}
+
+/// Oracle: construct-from-answer, testing-plan F16. A bipolar marker over
+/// three 400 nm pads, 800 apart, as base, emitter and collector: its emitter
+/// is the middle pad, area 400 · 400 = 160 000 and perimeter 1600, which the
+/// deck names as the second terminal. A source drawn in two touching pieces
+/// is one terminal but no one polygon, and its diffusion is not measured.
+#[test]
+fn a_bipolar_measures_its_emitter_and_a_split_source_is_not_measured() {
+    use gpurify_check::topology::device::{DeviceMeasure, DeviceParam};
+    use gpurify_geom::{Dbu, DbuArea};
+    const MARK: LayerId = LayerId(0);
+    const PAD: [LayerId; 3] = [LayerId(1), LayerId(2), LayerId(3)];
+    let mut layout = LayoutBuilder::new(4);
+    layout.rect(MARK, 200, 0, 1800, 400);
+    for (k, layer) in PAD.into_iter().enumerate() {
+        let x = 800 * i64::try_from(k).expect("three pads");
+        layout.rect(layer, x, 0, x + 400, 400);
+    }
+    let (store, _) = layout.finish();
+    let connectivity = Connectivity {
+        conductors: PAD.to_vec(),
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+    let mut strings = StrTable::default();
+    let recognition = DeviceRecognition {
+        kind: vec![DeviceKind::Bjt],
+        marker: vec![MARK],
+        terminal_start: vec![0, 3],
+        terminal: PAD.to_vec(),
+        model: vec![strings.intern("npn")],
+        value: Vec::new(),
+    };
+    let mut devices = DeviceTable::default();
+    recognise_into(&store, &nets, &recognition, &mut devices);
+    assert_eq!(devices.len(), 1, "{:?}", devices.refused);
+    assert_eq!(
+        devices.params_of(DeviceId(0))[2..],
+        [
+            (
+                DeviceParam::EmitterArea,
+                DeviceMeasure::Area(DbuArea::new(160_000))
+            ),
+            (
+                DeviceParam::EmitterPerimeter,
+                DeviceMeasure::Length(Dbu::new_unchecked(1600))
+            ),
+        ]
+    );
+
+    // The left finger of `Fingers`, its source drawn as two abutting halves.
+    let mut layout = LayoutBuilder::new(4);
+    layout.rect(Fingers::CHANNEL, 200, 0, 250, 200);
+    layout.rect(Fingers::POLY, 200, -50, 250, 250);
+    layout.rect(Fingers::ACTIVE, 0, 0, 100, 200);
+    layout.rect(Fingers::ACTIVE, 100, 0, 200, 200);
+    layout.rect(Fingers::ACTIVE, 250, 0, 600, 200);
+    let (store, _) = layout.finish();
+    let drawn = Fingers {
+        store,
+        channel: [PolyId(0); 2],
+        gate: [PolyId(1); 2],
+        active: [PolyId(2), PolyId(3), PolyId(4)],
+    };
+    let devices = drawn.recognise(Fingers::CHANNEL, &drawn.nets());
+    assert_eq!(devices.len(), 1, "{:?}", devices.refused);
+    let measured: Vec<DeviceParam> = devices
+        .params_of(DeviceId(0))
+        .iter()
+        .map(|&(param, _)| param)
+        .collect();
+    assert!(!measured.contains(&DeviceParam::SourceArea), "{measured:?}");
+    assert!(measured.contains(&DeviceParam::DrainArea), "{measured:?}");
 }
 
 // ---------------------------------------------------------------------------
