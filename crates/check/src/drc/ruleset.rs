@@ -355,8 +355,9 @@ pub enum Rule {
     /// not under it). `examined` counts merged figures.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
-    /// DRC-017. Rules: sky130 m1.6, GF180 Mn.3, IHP M1.d, ASAP7 M1.A.1; LEF
-    /// `AREA`; `KLayout` `with_area`. The `LEF58_AREA` exceptions
+    /// DRC-017, ERC-A9. Rules: sky130 m1.6, GF180 Mn.3, IHP M1.d and Ant.g
+    /// (protection-diode size), ASAP7 M1.A.1; LEF `AREA`; `KLayout`
+    /// `with_area`. The `LEF58_AREA` exceptions
     /// (`EXCEPTMINWIDTH`, `EXCEPTRECTANGLE`, ...) are not modelled.
     MinArea {
         /// The layer measured, drawn or derived.
