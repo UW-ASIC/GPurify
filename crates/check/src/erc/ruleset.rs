@@ -435,6 +435,7 @@ impl RuleSet {
                     let credit = row.opt_number("diode_credit")?.unwrap_or(0.0);
                     let bonus = row.opt_number("diode_bonus")?.unwrap_or(0.0);
                     let minus = row.opt_number("area_minus_diode")?.unwrap_or(0.0);
+                    let plus = row.opt_number("gate_plus_diode")?.unwrap_or(0.0);
                     let table = &mut set.antenna_electrical;
                     row.head(&mut table.head)?;
                     table.gate.push(layers[0]);
@@ -446,6 +447,7 @@ impl RuleSet {
                     table.diode_credit.push(credit);
                     table.diode_bonus.push(bonus);
                     table.area_minus_diode.push(minus);
+                    table.gate_plus_diode.push(plus);
                     table.max_ratio.push(max_ratio);
                     close_csr(&mut table.collector_start, table.collector.len());
                 }
@@ -791,6 +793,7 @@ impl RuleSet {
                 c.finite("diode_credit", t.diode_credit[r])?;
                 c.finite("diode_bonus", t.diode_bonus[r])?;
                 c.not_negative("area_minus_diode", t.area_minus_diode[r])?;
+                c.not_negative("gate_plus_diode", t.gate_plus_diode[r])?;
             }
             "density_cmp" => {
                 let t = &self.density_cmp;

@@ -646,8 +646,10 @@ rule DF.11 length(ncomp.edges() and pcomp.edges()) >= 300nm
 #   IO.1..IO.4 (I/O latch-up guard rings: the ring-to-pad-COMP distance is
 #   not what esd_latchup measures), MIMTM.8b (maximum area), MIMTM.11,
 #   MT30.* (30 kA top metal only), ANT.14/ANT.15 (MIM-area antenna: the gate
-#   is FuseTop, not a gate), ANT.16 diode credit (MF = 2 thin, 15 thick; the
-#   tool refuses a non-zero credit), DE.*, the LDMOS (MDN/MDP), OTP, eFuse,
+#   is FuseTop, not a gate), ANT.16 diode credit (MF = 2 thin, 15 thick:
+#   antenna_electrical's gate_plus_diode states it, one row per oxide, but
+#   the ANT rows above pool both oxides' gates and take no credit, which can
+#   over-report a gate with a diode), DE.*, the LDMOS (MDN/MDP), OTP, eFuse,
 #   SRAM and scribe-line sections.
 # Devices not recognised: every diode (np/pn/nwp/dnwpw/dnwps/sc_diode), the
 #   nwell and pwell resistors, the vertical BJTs and the inversion-mode MOS
