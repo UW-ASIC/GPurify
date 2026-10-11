@@ -920,3 +920,55 @@ fn a_bend_is_a_concave_corner_of_a_inside_b() {
         assert_clean(&sink.runs, &sink.out, RULE);
     }
 }
+
+// ----------------------------------------------------------- max_enclosure
+
+/// Oracle: construct-from-answer (sky130 npc.5, 95 nm). A cut `[0, 100]^2`
+/// in a host 50 past it but 96 on the right reaches 96: one finding on the
+/// host, at the centre of the 1 nm strip past 95, `x` 195..196. Two cuts 191
+/// apart under one host reach 95.5 midway, reported as 96; 190 apart, 95,
+/// clean.
+#[test]
+fn a_maximum_enclosure_measures_the_furthest_reach_of_the_host() {
+    let table = vec![(
+        RULE,
+        Rule::MaxEnclosure {
+            outer: B,
+            inner: A,
+            limit: dbu(95),
+        },
+    )];
+    let mut layout = LayoutBuilder::new(2);
+    layout.rect(A, 0, 0, 100, 100);
+    let host = layout.rect(B, -50, -50, 196, 150);
+    let (store, ids) = layout.finish();
+    let mut sink = Sink::default();
+    sink.run(&store, &table);
+    assert_only_violation(
+        &sink.out,
+        &Violation {
+            rule: RULE,
+            layer: B,
+            severity: Severity::Error,
+            at: point(195, 50),
+            measured: Measurement::Length(dbu(96)),
+            limit: Measurement::Length(dbu(95)),
+            shapes: (ids.of(host), None),
+        },
+    );
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
+
+    for (gap, reach) in [(190, None), (191, Some(96))] {
+        let mut layout = LayoutBuilder::new(2);
+        layout.rect(A, 0, 0, 100, 100);
+        layout.rect(A, 100 + gap, 0, 200 + gap, 100);
+        layout.rect(B, -50, -50, 250 + gap, 150);
+        let (store, _) = layout.finish();
+        sink.run(&store, &table);
+        let want: Vec<Measurement> = reach
+            .map(|r| Measurement::Length(dbu(r)))
+            .into_iter()
+            .collect();
+        assert_eq!(sink.out.measured, want, "two cuts {gap} apart");
+    }
+}

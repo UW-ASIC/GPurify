@@ -484,7 +484,7 @@ pub(crate) fn wide_rects_into(
 }
 
 /// Rectangles, possibly overlapping, as one validated layer.
-fn rects_layer(rects: &[Bbox]) -> Result<ValidatedLayer, BooleanError> {
+pub(super) fn rects_layer(rects: &[Bbox]) -> Result<ValidatedLayer, BooleanError> {
     let mut builder = GeometryStoreBuilder::with_capacity(rects.len(), 4 * rects.len());
     for r in rects {
         builder.push(

@@ -324,6 +324,17 @@ def minimum_cut(rule, cuts, wide, other, t, n, within)
     end
   end
 end
+# Each merged `outer` figure holding merged `inner` figures (covering them
+# entirely) that reaches past their union sized by `lim` (square corners).
+def max_enclosure(rule, outer, inner, lim)
+  held = inner.data.merged.each.to_a
+  outer.data.merged.each do |o|
+    r = RBA::Region.new(o)
+    mine = held.select { |p| (RBA::Region.new(p) - r).is_empty? }
+    next if mine.empty?
+    put({ rule: rule }.merge(poly(o))) unless (r - RBA::Region.new(mine).sized(lim)).is_empty?
+  end
+end
 # The figures of `layer` whose narrowest Euclidean width, squared, lies in
 # [lo, hi) (nil: open). `width` resolves only whole units, and a neck between
 # two corners is irrational, so each width pair under the bound is measured
@@ -832,6 +843,23 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                     Value::Ignore,
                     vec![name],
                 )
+            }
+            Rule::MaxEnclosure {
+                outer,
+                inner,
+                limit,
+            } => {
+                let name = fig(outer, &mut reads);
+                fig(inner, &mut reads);
+                writeln!(
+                    body,
+                    "max_enclosure({q}, {}, {}, {})",
+                    var(outer),
+                    var(inner),
+                    lim(limit)
+                )
+                .expect("a String");
+                exact("max_enclosure", Key::FigAt(name), Value::Ignore)
             }
             Rule::MinExtension {
                 layer,
