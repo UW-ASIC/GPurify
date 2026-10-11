@@ -274,6 +274,7 @@ explains (kind 30).
 | 36 | cut_spacing | `space(L, center) >= l`, `adjacent_space(L[, center]; cuts, within) >= l` | ROW PAIR | EXACT (scripted) | exact | new |
 | 37 | cut_class_spacing | `cut_class_space(L; short, long, space)` | ROW PAIR | EXACT (scripted) | exact | new |
 | 38 | minimum_cut | `min_cuts(C, W, O; width[, within]) >= n` | ROW | EXACT (scripted) | exact | new |
+| 39 | gate_corner | `bend(A, B)`, `covers_corner(A, B)` | POINT | EXACT | exact | new |
 
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1250,6 +1251,23 @@ minimum_cut(id, C.dup.raw, W, O, w, N, D2 or nil)   # one polygon per reported c
 - Key ROW, the cut's box; the count is compared exactly. A cut that bridges two figures of one
   layer is grouped by a figure each tool picks in its own order, so the random deck carries no
   `min_cuts` row.
+
+### 39. gate_corner — EXACT
+
+**GPurify** (`overlay.rs` `gate_corner`, `concave_corners`): each concave corner (a right turn
+with the material on the left) of a figure of merged `A & B` that is also a concave corner of
+merged A (`bend`) or of merged B (`covers_corner`). `at` the corner.
+
+**KLayout**
+
+```ruby
+emit(id, (A & B).corners(90) & A.corners(90))   # bend; B.corners(90) for covers_corner
+```
+
+- (d) [L] "corners": "Since polygons are oriented clockwise, positive angles indicate concave
+  (inner) corners", marked by "small 2x2 DBU boxes". Boxes of two corners overlap only when the
+  corners are one point (one unit apart is two DBU at x2, so their boxes only touch), and the
+  overlap's centre, halved and floored, is the corner. Key POINT.
 
 ---
 

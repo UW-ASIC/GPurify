@@ -517,6 +517,24 @@ pub(crate) const KINDS: &[Kind] = &[
     opposite(WIRE_BELOW),
     opposite(WIRE),
     drc("extension", Cmp::Ge, "min_extension", &[0, 1], LIMIT, &[]),
+    // A gate's shape: `bend(poly, diff)` (poly turning on diff, sky130
+    // poly.11) and `covers_corner(poly, diff)` (poly over an inner corner of
+    // diff, poly.10).
+    Kind {
+        fixed: &[("of_reference", false)],
+        ..drc("bend", Cmp::Absent, "gate_corner", &[0, 1], None, &[])
+    },
+    Kind {
+        fixed: &[("of_reference", true)],
+        ..drc(
+            "covers_corner",
+            Cmp::Absent,
+            "gate_corner",
+            &[0, 1],
+            None,
+            &[],
+        )
+    },
     drc("overlap", Cmp::Ge, "overlap", &[0, 1], LIMIT, &[]),
     drc(
         "tap_distance",

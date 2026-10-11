@@ -488,6 +488,75 @@ pub(crate) fn min_extension(
     (Outcome::Ran, gates.len() as u64)
 }
 
+/// Every concave corner of `poly`, holes included, into `out`: a right turn
+/// where the material lies on the left of travel. A corner a figure meets
+/// itself at is two.
+fn concave_corners(poly: PolygonRef<'_>, out: &mut Vec<Point>) {
+    for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+        let (xs, ys) = ring.coords();
+        let n = xs.len();
+        for i in 0..n {
+            let at = |k: usize| (i128::from(xs[k].raw()), i128::from(ys[k].raw()));
+            let ((px, py), (vx, vy), (nx, ny)) = (at((i + n - 1) % n), at(i), at((i + 1) % n));
+            if (vx - px) * (ny - vy) - (vy - py) * (nx - vx) < 0 {
+                out.push(Point { x: xs[i], y: ys[i] });
+            }
+        }
+    }
+}
+
+/// A gate's shape (sky130 poly.10, poly.11): each concave corner of the area
+/// the merged layers share that is a concave corner of `layer` (a bend) or,
+/// with `of_reference`, of `reference` (an inner corner covered). Reported
+/// at the corner on the lowest drawn rows under its gate. `examined` counts
+/// gates.
+pub(crate) fn gate_corner(
+    store: &GeometryStore,
+    rule: StrId,
+    (layer, reference): (LayerId, LayerId),
+    of_reference: bool,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let (Some(lines), Some(refs)) = (merged(store, layer, s), merged(store, reference, s)) else {
+        return REFUSED;
+    };
+    let mut gates = ValidatedLayer::default();
+    if intersection_into(&lines, &refs, &mut gates).is_err() {
+        return REFUSED;
+    }
+    let mut corners = Vec::new();
+    let of = if of_reference { &refs } else { &lines };
+    for f in 0..u32::try_from(of.len()).expect("a layer indexes polygons with a u32") {
+        concave_corners(of.get(f), &mut corners);
+    }
+    corners.sort_unstable();
+    let drawn = s.validated.get(store, layer).expect("merged above");
+    s.rects_a.build(store, layer, drawn);
+    let drawn = s.validated.get(store, reference).expect("merged above");
+    s.rects_b.build(store, reference, drawn);
+    let owners = owners_of(&gates, &s.rects_a)
+        .into_iter()
+        .zip(owners_of(&gates, &s.rects_b));
+    let mut own = Vec::new();
+    for (g, (a_row, b_row)) in (0..).zip(owners) {
+        own.clear();
+        concave_corners(gates.get(g), &mut own);
+        for &at in own.iter().filter(|p| corners.binary_search(p).is_ok()) {
+            out.push(Violation {
+                rule,
+                layer,
+                severity: Severity::Error,
+                at,
+                measured: Measurement::Count(1),
+                limit: Measurement::Count(0),
+                shapes: (a_row, Some(b_row)),
+            });
+        }
+    }
+    (Outcome::Ran, gates.len() as u64)
+}
+
 /// Min overlap: each figure of the area the merged layers share, measured as
 /// `min_width` measures a figure (facing edges, and a diagonal neck under the
 /// limit), on the lowest drawn row of each layer under it. `examined` counts

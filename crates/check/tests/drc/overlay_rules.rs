@@ -863,3 +863,60 @@ fn ihp_lu_a_the_middle_of_a_well_tied_at_both_ends_is_too_far() {
     assert_eq!(sink.out.at[0].x, dbu(23_000));
     assert_eq!(sink.out.shape_a[0], ids.of(well));
 }
+
+// ------------------------------------------------------------- gate_corner
+
+/// Oracle: construct-from-answer (sky130 poly.11, poly.10). An L-shaped A
+/// whose concave corner (500, 500) lies inside B turns on B: one `bend` at
+/// the corner. The same A over a B whose own inner corner is elsewhere
+/// covers no inner corner of B. Bent above B, the shared area is a
+/// rectangle and neither form finds anything.
+#[test]
+fn a_bend_is_a_concave_corner_of_a_inside_b() {
+    let table = |of_reference: bool| {
+        vec![(
+            RULE,
+            Rule::GateCorner {
+                layer: A,
+                reference: B,
+                of_reference,
+            },
+        )]
+    };
+    let l = |y: i64| -> (Vec<i64>, Vec<i64>) {
+        (
+            vec![400, 500, 500, 1_200, 1_200, 400],
+            vec![-200, -200, y, y, y + 100, y + 100],
+        )
+    };
+    let mut layout = LayoutBuilder::new(2);
+    let poly = layout.shape(A, &l(500));
+    let diff = layout.rect(B, 0, 0, 1_000, 1_000);
+    let (store, ids) = layout.finish();
+    let mut sink = Sink::default();
+    sink.run(&store, &table(false));
+    assert_only_violation(
+        &sink.out,
+        &Violation {
+            rule: RULE,
+            layer: A,
+            severity: Severity::Error,
+            at: point(500, 500),
+            measured: Measurement::Count(1),
+            limit: Measurement::Count(0),
+            shapes: (ids.of(poly), Some(ids.of(diff))),
+        },
+    );
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
+    sink.run(&store, &table(true));
+    assert_clean(&sink.runs, &sink.out, RULE);
+
+    let mut layout = LayoutBuilder::new(2);
+    layout.shape(A, &l(1_100));
+    layout.rect(B, 0, 0, 1_000, 1_000);
+    let (store, _) = layout.finish();
+    for of_reference in [false, true] {
+        sink.run(&store, &table(of_reference));
+        assert_clean(&sink.runs, &sink.out, RULE);
+    }
+}

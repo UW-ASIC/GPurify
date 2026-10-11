@@ -599,6 +599,41 @@ pub enum Rule {
         /// The smallest legal extension, in grid units; positive.
         limit: Dbu,
     },
+    /// A concave corner of the area two layers share that is a concave corner
+    /// of `layer` (it turns on `reference`) or of `reference` (it covers an
+    /// inner corner of `reference`).
+    ///
+    /// Deck: `bend(A, B)` (`of_reference` false) and `covers_corner(A, B)`
+    /// (true), kind `gate_corner`. Both layers are merged, and the area they
+    /// share is the gate. A concave corner of a rectilinear intersection is a
+    /// concave corner of one operand (both, where they coincide), so a gate
+    /// is a rectangle exactly when neither form finds a corner on it. `bend`
+    /// finds where A turns 90 degrees on B, the corner lying in B's material:
+    /// an L-shaped poly bent over diffusion, or a stub off a gate (two
+    /// corners). A turn on B's edge leaves the gate a rectangle and is not
+    /// one. `covers_corner` finds an inner corner of B under A's material, as
+    /// a gate over a jog in the diffusion's edge. Corners of holes count.
+    ///
+    /// One violation per corner, at it, on layer A, `measured` `Count(1)`
+    /// against a `limit` of `Count(0)`. `shapes` is the lowest A row and the
+    /// lowest B row under its gate. `examined` counts the gates.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-052. Rules: sky130 poly.11 "No 90 deg turns of poly on diff" and
+    /// poly.10 "Poly can't overlap inner corners of diff", GF180 PL.6 "90 deg
+    /// bends on the COMP are not allowed", IHP Gat.f, ASAP7 GATE.AUX.1 "GATE
+    /// may not bend"; `KLayout` `corners`.
+    ///
+    /// Limits: 45-degree turns (IHP Gat.f) cannot occur: every rule but
+    /// [`Rule::Angle`] refuses a non-rectilinear layer.
+    GateCorner {
+        /// The layer that bends or covers (A); findings are reported on it.
+        layer: LayerId,
+        /// The layer it lies on (B).
+        reference: LayerId,
+        /// Corners of `reference` (`covers_corner`), else of `layer` (`bend`).
+        of_reference: bool,
+    },
     /// `a` and `b` overlapping by less than `limit`.
     ///
     /// Deck: `overlap(A, B) >= len`, kind `overlap`. Both layers are merged,
@@ -2510,6 +2545,17 @@ impl RuleSet {
                         limit: length(spec, "limit")?,
                     }
                 }
+                "gate_corner" => {
+                    let (layer, reference) = two(spec)?;
+                    let ParamValue::Flag(of_reference) = value(spec, "of_reference")? else {
+                        return Err(wrong_type(spec, "of_reference"));
+                    };
+                    Rule::GateCorner {
+                        layer,
+                        reference,
+                        of_reference,
+                    }
+                }
                 "overlap" => {
                     let (a, b) = two(spec)?;
                     Rule::Overlap {
@@ -3192,6 +3238,11 @@ impl RuleSet {
                     reference,
                     limit,
                 } => overlay::min_extension(store, id, layer, reference, limit, s, out),
+                Rule::GateCorner {
+                    layer,
+                    reference,
+                    of_reference,
+                } => overlay::gate_corner(store, id, (layer, reference), of_reference, s, out),
                 Rule::Overlap { a, b, limit } => overlay::overlap(store, id, a, b, limit, s, out),
                 Rule::MaxDistanceToTap { well, tap, limit } => {
                     overlay::max_distance_to_tap(store, id, well, tap, limit, s, out)
@@ -3826,6 +3877,11 @@ impl Rule {
                 outer: a, inner: b, ..
             }
             | Rule::MinExtension {
+                layer: a,
+                reference: b,
+                ..
+            }
+            | Rule::GateCorner {
                 layer: a,
                 reference: b,
                 ..

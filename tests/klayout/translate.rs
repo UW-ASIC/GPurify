@@ -855,6 +855,26 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                     vec![],
                 )
             }
+            Rule::GateCorner {
+                layer,
+                reference,
+                of_reference,
+            } => {
+                layers.reads(layer, &mut reads);
+                layers.reads(reference, &mut reads);
+                // `corners(90)` marks each concave corner with a 2 x 2 box
+                // around it; two corners' boxes overlap only where they are
+                // one point.
+                writeln!(
+                    body,
+                    "emit({q}, ({a} & {b}).corners(90) & {}.corners(90))",
+                    var(if of_reference { reference } else { layer }),
+                    a = var(layer),
+                    b = var(reference)
+                )
+                .expect("a String");
+                exact("gate_corner", Key::Point, Value::Ignore)
+            }
             Rule::Overlap { a, b, limit } => {
                 fig(a, &mut reads);
                 fig(b, &mut reads);
