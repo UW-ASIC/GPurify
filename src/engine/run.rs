@@ -523,6 +523,7 @@ fn run_pex(
         let accuracy = match gpurify_extract::quasistatic::extract_into(
             &loaded.store,
             &extracted.nets,
+            &loaded.deck.connectivity,
             &selected,
             &loaded.deck.stack,
             grid,

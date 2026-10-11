@@ -12,7 +12,7 @@ use gpurify_geom::rects::decompose_into;
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_geom::{Dbu, Grid};
-use gpurify_ingest::deck::ProcessStack;
+use gpurify_ingest::deck::{Connectivity, ProcessStack};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
@@ -101,14 +101,23 @@ pub(crate) fn on_substrate(stack: &ProcessStack, layer: LayerId) -> bool {
         .is_some_and(|&height| !(height > 0.0))
 }
 
+/// Whether `layer`'s shapes are conductors in the field: neither a junction
+/// ([`on_substrate`]) nor a global layer ([`Connectivity::global`], the
+/// substrate as a net, which carries no modelled parasitics and needs no
+/// `pex` row).
+pub(crate) fn in_field(stack: &ProcessStack, connectivity: &Connectivity, layer: LayerId) -> bool {
+    !on_substrate(stack, layer) && !connectivity.global.contains(&layer)
+}
+
 /// Mesh the selected nets, one conductor per entry of `selected`, in that order.
 ///
 /// `out` is cleared first. Each polygon is cut into disjoint rectangles,
 /// extruded from its layer's height through its thickness, and each face is
 /// cut into panels no longer than `options.max_edge` on a side (half that
 /// near another conductor). A polygon on a layer the stack puts on the
-/// substrate (height 0) is a junction and gets no panels, so a conductor
-/// made only of such polygons has an empty band.
+/// substrate (height 0) is a junction and gets no panels, and so does one on
+/// a global layer (`connectivity.global`), which needs no stack row; a
+/// conductor made only of such polygons has an empty band.
 ///
 /// # Errors
 ///
@@ -123,6 +132,7 @@ pub(crate) fn on_substrate(stack: &ProcessStack, layer: LayerId) -> bool {
 pub fn build_into(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     selected: &[NetId],
     stack: &ProcessStack,
     options: MeshOptions,
@@ -157,10 +167,12 @@ pub fn build_into(
             return Err(MeshError::EmptyConductor);
         }
         // Refuse by the smallest layer id the stack does not describe (a layer
-        // past the stack clamps onto the NaN sentinel row).
+        // past the stack clamps onto the NaN sentinel row). A global layer
+        // needs no row.
         let undescribed = polys
             .iter()
             .map(|&poly| store.poly_layer(poly))
+            .filter(|layer| !connectivity.global.contains(layer))
             .filter(|layer| !(table[layer.idx().min(sentinel)].epsilon > 0.0))
             .min();
         if let Some(layer) = undescribed {
@@ -168,8 +180,7 @@ pub fn build_into(
         }
         for &poly in polys {
             let layer = store.poly_layer(poly);
-            // A junction: not in the field.
-            if on_substrate(stack, layer) {
+            if !in_field(stack, connectivity, layer) {
                 continue;
             }
             let row = table[layer.idx().min(sentinel)];
@@ -638,6 +649,7 @@ mod tests {
         super::build_into(
             &store,
             &nets,
+            &connectivity,
             &[NetId(0), NetId(1)],
             &stack,
             options,

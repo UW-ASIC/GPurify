@@ -1165,6 +1165,7 @@ fn field_solve(
         gpurify_extract::field::extract_columns_into(
             &wires,
             &nets,
+            &deck.connectivity,
             window,
             std::slice::from_ref(driven),
             stack,

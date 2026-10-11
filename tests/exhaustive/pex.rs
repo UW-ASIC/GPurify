@@ -977,6 +977,7 @@ fn maxwell(layout: Layout, labels: &[&str], scale: f64) -> (Vec<Vec<f64>>, Vec<V
     gpurify::extract::quasistatic::extract_into(
         &ran.loaded.store,
         &ran.extracted.nets,
+        &ran.loaded.deck.connectivity,
         &nets,
         &ran.loaded.deck.stack,
         ran.loaded.grid,
@@ -1175,6 +1176,7 @@ fn a_field_solved_plate_sees_the_substrate() {
         gpurify::extract::quasistatic::extract_into(
             &ran.loaded.store,
             &ran.extracted.nets,
+            &ran.loaded.deck.connectivity,
             &[plate],
             &ran.loaded.deck.stack,
             ran.loaded.grid,
@@ -1282,6 +1284,45 @@ fn a_junction_is_its_closed_form_beside_the_field_solved_metal() {
         + wire_ohm(JUNCTION.m2, 5_000, 1_000)
         + JUNCTION.v1.sheet;
     assert!(relative(ohm, series) <= MODEL, "R {ohm} ohm, want {series}");
+}
+
+/// PEX-004, PEX-005 (F79): a field-solved net that reaches a `connect global`
+/// layer solves, and the global layer adds nothing to it. On the shipped
+/// sky130 deck, `VSS` is a p-tap strapped to `li` by one contact; the tap is
+/// also `psub` (global, no `pex` row) and joins it through `psub_tie`. A
+/// global layer carries no parasitics (deck.md), so the network is the one
+/// the same deck gives with `psub` not connected at all, where the tap's
+/// `psub` shape is on no net: element for element, bit for bit. With the
+/// global layer in the mesh the solve is refused for want of a `psub` row.
+#[test]
+fn a_field_solved_net_on_the_substrate_net_leaves_the_global_layer_out() {
+    let sky130 = include_str!("../../pdks/sky130.deck");
+    let unconnected = sky130
+        .replace("connect global psub\n", "")
+        .replace("connect via psub_tie [ptap, psub]\n", "");
+    assert!(
+        unconnected.len() < sky130.len(),
+        "both lines are in the deck"
+    );
+    let tap = Layout::default()
+        .rect("tap", 0, 0, 1_000, 500)
+        .rect("psdm", -125, -125, 1_125, 625)
+        .rect("licon", 415, 165, 585, 335)
+        .rect("li", 335, 85, 665, 415)
+        .label("li_label", 500, 250, "VSS");
+    let solve = |deck: &str| {
+        let ran = run(deck, tap.clone(), PEX, &["VSS"]);
+        assert_eq!(ran.summary.pex, StageStatus::Ran, "{:?}", ran.summary.pex);
+        ran.outputs.parasitics.expect("PEX ran")
+    };
+    let tied = solve(sky130);
+    assert!(
+        tied.value
+            .iter()
+            .any(|value| matches!(value, Parasitic::Inductance(_))),
+        "VSS was field-solved"
+    );
+    assert_eq!(tied, solve(&unconnected));
 }
 
 /// PEX-005, PEX-010 (F80): a net of junctions only has no panels, so solved
@@ -1403,6 +1444,7 @@ fn a_field_solved_capacitance_converges_as_the_mesh_is_refined() {
         gpurify::extract::field::extract_meshed_into(
             &ran.loaded.store,
             &ran.extracted.nets,
+            &ran.loaded.deck.connectivity,
             &[net(&ran, "A")],
             &ran.loaded.deck.stack,
             ran.loaded.grid,

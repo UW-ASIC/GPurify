@@ -31,6 +31,7 @@ fn a_field_solve_obeys_reciprocity() {
     let accuracy = extract_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &uniform_stack(3, 1.0, 0.25),
         grid(),
@@ -122,6 +123,7 @@ fn a_field_solve_is_byte_identical_across_runs() {
         extract_into(
             case.store(),
             &case.nets,
+            case.connectivity(),
             &case.selected,
             &stack,
             grid(),
@@ -268,6 +270,7 @@ fn field_solving_one_of_two_coupled_nets_keeps_their_coupling() {
         extract_into(
             case.store(),
             &case.nets,
+            case.connectivity(),
             &[net],
             &stack,
             grid(),

@@ -123,6 +123,7 @@ fn refining_a_mesh_subdivides_it_without_changing_any_conductors_area() {
     build_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &stack(),
         mesh_options(500, 1 << 20),
@@ -134,6 +135,7 @@ fn refining_a_mesh_subdivides_it_without_changing_any_conductors_area() {
     build_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &stack(),
         mesh_options(250, 1 << 20),
@@ -182,6 +184,7 @@ fn a_built_mesh_partitions_its_panels_across_the_nets_it_was_given() {
     build_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &stack(),
         mesh_options(400, 1 << 20),
@@ -255,6 +258,7 @@ fn a_mesh_that_would_exceed_the_panel_limit_is_refused_rather_than_truncated() {
         build_into(
             case.store(),
             &case.nets,
+            case.connectivity(),
             &case.selected,
             &stack(),
             mesh_options(400, 1),
@@ -271,6 +275,7 @@ fn a_mesh_that_would_exceed_the_panel_limit_is_refused_rather_than_truncated() {
     build_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &stack(),
         mesh_options(400, 1 << 20),
@@ -299,6 +304,7 @@ fn a_conductor_on_the_substrate_gets_no_panels() {
     build_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &grounded,
         mesh_options(400, 1 << 20),
@@ -326,6 +332,7 @@ fn meshing_is_byte_identical_across_runs_and_across_a_reused_buffer() {
     build_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &stack(),
         options,
@@ -340,6 +347,7 @@ fn meshing_is_byte_identical_across_runs_and_across_a_reused_buffer() {
     build_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &stack(),
         options,
@@ -356,6 +364,7 @@ fn meshing_is_byte_identical_across_runs_and_across_a_reused_buffer() {
     build_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &stack(),
         options,

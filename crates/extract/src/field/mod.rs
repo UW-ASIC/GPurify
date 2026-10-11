@@ -10,7 +10,9 @@
 //! the field. A shape on a layer at height 0 (a well, a diffusion) is a
 //! junction in that plane, not a conductor above it: it is left out of the
 //! mesh, and its closed-form capacitance `Ca·A + Cf·P` (the layer's `pex`
-//! row) sits on its conductor's diagonal. See the
+//! row) sits on its conductor's diagonal. A shape on a global layer (the
+//! substrate as a net) carries no parasitics: it is left out too, and needs
+//! no `pex` row. See the
 //! [crate docs](crate#accuracy-and-known-gaps).
 //!
 //! # Time complexity
@@ -32,7 +34,7 @@ use crate::conductor::Regions;
 use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::GeometryStore;
 use gpurify_geom::{Dbu, Grid, MAX_ABS_DBU};
-use gpurify_ingest::deck::ProcessStack;
+use gpurify_ingest::deck::{Connectivity, ProcessStack};
 
 /// The Maxwell capacitance matrix, full square so symmetry is checkable.
 ///
@@ -112,16 +114,21 @@ pub struct Accuracy {
 /// thickness or a gap between layers), coarsened until the estimated mesh
 /// fits 2²⁰ panels. Every column is solved to [`solve::Options::default`].
 ///
+/// Shapes on a global layer ([`Connectivity::global`]) are left out, as
+/// junctions are, and need no stack row.
+///
 /// # Errors
 ///
 /// [`solve::SolveError::Mesh`] when the selection cannot be meshed: a net
-/// with no polygons, a polygon on a layer the stack gives no thickness,
-/// height or permittivity, a layer whose geometry (a junction's included)
-/// does not validate as rectilinear, or too many panels. The other variants
-/// when a column does not converge, breaks down or goes non-finite.
+/// with no polygons, a polygon off the global layers on a layer the stack
+/// gives no thickness, height or permittivity, a layer whose geometry (a
+/// junction's included) does not validate as rectilinear, or too many
+/// panels. The other variants when a column does not converge, breaks down
+/// or goes non-finite.
 pub fn extract_into(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     selected: &[NetId],
     stack: &ProcessStack,
     grid: Grid,
@@ -129,8 +136,17 @@ pub fn extract_into(
 ) -> Result<Accuracy, solve::SolveError> {
     let mut order = selected.to_vec();
     order.sort_unstable();
-    let meshing = mesh_options(store, nets, &order, stack, grid);
-    extract_meshed_into(store, nets, &order, stack, grid, meshing, matrix)
+    let meshing = mesh_options(store, nets, connectivity, &order, stack, grid);
+    extract_meshed_into(
+        store,
+        nets,
+        connectivity,
+        &order,
+        stack,
+        grid,
+        meshing,
+        matrix,
+    )
 }
 
 /// [`extract_into`] at a caller's panel size rather than the stack-derived one.
@@ -142,6 +158,7 @@ pub fn extract_into(
 pub fn extract_meshed_into(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     selected: &[NetId],
     stack: &ProcessStack,
     grid: Grid,
@@ -153,7 +170,16 @@ pub fn extract_meshed_into(
     let driven: Vec<Vec<usize>> = (0..order.len()).map(|i| vec![i]).collect();
     let options = solve::Options::default();
     columns_meshed_into(
-        store, nets, &order, &driven, stack, grid, meshing, options, matrix,
+        store,
+        nets,
+        connectivity,
+        &order,
+        &driven,
+        stack,
+        grid,
+        meshing,
+        options,
+        matrix,
     )
 }
 
@@ -177,6 +203,7 @@ pub fn extract_meshed_into(
 pub fn extract_columns_into(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     selected: &[NetId],
     driven: &[Vec<NetId>],
     stack: &ProcessStack,
@@ -196,7 +223,16 @@ pub fn extract_columns_into(
         })
         .collect();
     columns_meshed_into(
-        store, nets, &order, &columns, stack, grid, meshing, options, matrix,
+        store,
+        nets,
+        connectivity,
+        &order,
+        &columns,
+        stack,
+        grid,
+        meshing,
+        options,
+        matrix,
     )
     .map(|accuracy| accuracy.iterations)
 }
@@ -204,6 +240,7 @@ pub fn extract_columns_into(
 fn columns_meshed_into(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     order: &[NetId],
     columns: &[Vec<usize>],
     stack: &ProcessStack,
@@ -216,8 +253,17 @@ fn columns_meshed_into(
     matrix.value.clear();
 
     let mut mesh = mesh::Mesh::default();
-    mesh::build_into(store, nets, order, stack, meshing, grid, &mut mesh)?;
-    let junction = junctions_farad(store, nets, order, stack, grid)?;
+    mesh::build_into(
+        store,
+        nets,
+        connectivity,
+        order,
+        stack,
+        meshing,
+        grid,
+        &mut mesh,
+    )?;
+    let junction = junctions_farad(store, nets, connectivity, order, stack, grid)?;
 
     let n = order.len();
     let width = columns.len();
@@ -251,10 +297,12 @@ fn columns_meshed_into(
 
 /// Each conductor's junction capacitance in farads: the closed form
 /// `Ca·A + Cf·P` of its regions on layers the stack puts on the substrate,
-/// which the mesh leaves out ([`mesh::build_into`]).
+/// which the mesh leaves out ([`mesh::build_into`]). A global layer carries
+/// no parasitics, so none of its shapes is a junction.
 fn junctions_farad(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     order: &[NetId],
     stack: &ProcessStack,
     grid: Grid,
@@ -264,7 +312,9 @@ fn junctions_farad(
     for &net in order {
         let first = regions.len();
         regions
-            .push_net(store, nets, net, |layer| mesh::on_substrate(stack, layer))
+            .push_net(store, nets, net, |layer| {
+                mesh::on_substrate(stack, layer) && !connectivity.global.contains(&layer)
+            })
             .map_err(mesh::MeshError::InvalidGeometry)?;
         let mut femtofarads = 0.0_f64;
         for region in first..regions.len() {
@@ -344,12 +394,14 @@ const UNSTATED: i64 = i64::MAX;
 fn mesh_options(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     selected: &[NetId],
     stack: &ProcessStack,
     grid: Grid,
 ) -> mesh::MeshOptions {
     let feature = finest_feature(stack, grid);
-    let surface = surface_area(store, nets, selected, thickest_layer(stack, grid));
+    let in_field = |layer| mesh::in_field(stack, connectivity, layer);
+    let surface = surface_area(store, nets, selected, in_field, thickest_layer(stack, grid));
     let max_edge = feature.max(budget_edge(surface)).clamp(1, MAX_ABS_DBU);
     mesh::MeshOptions {
         max_edge: Dbu::new_unchecked(max_edge),
@@ -386,18 +438,23 @@ fn thickest_layer(stack: &ProcessStack, grid: Grid) -> i64 {
     thickest
 }
 
-/// Surface area of the selected conductors in dbu², each polygon boxed and
-/// extruded — an estimate that bounds a panel count.
+/// Surface area of the selected conductors in dbu², each polygon the mesh
+/// takes (`in_field`) boxed and extruded — an estimate that bounds a panel
+/// count.
 fn surface_area(
     store: &GeometryStore,
     nets: &NetTable,
     selected: &[NetId],
+    in_field: impl Fn(gpurify_geom::LayerId) -> bool,
     thickness: i64,
 ) -> i128 {
     let t = i128::from(thickness);
     let mut surface = 0_i128;
     for &net in selected {
         for &poly in nets.polys_of(net) {
+            if !in_field(store.poly_layer(poly)) {
+                continue;
+            }
             let bbox = store.poly_bbox(poly);
             let w = i128::from(bbox.width().raw().max(0));
             let h = i128::from(bbox.height().raw().max(0));

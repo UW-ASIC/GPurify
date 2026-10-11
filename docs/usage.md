@@ -170,8 +170,12 @@ depletion capacitance rather than a field: it is left out of the solve, and
 the net's capacitance to ground adds the closed form from that layer's `pex`
 line (area and fringe), while its resistance through the shape is computed
 as for any other. So a net of metal and diffusion field-solves its metal,
-and the field reads every junction as part of the grounded substrate. A net
-named twice is solved once.
+and the field reads every junction as part of the grounded substrate. A
+shape on a `connect global` layer (the substrate as a net) carries no
+parasitics in the field solve either: it is left out and needs no `pex`
+line, so a ground net tied to the substrate through its taps solves through
+its other shapes, and one whose pieces join only through the substrate is
+not one circuit and is refused. A net named twice is solved once.
 
 A net with no text label in the layout has no name to write, and the run
 refuses it rather than inventing one. A label on two nets that are not

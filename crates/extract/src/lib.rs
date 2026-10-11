@@ -127,7 +127,8 @@
 //!   filament as wide as their shared edge. A via cut is one filament
 //!   between the two centre lines it lands on, carrying the stack's
 //!   resistance per cut. A net whose pieces do not join into one circuit
-//!   (two pieces meeting only at a corner) is refused
+//!   (two pieces meeting only at a corner, or joined only through a global
+//!   layer, which carries no modelled current) is refused
 //!   (see [`field::henry::extract_inductance_into`]).
 //!   Only each net's own port impedance is computed, so mutual inductance
 //!   between nets never reaches the output. A single frequency (1 MHz) means

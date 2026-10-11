@@ -64,7 +64,8 @@ pub enum InductanceError {
     /// Carries the layer id.
     #[error("layer {0} has no positive thickness in the process stack")]
     NoThickness(u16),
-    /// A selected net has no polygons. Carries the net id.
+    /// A selected net has no polygons off the global layers, which carry no
+    /// parasitics. Carries the net id.
     #[error("net {0} has no geometry to build a filament from")]
     EmptyNet(u32),
     /// The branch impedance matrix or the reduced nodal admittance matrix
@@ -187,11 +188,15 @@ fn shared_edge(a: Bbox, b: Bbox) -> Option<(i64, i64, i64)> {
 /// filament from where its centre projects onto one centre line to where it
 /// projects onto the other, the cut wide and long, carrying the layer's
 /// resistance per cut. Cuts of one array are so many filaments in parallel.
-/// A net's port runs between its two most distant end points.
+/// A net's port runs between its two most distant end points. Shapes on a
+/// global layer ([`Connectivity::global`], the substrate as a net) carry no
+/// modelled current: they are left out and need no stack row, so a net
+/// whose pieces join only through one is not one circuit.
 ///
 /// # Errors
 ///
-/// [`InductanceError::EmptyNet`] for a selected net with no polygons,
+/// [`InductanceError::EmptyNet`] for a selected net with no polygons off the
+/// global layers,
 /// [`InductanceError::InvalidGeometry`] for a net's shapes on a layer that
 /// are not valid rectilinear rings, [`InductanceError::NoSheetResistance`]
 /// or [`InductanceError::NoThickness`] for a shape on a layer the stack does
@@ -275,13 +280,15 @@ pub fn extract_inductance_into(
     // Each net's node range, for the one-circuit check.
     let mut spans: Vec<(NetId, usize, usize)> = Vec::new();
     for &net in &order {
-        if nets.polys_of(net).is_empty() {
-            return Err(InductanceError::EmptyNet(net.0));
-        }
         let mut regions = Regions::default();
         regions
-            .push_net(store, nets, net, |_| true)
+            .push_net(store, nets, net, |layer| {
+                !connectivity.global.contains(&layer)
+            })
             .map_err(|layer| InductanceError::InvalidGeometry(layer.0))?;
+        if regions.len() == 0 {
+            return Err(InductanceError::EmptyNet(net.0));
+        }
         for &layer in &regions.layer {
             conductor(layer.0)?;
         }
