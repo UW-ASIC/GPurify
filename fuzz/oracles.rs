@@ -555,26 +555,31 @@ fn spice_cards(text: &str) -> (usize, usize) {
     (devices, instances)
 }
 
-/// The most leaf devices a fuzz input's reference may flatten to. Nothing in
-/// `Netlist::flatten_top` bounds the expansion, so a few lines nesting
-/// doubled instances would exhaust memory (N-infra-1); the count is taken
-/// from the tables first.
-const FLAT_DEVICES: u128 = 1 << 16;
+/// The most devices, nets and instances a fuzz input's reference is expanded
+/// to. `Netlist::flatten_top` refuses past `MAX_FLAT_ELEMENTS` (2^28) itself,
+/// counted before expanding (F89), but a reference just under that is more
+/// than a fuzz run has memory for: inputs between the two are not expanded.
+const FLAT_ELEMENTS: u128 = 1 << 20;
 
 /// Flattens `netlist` below its top, as LVS loads a reference, when it has
 /// one top and at most 1000 subcircuits (the oracle's own walk recurses).
 ///
-/// Oracle: a cycle the top reaches is `CyclicHierarchy`; otherwise, within
-/// [`FLAT_DEVICES`], the flat netlist holds each subcircuit's devices once
-/// per instance path, counted from the tables.
+/// Oracle, counted from the tables: a cycle the top reaches is
+/// `CyclicHierarchy`; a top whose devices, nets and instances number more
+/// than `MAX_FLAT_ELEMENTS` is `TooLarge` with that number, saturated to a
+/// `u64`; otherwise, within [`FLAT_ELEMENTS`], the flat netlist holds each
+/// subcircuit's devices once per instance path, and the top's nets plus,
+/// per instance, its callee's nets that are not on a port.
 fn flatten_checked(netlist: &Netlist, strings: &mut StrTable) {
+    /// `(devices, nets, instances)` below one placement of `cell`, each
+    /// instance with the nets it adds; `None` on a cycle.
     fn flat(
         cell: usize,
         calls: &[Vec<usize>],
-        own: &[u128],
-        memo: &mut [Option<u128>],
+        own: &[(u128, u128)],
+        memo: &mut [Option<[u128; 3]>],
         on_path: &mut [bool],
-    ) -> Option<u128> {
+    ) -> Option<[u128; 3]> {
         if let Some(count) = memo[cell] {
             return Some(count);
         }
@@ -582,9 +587,14 @@ fn flatten_checked(netlist: &Netlist, strings: &mut StrTable) {
             return None;
         }
         on_path[cell] = true;
-        let mut count = own[cell];
+        let mut count = [own[cell].0, 0, 0];
         for &callee in &calls[cell] {
-            count = count.saturating_add(flat(callee, calls, own, memo, on_path)?);
+            let [devices, nets, instances] = flat(callee, calls, own, memo, on_path)?;
+            count = [
+                count[0].saturating_add(devices),
+                count[1].saturating_add(own[callee].1).saturating_add(nets),
+                count[2].saturating_add(1).saturating_add(instances),
+            ];
         }
         on_path[cell] = false;
         memo[cell] = Some(count);
@@ -602,12 +612,22 @@ fn flatten_checked(netlist: &Netlist, strings: &mut StrTable) {
     for (&caller, &callee) in netlist.instance_subckt.iter().zip(&netlist.instance_of) {
         calls[caller.0 as usize].push(callee.0 as usize);
     }
-    let own: Vec<u128> = (0..n)
+    // Per subcircuit: its devices, and its nets that are not on its ports.
+    let mut own: Vec<(u128, u128)> = (0..n)
         .map(|c| {
             let rows = netlist.devices_of(SubcktId(u32::try_from(c).expect("under 1000")));
-            u128::from(rows.end - rows.start)
+            (u128::from(rows.end - rows.start), 0)
         })
         .collect();
+    for (net, cell) in netlist.net_subckt.iter().enumerate() {
+        let on_port = netlist.port_net.iter().any(|port| port.0 as usize == net);
+        own[cell.0 as usize].1 += u128::from(!on_port);
+    }
+    let top_nets = netlist
+        .net_subckt
+        .iter()
+        .filter(|&&cell| cell == top)
+        .count() as u128;
     let expected = flat(
         top.0 as usize,
         &calls,
@@ -615,21 +635,32 @@ fn flatten_checked(netlist: &Netlist, strings: &mut StrTable) {
         &mut vec![None; n],
         &mut vec![false; n],
     );
-    match expected {
-        None => assert!(
+    let Some([devices, nets, instances]) = expected else {
+        assert!(
             matches!(
                 netlist.flatten_top(top, strings),
                 Err(NetlistError::CyclicHierarchy(_))
             ),
             "a cycle under the top flattened"
-        ),
-        Some(count) if count <= FLAT_DEVICES => {
-            let flat = netlist
-                .flatten_top(top, strings)
-                .expect("an acyclic reference flattens");
-            assert_eq!(flat.device_model.len() as u128, count, "flat devices");
-        }
-        Some(_) => {}
+        );
+        return;
+    };
+    let nets = top_nets.saturating_add(nets);
+    let total = devices.saturating_add(nets).saturating_add(instances);
+    if total > u128::from(gpurify_ingest::netlist::MAX_FLAT_ELEMENTS) {
+        let saturated = u64::try_from(total).unwrap_or(u64::MAX);
+        let refused = netlist.flatten_top(top, strings);
+        assert!(
+            matches!(refused, Err(NetlistError::TooLarge(count)) if count == saturated),
+            "{total} elements read as {:?}",
+            refused.map(|flat| flat.device_model.len())
+        );
+    } else if total <= FLAT_ELEMENTS {
+        let flat = netlist
+            .flatten_top(top, strings)
+            .expect("an acyclic reference within the cap flattens");
+        assert_eq!(flat.device_model.len() as u128, devices, "flat devices");
+        assert_eq!(flat.net_name.len() as u128, nets, "flat nets");
     }
 }
 

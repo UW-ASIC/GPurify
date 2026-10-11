@@ -385,6 +385,64 @@ X1 x A
     ));
 }
 
+/// Testing-plan F89. Subcircuits `c0` (the top) to `c{n-1}` each place the
+/// next twice, so the flat top holds 2 + 4 + … + 2ⁿ = 2ⁿ⁺¹ − 2 instances,
+/// counted from the tables against `MAX_FLAT_ELEMENTS` (2²⁸) with the
+/// devices and nets before anything is expanded.
+///
+/// - Devices: `c{n}` holds one resistor and every net is a port but the
+///   top's `a` and `b`, so 2ⁿ devices, 2 nets: 3·2ⁿ in all.
+/// - Nets: each `c{k}`, `k < n`, joins its two placements through a net `m`
+///   of its own and `c{n}` is empty, so no device, the top's 3 nets and one
+///   `m` per placement of `c1` to `c{n-1}`, 2ⁿ − 2: 3·2ⁿ − 1 in all. A
+///   count of devices alone would let this one expand.
+///
+/// At `n = 3` each flattens to what it counts: 8 devices and 2 nets, and 0
+/// devices and 3 + 6 nets. At `n = 30` each is refused with its count at once.
+#[test]
+fn a_reference_over_the_flat_cap_is_refused_before_it_is_expanded() {
+    use gpurify_ingest::netlist::MAX_FLAT_ELEMENTS;
+    use std::fmt::Write;
+
+    // `c{k}` placing `c{k + 1}` twice through `nets`, then the leaf `last`.
+    let chain = |n: u32, [one, two]: [&str; 2], last: &str| {
+        let mut text = String::new();
+        for k in 0..n {
+            let next = k + 1;
+            write!(
+                text,
+                ".subckt c{k} a b\nX1 {one} c{next}\nX2 {two} c{next}\n.ends\n"
+            )
+            .expect("a String takes any text");
+        }
+        text + &format!(".subckt c{n} a b\n{last}.ends\n")
+    };
+    let devices = |n| chain(n, ["a b", "a b"], "R1 a b 1k rpoly\n");
+    let nets = |n| chain(n, ["a m", "m b"], "");
+    let flatten = |text: &str| {
+        let mut strings = StrTable::default();
+        let netlist = spice::read(text, &mut strings, &DeviceRecognition::default())
+            .expect("a chain of subcircuits reads");
+        let top = netlist.top().expect("c0 is the one top");
+        netlist
+            .flatten_top(top, &mut strings)
+            .map(|flat| (flat.device_model.len(), flat.net_name.len()))
+    };
+
+    assert_eq!(flatten(&devices(3)).expect("24 elements"), (8, 2));
+    assert_eq!(flatten(&nets(3)).expect("23 elements"), (0, 9));
+
+    let started = std::time::Instant::now();
+    for (text, want) in [(devices(30), 3 << 30), (nets(30), (3 << 30) - 1)] {
+        assert!(want > MAX_FLAT_ELEMENTS);
+        match flatten(&text) {
+            Err(NetlistError::TooLarge(count)) => assert_eq!(count, want),
+            other => panic!("{other:?}, want TooLarge({want})"),
+        }
+    }
+    assert!(started.elapsed().as_secs() < 5, "refused without expanding");
+}
+
 /// Oracle: SPICE's own card syntax (ngspice manual, "Resistors" and
 /// "Capacitors": `RXXXXXXX n+ n- <value> <mname>`). A value written between
 /// a card's nets and its model is the device's `r` or `c`, so the positional

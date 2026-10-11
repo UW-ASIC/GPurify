@@ -44,8 +44,26 @@ pub struct SourceSpan {
     pub line: u32,
 }
 
-/// Why a netlist was refused. Each but [`NetlistError::Io`] carries the line
-/// and the offending token.
+/// The most devices, nets and instances [`Netlist::flatten_top`] expands a
+/// reference to.
+///
+/// LVS compares a flat reference, so every instance is expanded, and a few
+/// lines can place a cell 2ⁿ times (each of `n` subcircuits placing the next
+/// twice): 766 bytes reached 2²⁰ devices, and 30 levels would exhaust memory.
+/// The expansion is counted from the tables first and a reference over the cap
+/// is refused before anything is expanded. Nets and instances count with the
+/// devices because each costs memory or a step of the walk on its own: a
+/// chain that places no device still names a net per placement. The cap is a
+/// layout's, [`MAX_FLAT_POLYGONS`](crate::layout::MAX_FLAT_POLYGONS): a
+/// layout's every device and net is at least one polygon, so a reference past
+/// it could not match any layout the reader accepts.
+// ponytail: a flat cap, as the layout's; comparing hierarchically is the
+// upgrade that lifts both.
+pub const MAX_FLAT_ELEMENTS: u64 = crate::layout::MAX_FLAT_POLYGONS;
+
+/// Why a netlist was refused. Each but [`NetlistError::Io`] and the
+/// hierarchy's refusals ([`NetlistError::CyclicHierarchy`],
+/// [`NetlistError::TooLarge`]) carries the line and the offending token.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum NetlistError {
     /// A token that does not fit the card: a missing name, a malformed
@@ -71,6 +89,14 @@ pub enum NetlistError {
     /// hierarchy cannot be flattened ([`Netlist::flatten_top`]).
     #[error("subcircuit {0} places itself through its instances")]
     CyclicHierarchy(String),
+    /// A top that flattens to more than [`MAX_FLAT_ELEMENTS`] devices, nets
+    /// and instances, counted from the tables before anything is expanded
+    /// ([`Netlist::flatten_top`]).
+    #[error(
+        "the reference flattens to {0} devices, nets and instances, over the \
+         {MAX_FLAT_ELEMENTS} a flat comparison holds; LVS flattens every instance"
+    )]
+    TooLarge(u64),
     /// The netlist file could not be read. The readers never return it; a
     /// caller reading the file does.
     #[error("io: {0}")]
@@ -181,16 +207,29 @@ impl Netlist {
     ///
     /// # Errors
     ///
-    /// [`NetlistError::CyclicHierarchy`] when a subcircuit places itself.
+    /// [`NetlistError::CyclicHierarchy`] when a subcircuit `top` reaches
+    /// places itself, then [`NetlistError::TooLarge`] when the result would
+    /// hold more than [`MAX_FLAT_ELEMENTS`] devices, nets and instances. Both
+    /// are found by counting, before anything is expanded.
     ///
     /// # Panics
     ///
     /// On a `top` past [`Self::subckt_count`].
+    ///
+    /// # Time complexity
+    ///
+    /// The count is linear in the netlist. The expansion is linear in the
+    /// devices, nets and instances it produces, times the netlist's nets and
+    /// instances per instance placed.
     pub fn flatten_top(
         &self,
         top: SubcktId,
         strings: &mut StrTable,
     ) -> Result<Netlist, NetlistError> {
+        let size = self.flat_size(top, strings)?;
+        if size > MAX_FLAT_ELEMENTS {
+            return Err(NetlistError::TooLarge(size));
+        }
         let mut out = Netlist {
             subckt_name: vec![self.subckt_name[top.0 as usize]],
             subckt_port_start: vec![0],
@@ -220,6 +259,65 @@ impl Netlist {
         self.expand(top, &map, "", strings, &mut on_chain, &mut out)?;
         out.subckt_device_start.push(narrow(out.device_model.len()));
         Ok(out)
+    }
+
+    /// What [`Self::flatten_top`] expands `top` to, counted from the tables:
+    /// its devices, its nets and the instances it places, all the way down,
+    /// saturating. `top`'s own nets are all in the result; each instance adds
+    /// its callee's nets that are not on a port.
+    fn flat_size(&self, top: SubcktId, strings: &StrTable) -> Result<u64, NetlistError> {
+        let cells = self.subckt_count();
+        let mut calls = vec![Vec::new(); cells];
+        for (&caller, &callee) in self.instance_subckt.iter().zip(&self.instance_of) {
+            calls[caller.0 as usize].push(callee);
+        }
+        let mut on_port = vec![false; self.net_name.len()];
+        for &port in &self.port_net {
+            on_port[port.0 as usize] = true;
+        }
+        let (mut nets, mut inner) = (vec![0u64; cells], vec![0u64; cells]);
+        for (net, &cell) in self.net_subckt.iter().enumerate() {
+            nets[cell.0 as usize] += 1;
+            inner[cell.0 as usize] += u64::from(!on_port[net]);
+        }
+        let (mut counted, mut on_chain) = (vec![None; cells], vec![false; cells]);
+        let below = self.flat_below(top, (&calls, &inner), &mut counted, &mut on_chain, strings)?;
+        Ok(nets[top.0 as usize].saturating_add(below))
+    }
+
+    /// The devices and instances below one placement of `cell`, each
+    /// instance with the nets it adds (`inner` of its callee), saturating;
+    /// memoised in `counted`. Refuses a cycle, naming the subcircuit met
+    /// twice on one chain, as `expand` would.
+    fn flat_below(
+        &self,
+        cell: SubcktId,
+        (calls, inner): (&[Vec<SubcktId>], &[u64]),
+        counted: &mut [Option<u64>],
+        on_chain: &mut [bool],
+        strings: &StrTable,
+    ) -> Result<u64, NetlistError> {
+        let row = cell.0 as usize;
+        if let Some(count) = counted[row] {
+            return Ok(count);
+        }
+        if on_chain[row] {
+            return Err(NetlistError::CyclicHierarchy(
+                strings.resolve(self.subckt_name[row]).to_owned(),
+            ));
+        }
+        on_chain[row] = true;
+        let devices = self.devices_of(cell);
+        let mut count = u64::from(devices.end - devices.start);
+        for &callee in &calls[row] {
+            let below = self.flat_below(callee, (calls, inner), counted, on_chain, strings)?;
+            count = count
+                .saturating_add(1 + inner[callee.0 as usize])
+                .saturating_add(below);
+        }
+        on_chain[row] = false;
+        counted[row] = Some(count);
+        Ok(count)
     }
 
     /// Append `cell`'s devices to `out`, its nets mapped by `map` (indexed by
