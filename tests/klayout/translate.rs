@@ -10,7 +10,7 @@
 //! Each rule writes JSON lines tagged with its id (see `PRELUDE`), and a
 //! [`Mirror`] says how those lines are compared with `GPurify`'s findings.
 
-use gpurify::check::drc::{Rule, RuleSet};
+use gpurify::check::drc::{Rule, RuleSet, WireBand};
 use gpurify::check::report::LimitSense;
 use gpurify::geom::LayerId;
 use gpurify_ingest::deck::{Deck, DerivedOp};
@@ -733,15 +733,16 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 outer,
                 inner,
                 limit,
+                wire,
             } => {
                 fig(outer, &mut reads);
                 let name = fig(inner, &mut reads);
                 writeln!(
                     body,
-                    "emit({q}, {o}.enclosing({i}, {}, euclidian, transparent)) ; emit({q}, {i}.not_inside({o}))",
+                    "i = {} ; emit({q}, {o}.enclosing(i, {}, euclidian, transparent)) ; emit({q}, i.not_inside({o}))",
+                    banded(var(inner), &var(outer), wire),
                     lim(limit),
                     o = var(outer),
-                    i = var(inner)
                 )
                 .expect("a String");
                 exact("min_enclosure", Key::FigRow(name, 1), Value::Length)
@@ -750,17 +751,18 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 outer,
                 inner,
                 min_one_side,
+                wire,
             } => {
                 fig(outer, &mut reads);
                 let name = fig(inner, &mut reads);
                 writeln!(
                     body,
-                    "c = enclosed({o}, projection) < {} ; \
-                     emit({q}, {i}.drc(if_all(c.first_edges.angle == 90, c.first_edges.angle == 0))) ; \
-                     emit({q}, {i}.not_inside({o}))",
+                    "i = {} ; c = enclosed({o}, projection) < {} ; \
+                     emit({q}, i.drc(if_all(c.first_edges.angle == 90, c.first_edges.angle == 0))) ; \
+                     emit({q}, i.not_inside({o}))",
+                    banded(var(inner), &var(outer), wire),
                     lim(min_one_side),
                     o = var(outer),
-                    i = var(inner)
                 )
                 .expect("a String");
                 approx(
@@ -1515,6 +1517,22 @@ fn doubled(lengths: &[gpurify::geom::Dbu]) -> String {
         .map(|length| (2 * length.raw()).to_string())
         .collect::<Vec<_>>()
         .join(", ")
+/// The inner layer `inner` restricted to an enclosure's wire band: the shapes
+/// inside the part of `outer` at least `from` wide (`sized(-(w - 1))` and back
+/// at x2, as for wide spacing) and not inside the part `below` wide.
+fn banded(inner: String, outer: &str, wire: WireBand) -> String {
+    let wide = |w: gpurify::geom::Dbu| {
+        let t = w.raw() - 1;
+        format!("{outer}.sized(-{t}).sized({t})")
+    };
+    let mut out = inner;
+    if wire.from.raw() > 0 {
+        out = format!("{out}.inside({})", wide(wire.from));
+    }
+    if let Some(below) = wire.below {
+        out = format!("{out}.not_inside({})", wide(below));
+    }
+    out
 }
 
 fn exact(kind: &'static str, key: Key, value: Value) -> Spec {

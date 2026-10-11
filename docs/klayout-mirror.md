@@ -561,6 +561,9 @@ emit(id, O.enclosing(I, LIM, euclidian, transparent)) ; emit(id, I.not_inside(O)
 
 - `enclosing` ignores inner shapes that are partly or fully outside (v T7), hence the
   `not_inside`. Coincident edges are reported at 0, and corner-to-corner distances count.
+- A wire band restricts `I` first, for this kind and the next: `I.inside(O.sized(-T).sized(T))`
+  with `T = W - 1` at x2 (the wide part of kind 11) for `width: W`, and `.not_inside(...)` the
+  same way for `below:`.
 - Key FIG by shape: per inner figure, the least over its drawn rows (the marker is in the strip
   outside the inner).
 

@@ -28,7 +28,7 @@
 use crate::common;
 
 use common::Sink;
-use gpurify_check::drc::Rule;
+use gpurify_check::drc::{Rule, WireBand};
 use gpurify_check::report::{Measurement, Outcome, RuleRun, SkipReason, Violations};
 use gpurify_geom::MAX_ABS_DBU;
 use gpurify_geom::{GeometryStore, LayerId};
@@ -143,6 +143,7 @@ fn run_overlay(store: &GeometryStore, k: i64) -> (Violations, Vec<RuleRun>) {
                     outer: ENC_OUTER,
                     inner: ENC_INNER,
                     limit: dbu(10 * k),
+                    wire: WireBand::ANY,
                 },
             ),
             (
@@ -151,6 +152,7 @@ fn run_overlay(store: &GeometryStore, k: i64) -> (Violations, Vec<RuleRun>) {
                     outer: BAD,
                     inner: ENC_INNER,
                     limit: dbu(10 * k),
+                    wire: WireBand::ANY,
                 },
             ),
             (
@@ -159,6 +161,7 @@ fn run_overlay(store: &GeometryStore, k: i64) -> (Violations, Vec<RuleRun>) {
                     outer: ENC_OUTER,
                     inner: ENC_INNER,
                     min_one_side: dbu(30 * k),
+                    wire: WireBand::ANY,
                 },
             ),
             (

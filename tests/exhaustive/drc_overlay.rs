@@ -35,6 +35,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     [
         min_enclosure(depth),
         asymmetric_enclosure(depth),
+        wire_enclosure(),
         min_extension(depth),
         overlap(depth),
         must_contain(),
@@ -527,6 +528,80 @@ fn asymmetric_enclosure(depth: Depth) -> Vec<Fixture> {
             ));
         }
     }
+    every_placement(cases)
+}
+
+/// Enclosure by wire width, LEF/DEF 5.8 Example 1-3's `via23` in nm:
+/// `enclosure(via, met2, opposite; below: 1000nm) >= 50nm` (`narrow`),
+/// `enclosure(via, met2; width: 1000nm, below: 2000nm) >= 20nm` (`mid`) and
+/// `enclosure(via, met2; width: 2000nm) >= 50nm` (`wide`) (`min_enclosure`
+/// and `asymmetric_enclosure` with a wire band, DRC-043): each 200 nm via is
+/// held by exactly one row, the one whose band holds the width of the wire it
+/// lies on (where a square that wide fits around all of it), and an unhosted
+/// via by the lowest.
+///
+/// Oracle: the wires are drawn to a width, and the via's margins to the
+/// wire's edges are drawn: 15 to the left, 30 below. So `narrow` reads
+/// `max(min(15, far), min(30, far)) = 30` and the others 15.
+///
+/// Shapes: a wire 999, 1000, 1001, 1999, 2000 and 2001 wide (the bands'
+/// edges, inclusive below, exclusive above); a via on a 500 nm tab off a
+/// 3000 nm plate (the tab's width, not the plate's, so `narrow` reads 20);
+/// a via 40 into a corner of the plate (`wide` only); an unhosted via
+/// (`narrow`, 0).
+fn wire_enclosure() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["via", "met2"],
+        "rule narrow enclosure(via, met2, opposite; below: 1000nm) >= 50nm\n\
+         rule mid enclosure(via, met2; width: 1000nm, below: 2000nm) >= 20nm\n\
+         rule wide enclosure(via, met2; width: 2000nm) >= 50nm\n",
+    );
+    let case = |name: &str, layout: Layout, rows: [Vec<Finding>; 3]| {
+        let [narrow, mid, wide] = rows;
+        fixture(
+            &format!("wire_enclosure/{name}"),
+            &["DRC-043", "DRC-040", "DRC-041"],
+            &deck,
+            layout,
+            &[("narrow", narrow), ("mid", mid), ("wide", wide)],
+        )
+    };
+    let via = || Layout::default().rect("via", 0, 0, 200, 200);
+    let mut cases = Vec::new();
+    for w in [999, 1000, 1001, 1999, 2000, 2001] {
+        let rows = if w < 1000 {
+            [lengths(&[30]), vec![], vec![]]
+        } else if w < 2000 {
+            [vec![], lengths(&[15]), vec![]]
+        } else {
+            [vec![], vec![], lengths(&[15])]
+        };
+        cases.push(case(
+            &format!("wire/{w}"),
+            via().rect("met2", -15, -30, 3000, w - 30),
+            rows,
+        ));
+    }
+    cases.push(case(
+        "tab",
+        Layout::default()
+            .rect("met2", 0, 0, 3000, 3000)
+            .rect("met2", 3000, 1000, 3800, 1500)
+            .rect("via", 3580, 1150, 3780, 1490),
+        [lengths(&[20]), vec![], vec![]],
+    ));
+    cases.push(case(
+        "plate",
+        Layout::default()
+            .rect("met2", 0, 0, 3000, 3000)
+            .rect("via", 40, 40, 240, 240),
+        [vec![], vec![], lengths(&[40])],
+    ));
+    cases.push(case(
+        "unhosted",
+        via().rect("met2", 5000, 5000, 6000, 6000),
+        [lengths(&[0]), vec![], vec![]],
+    ));
     every_placement(cases)
 }
 
