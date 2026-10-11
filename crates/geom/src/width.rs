@@ -4,11 +4,11 @@
 //!
 //! Data in: one validated rectilinear polygon. Data out: the narrowest gap and
 //! its midpoint. Exact on the whole input domain, but a neck's length, which
-//! is floored to a whole unit.
+//! is floored to a whole unit ([`narrowest_width2`] keeps it exact, squared).
 
-use crate::ops::Point;
+use crate::ops::{isqrt, Point};
 use crate::view::PolygonRef;
-use crate::Dbu;
+use crate::{Dbu, DbuArea};
 
 /// Midpoint of two coordinates, floored on both sides of the origin.
 const fn mid(a: Dbu, b: Dbu) -> Dbu {
@@ -205,10 +205,16 @@ pub fn narrowest_facing(
 /// across material) and the diagonal necks ([`narrowest_neck`]), a neck's
 /// length floored to a whole unit.
 pub fn narrowest_width(poly: PolygonRef<'_>, scratch: &mut FacingScratch) -> Dbu {
+    isqrt(narrowest_width2(poly, scratch))
+}
+
+/// [`narrowest_width`] squared, exact: a diagonal neck of `√5000` is 5000,
+/// so comparing it against a squared limit has no rounding.
+pub fn narrowest_width2(poly: PolygonRef<'_>, scratch: &mut FacingScratch) -> DbuArea {
     let facing = narrowest_facing(poly, true, scratch)
         .expect("every validated polygon has a facing pair across its own material")
         .0;
-    narrowest_neck(poly, facing).map_or(facing, |(neck, _)| neck)
+    neck2(poly, facing).map_or(facing.mul_wide(facing), |(gap2, _)| DbuArea::new(gap2))
 }
 
 /// The narrowest diagonal neck of a polygon under `limit`: the Euclidean gap
@@ -222,6 +228,19 @@ pub fn narrowest_width(poly: PolygonRef<'_>, scratch: &mut FacingScratch) -> Dbu
 /// Over `k` concave corners, `O(k log k)` plus the pairs within `limit` in x:
 /// `O(k²)` only when every corner sits in one `limit`-wide column.
 pub fn narrowest_neck(poly: PolygonRef<'_>, limit: Dbu) -> Option<(Dbu, Point)> {
+    neck2(poly, limit).map(|(gap2, at)| {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_precision_loss,
+            reason = "a gap under the limit"
+        )]
+        let gap = (gap2 as f64).sqrt() as i64;
+        (Dbu::new_unchecked(gap), at)
+    })
+}
+
+/// [`narrowest_neck`] with the gap squared, exact.
+fn neck2(poly: PolygonRef<'_>, limit: Dbu) -> Option<(i128, Point)> {
     // ponytail: pairs within `limit` along x, O(k²) only when every concave
     // corner sits in one `limit`-wide column.
     // Each concave corner, with the diagonal its void quadrant points along.
@@ -264,13 +283,5 @@ pub fn narrowest_neck(poly: PolygonRef<'_>, limit: Dbu) -> Option<(Dbu, Point)> 
             }
         }
     }
-    best.map(|(gap2, at)| {
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_precision_loss,
-            reason = "a gap under the limit"
-        )]
-        let gap = (gap2 as f64).sqrt() as i64;
-        (Dbu::new_unchecked(gap), at)
-    })
+    best
 }

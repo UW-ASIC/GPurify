@@ -306,8 +306,11 @@ pub enum DerivedOp {
     Extents,
     /// The shapes whose area, holes excluded, lies in `lo..=hi` square grid units.
     WithArea(i128, i128),
-    /// The shapes whose narrowest width, as the `width` rule measures it, lies
-    /// in `lo..=hi` grid units; a diagonal neck counts, floored to a whole unit.
+    /// The shapes whose narrowest width, as the `width` rule measures it (a
+    /// diagonal neck counts), has its square in `lo..=hi` square grid units.
+    /// A squared width is a whole number, so the deck's strict bounds are
+    /// kept exactly: `with_width(> 70nm)` is `4901..` and holds a `√5000`
+    /// neck, `with_width(<= 70nm)` is `..=4900` and does not.
     WithWidth(i128, i128),
     /// Polygons to their boundary edges, each directed with the material on
     /// its left. The result is an edge layer.

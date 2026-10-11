@@ -3030,6 +3030,12 @@ fn selections() -> Vec<Fixture> {
     ));
     // Two plates overlapping 50 x 50 at a corner: the Euclidean neck between
     // their concave corners is sqrt(5000), 70.7 nm, which `width` measures.
+    // It is more than 70 nm and less than 71 (F65: not floored to 70).
+    let plates = || {
+        Layout::default()
+            .rect("a", 0, 0, 1000, 1000)
+            .rect("a", 950, 950, 1950, 1950)
+    };
     cases.push(derived(
         "derived/with_width_neck",
         cat,
@@ -3038,9 +3044,19 @@ fn selections() -> Vec<Fixture> {
             ("a.with_width(< 100nm)", areas(&[1_997_500])),
             ("a.with_width(>= 100nm)", vec![]),
         ],
-        Layout::default()
-            .rect("a", 0, 0, 1000, 1000)
-            .rect("a", 950, 950, 1950, 1950),
+        plates(),
+    ));
+    cases.push(derived(
+        "derived/with_width_neck_strict",
+        cat,
+        &["a"],
+        &[
+            ("a.with_width(> 70nm)", areas(&[1_997_500])),
+            ("a.with_width(<= 70nm)", vec![]),
+            ("a.with_width(== 70nm)", vec![]),
+            ("a.with_width(> 70nm, < 71nm)", areas(&[1_997_500])),
+        ],
+        plates(),
     ));
 
     let texts = rects(

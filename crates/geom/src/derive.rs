@@ -15,7 +15,7 @@ use crate::ops::{segments_intersect, Point, Seg};
 use crate::rects::decompose_into;
 use crate::store::GeometryStoreBuilder;
 use crate::view::{validate_layer_into, PolygonRef, ValidatedLayer};
-use crate::width::{narrowest_width, FacingScratch};
+use crate::width::{narrowest_width2, FacingScratch};
 use crate::{narrow, Dbu};
 use std::ops::RangeInclusive;
 
@@ -136,13 +136,15 @@ pub fn with_area_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mut
     a.select_into(&keep, out);
 }
 
-/// Polygons whose narrowest width in grid units, as the `width` rule measures
-/// it ([`narrowest_width`]: diagonal necks count, floored to a whole unit), is
-/// in `range`.
+/// Polygons whose narrowest width, as the `width` rule measures it (diagonal
+/// necks count), has its square in `range`, in square grid units
+/// ([`narrowest_width2`]). Squared, a neck is a whole number, so a strict
+/// bound is exact as an inclusive one: `> 70` is `4901..` here, and a
+/// `√5000` neck (70.7) is in it.
 pub fn with_width_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mut ValidatedLayer) {
     let mut scratch = FacingScratch::default();
     let keep: Vec<bool> = (0..narrow(a.len()))
-        .map(|idx| range.contains(&i128::from(narrowest_width(a.get(idx), &mut scratch).raw())))
+        .map(|idx| range.contains(&narrowest_width2(a.get(idx), &mut scratch).raw()))
         .collect();
     a.select_into(&keep, out);
 }

@@ -135,7 +135,7 @@ this way. Operations on shapes:
 | `.holes()` | Each hole, filled. A hole with an island in it is filled over the island. |
 | `.extents()` | The bounding box of each shape. Boxes that overlap stay separate shapes, as in KLayout: `forbidden` reports each, and an operation or a check that merges its layer merges them. |
 | `.with_area(bounds)` | The shapes whose area, not counting holes, is within the bounds. |
-| `.with_width(bounds)` | The shapes whose narrowest width, as `width` measures it, is within the bounds. The diagonal neck where two shapes overlap at a corner counts, at its length rounded down to the grid. |
+| `.with_width(bounds)` | The shapes whose narrowest width, as `width` measures it, is within the bounds. The diagonal neck where two shapes overlap at a corner counts, at its exact length: a 70.7 nm neck is `> 70nm` and not `<= 70nm`. |
 | `.with_text(T, "pattern")` | The shapes holding a text on layer `T` that matches `pattern`, as IHP picks devices by their text. `*` matches any run of characters and `?` one; everything else matches itself, case included. A text on a shape's edge counts. `T` must be a drawn layer. |
 | `.without_text(T, "pattern")` | The shapes holding no such text. |
 | `.edges()` | The boundary of each shape, as an edge layer. |

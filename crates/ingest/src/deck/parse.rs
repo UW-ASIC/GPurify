@@ -700,15 +700,15 @@ impl<'a> Parser<'a> {
                 (derived, Some(false), None)
             }
             "with_area" => {
-                let (lo, hi) = self.bounds(op, Dim::Area)?;
+                let (lo, hi) = self.bounds(op, Dim::Area, false)?;
                 (DerivedOp::WithArea(lo, hi), Some(false), None)
             }
             "with_width" => {
-                let (lo, hi) = self.bounds(op, Dim::Length)?;
+                let (lo, hi) = self.bounds(op, Dim::Length, true)?;
                 (DerivedOp::WithWidth(lo, hi), Some(false), None)
             }
             "with_length" => {
-                let (lo, hi) = self.bounds(op, Dim::Length)?;
+                let (lo, hi) = self.bounds(op, Dim::Length, false)?;
                 (DerivedOp::WithLength(lo, hi), Some(true), None)
             }
             "with_text" | "without_text" => {
@@ -760,8 +760,11 @@ impl<'a> Parser<'a> {
     }
 
     /// `(cmp value {, cmp value})`: at most one lower and one upper bound, or one
-    /// `==`. Inclusive, in grid units (square grid units for an area).
-    fn bounds(&mut self, op: &str, dim: Dim) -> R<(i128, i128)> {
+    /// `==`. Inclusive, in grid units (square grid units for an area). With
+    /// `square`, a length bound `n` is on the squared measure, `n·|n|` (which
+    /// keeps the order), so a strict bound stays exact on an irrational length:
+    /// `> 70` is `>= 4901`, which a `√5000` neck meets.
+    fn bounds(&mut self, op: &str, dim: Dim, square: bool) -> R<(i128, i128)> {
         let open = self.expect("(")?;
         let (mut lo, mut hi) = (None, None);
         loop {
@@ -780,6 +783,7 @@ impl<'a> Parser<'a> {
             } else {
                 i128::from(self.length(&value, op)?.raw())
             };
+            let n = if square { n * n.abs() } else { n };
             let (low, high) = match cmp {
                 ">=" => (Some(n), None),
                 ">" => (Some(n + 1), None),

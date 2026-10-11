@@ -309,10 +309,11 @@ fn with_width_selects_on_the_narrowest_width() {
         (&[0, 10, 10, 4, 4, 0], &[0, 0, 2, 2, 10, 10]), // L, narrowest 2
         (&[20, 23, 23, 20], &[0, 0, 10, 10]),           // 3 x 10
     ]);
+    // The range is on the squared width: `>= 3` is `9..`, `<= 2` is `..=4`.
     let mut got = ValidatedLayer::default();
-    with_width_into(&l, 3..=i128::MAX, &mut got);
+    with_width_into(&l, 9..=i128::MAX, &mut got);
     assert_eq!(boxes(&got), [(20, 0, 23, 10)], "the L is 2 wide at its arm");
-    with_width_into(&l, 0..=2, &mut got);
+    with_width_into(&l, 0..=4, &mut got);
     assert_eq!(boxes(&got), [(0, 0, 10, 10)]);
 }
 
@@ -320,15 +321,19 @@ fn with_width_selects_on_the_narrowest_width() {
 fn with_width_counts_the_diagonal_neck_width_measures() {
     // Two 10-squares overlapping 2 x 2 at a corner: every facing pair is 10
     // apart, but the concave corners (10, 8) and (8, 10) are sqrt(8) = 2.83
-    // apart, which `width` reports floored, as 2.
+    // apart: 8 squared, exactly. So the neck is `> 2` (`5..`) and `<= 3`
+    // (`..=9`), and neither `<= 2` (`..=4`) nor `>= 3` (`9..`): a floor to 2
+    // would put it in `<= 2` and out of `> 2` (F65).
     let plates = rects(&[(0, 0, 10, 10), (8, 8, 18, 18)]);
     let mut got = ValidatedLayer::default();
-    with_width_into(&plates, 0..=2, &mut got);
-    assert_eq!(boxes(&got), [(0, 0, 18, 18)], "the neck is 2 wide");
-    with_width_into(&plates, 3..=i128::MAX, &mut got);
+    with_width_into(&plates, 5..=i128::MAX, &mut got);
+    assert_eq!(boxes(&got), [(0, 0, 18, 18)], "the neck is wider than 2");
+    with_width_into(&plates, 0..=9, &mut got);
+    assert_eq!(boxes(&got), [(0, 0, 18, 18)], "the neck is at most 3");
+    with_width_into(&plates, 0..=4, &mut got);
+    assert!(got.is_empty(), "the neck is not at most 2");
+    with_width_into(&plates, 9..=i128::MAX, &mut got);
     assert!(got.is_empty(), "nothing is 3 wide at the neck");
-    with_width_into(&plates, 0..=1, &mut got);
-    assert!(got.is_empty(), "the neck floors to 2, not less");
 }
 
 fn seg(ax: i64, ay: i64, bx: i64, by: i64) -> Seg {
