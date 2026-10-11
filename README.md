@@ -95,12 +95,14 @@ come from and using the foundry's rule ids:
 
 | File | Drawn layers | Rules | Devices |
 |---|---:|---:|---:|
-| `ihp_sg13g2` | 62 | 413 | 10 |
-| `gf180mcu` | 55 | 228 | 27 |
-| `sky130` | 51 | 222 | 22 |
-| `generic_finfet` (ASAP7) | 45 | 168 | 0 |
+| `ihp_sg13g2` | 75 | 441 | 12 |
+| `gf180mcu` | 55 | 250 | 27 |
+| `sky130` | 60 | 268 | 30 |
+| `generic_finfet` (ASAP7) | 45 | 174 | 0 |
 
-None has been compared against foundry signoff. What each leaves out is
+From Rust, each is also compiled into the library as a constant
+(`gpurify::pdks::SKY130` and so on), so a tool built on GPurify reads the
+same deck instead of a copy. None has been compared against foundry signoff. What each leaves out is
 listed at the end of the deck and in [docs/limitations.md](docs/limitations.md#shipped-decks).
 
 ## The same input gives the same file
