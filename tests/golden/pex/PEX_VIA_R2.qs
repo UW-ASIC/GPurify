@@ -2,6 +2,7 @@ exit 0
 --- stdout
 *SPEF "IEEE 1481-1998"
 *DESIGN "tests/fixtures/pex/PEX_VIA_R2.gds"
+*DATE ""
 *VENDOR "gpurify"
 *PROGRAM "gpurify"
 *VERSION "0.1.0"
@@ -13,7 +14,7 @@ exit 0
 *T_UNIT 1 NS
 *C_UNIT 1 FF
 *R_UNIT 1 OHM
-*L_UNIT 1 PH
+*L_UNIT 0.000001 UH
 
 *D_NET PEX_VIA2_n0 0.188289
 *CONN
