@@ -267,6 +267,15 @@ impl Row<'_> {
         Ok(out)
     }
 
+    /// An antenna row's one collecting measure: a row states one
+    /// `sidewall_thickness`, or none for the drawn area.
+    fn antenna_measure(&self) -> Result<antenna::AntennaMeasure, ErcError> {
+        Ok(match self.opt_length("sidewall_thickness")? {
+            Some(thickness) => antenna::AntennaMeasure::Sidewall { thickness },
+            None => antenna::AntennaMeasure::Area,
+        })
+    }
+
     fn flag(&self, param: &'static str, absent: bool) -> Result<bool, ErcError> {
         match self.find(param) {
             None => Ok(absent),
@@ -395,12 +404,7 @@ impl RuleSet {
                 "antenna" => {
                     let layers = row.layers_from(2)?;
                     let max_ratio = row.number("max_ratio")?;
-                    // One measure for the whole collecting set: a row states
-                    // one `sidewall_thickness`.
-                    let measure = match row.opt_length("sidewall_thickness")? {
-                        Some(thickness) => antenna::AntennaMeasure::Sidewall { thickness },
-                        None => antenna::AntennaMeasure::Area,
-                    };
+                    let measure = row.antenna_measure()?;
                     let diode = row.opt_layer("diode_layer")?;
                     let table = &mut set.antenna;
                     row.head(&mut table.head)?;
@@ -416,6 +420,7 @@ impl RuleSet {
                 "antenna_electrical" => {
                     let layers = row.layers_from(2)?;
                     let max_ratio = row.number("max_ratio")?;
+                    let measure = row.antenna_measure()?;
                     let diode = row.opt_layer("diode_layer")?;
                     let credit = row.opt_number("diode_credit")?.unwrap_or(0.0);
                     let bonus = row.opt_number("diode_bonus")?.unwrap_or(0.0);
@@ -423,6 +428,9 @@ impl RuleSet {
                     row.head(&mut table.head)?;
                     table.gate.push(layers[0]);
                     table.collector.extend_from_slice(&layers[1..]);
+                    table
+                        .collector_measure
+                        .extend(layers[1..].iter().map(|_| measure));
                     table.diode.push(diode);
                     table.diode_credit.push(credit);
                     table.diode_bonus.push(bonus);
@@ -967,7 +975,14 @@ impl RuleSet {
         supply::check_esd_topological(design, intent, &self.esd_topological, out, runs);
 
         antenna::check_antenna(design, &self.antenna, scratch, out, runs);
-        antenna::check_antenna_electrical(design, &self.antenna_electrical, scratch, out, runs);
+        antenna::check_antenna_electrical(
+            design,
+            grid,
+            &self.antenna_electrical,
+            scratch,
+            out,
+            runs,
+        );
         antenna::check_density_cmp(design, die, &self.density_cmp, scratch, out, runs);
 
         electrical::check_p2p_resistance(
