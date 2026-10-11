@@ -128,6 +128,8 @@ fn cuts() -> (Layout, Layout) {
     (a, b)
 }
 
+/// DRC-068, cut-area conservation between two databases.
+///
 /// Oracle: construct-from-answer. The lost cut differs by its 22500 nm²; the
 /// slotted one by the ring around its slot, 22500 − 12100 = 10400 nm², one
 /// region with a hole. Together they are the cut area `b` lost,
