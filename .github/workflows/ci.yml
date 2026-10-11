@@ -6,6 +6,13 @@ on:
     branches: [main]
   pull_request:
 
+# A newer push supersedes an older run of the same workflow on the same
+# branch or pull request: with many branches in flight, stale runs would
+# otherwise hold the runners.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 

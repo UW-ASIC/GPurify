@@ -11,6 +11,13 @@ on:
   pull_request:
     types: [labeled, synchronize]
 
+# A newer push supersedes an older run of the same workflow on the same
+# branch or pull request: with many branches in flight, stale runs would
+# otherwise hold the runners.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -105,7 +112,7 @@ jobs:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
           restore-keys: fuzz-corpus-${{ matrix.target }}-
-      # One hour per target. A crash, a leak, an input over 2 GiB of memory or
+      # One hour per target nightly, ten minutes on a pull request. A crash, a leak, an input over 2 GiB of memory or
       # one taking over 20 s fails the job; the input is uploaded below, to be
       # minimised (`cargo fuzz tmin`) into fuzz/regressions/<target>/.
       - run: |
@@ -113,7 +120,7 @@ jobs:
           # The prebuilt cargo-fuzz is a musl binary and defaults to the triple
           # it was built for; AddressSanitizer cannot link static musl.
           cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} ${{ matrix.seeds }} -- \
-            -max_total_time=3600 -rss_limit_mb=2048 -timeout=20
+            -max_total_time=${{ github.event_name == 'pull_request' && 600 || 3600 }} -rss_limit_mb=2048 -timeout=20
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
