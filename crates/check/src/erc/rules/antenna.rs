@@ -54,6 +54,10 @@ pub struct Stack {
     /// Whether shapes touching on one layer are one net
     /// (`connect touch_within_layer`).
     pub intra_layer_touch: bool,
+    /// The gate terminal layer (the first) of every `device mos` row: a
+    /// shape that is not a conductor is on one of these when it overlaps
+    /// one, whatever the cuts say ([`AntennaTable`]).
+    pub gates: Vec<LayerId>,
 }
 
 impl Stack {
@@ -132,10 +136,15 @@ pub struct CmpModel {
 ///   conductor (a derived `poly and diffusion` gate, a cut, a capacitor
 ///   plate) is on the net of one conductor it overlaps with positive area
 ///   (touching alone does not join): a cut, one its `connect via` rows name;
-///   any other layer, the one it lies on, never metal routed over it. Of the
-///   conductors it overlaps, one that another reaches upward through cuts is
-///   over it, and of the rest the topmost is taken, so a gate sits on its
-///   poly, not on the diffusion or well under it.
+///   any other layer, the one it lies on, never metal routed over it. A
+///   conductor some `device mos` row names as its gate terminal
+///   ([`Stack::gates`]) is taken first, so a derived gate sits on its poly
+///   even where a `connect via` row joins poly to the diffusion under it.
+///   Without one, of the conductors it overlaps, one that another reaches
+///   upward through cuts is over it, and of the rest the topmost is taken,
+///   so a gate sits on its poly, not on the diffusion or well under it,
+///   unless a cut joins the diffusion to the poly (a deck that writes no MOS
+///   device then puts the gate on the diffusion).
 /// - gates on one net at every stage have one ratio and are reported once.
 /// - with a `diode` layer, a gate whose net at the row's highest stage has
 ///   area on that layer is not this row's: a foundry that states a separate
@@ -305,6 +314,9 @@ pub struct DensityCmpTable {
 ///
 /// - a cut joins only those its `connect via` rows name, so a via1 cut sits on
 ///   met1, not on the poly under it;
+/// - a MOS gate terminal layer ([`Stack::gates`]) is taken first, the rules
+///   below choosing among several; only a shape over none of them falls to
+///   the rules below among all;
 /// - one that another of them reaches upward through cuts (the stack's vias,
 ///   followed bottom-up) is routed over the shape, joined to it only through
 ///   those cuts, and is passed over: metal drawn over a gate is not its net;
@@ -384,13 +396,18 @@ fn attach(
         .collect();
     let joins = |c: usize| named.is_empty() || named.contains(&conductors[c]);
 
+    let gate = |c: usize| stack.gates.contains(&conductors[c]);
     let first = store.polys_on_layer(layer).start;
     for (offset, &poly) in mine.poly_of_row.iter().enumerate() {
         let hit = &hit[poly as usize * width..(poly as usize + 1) * width];
         let lies = |c: usize| hit[c] != NetId::NONE && joins(c);
-        let on = (0..width)
-            .rev()
-            .find(|&c| lies(c) && !(0..width).any(|d| lies(d) && over[d * width + c]));
+        // The topmost of `among` that is over no other of them.
+        let pick = |among: &dyn Fn(usize) -> bool| {
+            (0..width)
+                .rev()
+                .find(|&c| among(c) && !(0..width).any(|d| among(d) && over[d * width + c]))
+        };
+        let on = pick(&|c| lies(c) && gate(c)).or_else(|| pick(&lies));
         net_of[first as usize + offset] = on.map_or(NetId::NONE, |c| hit[c]);
     }
     true
@@ -1197,6 +1214,7 @@ mod tests {
                 (via1, met1, met2),
             ],
             intra_layer_touch: true,
+            gates: Vec::new(),
         };
 
         let at_met1 = stack.stage(stack.standing(met1).expect("a conductor"));

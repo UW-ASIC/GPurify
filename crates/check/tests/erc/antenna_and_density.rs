@@ -409,6 +409,7 @@ fn gf180_ant_2_sidewall_area_of_metal1_over_a_derived_gate() {
         conductors: vec![poly, metal1],
         vias: vec![(contact, poly, metal1)],
         intra_layer_touch: true,
+        gates: Vec::new(),
     };
 
     let (violations, runs) = run_staged(
@@ -462,6 +463,7 @@ fn a_gate_joined_only_through_upper_metal_does_not_share_the_charge_at_metal1() 
         conductors: vec![poly, metal1, metal2],
         vias: vec![(contact, poly, metal1), (via1, metal1, metal2)],
         intra_layer_touch: true,
+        gates: Vec::new(),
     };
 
     let (violations, runs) =
@@ -520,6 +522,7 @@ fn a_gate_joins_its_poly_not_the_well_it_sits_in() {
         conductors: vec![tap, well, poly, metal1],
         vias: vec![(tie, tap, well), (contact, tap, metal1)],
         intra_layer_touch: true,
+        gates: Vec::new(),
     };
 
     let (violations, runs) = run_staged(&store, stack, gate, &[metal1], AntennaMeasure::Area, 1.0);

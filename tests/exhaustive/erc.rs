@@ -24,7 +24,8 @@
 //! A fixture that fails because `GPurify` disagrees with the definition carries
 //! the finding it fails on; none is left. A fixed finding's fixtures name it
 //! in their comments: F25 to F29 (F28's drawing-order cases in
-//! [`topology_cases`]), F35 and F72 ([`metal_over_a_gate`]) from
+//! [`topology_cases`]), F35, F72 ([`metal_over_a_gate`]) and F81
+//! ([`gate_on_its_device_poly`]) from
 //! `docs/testing-plan.md`, and four found here:
 //!
 //! - `F59`: the cumulative antenna ratio pooled all gates of the net at the
@@ -623,7 +624,40 @@ fn antenna_variants() -> Vec<Fixture> {
     );
     out.push(ihp_area_ratio());
     out.extend(metal_over_a_gate());
+    out.push(gate_on_its_device_poly());
     out
+}
+
+/// F81: a deck with a direct diffusion-poly cut (`connect via bc [diff,
+/// poly]`) reaches poly upward from the diffusion, so by conductors and vias
+/// alone the poly is "over" a derived `poly and diff` gate and the gate fell
+/// to the diffusion, a net with no met1: a false clean. The deck's `device
+/// mos` row names poly as the gate terminal, so the gate is on its poly, which
+/// the contact joins to 2.0 µm² of met1 over the 1.0 µm² gate: 2.0, as in
+/// `derived_gate`. No `bc` shape is drawn, so diffusion and poly stay apart.
+/// The device's source and drain are `diff not poly`, as extraction requires
+/// of a channel; the antenna row reads only its gate terminal.
+fn gate_on_its_device_poly() -> Fixture {
+    let mut l = Layout::default();
+    rect(&mut l, "diff", (-500, 0, 1500, 1000));
+    rect(&mut l, "poly", (0, 0, 1000, 2000));
+    rect(&mut l, "cont", (400, 1700, 600, 1900));
+    rect(&mut l, "met1", (0, 1600, 4000, 2100));
+    let deck = antenna_deck(
+        "layer bc = gds(12, 0)
+layer sd = diff not poly
+connect via bc [diff, poly]
+device mos gated model \"nfet\" terminals [poly, sd, sd]
+rule ant antenna(gated, met1; max_ratio: 1.0, sidewall: none, diode: none)",
+    );
+    Fixture::new(
+        "erc/antenna/f81/direct_diff_poly_cut",
+        &["ERC-A1"],
+        &deck,
+        ERC,
+    )
+    .layout(l)
+    .expect(Expect::rule("ant", vec![ratio(2.0).at(500, 500)]))
 }
 
 /// F72: a gate's net is that of the poly it lies on, never metal drawn over

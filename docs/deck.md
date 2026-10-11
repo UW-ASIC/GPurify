@@ -308,7 +308,7 @@ rule esd.pad  esd_topological(pad; clamps: ["esd_diode", "rail_clamp"])
 
 | Check | What it flags |
 |---|---|
-| `antenna(gate, collectors…; max_ratio: n, sidewall: len \| none, diode: layer \| none)` | A gate whose collector-to-gate area ratio is above `max_ratio`. The ratio has one term per etch step the collectors span, each counting only what is connected to the gate when that layer is etched, and the terms are summed (LEF's CAR, IHP's `AreaRatio`). Overlapping shapes count once. With `sidewall`, collector area is perimeter times that thickness. With `diode`, a gate connected to that layer is skipped, left to a row for protected gates (IHP Ant.b and Ant.e). Name the gate as a derived `poly and diffusion` layer. |
+| `antenna(gate, collectors…; max_ratio: n, sidewall: len \| none, diode: layer \| none)` | A gate whose collector-to-gate area ratio is above `max_ratio`. The ratio has one term per etch step the collectors span, each counting only what is connected to the gate when that layer is etched, and the terms are summed (LEF's CAR, IHP's `AreaRatio`). Overlapping shapes count once. With `sidewall`, collector area is perimeter times that thickness. With `diode`, a gate connected to that layer is skipped, left to a row for protected gates (IHP Ant.b and Ant.e). Name the gate as a derived `poly and diffusion` layer. The gate is connected through the layer a `device mos` row names as its gate terminal (`poly`) where it overlaps it; with no such row, through the conductor it lies on, which is the diffusion when a `connect via` joins diffusion and poly directly. |
 | `antenna_electrical(gate, collectors…; max_ratio: n, diode: layer \| none, diode_credit: n, diode_bonus: n)` | The cumulative antenna ratio, with credit for protection diodes. |
 | `density_cmp(L; window: len x len, step: len x len, min: frac \| none, max: frac \| none, max_delta: frac \| none, partial_windows: true \| false, cmp: none \| (target: frac, sensitivity: len, max_delta: len))` | Metal density out of range, a jump between neighbouring windows, or a predicted polish thickness out of range. |
 | `electromigration(layers…; max_density: current per width, max_current_per_cut: current, blech_limit: current, reference_temperature: temp, activation_energy: eV, current_exponent: n)` | A wire or cut carrying more current than its rated limit at the operating temperature. Needs `--intent`. |
@@ -373,7 +373,8 @@ base, emitter, collector for `bjt`; anode, cathode for `diode`, which LVS
 compares as polar (a reversed diode is a mismatch), as it does a capacitor's
 two plates. A resistor's two ends may be written either way round.
 Kinds: `mos`, `bjt`, `resistor`, `capacitor`, `diode`. The model name is what
-LVS compares against your schematic.
+LVS compares against your schematic. A `mos` row's gate terminal is also where
+an `antenna` row's gate connects.
 
 Each terminal needs a shape of its own under the marker, and shapes that
 touch or overlap are one shape. A source drawn twice with no drain is not a
