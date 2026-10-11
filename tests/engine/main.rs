@@ -622,3 +622,107 @@ fn a_pmos_in_an_untapped_well_fails_lvs_and_a_tapped_one_matches() {
     let (verdict, rules) = sky130_lvs(&tapped, reference);
     assert!(matches!(verdict, Verdict::Match), "{verdict:?} {rules:?}");
 }
+
+/// FLOW-005: live DRC from one shared deck. A consumer that edits a layout
+/// (a router or an editor, as Philis is) parses the shipped deck once
+/// through the library (`gpurify_ingest::deck::parse_deck`), compiles its
+/// DRC rows once (`drc::RuleSet::from_deck`), and checks each edit of a
+/// layout it holds in memory (`GeometryStoreBuilder`,
+/// `gpurify_ingest::layout::derive_layers`, `RuleSet::run`): no file, no CLI.
+///
+/// Oracle: the foundry rule at the limit (FR), SkyWater's periphery rules
+/// m1.1 and m1.2, met1 width and spacing 0.14 um (`pdks/sky130.deck` [S1]):
+/// two met1 wires 140 nm wide and 140 nm apart break neither; the first
+/// narrowed by one 5 nm deck grid step is one m1.1 finding of 135 nm, and
+/// the gap closed by one step one m1.2 finding of 135 nm. And a metamorphic
+/// relation (MR): the shared deck gives each edit the whole report a deck
+/// parsed afresh for that edit gives, and undoing an edit gives back the
+/// report from before it, so checking leaves nothing behind in the deck. A
+/// rule table that carries state from one check to the next, or a library
+/// path that reads the deck otherwise than the run does, breaks it.
+#[test]
+fn a_consumer_checks_each_edit_against_one_shared_deck() {
+    use gpurify_check::drc::RuleSet;
+    use gpurify_check::report::{Measurement, Violations};
+
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/pdks/sky130.deck"))
+        .expect("the shipped deck is readable");
+    let compile = || {
+        let mut strings = StrTable::default();
+        let deck = parse_deck(&source, grid(), &mut strings).expect("sky130.deck parses");
+        let rules = RuleSet::from_deck(&deck, &strings).expect("its DRC rows compile");
+        (strings, deck, rules)
+    };
+    // One edit: two met1 wires 2 um tall, the first `width` wide and the
+    // second 140 nm, `gap` apart. Its report as sorted text, and its
+    // findings as `(rule, measured)`.
+    let check = |(strings, deck, rules): &(StrTable, Deck, RuleSet), (width, gap): (i64, i64)| {
+        let met1 = deck.layers.id(strings, "met1").expect("a sky130 layer");
+        let mut builder = GeometryStoreBuilder::default();
+        for (xlo, xhi) in [(0, width), (width + gap, width + gap + 140)] {
+            builder.push(
+                met1,
+                &[xlo, xhi, xhi, xlo].map(dbu),
+                &[0, 0, 2_000, 2_000].map(dbu),
+            );
+        }
+        let (mut store, _) = builder.finish(deck.layers.len());
+        gpurify_ingest::layout::derive_layers(&mut store, deck, &Provenance::default(), strings)
+            .expect("the derived layers compute");
+        let (mut out, mut runs) = (Violations::default(), Vec::new());
+        rules.run(&store, &mut out, &mut runs);
+        let name = |id| strings.resolve(id).to_owned();
+        let findings: Vec<(String, Measurement)> = (0..out.len())
+            .map(|row| (name(out.get(row).rule), out.get(row).measured))
+            .collect();
+        let mut text: Vec<String> = runs
+            .iter()
+            .map(|run| format!("{} {:?} {}", name(run.rule), run.outcome, run.examined))
+            .chain((0..out.len()).map(|row| {
+                let v = out.get(row);
+                format!("{} {:?} {:?}", name(v.rule), v.measured, v.at)
+            }))
+            .collect();
+        text.sort();
+        (text, findings)
+    };
+
+    let shared = compile();
+    let edits = [(140, 140), (135, 140), (140, 140), (140, 135), (140, 140)];
+    let reports: Vec<_> = edits.iter().map(|&edit| check(&shared, edit)).collect();
+    for (&edit, report) in edits.iter().zip(&reports) {
+        assert_eq!(
+            report.0,
+            check(&compile(), edit).0,
+            "{edit:?}: the shared deck and a fresh one"
+        );
+    }
+    assert_eq!(reports[0].0, reports[2].0, "the narrowing undone");
+    assert_eq!(reports[0].0, reports[4].0, "the gap undone");
+    for rule in ["m1.1", "m1.2"] {
+        assert!(
+            reports[0]
+                .0
+                .iter()
+                .any(|line| line.starts_with(&format!("{rule} Ran "))),
+            "{rule} runs: {:?}",
+            reports[0].0
+        );
+    }
+    let of = |k: usize, rule: &str| -> Vec<Measurement> {
+        let found = reports[k].1.iter().filter(|(r, _)| r == rule);
+        found.map(|&(_, measured)| measured).collect()
+    };
+    let nm = |n| vec![Measurement::Length(dbu(n))];
+    assert_eq!(
+        (of(0, "m1.1"), of(0, "m1.2")),
+        (vec![], vec![]),
+        "at the limit"
+    );
+    assert_eq!(
+        (of(1, "m1.1"), of(1, "m1.2")),
+        (nm(135), vec![]),
+        "narrowed"
+    );
+    assert_eq!((of(3, "m1.1"), of(3, "m1.2")), (vec![], nm(135)), "closer");
+}
