@@ -241,3 +241,70 @@ fn known_failures_name_open_findings(fixtures: &[Fixture]) {
     }
     assert!(bad.is_empty(), "{bad:#?}");
 }
+
+/// The catalog names the evidence its fixtures give, so its oracle column is
+/// a record of what is proved, not a plan: `SY` for every row a synthetic
+/// fixture with a hand-derived answer proves, `MR` where the fixture is also
+/// placed under the square's symmetries or is a corpus relation, and `BM`
+/// where the bitmap reference decides it.
+#[test]
+fn the_catalog_names_the_evidence_its_fixtures_give() {
+    let catalog = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/check-catalog.tsv"),
+    )
+    .expect("the catalog is readable");
+    let oracles: BTreeMap<String, BTreeSet<String>> = catalog
+        .lines()
+        .skip(1)
+        .map(|line| {
+            let cells: Vec<&str> = line.split('\t').collect();
+            let codes = cells[7]
+                .split(';')
+                .map(|code| code.trim().split(':').next().unwrap_or_default().to_owned())
+                .collect();
+            (cells[0].to_owned(), codes)
+        })
+        .collect();
+    let symmetric = |name: &str| {
+        name.split('/').any(|part| {
+            ["r0", "r90", "r180", "r270", "m0", "m90", "m180", "m270"]
+                .iter()
+                .any(|s| part.starts_with(s))
+        })
+    };
+    let mut missing: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for fixture in all(Depth::Merge) {
+        let mut codes = Vec::new();
+        if fixture.name.starts_with("corpus/") {
+            codes.push("MR");
+        } else {
+            codes.push("SY");
+            if symmetric(&fixture.name) {
+                codes.push("MR");
+            }
+        }
+        if fixture.name.starts_with("bitmap/") {
+            codes.push("BM");
+        }
+        for id in &fixture.catalog {
+            let have = oracles.get(*id).expect("the row exists");
+            for code in &codes {
+                if !have.contains(*code) {
+                    missing.entry(id).or_default().insert(code);
+                }
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "catalog rows whose oracle column omits evidence a fixture gives:\n{}",
+        missing
+            .iter()
+            .map(|(id, codes)| format!(
+                "{id}\t{}",
+                codes.iter().copied().collect::<Vec<_>>().join(",")
+            ))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}

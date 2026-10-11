@@ -53,6 +53,8 @@ struct Row {
     check: String,
     gpurify: Vec<String>,
     status: String,
+    sources: String,
+    oracle: String,
     notes: String,
 }
 
@@ -88,6 +90,8 @@ fn catalog() -> Vec<Row> {
                     .map(str::to_owned)
                     .collect(),
                 status: cells[6].to_owned(),
+                sources: cells[4].to_owned(),
+                oracle: cells[7].to_owned(),
                 notes: cells[8].to_owned(),
             }
         })
@@ -308,5 +312,115 @@ fn the_rule_reference_cites_the_catalog() {
             cited, want,
             "crates/check/src/lib.rs: the {kind} row's catalog cell"
         );
+    }
+}
+
+/// Open tools the catalog cites, as they appear in `sources` and in a
+/// `TX:<tool>` oracle.
+const OPEN_TOOLS: [&str; 9] = [
+    "KL",
+    "NG",
+    "MAG",
+    "OR",
+    "drt",
+    "YOSYS",
+    "ngspice",
+    "FasterCap",
+    "FastHenry",
+];
+
+/// Oracles that do not borrow another tool's answer.
+const INDEPENDENT: [&str; 7] = ["CF", "SE", "FR", "SY", "NV", "BM", "MR"];
+
+/// Rows beyond open source that still rest on fewer than two independent
+/// oracles. Ledger P1 adds the second; this list may only shrink.
+const EVIDENCE_GAPS: [&str; 8] = [
+    "ERC-D3", "ERC-F12", "ERC-F6", "FLOW-005", "LVS-020", "LVS-066", "LVS-071", "PEX-010",
+];
+
+fn codes(oracle: &str) -> BTreeSet<&str> {
+    oracle
+        .split(';')
+        .map(|code| code.trim().split(':').next().unwrap_or_default())
+        .filter(|code| !code.is_empty() && *code != "-")
+        .collect()
+}
+
+/// A supported row no open tool defines and none was compared against: what
+/// GPurify must prove on its own evidence.
+fn beyond_open_source(row: &Row) -> bool {
+    let words = |text: &str| {
+        text.split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|word| OPEN_TOOLS.contains(&word))
+    };
+    matches!(
+        row.status.as_str(),
+        "implemented" | "partial" | "expressible"
+    ) && !words(&row.sources)
+        && !codes(&row.oracle).contains("TX")
+}
+
+/// The generated "beyond open source" block of check-sources.md.
+fn beyond_block(rows: &[Row]) -> String {
+    let cell = |text: &str| {
+        if text.is_empty() {
+            "—".to_owned()
+        } else {
+            text.replace('|', "\\|")
+        }
+    };
+    let mut out = format!(
+        "{BEGIN}\n\n| Id | Check | Status | Defined by (public) | Evidence |\n|---|---|---|---|---|\n"
+    );
+    for row in rows.iter().filter(|row| beyond_open_source(row)) {
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} | {} |",
+            row.id,
+            cell(&row.check),
+            row.status,
+            cell(&row.sources),
+            cell(&row.oracle)
+        );
+    }
+    let _ = write!(out, "\n{END}");
+    out
+}
+
+/// check-sources.md lists every check GPurify performs that no open tool
+/// defines, with the public source that defines it and the evidence that
+/// proves it; each rests on two independent oracles, or is a named gap.
+#[test]
+fn checks_beyond_open_source_are_listed_with_two_independent_oracles() {
+    let rows = catalog();
+    let mut weak: Vec<&str> = rows
+        .iter()
+        .filter(|row| beyond_open_source(row))
+        .filter(|row| {
+            codes(&row.oracle)
+                .iter()
+                .filter(|code| INDEPENDENT.contains(code))
+                .count()
+                < 2
+        })
+        .map(|row| row.id.as_str())
+        .collect();
+    weak.sort_unstable();
+    assert_eq!(
+        weak, EVIDENCE_GAPS,
+        "rows beyond open source with fewer than two independent oracles; add the evidence, or \
+         (only when a row is new) list it in EVIDENCE_GAPS"
+    );
+    let file = path("docs/check-sources.md");
+    let doc = read("docs/check-sources.md");
+    let want = beyond_block(&rows);
+    let (Some(start), Some(end)) = (doc.find(BEGIN), doc.find(END)) else {
+        panic!("docs/check-sources.md has no generated block; add the {BEGIN} and {END} markers");
+    };
+    let have = &doc[start..end + END.len()];
+    if have != want {
+        let updated = format!("{}{want}{}", &doc[..start], &doc[end + END.len()..]);
+        std::fs::write(&file, updated).expect("docs/check-sources.md is writable");
+        panic!("docs/check-sources.md was stale against the catalog; it is rewritten: review and commit it");
     }
 }
