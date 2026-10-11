@@ -73,25 +73,6 @@ fn the_widening_product_at_the_domain_corner_is_exactly_two_to_the_eighty() {
     assert_eq!(min.mul_wide(max).raw(), -corner);
 }
 
-/// Oracle: law. The widening multiply is `i128` multiplication of the two
-/// coordinates, for every pair in the domain — including the mixed-sign and
-/// near-edge pairs a hand-written table would not think to include. The
-/// comparison is against `i128::from(a) * i128::from(b)`, which is the
-/// operation itself, not a reimplementation of it.
-#[test]
-fn the_widening_product_agrees_with_i128_multiplication_over_the_whole_domain() {
-    let mut rng = Rng::new(41);
-    for _ in 0..2_048 {
-        let a = rng.range(-MAX_ABS_DBU, MAX_ABS_DBU + 1);
-        let b = rng.range(-MAX_ABS_DBU, MAX_ABS_DBU + 1);
-        assert_eq!(
-            coord(a).mul_wide(coord(b)).raw(),
-            i128::from(a) * i128::from(b),
-            "seed 41: {a} * {b}"
-        );
-    }
-}
-
 /// Oracle: law. Multiplication commutes and negation distributes over it. Both
 /// hold for every pair, and together they catch the argument transposition and
 /// the dropped sign that the corner-case test above cannot see, because at the

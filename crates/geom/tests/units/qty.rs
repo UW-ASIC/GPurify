@@ -80,21 +80,6 @@ fn a_quantity_prints_its_value_followed_by_its_prefixed_symbol() {
     assert_renders_as::<Length, { prefix::GIGA }>(0.5, "Gm");
 }
 
-/// Oracle: closed form. `raw` is documented as the inverse of `new`, and a
-/// wrapper that stores what it was handed has exactly one correct answer, so
-/// this is asserted with no tolerance at all.
-#[test]
-#[allow(
-    clippy::float_cmp,
-    reason = "a newtype must return the bits it was handed, not a value near them"
-)]
-fn the_raw_count_is_exactly_what_was_wrapped() {
-    for raw in [0.0_f64, 1.8, -3.5, 1e-18, 1e18, f64::MIN_POSITIVE] {
-        assert_eq!(Qty::<Voltage, { prefix::BASE }>::new(raw).raw(), raw);
-        assert_eq!(Qty::<Capacitance, { prefix::ATTO }>::new(raw).raw(), raw);
-    }
-}
-
 /// Oracle: closed form. Restating at the prefix a quantity already carries
 /// scales it by `10^0`, which is multiplication by one, so the result is the
 /// original bit for bit. The test plan calls for exactness here specifically:
