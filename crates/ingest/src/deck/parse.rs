@@ -1100,6 +1100,14 @@ impl<'a> Parser<'a> {
                 self.out.lvs.permute.push((model, a, b));
                 Ok(())
             }
+            "ignore" => {
+                let model = self.model()?;
+                if self.out.lvs.ignore.contains(&model) {
+                    return Err(self.err(span, &format!("\"{model}\" is already ignored")));
+                }
+                self.out.lvs.ignore.push(model);
+                Ok(())
+            }
             "asymmetric" => {
                 let model = self.model()?;
                 if self.out.lvs.asymmetric.contains(&model) {
@@ -1112,7 +1120,7 @@ impl<'a> Parser<'a> {
                 span,
                 &format!(
                     "unknown lvs control `{control}`; expected tolerance, ignore_parameter, \
-                     asymmetric or permute"
+                     asymmetric, permute or ignore"
                 ),
             )),
         }

@@ -1,11 +1,12 @@
 //! What the deck's `lvs` statements change in a comparison
 //! ([`LvsControls`]): per-parameter tolerances, ignored parameters,
-//! asymmetric transistors and permuted pins.
+//! asymmetric transistors, permuted pins and ignored devices.
 //!
 //! Data in: the controls and the two graphs. Data out: the graphs as the
 //! controls leave them, and the bound a paired parameter must meet.
 
 use crate::lvs::graph::{narrow, transpose_into, Graph};
+use crate::lvs::reduce::Merge;
 use crate::lvs::verdict::Discrepancy;
 use crate::topology::device::role_at;
 use crate::topology::TerminalRole;
@@ -170,6 +171,88 @@ pub(crate) fn report_roles(found: &mut [Discrepancy], reference: &Graph, control
             if let Some(classes) = Classes::of(kind, reference.device_model[device], controls) {
                 *role = classes.reported(*role);
             }
+        }
+    }
+}
+
+/// Drops every device `lvs ignore` names, as if it were not drawn or
+/// written, and every net that lost its last terminal with them and is no
+/// port: no netlist could state such a net, while a port must still pair.
+/// Surviving nets keep their order. Returns the rows of `graph` the kept
+/// devices were, ascending, or `None` when nothing was dropped.
+pub(crate) fn drop_ignored_devices(graph: &mut Graph, controls: &LvsControls) -> Option<Vec<u32>> {
+    if controls.ignore.is_empty() {
+        return None;
+    }
+    let kept: Vec<u32> = (0..narrow(graph.device_count()))
+        .filter(|&device| {
+            !controls
+                .ignore
+                .contains(&graph.device_model[device as usize])
+        })
+        .collect();
+    if kept.len() == graph.device_count() {
+        return None;
+    }
+    let nets = graph.net_count();
+    // A net survives while a kept device or a port holds it, or nothing
+    // ever did: only what the dropped devices alone reached goes.
+    let mut held = vec![false; nets];
+    for &net in &graph.port_net {
+        held[net as usize] = true;
+    }
+    for &device in &kept {
+        for &net in graph.terminals_of(device).0 {
+            if let Some(slot) = held.get_mut(net as usize) {
+                *slot = true;
+            }
+        }
+    }
+    let mut new_net = vec![u32::MAX; nets];
+    let mut next = 0u32;
+    for (net, slot) in new_net.iter_mut().enumerate() {
+        if held[net] || graph.terminals_on(narrow(net)).is_empty() {
+            *slot = next;
+            next += 1;
+        }
+    }
+    let renamed = |net: u32| new_net.get(net as usize).copied().unwrap_or(u32::MAX);
+    let mut out = Graph {
+        net_name: (0..nets)
+            .filter(|&net| new_net[net] != u32::MAX)
+            .map(|net| graph.net_name[net])
+            .collect(),
+        port_net: graph.port_net.iter().map(|&net| renamed(net)).collect(),
+        ..Graph::default()
+    };
+    out.device_terminal_start.push(0);
+    out.device_param_start.push(0);
+    for &device in &kept {
+        out.device_kind.push(graph.device_kind[device as usize]);
+        out.device_model.push(graph.device_model[device as usize]);
+        let (terminal_nets, roles) = graph.terminals_of(device);
+        out.terminal_net
+            .extend(terminal_nets.iter().map(|&net| renamed(net)));
+        out.terminal_role.extend_from_slice(roles);
+        out.device_terminal_start
+            .push(narrow(out.terminal_net.len()));
+        out.param.extend_from_slice(graph.params_of(device));
+        out.device_param_start.push(narrow(out.param.len()));
+    }
+    transpose_into(&mut out, next as usize);
+    *graph = out;
+    Some(kept)
+}
+
+/// Rewrites each merge's device rows, rows of a graph [`drop_ignored_devices`]
+/// filtered, as rows of the graph it was given (`kept[row]`).
+pub(crate) fn restore_rows(merges: &mut [Merge], kept: Option<&[u32]>) {
+    let Some(kept) = kept else {
+        return;
+    };
+    for merge in merges {
+        for row in &mut merge.devices {
+            *row = kept[*row as usize];
         }
     }
 }

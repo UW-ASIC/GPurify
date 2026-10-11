@@ -650,6 +650,23 @@ lvs permute \"nfet\" gate bulk
     );
 }
 
+/// Oracle: the language spec (deck.md, "LVS controls"). `lvs ignore`
+/// lowers to the model, which no device statement need declare; a model
+/// ignored twice is refused.
+#[test]
+fn lvs_ignore_names_any_model_once() {
+    let devices = "device mos poly model \"nfet\" terminals [poly, diff, diff]\n";
+    let (deck, strings) = ok(&format!(
+        "{devices}lvs ignore \"nfet\"\nlvs ignore \"decap\"\n"
+    ));
+    let id = |name: &str| strings.get(name).expect("interned");
+    assert_eq!(deck.lvs.ignore, [id("nfet"), id("decap")]);
+    one_error(
+        &format!("{devices}lvs ignore \"decap\"\nlvs ignore \"decap\"\n"),
+        "already ignored",
+    );
+}
+
 /// Oracle: spec example. The sky130 excerpt in `docs/deck.md` is the deck users
 /// copy; it holds ten rules, counted in the document: six written out, three
 /// from its `for` loop and the `em.li` row.

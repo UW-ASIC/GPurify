@@ -5,7 +5,9 @@
 //! discrepancy order is user-visible: class imbalances, then per-pair joins in
 //! layout order, then unpaired layout nodes, then unpaired reference nodes.
 
-use crate::lvs::controls::{assign_roles, bound, drop_ignored_params, report_roles};
+use crate::lvs::controls::{
+    assign_roles, bound, drop_ignored_devices, drop_ignored_params, report_roles, restore_rows,
+};
 use crate::lvs::graph::{channel_ends, drop_unextracted_bulk, keep_declared_params, narrow, Graph};
 use crate::lvs::reduce::{reduce_with, Merge, ParamNames};
 use crate::lvs::refine::{refine_into, role_code, Partition};
@@ -228,6 +230,12 @@ pub fn compare_logged(
 ///   terminal comparison and a parallel merge; a class other than a
 ///   transistor's channel is no channel, so no series merge takes it, and a
 ///   terminal mismatch on it is reported under its lowest pin's role.
+/// - **`lvs ignore`** (catalog LVS-034): every device of the model is
+///   dropped from both sides before reduction, as Netgen's `ignore class`
+///   and `KLayout`'s `same_device_classes` with `nil` remove it, and so is
+///   a net only those devices reached, unless it is a port of the reference
+///   or a labelled layout net, which must still pair. A [`Merge`] still
+///   lists rows of the graphs given.
 ///
 /// # Panics
 ///
@@ -242,15 +250,19 @@ pub fn compare_with(
     debug_assert_graph!(reference);
     let mut declared = reference.clone();
     drop_unextracted_bulk(layout, &mut declared);
+    let reference_rows = drop_ignored_devices(&mut declared, controls);
     protect_labelled(layout, &mut declared);
     let mut measured = layout.clone();
     keep_declared_params(reference, &mut measured);
+    let layout_rows = drop_ignored_devices(&mut measured, controls);
     drop_ignored_params(&mut measured, controls);
     drop_ignored_params(&mut declared, controls);
     assign_roles(&mut measured, controls);
     assign_roles(&mut declared, controls);
-    let (mut layout, layout_merges) = reduce_with(&measured, options.params);
-    let (mut reference, reference_merges) = reduce_with(&declared, options.params);
+    let (mut layout, mut layout_merges) = reduce_with(&measured, options.params);
+    let (mut reference, mut reference_merges) = reduce_with(&declared, options.params);
+    restore_rows(&mut layout_merges, layout_rows.as_deref());
+    restore_rows(&mut reference_merges, reference_rows.as_deref());
     if let Some(multiplier) = options.params.multiplier {
         state_count(&mut layout, multiplier);
         state_count(&mut reference, multiplier);
