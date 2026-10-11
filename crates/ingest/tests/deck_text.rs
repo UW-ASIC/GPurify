@@ -1174,7 +1174,7 @@ fn a_temperature_and_its_coefficients_come_together() {
 fn a_piecewise_linear_table_lowers_point_by_point_and_must_rise() {
     let row = |table: &str| {
         format!(
-            "rule ae antenna_electrical(poly, met1; max_ratio: 400, sidewall: none, diode: diff,
+            "rule ae antenna_electrical(poly, met1; max_ratio: 400, sidewall: none, cut_factor: 1, diode: diff,
     diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
     diode_reduce: none, diode_max_ratio: {table})\n"
         )
@@ -1184,6 +1184,7 @@ fn a_piecewise_linear_table_lowers_point_by_point_and_must_rise() {
         rules(&deck, &strings)[0].3,
         [
             "max_ratio=400",
+            "cut_factor=1",
             "diode_layer=diff",
             "diode_credit=0",
             "diode_bonus=0",

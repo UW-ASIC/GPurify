@@ -154,6 +154,12 @@ pub struct CmpModel {
 /// - an oxide class is a gate layer of its own, one row each: LEF's
 ///   `ANTENNAMODEL OXIDE1-4` gives each model its own gate area and limits,
 ///   and gf180 states ANT.1-ANT.15 per "related gate oxide area".
+/// - a row listing cuts with the conductors they stand on accumulates metal
+///   and cut damage as one ratio, LEF's `ANTENNACUMROUTINGPLUSCUT`
+///   ("CAR(mi) = PAR(mi) + CAR(vi-1)"): a cut and its lower conductor share
+///   an etch stage and so a denominator. A cut collects by its area whatever
+///   the row's measure, as LEF's cut layers "do not use side area
+///   modelling".
 ///
 /// The ratio is dimensionless. No design intent is needed.
 ///
@@ -163,11 +169,12 @@ pub struct CmpModel {
 ///   exempts nothing (ERC-A13). Any area on the `diode` layer counts as a
 ///   protection diode; IHP's minimum diode size (Ant.g, ERC-A9) is not
 ///   checked.
-/// - LEF `ANTENNACUMROUTINGPLUSCUT` is missing (ERC-A4); a MIM victim works
-///   as a gate layer, but gf180's deck leaves ANT.14/15 out (ERC-A11).
+/// - A MIM victim works as a gate layer, but gf180's deck leaves ANT.14/15
+///   out (ERC-A11). A cut area factor (LEF's `ANTENNAAREAFACTOR` on a cut
+///   layer) is [`AntennaElectricalTable`]'s.
 ///
-/// Catalog: ERC-A1, ERC-A2, ERC-A3, ERC-A4 (partial), ERC-A8, ERC-A11
-/// (partial), ERC-A12 in the [check catalog]. Defined by
+/// Catalog: ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A11 (partial),
+/// ERC-A12 in the [check catalog]. Defined by
 /// [LEF/DEF 5.8] Appendix C (PAR, CAR, `ANTENNAMODEL`); [GF180MCU] ANT.1-ANT.15;
 /// [IHP SG13G2] Ant.a-Ant.f; [SKY130] antenna rules, licon.1 and via.1;
 /// [KLayout] `antenna_check` (diodes). Source tags are in [check-sources.md].
@@ -204,20 +211,23 @@ pub struct AntennaTable {
 
 /// Antenna ratio with protection-diode credit: deck kind `antenna_electrical`,
 /// written `antenna_electrical(gate, collectors..; max_ratio: n,
-/// sidewall: len | none, diode: layer | none, diode_credit: n,
-/// diode_bonus: n, area_minus_diode: n, gate_plus_diode: n,
-/// diode_reduce: [(area, n), ..] | none, diode_max_ratio: [(area, n), ..] |
-/// none)`.
+/// sidewall: len | none, cut_factor: n, diode: layer | none,
+/// diode_credit: n, diode_bonus: n, area_minus_diode: n,
+/// gate_plus_diode: n, diode_reduce: [(area, n), ..] | none,
+/// diode_max_ratio: [(area, n), ..] | none)`.
 ///
 /// Nets, collectors, gates, the [`AntennaMeasure`] and the etch stages are
 /// those of [`AntennaTable`]. The ratio is LEF/DEF 5.8 Appendix C's
 /// cumulative antenna ratio: each collector layer adds the partial ratio of
-/// the gate's node on it, conductors before the cuts on them,
+/// the gate's node on it, conductors before the cuts on them (metal and cut
+/// as one CAR, `ANTENNACUMROUTINGPLUSCUT`),
 ///
-/// `PAR = (area * reduce(diode) - area_minus_diode * diode) / (gate +
-/// gate_plus_diode * diode)`,
+/// `PAR = (factor * area * reduce(diode) - area_minus_diode * diode) / (gate
+/// + gate_plus_diode * diode)`,
 ///
-/// where `reduce` is `diode_reduce`'s piecewise-linear factor
+/// where `factor` is `cut_factor` on a cut layer (`ANTENNAAREAFACTOR`, its
+/// Example 1's "10 x cut_area") and 1 on a conductor, `reduce` is
+/// `diode_reduce`'s piecewise-linear factor
 /// (`ANTENNAAREADIFFREDUCEPWL`, 1 without one), every area the node's when
 /// that layer is etched, `diode` being the `diode` layer's
 /// (`ANTENNAAREAMINUSDIFF` and `ANTENNAGATEPLUSDIFF`, whose `diff_area` is
@@ -255,9 +265,11 @@ pub struct AntennaTable {
 /// piecewise-linear table is linear between its points and holds its end
 /// values beyond them, LEF's points rising in diffusion area.
 ///
-/// Catalog: ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A12 in the [check catalog].
-/// Defined by [SKY130] antenna EGAR and Table Ig, and the sky130 technology
-/// LEF's PWL tables; [LEF/DEF 5.8] `ANTENNAAREAMINUSDIFF`,
+/// Catalog: ERC-A4, ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A12 in the
+/// [check catalog]. Defined by [SKY130] antenna EGAR and Table Ig, and the
+/// sky130 technology LEF's PWL tables; [LEF/DEF 5.8]
+/// `ANTENNACUMROUTINGPLUSCUT`,
+/// `ANTENNAAREAFACTOR`, `ANTENNAAREAMINUSDIFF`,
 /// `ANTENNAGATEPLUSDIFF`, `ANTENNAAREADIFFREDUCEPWL`, `ANTENNADIFFAREARATIO
 /// PWL` and `ANTENNAMODEL`; [GF180MCU] ANT.16; [IHP SG13G2] Ant.b/e and
 /// Ant.d/f; [KLayout] `antenna_check` (its diode factor). Source tags are in
@@ -280,8 +292,12 @@ pub struct AntennaElectricalTable {
     pub collector_start: Vec<u32>,
     /// Collector layers, CSR by `collector_start`; at least one per row.
     pub collector: Vec<LayerId>,
-    /// Parallel to `collector`; equal within a row.
+    /// Parallel to `collector`; equal within a row but for a cut's, which is
+    /// [`AntennaMeasure::Area`].
     pub collector_measure: Vec<AntennaMeasure>,
+    /// Per row: LEF's `ANTENNAAREAFACTOR` on the row's cut layers, a multiple
+    /// of every cut collector's area (1 for none). Positive from a deck.
+    pub cut_factor: Vec<f64>,
     /// Per row: the protection-diode layer, or `None` for no credit.
     pub diode: Vec<Option<LayerId>>,
     /// Per row: the credit per square micrometre of diode area on the gate's
@@ -625,6 +641,8 @@ fn stage_nets(
 /// node's at that layer's etch.
 #[derive(Debug, Clone, Copy)]
 struct Par<'a> {
+    /// `ANTENNAAREAFACTOR` of a cut layer: a cut collector's area times this.
+    cut_factor: f64,
     /// `ANTENNAAREAMINUSDIFF`.
     minus: f64,
     /// `ANTENNAGATEPLUSDIFF`.
@@ -789,6 +807,11 @@ fn antenna_row(
                 }
                 continue;
             };
+            let factor = if stack.vias.iter().any(|via| via.0 == read[c].0) {
+                par.cut_factor
+            } else {
+                1.0
+            };
             for (g, net) in gate_net.iter().enumerate() {
                 // A layer with nothing on the gate's net is no node of it.
                 if *net == NetId::NONE || mine[net.idx()] == 0 {
@@ -800,7 +823,7 @@ fn antenna_row(
                 } else {
                     pwl(par.reduce, on_net[at] / 2)
                 };
-                let numerator = mine[at] as f64 * reduce - par.minus * diff;
+                let numerator = factor * mine[at] as f64 * reduce - par.minus * diff;
                 let denominator = gate_area[at] as f64 + par.plus * diff;
                 ratio[g] = (ratio[g] + numerator / denominator).max(0.0);
             }
@@ -947,6 +970,7 @@ pub fn check_antenna_electrical(
             &table.collector_measure[span],
             &table.stack,
             Some(Par {
+                cut_factor: table.cut_factor[row],
                 minus: table.area_minus_diode[row],
                 plus: table.gate_plus_diode[row],
                 reduce: &table.diode_reduce[row],

@@ -421,6 +421,15 @@ impl RuleSet {
         let mut set = Self::default();
         // Sorted ids already filed; the first duplicate in deck order is refused.
         let mut seen: Vec<StrId> = Vec::with_capacity(deck.rules.spec.len());
+        // A cut collects by its area whatever the row's measure: LEF's cut
+        // layers "do not use side area modelling".
+        let cut_by_area = |layer: LayerId, measure| {
+            if deck.connectivity.via_cut.contains(&layer) {
+                antenna::AntennaMeasure::Area
+            } else {
+                measure
+            }
+        };
 
         for spec in &deck.rules.spec {
             let row = Row {
@@ -450,7 +459,7 @@ impl RuleSet {
                     table.collector.extend_from_slice(&layers[1..]);
                     table
                         .collector_measure
-                        .extend(layers[1..].iter().map(|_| measure));
+                        .extend(layers[1..].iter().map(|&layer| cut_by_area(layer, measure)));
                     table.max_ratio.push(max_ratio);
                     close_csr(&mut table.collector_start, table.collector.len());
                 }
@@ -465,13 +474,15 @@ impl RuleSet {
                     let plus = row.opt_number("gate_plus_diode")?.unwrap_or(0.0);
                     let reduce = row.area_table("diode_reduce_area", "diode_reduce")?;
                     let diode_max = row.area_table("diode_max_ratio_area", "diode_max_ratio")?;
+                    let cut_factor = row.number("cut_factor")?;
                     let table = &mut set.antenna_electrical;
                     row.head(&mut table.head)?;
                     table.gate.push(layers[0]);
                     table.collector.extend_from_slice(&layers[1..]);
                     table
                         .collector_measure
-                        .extend(layers[1..].iter().map(|_| measure));
+                        .extend(layers[1..].iter().map(|&layer| cut_by_area(layer, measure)));
+                    table.cut_factor.push(cut_factor);
                     table.diode.push(diode);
                     table.diode_credit.push(credit);
                     table.diode_bonus.push(bonus);
@@ -825,6 +836,7 @@ impl RuleSet {
                 c.finite("diode_bonus", t.diode_bonus[r])?;
                 c.not_negative("area_minus_diode", t.area_minus_diode[r])?;
                 c.not_negative("gate_plus_diode", t.gate_plus_diode[r])?;
+                c.positive("cut_factor", t.cut_factor[r])?;
                 for &(_, factor) in &t.diode_reduce[r] {
                     c.not_negative("diode_reduce", factor)?;
                 }
