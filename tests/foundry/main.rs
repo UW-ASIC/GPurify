@@ -614,6 +614,10 @@ fn switches(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Oracle: GF's fd_pv unit structures (pass boxes on 2/222 clean, fail
+/// boxes on 3/222 flagged) and the mcu7t5v0 cells (clean), against which
+/// `GPurify` and fd_pv's `gf180mcu.drc` are both held, row by row of
+/// `docs/xcheck/gf180mcu.tsv` (a differential against the foundry deck).
 #[test]
 #[ignore = "release tier: needs the foundry PDKs and klayout (nix develop .#oracles)"]
 fn foundry_deck_gf180mcu() {
@@ -691,6 +695,10 @@ fn foundry_deck_gf180mcu() {
     cross_check("pdks/gf180mcu.deck", "docs/xcheck/gf180mcu.tsv", &layouts);
 }
 
+/// Oracle: IHP's unit cells (each rule's PASS half clean, FAIL half
+/// flagged) and the `sg13g2_stdcell` cells (clean), against which `GPurify` and
+/// IHP's `ihp-sg13g2.drc` and `sg13g2_maximal.drc` are both held, row by row
+/// of `docs/xcheck/ihp_sg13g2.tsv` (a differential against the foundry deck).
 #[test]
 #[ignore = "release tier: needs the foundry PDKs and klayout (nix develop .#oracles)"]
 fn foundry_deck_ihp_sg13g2() {
@@ -792,6 +800,9 @@ fn foundry_deck_ihp_sg13g2() {
     );
 }
 
+/// Oracle: a differential against the foundry's `sky130A_mr.drc` on
+/// `test_violators.gds` (held to the foundry deck's findings), and the
+/// `sky130_fd_sc_hd` cells (clean), row by row of `docs/xcheck/sky130.tsv`.
 #[test]
 #[ignore = "release tier: needs the foundry PDKs and klayout (nix develop .#oracles)"]
 fn foundry_deck_sky130() {
