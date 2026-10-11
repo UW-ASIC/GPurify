@@ -70,6 +70,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         attached_wide_spacing(depth),
         net_spacing(depth),
         spacing_table(depth),
+        tip_spacing_table(depth),
         min_area(depth),
         min_enclosed_area(depth),
         off_grid(depth),
@@ -2637,6 +2638,145 @@ fn spacing_table(depth: Depth) -> Vec<Fixture> {
     ));
     let mut out = every_placement(cases);
     out.push(vacuous("spacing_table", &["DRC-025"], TABLE, &["t"]));
+    out
+}
+
+// ---------------------------------------------------------- tip_spacing_table
+
+/// The ASAP7 M1 tip table (DRM r1p7, Table 3.12.1): edges below 24 nm, from
+/// 24 to 36 nm, and above 36 nm; M1.S.1 side to side 18, M1.S.2 tip to side
+/// 25, M1.S.3 tip to tip 27 (both 24 to 36), M1.S.4 31 (both below 24),
+/// M1.S.5 31 (one of each).
+const TIPS: &str = "rule t tip_space_table(met1;
+    length: [0nm, 24nm, 37nm],
+    space: [[31nm, 31nm, 25nm],
+            [31nm, 27nm, 25nm],
+            [25nm, 25nm, 18nm]])";
+
+/// `tip_space_table` (`tip_spacing_table`, DRC-031): whole edges of the
+/// merged layer in different figures that face each other over a positive
+/// run need the cell of their two length classes; one finding per pair of
+/// figures, its smallest offending gap, at the middle of the stretch the
+/// two edges face each other over.
+///
+/// Each ASAP7 rule's gap swept around its value (FR; positive gaps only, as
+/// shapes that touch merge): side to side, tip to
+/// side from a 20 and from a 30 wide line, tip to tip at both widths and
+/// mixed. Each class boundary swept at a gap between its two cells: tips 23,
+/// 24 and 25 wide 28 apart (31 below 24, 27 from it), and 36, 37 and 38 wide
+/// 20 apart (27 to 36, 18 above). Clean: a diagonal pair (no run), a notch
+/// inside one figure, and a 30 wide tip drawn as two 15 wide strips 28 from
+/// another (one 30 wide end, 27; a check classing drawn edges would ask
+/// 31). Three bars, two findings; a figure facing a bar 15 and 10 away
+/// along two steps, one finding at the nearer.
+fn tip_spacing_table(depth: Depth) -> Vec<Fixture> {
+    let deck = one_layer_deck(TIPS);
+    let mut cases = Vec::new();
+    let mut case = |shape: String, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("tip_spacing_table/{shape}"),
+            &["DRC-031"],
+            &deck,
+            layout,
+            vec![("t", findings)],
+        ));
+    };
+    // Two lines `wa` and `wb` wide, tip to tip `g` apart, both starting at
+    // x = 0: they face each other over the narrower width.
+    let tips = |wa: i64, wb: i64, g: i64| met1(&[[0, 0, wa, 1000], [0, 1000 + g, wb, 2000 + g]]);
+    let found = |g: i64, need: i64, x2: i64, y2: i64| {
+        if g < need {
+            vec![pin(Finding::length(g), x2, y2)]
+        } else {
+            Vec::new()
+        }
+    };
+    for g in sweep(depth, 18).into_iter().filter(|&g| g > 0) {
+        case(
+            format!("side_to_side/{}", side(g, 18)),
+            met1(&[[0, 0, 100, 1000], [100 + g, 0, 200 + g, 1000]]),
+            found(g, 18, 200 + g, 1000),
+        );
+    }
+    for w in [20, 30] {
+        for g in sweep(depth, 25).into_iter().filter(|&g| g > 0) {
+            case(
+                format!("tip_to_side/w{w}/{}", side(g, 25)),
+                met1(&[[0, 0, w, 1000], [-500, 1000 + g, 500, 1100 + g]]),
+                found(g, 25, w, 2000 + g),
+            );
+        }
+    }
+    for (rule, wa, wb, need) in [("s3", 30, 30, 27), ("s4", 20, 20, 31), ("s5", 30, 20, 31)] {
+        for g in sweep(depth, need).into_iter().filter(|&g| g > 0) {
+            case(
+                format!("tip_to_tip/{rule}/{}", side(g, need)),
+                tips(wa, wb, g),
+                found(g, need, wa.min(wb), 2000 + g),
+            );
+        }
+    }
+    for w in sweep(depth, 24).into_iter().filter(|&w| w > 0) {
+        let need = if w < 24 {
+            31
+        } else if w < 37 {
+            27
+        } else {
+            18
+        };
+        case(
+            format!("class_24/{}", side(w, 24)),
+            tips(w, w, 28),
+            found(28, need, w, 2028),
+        );
+    }
+    for w in sweep(depth, 37) {
+        let need = if w < 24 {
+            31
+        } else if w < 37 {
+            27
+        } else {
+            18
+        };
+        case(
+            format!("class_37/{}", side(w, 37)),
+            tips(w, w, 20),
+            found(20, need, w, 2020),
+        );
+    }
+    case(
+        "diagonal".into(),
+        met1(&[[0, 0, 30, 1000], [40, 1010, 70, 2000]]),
+        Vec::new(),
+    );
+    case(
+        "notch_in_one_figure".into(),
+        met1(&[[0, 0, 20, 500], [30, 0, 50, 500], [0, -20, 50, 0]]),
+        Vec::new(),
+    );
+    case(
+        "tip_drawn_as_strips".into(),
+        met1(&[[0, 0, 15, 1000], [15, 0, 30, 1000], [0, 1028, 30, 2028]]),
+        Vec::new(),
+    );
+    case(
+        "three_bars".into(),
+        met1(&[[0, 0, 100, 1000], [110, 0, 210, 1000], [220, 0, 320, 1000]]),
+        vec![
+            Finding::length(10).at(105, 500),
+            Finding::length(10).at(215, 500),
+        ],
+    );
+    // A bar's 1000-long side x = 100 faces a figure stepped 15 away below
+    // y = 400 and 10 away above it: both 400 and 600 long, 18 apart needed;
+    // the nearer step is the finding, over y = 400..1000.
+    case(
+        "nearest_of_two_steps".into(),
+        met1(&[[0, 0, 100, 1000], [115, 0, 215, 400], [110, 400, 210, 1000]]),
+        vec![Finding::length(10).at(105, 700)],
+    );
+    let mut out = every_placement(cases);
+    out.push(vacuous("tip_spacing_table", &["DRC-031"], TIPS, &["t"]));
     out
 }
 

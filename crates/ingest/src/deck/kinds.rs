@@ -564,6 +564,20 @@ pub(crate) const KINDS: &[Kind] = &[
             p("attached", "attached", Dim::Length),
         ],
     ),
+    // Space between facing edges by the length class of each (ASAP7 M1.S.1
+    // to M1.S.5): a square, symmetric table of cells, one row and column per
+    // class threshold.
+    drc(
+        "tip_space_table",
+        Cmp::Absent,
+        "tip_spacing_table",
+        &[0],
+        None,
+        &[
+            p("length", "length", Dim::LengthList),
+            p("space", "space", Dim::LengthRows),
+        ],
+    ),
     // Edge layers.
     drc("length", Cmp::Ge, "edge_min_length", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "edge_spacing", &[0], LIMIT, &[]),

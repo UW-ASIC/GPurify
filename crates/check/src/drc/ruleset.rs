@@ -1,6 +1,8 @@
 //! The rule set: one [`Rule`] per deck row, the deck parser, and the driver.
 
-use crate::drc::rules::{area, edge, grid, overlay, patterning, presence, spacing, via, width};
+use crate::drc::rules::{
+    area, edge, facing, grid, overlay, patterning, presence, spacing, via, width,
+};
 use crate::drc::{DrcError, Scratch};
 use crate::report::{record_run, LimitSense, Outcome, RuleRun, Violations};
 use crate::topology::NetTable;
@@ -1319,6 +1321,46 @@ pub enum Rule {
         /// for no allowance, and always `None` with [`StepKind::MaxEdges`].
         length_sum: Option<Dbu>,
     },
+    /// Two shapes whose facing edges are closer than the cell the two edges'
+    /// lengths select: tip to tip, tip to side and side to side, each by
+    /// width class.
+    ///
+    /// Deck: `tip_space_table(L; length: [..], space: [[..], ..])`, kind
+    /// `tip_spacing_table`. Edges are the merged layer's, each whole however
+    /// it was drawn, so a line end drawn as two strips is one end. Two edges
+    /// of different merged figures face each other when they are parallel,
+    /// each faces out of its own material toward the other across empty
+    /// space, and their spans overlap by a positive length; their gap is the
+    /// distance between their lines. Edges that meet only diagonally do not
+    /// face ([`Rule::CornerToCorner`] measures those). Each edge takes the
+    /// class of the last `length` its own length reaches, so `[0nm, 24nm,
+    /// 37nm]` classes edges below 24 nm, from 24 to 36 nm, and above 36 nm,
+    /// and a facing pair needs `space[class of one][class of the other]`. The
+    /// table is square and symmetric, and need not rise: a tip may need more
+    /// space than a side.
+    ///
+    /// One violation per pair of merged figures with a facing pair closer
+    /// than its cell: `measured` the smallest such gap, `limit` that pair's
+    /// cell (the largest among equally near pairs), at the middle of the
+    /// stretch the two edges face each other over. `shapes` is the lowest
+    /// drawn row under each figure. `examined` counts facing pairs of edges
+    /// in different figures closer than the table's largest cell.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-031. Rules: ASAP7 M1.S.1 to M1.S.5, side to side when both edges
+    /// are over 36 nm, tip to side when one is at most 36 nm, tip to tip by
+    /// the two tips' classes (ASAP7 DRM r1p7, Table 3.12.1 and Fig. 3.12.1).
+    ///
+    /// Limits: the facing edges' own lengths pick the cell, so a line end
+    /// that steps is classed by the step's edge. ASAP7 M4.S.3 and M4.S.4,
+    /// tip to tip between lines on adjacent tracks, measure ends that do not
+    /// face each other and are not this table.
+    TipSpacingTable {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// Index into [`RuleSet::class_tables`].
+        table: u32,
+    },
 }
 
 /// Which runs of short edges a [`Rule::MinStep`] rejects, after LEF
@@ -1446,6 +1488,53 @@ pub struct SpacingQuery {
     pub end_of_line: Option<Dbu>,
 }
 
+/// A square table indexed by a class of each of two edges, for
+/// [`Rule::TipSpacingTable`]: a pair needs `space[i][j]`, with `i` the class
+/// of one and `j` that of the other, each the last threshold in `class` it
+/// reaches. Classes start at 0, so every edge has one.
+///
+/// Every table in a [`RuleSet`] passed its kind's check
+/// ([`ClassTable::is_valid_tips`]); one built by hand must too, or
+/// [`RuleSet::run`] may panic indexing it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassTable {
+    /// The class thresholds, in grid units: starts at 0 and rises.
+    pub class: Vec<Dbu>,
+    /// Per class, a run a pair must exceed for the class to apply; `None`
+    /// checks no run. Empty for a table that reads no runs.
+    pub prl: Vec<Option<Dbu>>,
+    /// Row-major, `class.len()` rows of `class.len()` cells, each a positive
+    /// space in grid units; symmetric.
+    pub space: Vec<Dbu>,
+}
+
+impl ClassTable {
+    /// Whether the table is square, symmetric and positive, with classes
+    /// from 0 rising strictly and no runs: what [`Rule::TipSpacingTable`]
+    /// reads. [`RuleSet::from_deck`] refuses one that is not
+    /// ([`DrcError::BadTable`]).
+    pub fn is_valid_tips(&self) -> bool {
+        self.prl.is_empty()
+            && self.is_square()
+            && self.class.windows(2).all(|pair| pair[0] < pair[1])
+    }
+
+    /// Classes from 0, one row and column per class, every cell positive and
+    /// mirrored across the diagonal.
+    fn is_square(&self) -> bool {
+        let n = self.class.len();
+        self.class.first().is_some_and(|first| first.raw() == 0)
+            && self.space.len() == n * n
+            && self.space.iter().all(|cell| cell.raw() > 0)
+            && (0..n).all(|i| (0..i).all(|j| self.at(i, j) == self.at(j, i)))
+    }
+
+    /// The cell for classes `i` and `j`.
+    pub(crate) fn at(&self, i: usize, j: usize) -> Dbu {
+        self.space[i * self.class.len() + j]
+    }
+}
+
 /// Every DRC rule the deck configures, in deck order.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RuleSet {
@@ -1460,6 +1549,8 @@ pub struct RuleSet {
     /// The width lists each [`Rule::AllowedWidth`] names: grid units, each
     /// positive, sorted, without repeats, never empty.
     pub widths: Vec<Vec<Dbu>>,
+    /// The tables [`Rule::TipSpacingTable`] names.
+    pub class_tables: Vec<ClassTable>,
     /// The deck's first derived layer: it and every higher id are computed,
     /// and the layers below it are drawn. `None` when every layer is drawn,
     /// as in a rule set built in code. A [`Rule::Density`] or
@@ -1489,7 +1580,8 @@ impl RuleSet {
     /// - [`DrcError::UnrepresentableAngle`] when an allowed angle is not a
     ///   multiple of 45 degrees;
     /// - what [`Rule::validate`] refuses: a limit that is not positive, or a
-    ///   spacing table that is not complete and monotone.
+    ///   spacing table that is not complete and monotone;
+    /// - [`DrcError::BadTable`] when a class table fails its kind's check.
     pub fn from_deck(deck: &Deck, strings: &StrTable) -> Result<Self, DrcError> {
         let rules = &deck.rules;
         let name_of = |id: StrId| strings.resolve(id).to_owned();
@@ -1558,6 +1650,19 @@ impl RuleSet {
         let bounded = |spec: &RuleSpec| match spec.layer_len {
             1 => Ok((layer(spec, 0), None)),
             _ => two(spec).map(|(layer, boundary)| (layer, Some(boundary))),
+        };
+        // Every length given for a list parameter, in deck order.
+        let lengths = |spec: &RuleSpec, param: &'static str| -> Result<Vec<Dbu>, DrcError> {
+            let wanted = strings.get(param);
+            rules
+                .params_of(spec)
+                .iter()
+                .filter(|&&(name, _)| Some(name) == wanted)
+                .map(|&(_, stated)| match stated {
+                    ParamValue::Length(length) => Ok(length),
+                    _ => Err(wrong_type(spec, param)),
+                })
+                .collect()
         };
         let sense = |spec: &RuleSpec| -> Result<LimitSense, DrcError> {
             let ParamValue::Flag(maximum) = value(spec, "maximum")? else {
@@ -1794,22 +1899,10 @@ impl RuleSet {
                 }
                 "spacing_table" => {
                     let layer = one(spec)?;
-                    let lengths = |param: &'static str| -> Result<Vec<Dbu>, DrcError> {
-                        let wanted = strings.get(param);
-                        rules
-                            .params_of(spec)
-                            .iter()
-                            .filter(|&&(name, _)| Some(name) == wanted)
-                            .map(|&(_, stated)| match stated {
-                                ParamValue::Length(length) => Ok(length),
-                                _ => Err(wrong_type(spec, param)),
-                            })
-                            .collect()
-                    };
                     set.tables.push(SpacingTable {
-                        prl: lengths("prl")?,
-                        width: lengths("width")?,
-                        space: lengths("space")?,
+                        prl: lengths(spec, "prl")?,
+                        width: lengths(spec, "width")?,
+                        space: lengths(spec, "space")?,
                     });
                     Rule::SpacingTable {
                         layer,
@@ -1989,6 +2082,23 @@ impl RuleSet {
                         region,
                         limit: ratio(spec, "limit")?,
                         sense: sense(spec)?,
+                    }
+                }
+                "tip_spacing_table" => {
+                    let layer = one(spec)?;
+                    let table = ClassTable {
+                        class: lengths(spec, "length")?,
+                        prl: Vec::new(),
+                        space: lengths(spec, "space")?,
+                    };
+                    if !table.is_valid_tips() {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    set.class_tables.push(table);
+                    Rule::TipSpacingTable {
+                        layer,
+                        table: u32::try_from(set.class_tables.len() - 1)
+                            .expect("a deck has few tables"),
                     }
                 }
                 other => {
@@ -2262,6 +2372,14 @@ impl RuleSet {
                     kind,
                     length_sum,
                 } => width::min_step(store, id, layer, (limit, kind, length_sum), s, out),
+                Rule::TipSpacingTable { layer, table } => facing::tip_spacing_table(
+                    store,
+                    id,
+                    layer,
+                    &self.class_tables[table as usize],
+                    s,
+                    out,
+                ),
             };
             record_run(runs, out, before, id, outcome, examined);
             for layer in rule.layers().into_iter().flatten() {
@@ -2593,7 +2711,8 @@ impl Rule {
             | Rule::EdgeWidth { layer, .. }
             | Rule::EdgeFacingSpace { layer, .. }
             | Rule::AllowedWidth { layer, .. }
-            | Rule::MinStep { layer, .. } => [Some(layer), None],
+            | Rule::MinStep { layer, .. }
+            | Rule::TipSpacingTable { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..

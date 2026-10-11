@@ -863,6 +863,13 @@ edge_enclosure(id, E, O, LIM)   # each edge whose RBA::Edges.new(e).extended_out
 **GPurify** (`area.rs` `count`): the merged figures of the layer in the whole layout, one finding
 when their number is above a maximum or below a minimum, at the centre of the die (the drawn
 layers' extent, as for `global_density`), `measured` the count. Nothing drawn is `Skipped`.
+### 36. tip_spacing_table — EXACT
+
+**GPurify** (`facing.rs` `tip_spacing_table`, `each_facing`): whole edges of the merged layer, in
+different figures, parallel and facing each other across empty space with a positive overlap of
+their spans; the gap is the distance between their lines. Each edge is classed by its own length
+(the last threshold it reaches) and the pair needs the cell of the two classes. One finding per
+pair of figures, its smallest offending gap.
 
 **KLayout**
 
@@ -1028,6 +1035,19 @@ oracle is LEF 5.8's own Example 1-16 and Figures 1-14 and 1-15, drawn as fixture
 staircase swept at the limit. OpenROAD's TritonRoute implements base `MINSTEP` runs, but its
 typed `INSIDECORNER`/`OUTSIDECORNER` branch never sets its corner flags (read from
 `FlexGC_main.cpp`), so it is not an oracle for them.
+tip_table(id, L.isolated(REACH, projection, transparent, whole_edges), CLASSES, SPACE)
+# REACH = 2·(largest cell); CLASSES and SPACE doubled. The prelude's tip_table keeps an edge pair
+# when the distance between its lines is under SPACE[class(e)][class(f)], class(e) the last
+# threshold e.length reaches.
+```
+
+- `isolated` with `projection` pairs edges of different merged polygons that project onto each
+  other with a positive overlap, closer than REACH, which is GPurify's facing pair (d).
+  `whole_edges` returns each edge whole, so its length is the merged edge's, the class GPurify
+  reads.
+- Key PAIR; the smallest distance per pair of figures is compared exactly. The oracles besides
+  the mirror: the ASAP7 M1.S.1 to M1.S.5 values at the limit and one step either side (FR), the
+  hand-derived fixtures under the square's symmetries (SY, MR).
 
 ---
 
@@ -1075,7 +1095,7 @@ Each operation runs on merged operands at the default coherence (a3).
 
 ### Antenna
 
-`antenna` is an ERC kind, not one of the 35, but `antenna_check` mirrors it. Not translated yet.
+`antenna` is an ERC kind, not one of the 36, but `antenna_check` mirrors it. Not translated yet.
 
 **GPurify** (`erc/rules/antenna.rs`)
 - For each rule row, the nets are those standing at that etch step: conductors up to the highest
