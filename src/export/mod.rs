@@ -98,6 +98,8 @@ pub struct Header {
     /// the design name.
     pub layout_path: String,
     /// Passed in, never read from the clock, so output is reproducible.
-    /// `None` leaves the date line out; the CLI always passes `None`.
+    /// `None` writes SPEF's `*DATE` as an empty string (IEEE 1481 requires
+    /// the line) and leaves DSPF's and SPICE's date line out; the CLI always
+    /// passes `None`.
     pub timestamp: Option<String>,
 }
