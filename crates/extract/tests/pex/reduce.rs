@@ -151,7 +151,7 @@ fn a_coupling_below_the_threshold_is_grounded_on_both_ends() {
 #[test]
 fn rc_grounds_every_coupling_and_keeps_the_series_elements() {
     let out = reduced(ExtractionKind::Rc, 0.0);
-    assert!(of_kind(&out, coupling).is_empty());
+    assert_eq!(of_kind(&out, coupling), Vec::new());
     assert_eq!(of_kind(&out, ground).len(), 5 + 2 * 4);
     assert_eq!(of_kind(&out, series), of_kind(&network(), series));
     assert_eq!(out.node_net, network().node_net);
@@ -163,8 +163,8 @@ fn rc_grounds_every_coupling_and_keeps_the_series_elements() {
 #[test]
 fn r_keeps_resistance_and_inductance_alone() {
     let out = reduced(ExtractionKind::R, 0.0);
-    assert!(of_kind(&out, ground).is_empty());
-    assert!(of_kind(&out, coupling).is_empty());
+    assert_eq!(of_kind(&out, ground), Vec::new());
+    assert_eq!(of_kind(&out, coupling), Vec::new());
     assert_eq!(of_kind(&out, series), of_kind(&network(), series));
     assert!(out.capacitance_per_net().iter().all(|&c| c == 0.0));
 }
@@ -192,7 +192,7 @@ fn cc_lumps_each_net_and_sums_its_couplings_per_pair() {
         assert_eq!((from, to), (want_from, Some(want_to)));
         assert_close("a pair's coupling", got, want, 1e-12);
     }
-    assert!(of_kind(&out, series).is_empty());
+    assert_eq!(of_kind(&out, series), Vec::new());
     holds_every_total("cc", &out);
 }
 
