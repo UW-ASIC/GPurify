@@ -3566,7 +3566,11 @@ mod tests {
         let drawn = every_model().into_iter().map(|(drawn, _)| drawn);
         let mut checked = 0;
         for c in sample().into_iter().chain(drawn) {
-            if reduce(&c, &Declared::of(&c), false).devs.len() < c.devs.len() {
+            if reduce(&c, &Declared::of(&c), false, &Controls::default())
+                .devs
+                .len()
+                < c.devs.len()
+            {
                 continue;
             }
             let layout = draw(&c);
