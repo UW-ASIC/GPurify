@@ -8,7 +8,9 @@
 //! bitmap DRC, a brute-force graph isomorphism for LVS, closed forms for ERC and
 //! PEX. Each fixture names the catalog rows (`docs/check-catalog.tsv`) it
 //! proves, and `every_catalog_row_of_a_complete_domain_is_proved` holds the
-//! catalog to it.
+//! catalog to it. Two ERC references run on generated inputs outside the
+//! fixture table (`erc_reference`): a dense nodal solve of supply grids and a
+//! search of extracted net graphs.
 //!
 //! `cargo test --test exhaustive` runs the merge depth;
 //! `cargo test --test exhaustive -- --ignored` the full enumerations.
@@ -18,6 +20,7 @@ mod corpus;
 mod drc_dimension;
 mod drc_overlay;
 mod erc;
+mod erc_reference;
 mod harness;
 mod lvs;
 mod pex;
