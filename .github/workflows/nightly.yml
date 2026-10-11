@@ -32,7 +32,7 @@ jobs:
           cargo test --workspace -- --ignored --skip klayout_mirror
           --skip netgen_differential --skip fastcap_differential
           --skip fasthenry_differential --skip ngspice_differential
-          --skip the_engine_costs_about_the_same_per_polygon_at_every_size
+          --skip the_engine_costs_the_same_per_polygon_at_sixteen_times_the_size
       # The bench gate (tests/scaling.rs): ns per polygon at 16x a layout's
       # size within 3x of 1x's, on an otherwise idle runner.
       - run: cargo test --test scaling -- --ignored --test-threads=1
