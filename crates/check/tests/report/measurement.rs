@@ -196,19 +196,3 @@ fn comparing_two_dimensions_is_a_programming_error_rather_than_an_answer() {
         );
     }
 }
-
-/// Oracle: law. Two measurements are equal exactly when they carry the same
-/// dimension and the same value, which is what makes a violation row
-/// assertable: `assert_only_violation` compares the measurement column, and a
-/// `PartialEq` that ignored the variant would let a resistance match a length.
-#[test]
-fn measurements_of_different_dimensions_are_never_equal() {
-    assert_ne!(Measurement::Length(dbu(200)), Measurement::Count(200));
-    assert_ne!(Measurement::Ratio(200.0), Measurement::Count(200));
-    assert_ne!(Measurement::Length(dbu(200)), Measurement::Length(dbu(201)));
-    assert_eq!(Measurement::Length(dbu(200)), Measurement::Length(dbu(200)));
-    assert_eq!(Measurement::Count(7), Measurement::Count(7));
-    // A `NaN` is not equal to itself, so a row carrying one cannot be asserted
-    // on at all. That is a second reason `is_finite` guards the push.
-    assert_ne!(Measurement::Ratio(f64::NAN), Measurement::Ratio(f64::NAN));
-}

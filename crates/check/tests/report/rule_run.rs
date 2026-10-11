@@ -19,57 +19,11 @@ fn ran_clean() -> RuleRun {
     }
 }
 
-/// Oracle: construct-from-answer. Four rules that found nothing for four
-/// different reasons produce one indistinguishable violation table between
-/// them, and four distinct run records. Both halves are asserted, because the
-/// pair is the argument: if the tables differed the record would be redundant,
-/// and if the records did not the ambiguity would survive.
-///
-/// The second half runs each record through the clean assertion against the
-/// same empty table, so the claim is made against code rather than against the
-/// derive: with the outcome as the only difference between the four, exactly
-/// one of them may be judged clean.
-#[test]
-fn an_empty_violation_table_is_the_same_for_a_rule_that_ran_and_one_that_did_not() {
-    let runs: Vec<RuleRun> = [
-        Outcome::Ran,
-        Outcome::Skipped(SkipReason::EmptyLayer),
-        Outcome::Skipped(SkipReason::NoDesignIntent),
-        Outcome::Refused,
-    ]
-    .into_iter()
-    .map(|outcome| RuleRun {
-        outcome,
-        ..ran_clean()
-    })
-    .collect();
-
-    for (i, left) in runs.iter().enumerate() {
-        for right in &runs[i + 1..] {
-            assert_ne!(left, right, "two outcomes share one run record");
-        }
-    }
-
-    // The four differ in nothing but the outcome, and every one of them
-    // contributed the same empty table. So the outcome is the whole of what
-    // separates a clean result from the three that are not, and the clean
-    // assertion has to read it: the first is accepted and the other three are
-    // refused against a table none of them can be distinguished by.
-    for (index, run) in runs.into_iter().enumerate() {
-        let verdict =
-            std::panic::catch_unwind(move || assert_clean(&[run], &Violations::default(), RULE));
-        assert_eq!(
-            verdict.is_ok(),
-            index == 0,
-            "{run:?} against an empty violation table was judged the wrong way"
-        );
-    }
-}
-
-/// Oracle: construct-from-answer. The clean assertion accepts exactly one of
-/// the four records above, and the three it rejects are the three the old suite
-/// accepted. Each rejection is checked, because a helper that cannot fail is
-/// the defect being fixed rather than the fix.
+/// Oracle: construct-from-answer. The clean assertion accepts a rule that ran,
+/// examined shapes and found nothing, and rejects the same record skipped
+/// (either reason), refused, examining nothing or holding a violation, against
+/// the same empty violation table. Each rejection is checked, because a helper
+/// that cannot fail is the defect being fixed rather than the fix.
 #[test]
 fn a_clean_assertion_accepts_only_a_rule_that_ran_and_examined_shapes() {
     assert_clean(&[ran_clean()], &Violations::default(), RULE);
