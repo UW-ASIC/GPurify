@@ -169,6 +169,7 @@ its shape was on. It combines only with other edge layers:
 | `.interacting(L)` / `.not_interacting(L)` | The whole edges that touch or lie in a shape on `L`, or that do not. |
 | `.with_length(bounds)` | The edges whose length is within the bounds. |
 | `.horizontal()` / `.vertical()` | The edges running along that axis, as KLayout's `with_angle(0)` and `with_angle(90)`. A width between horizontal edges is measured vertically. |
+| `.extended(begin: len, end: len, out: len, in: len)` | A box round each edge, as KLayout's `extended`: the edge lengthened by `begin` before its start and `end` past its end, and widened by `out` away from its shape and `in` into it. The result is a polygon layer, one box per edge, not merged. An edge runs with its shape on its left (counter-clockwise round a shape), so `begin` is at the corner it leaves. Every length is 0 or more, and `out` or `in` is above 0. |
 
 A check that takes an edge layer says so (see [Edge checks](#edge-checks)).
 Every other check refuses one.

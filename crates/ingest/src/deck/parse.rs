@@ -719,6 +719,43 @@ impl<'a> Parser<'a> {
                 };
                 (derived, takes, Some(other))
             }
+            "extended" => {
+                let open = self.expect("(")?;
+                let mut by = [Dbu::new_unchecked(0); 4];
+                for (at, name) in ["begin", "end", "out", "in"].into_iter().enumerate() {
+                    if at > 0 {
+                        self.expect(",")?;
+                    }
+                    let t = self.peek();
+                    let (word, _) = self.ident(&format!("`{name}:`"))?;
+                    if word != name {
+                        return Err(self.err_tok(
+                            t,
+                            "`extended` takes `begin:`, `end:`, `out:` and `in:`, in that order",
+                        ));
+                    }
+                    self.expect(":")?;
+                    let value = self.value()?;
+                    by[at] = self.length(&value, "extended")?;
+                    if by[at].raw() < 0 {
+                        return Err(self.err(value.span(), "`extended` takes lengths of 0 or more"));
+                    }
+                }
+                let close = self.expect(")")?;
+                if by[2].raw() == 0 && by[3].raw() == 0 {
+                    return Err(self.err(
+                        (open.start, close.end),
+                        "`extended` needs `out` or `in` above 0: a box needs a width",
+                    ));
+                }
+                let derived = DerivedOp::Extended {
+                    begin: by[0],
+                    end: by[1],
+                    outside: by[2],
+                    inside: by[3],
+                };
+                (derived, Some(true), None)
+            }
             "holes" | "extents" | "edges" => {
                 self.expect("(")?;
                 self.expect(")")?;

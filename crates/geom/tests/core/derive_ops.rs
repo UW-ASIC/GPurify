@@ -3,8 +3,8 @@
 use gpurify_geom::boolean::{intersection_into, subtraction_into, BooleanError};
 use gpurify_geom::derive::{
     covering_into, edge_boolean_into, edge_interacting_into, edge_part_into, edges_into,
-    extents_into, holes_into, inside_into, interacting_into, merge_into, outside_into,
-    overlapping_into, rectangles_into, sized_into, with_area_into, with_length_into,
+    extended_into, extents_into, holes_into, inside_into, interacting_into, merge_into,
+    outside_into, overlapping_into, rectangles_into, sized_into, with_area_into, with_length_into,
     with_width_into, EdgeOp,
 };
 use gpurify_geom::ops::{Point, Seg};
@@ -567,6 +567,30 @@ fn edge_parts_split_at_the_other_layers_boundary_and_the_boundary_is_neither() {
     edge_part_into(&a, &butt, false, &mut outside);
     assert!(inside.is_empty());
     assert_eq!(length(&outside), 30);
+}
+
+/// Oracle: `KLayout`'s `extended(begin, end, out, in)`, worked by hand on a
+/// 10 x 4 rectangle's counter-clockwise edges: each lengthened by 1 before
+/// the corner it leaves and widened by 2 away from the rectangle, one box per
+/// edge, unmerged.
+#[test]
+fn extended_edges_grow_a_box_before_their_start_and_away_from_their_shape() {
+    let mut boxes_out = ValidatedLayer::default();
+    extended_into(
+        &edges(&rects(&[(0, 0, 10, 4)])),
+        (d(1), d(0), d(2), d(0)),
+        &mut boxes_out,
+    )
+    .expect("in range");
+    assert_eq!(
+        boxes(&boxes_out),
+        [
+            (-2, 0, 0, 5),
+            (-1, -2, 10, 0),
+            (0, 4, 11, 6),
+            (10, -1, 12, 4)
+        ]
+    );
 }
 
 /// Oracle: hand-derived. Each segment's relation to `B` is in its comment:

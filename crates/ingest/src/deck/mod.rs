@@ -418,6 +418,23 @@ pub enum DerivedOp {
         /// Index of the pattern, for [`LayerTable::text`].
         text: u32,
     },
+    /// `KLayout` `extended` on an edge layer: one box per edge, the edge
+    /// lengthened by `begin` before its start and `end` past its end, and
+    /// widened by `outside` away from its shape and `inside` into it. The
+    /// edge runs with its shape on its left, so its start is the corner it
+    /// leaves going counter-clockwise round an outer ring. Boxes are not
+    /// merged, as `KLayout`'s are not; each length is 0 or more, and
+    /// `outside + inside` is positive.
+    Extended {
+        /// Added before the edge's start.
+        begin: Dbu,
+        /// Added past the edge's end.
+        end: Dbu,
+        /// Away from the edge's shape (its right).
+        outside: Dbu,
+        /// Into the edge's shape (its left).
+        inside: Dbu,
+    },
 }
 
 impl DerivedOp {
@@ -437,7 +454,8 @@ impl DerivedOp {
             | Self::WithWidth(..)
             | Self::Rectangles { .. }
             | Self::WithBbox { .. }
-            | Self::WithText { .. } => Some(false),
+            | Self::WithText { .. }
+            | Self::Extended { .. } => Some(false),
             Self::And
             | Self::Or
             | Self::Not

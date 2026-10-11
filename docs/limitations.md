@@ -32,8 +32,6 @@ result from them is weaker than it looks.
   `.vertical()`), bounding-box size (`.with_bbox_max()`), `.covering()`,
   `.overlapping()` and per-axis sizing (`.sized(dx, dy)`) are written in
   the deck.
-- Edge layers cannot be extended, so sky130 difftap.6 "diff and tap are not
-  allowed to extend beyond their abutting edge" cannot be written.
 - A way to state the voltage or domain of an input signal for the whole run:
   an input is held only within a power state (`states`), and the power-state
   rules examine only the declared states, never every combination.

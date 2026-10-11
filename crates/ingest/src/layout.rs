@@ -15,8 +15,8 @@ use crate::provenance::{PlacedLabel, Provenance};
 use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
 use gpurify_geom::derive::{
     covering_into, edge_boolean_into, edge_interacting_into, edge_part_into, edges_into,
-    extents_into, holes_into, inside_into, interacting_into, merge_into, outside_into,
-    overlapping_into, rectangles_into, sized_into, with_area_into, with_bbox_into,
+    extended_into, extents_into, holes_into, inside_into, interacting_into, merge_into,
+    outside_into, overlapping_into, rectangles_into, sized_into, with_area_into, with_bbox_into,
     with_length_into, with_width_into, EdgeOp,
 };
 use gpurify_geom::ops::{point_in_ring, point_seg_dist2, Point, Seg};
@@ -305,6 +305,17 @@ fn derive_layers_into(
                     std::mem::swap(&mut folded, &mut combined);
                 }
             }
+            DerivedOp::Extended {
+                begin,
+                end,
+                outside,
+                inside,
+            } => extended_into(
+                store.edges_on_layer(operands[0]),
+                (begin, end, outside, inside),
+                &mut folded,
+            )
+            .map_err(blame)?,
             _ => {
                 merged(operands[0], &mut operand).map_err(blame)?;
                 // `with_text` reads the texts on its layer argument, not its shapes.
