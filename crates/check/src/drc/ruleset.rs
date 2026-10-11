@@ -2890,13 +2890,13 @@ impl RuleSet {
                     limit: area_limit(spec, "limit")?,
                 },
                 "density_balance" => {
-                    let (a, b, boundary) = match spec.layer_len {
-                        2 => (layer(spec, 0), layer(spec, 1), None),
-                        _ => {
-                            layers(spec, 3)?;
-                            (layer(spec, 0), layer(spec, 1), Some(layer(spec, 2)))
-                        }
+                    let boundary = if spec.layer_len == 2 {
+                        None
+                    } else {
+                        layers(spec, 3)?;
+                        Some(layer(spec, 2))
                     };
+                    let (a, b) = (layer(spec, 0), layer(spec, 1));
                     Rule::DensityBalance {
                         a,
                         b,
