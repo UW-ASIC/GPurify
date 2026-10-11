@@ -227,6 +227,43 @@ def sq_dist(p, a, b)
   q = t <= 0 ? a : t >= l2 ? b : nil
   q ? (p.x - q.x)**2 + (p.y - q.y)**2 : Rational(((p.x - a.x) * dy - (p.y - a.y) * dx)**2, l2)
 end
+# The squared distance between two polygons, boundary to boundary: 0 when they
+# touch, overlap or nest, else the least from a vertex of one to an edge of the
+# other, exact.
+def poly_d2(p, q)
+  return 0 unless (RBA::Region.new(p).sized(1) & RBA::Region.new(q)).is_empty?
+  ds = []
+  p.each_edge { |e| q.each_point_hull { |v| ds << sq_dist(v, e.p1, e.p2) } }
+  q.each_edge { |e| p.each_point_hull { |v| ds << sq_dist(v, e.p1, e.p2) } }
+  ds.min
+end
+# LEF cut spacing over the drawn cuts of `layer`, by index into `raw:`: a cut's
+# neighbours are the others closer than `within`; a pair closer than `lim`
+# fails when either cut has at least `n` neighbours. Centre to centre (box
+# centres, whole at x2) or boundary to boundary.
+def cut_spacing(rule, layer, lim, n, within, center)
+  ps = layer.data.each.to_a
+  d2 = lambda do |p, q|
+    next poly_d2(p, q) unless center
+    a, b = p.bbox.center, q.bbox.center
+    (a.x - b.x)**2 + (a.y - b.y)**2
+  end
+  m = ps.size
+  dd = {}
+  count = Array.new(m, 0)
+  (0...m).each do |i|
+    ((i + 1)...m).each do |j|
+      dd[[i, j]] = d2.call(ps[i], ps[j])
+      if dd[[i, j]] < within * within
+        count[i] += 1
+        count[j] += 1
+      end
+    end
+  end
+  dd.each do |(i, j), d|
+    put({ rule: rule, rows: [i, j] }) if d < lim * lim && (count[i] >= n || count[j] >= n)
+  end
+end
 # The figures of `layer` whose narrowest Euclidean width, squared, lies in
 # [lo, hi) (nil: open). `width` resolves only whole units, and a neck between
 # two corners is irrational, so each width pair under the bound is measured
@@ -890,6 +927,26 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                     Value::Ignore,
                     vec![],
                 )
+            }
+            Rule::CutSpacing {
+                layer,
+                center,
+                adjacent,
+                within,
+                limit,
+            } => {
+                layers.reads(layer, &mut reads);
+                let name = layers.name(layer);
+                writeln!(
+                    body,
+                    "emit({raw}, {v}.dup.raw) ; cut_spacing({q}, {v}.dup.raw, {}, {adjacent}, {}, {center})",
+                    lim(limit),
+                    lim(within),
+                    raw = rb(&format!("raw:{name}")),
+                    v = var(layer)
+                )
+                .expect("a String");
+                exact("cut_spacing", Key::RowPair(name), Value::Ignore)
             }
             Rule::MultiPatterning { .. } => (
                 "multi_patterning",

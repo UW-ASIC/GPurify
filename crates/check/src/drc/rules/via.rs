@@ -2,15 +2,15 @@
 //!
 //! Data in: one cut layer (not validated) and its candidate pairs with exact
 //! boundary distances. Data out: under-served cuts, or too-close pairs inside
-//! an array cluster.
+//! an array cluster or around a cut with many neighbours.
 
 use super::spacing::whole_at;
-use super::{centre, label_pairs_into, pair_distances_into, Verdict};
+use super::{centre, join_nested, label_pairs_into, pair_distances_into, Verdict};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
-use gpurify_geom::ops::isqrt;
-use gpurify_geom::{Dbu, GeometryStore, LayerId, PolyId};
+use gpurify_geom::ops::{isqrt, Point};
+use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::StrId;
 
 fn measured_pairs(store: &GeometryStore, layer: LayerId, radius: Dbu, s: &mut Scratch) {
@@ -128,4 +128,102 @@ pub(crate) fn via_array_spacing(
         }
     }
     (Outcome::Ran, examined)
+}
+
+/// Squared distance between two boxes' centres, at twice the scale, so a
+/// centre on a half unit is whole: `4 d²`.
+fn centres_dist2_x4(a: Bbox, b: Bbox) -> DbuArea {
+    let twice = |lo: Dbu, hi: Dbu| i128::from(lo.raw()) + i128::from(hi.raw());
+    let dx = twice(a.xlo, a.xhi) - twice(b.xlo, b.xhi);
+    let dy = twice(a.ylo, a.yhi) - twice(b.ylo, b.yhi);
+    DbuArea::new(dx * dx + dy * dy)
+}
+
+/// The midpoint of two boxes' centres, floored.
+fn centres_mid(a: Bbox, b: Bbox) -> Point {
+    let quarter = |p: Dbu, q: Dbu, r: Dbu, t: Dbu| {
+        Dbu::new_unchecked((p.raw() + q.raw() + r.raw() + t.raw()).div_euclid(4))
+    };
+    Point {
+        x: quarter(a.xlo, a.xhi, b.xlo, b.xhi),
+        y: quarter(a.ylo, a.yhi, b.ylo, b.yhi),
+    }
+}
+
+/// LEF cut spacing (`CENTERTOCENTER`, `ADJACENTCUTS n WITHIN w`): every pair
+/// closer than `limit` where either cut has at least `adjacent` other cuts
+/// strictly closer than `within` (every cut when `adjacent` is 0). Distances
+/// are centre to centre with `center`, else boundary to boundary with nested
+/// cuts at 0. One violation per offending pair. `examined` counts the cuts
+/// held.
+pub(crate) fn cut_spacing(
+    store: &GeometryStore,
+    rule: StrId,
+    (layer, center): (LayerId, bool),
+    (adjacent, within): (u16, Dbu),
+    limit: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let cuts = store.polys_on_layer(layer);
+    let n = (cuts.end - cuts.start) as usize;
+    // A centre lies in its box, so two boxes are never further apart than
+    // their centres: pruning boxes at the reach keeps every pair.
+    let reach = if adjacent == 0 {
+        limit
+    } else {
+        limit.max(within)
+    };
+    measured_pairs(store, layer, reach, s);
+    // Squared distances; at 2x for centres, so every one compares as `scale d²`.
+    let scale: i128 = if center { 4 } else { 1 };
+    if center {
+        for (&(a, b), d2) in s.pairs.iter().zip(&mut s.dists) {
+            *d2 = centres_dist2_x4(store.poly_bbox(a), store.poly_bbox(b));
+        }
+    } else {
+        s.holes.build(store, [layer]);
+        join_nested(store, &s.holes, &s.pairs, &mut s.dists);
+    }
+    // `rect_start` doubles as the per-cut neighbour counter.
+    s.rect_start.clear();
+    s.rect_start.resize(n, 0);
+    let within2 = within.mul_wide(within).raw() * scale;
+    if adjacent > 0 {
+        for (&(a, b), d2) in s.pairs.iter().zip(&s.dists) {
+            if d2.raw() < within2 {
+                s.rect_start[(a.0 - cuts.start) as usize] += 1;
+                s.rect_start[(b.0 - cuts.start) as usize] += 1;
+            }
+        }
+    }
+    let neighbours = &s.rect_start;
+    let held = |cut: PolyId| neighbours[(cut.0 - cuts.start) as usize] >= u32::from(adjacent);
+    let limit2 = limit.mul_wide(limit).raw() * scale;
+    for (&(a, b), &d2) in s.pairs.iter().zip(&s.dists) {
+        if d2.raw() >= limit2 || !(held(a) || held(b)) {
+            continue;
+        }
+        let (measured, at) = if center {
+            let (ba, bb) = (store.poly_bbox(a), store.poly_bbox(b));
+            // floor(sqrt(4 d² / 4)) is floor(d): an integer k has k² ≤ x
+            // exactly when k² ≤ floor(x).
+            (isqrt(DbuArea::new(d2.raw() / 4)), centres_mid(ba, bb))
+        } else {
+            (isqrt(d2), whole_at(store, (a, b), d2))
+        };
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at,
+            measured: Measurement::Length(measured),
+            limit: Measurement::Length(limit),
+            shapes: (a, Some(b)),
+        });
+    }
+    let examined = (0..n)
+        .filter(|&i| neighbours[i] >= u32::from(adjacent))
+        .count();
+    (Outcome::Ran, examined as u64)
 }

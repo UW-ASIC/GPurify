@@ -1,4 +1,4 @@
-//! Via family: `redundant_via` and `via_array_spacing`.
+//! Via family: `redundant_via`, `via_array_spacing` and `cut_spacing`.
 //!
 //! Both rules count cuts rather than measuring one, and both are policies
 //! rather than physical limits, so what is definitive
@@ -234,4 +234,83 @@ fn a_cluster_exactly_at_the_array_threshold_is_not_yet_an_array() {
     assert_eq!(sink.runs[0].examined, 0);
     assert_eq!(sink.runs[0].violations, 0);
     assert!(sink.out.rule.is_empty());
+}
+
+// -------------------------------------------------------------- cut_spacing
+
+fn cut_spacing_table(center: bool, adjacent: u16, within: i64, limit: i64) -> Vec<(StrId, Rule)> {
+    vec![(
+        RULE,
+        Rule::CutSpacing {
+            layer: A,
+            center,
+            adjacent,
+            within: dbu(within),
+            limit: dbu(limit),
+        },
+    )]
+}
+
+/// Oracle: construct-from-answer (LEF `SPACING CENTERTOCENTER`). A 100 cut
+/// centred on the origin and a 300 x 100 cut centred 299 to its right are 299
+/// apart centre to centre (149 edge to edge): one finding of 299 under a
+/// 300 requirement, midway between the centres at `(149, 0)`. At 300 apart
+/// they pass.
+#[test]
+fn centre_to_centre_spacing_measures_between_cut_centres() {
+    let mut layout = LayoutBuilder::new(1);
+    let small = layout.rect(A, -50, -50, 50, 50);
+    let big = layout.rect(A, 149, -50, 449, 50);
+    let (store, ids) = layout.finish();
+    let mut sink = Sink::default();
+    sink.run(&store, &cut_spacing_table(true, 0, 0, 300));
+    assert_only_violation(
+        &sink.out,
+        &Violation {
+            rule: RULE,
+            layer: A,
+            severity: Severity::Error,
+            at: point(149, 0),
+            measured: Measurement::Length(dbu(299)),
+            limit: Measurement::Length(dbu(300)),
+            shapes: (ids.of(small), Some(ids.of(big))),
+        },
+    );
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 2);
+
+    let (store, _) = cut_row(2, 300);
+    let mut sink = Sink::default();
+    sink.run(&store, &cut_spacing_table(true, 0, 0, 300));
+    assert_clean(&sink.runs, &sink.out, RULE);
+}
+
+/// Oracle: LEF/DEF 5.8 Figure 1-6, "SPACING 0.22 ADJACENTCUTS 3 WITHIN 0.25".
+/// In a row of 100 cuts at a 300 pitch (gap 200), each cut has at most two
+/// neighbours within 250, so nothing is held and the 200 gaps pass a 220
+/// requirement. A fourth cut 200 above the second gives that cut three
+/// neighbours: its three pairs, each 200 apart, fail, and the pair of the
+/// first and third cuts, 500 apart, does not.
+#[test]
+fn adjacent_cuts_hold_only_a_cut_with_enough_close_neighbours() {
+    let (store, _) = cut_row(3, 300);
+    let mut sink = Sink::default();
+    sink.run(&store, &cut_spacing_table(false, 3, 250, 220));
+    assert_clean(&sink.runs, &sink.out, RULE);
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 0);
+
+    let mut layout = LayoutBuilder::new(1);
+    for x in [0, 300, 600] {
+        layout.rect(A, x - 50, -50, x + 50, 50);
+    }
+    layout.rect(A, 250, 250, 350, 350);
+    let (store, _) = layout.finish();
+    let mut sink = Sink::default();
+    sink.run(&store, &cut_spacing_table(false, 3, 250, 220));
+    assert_eq!(sink.out.len(), 3);
+    assert!(sink
+        .out
+        .measured
+        .iter()
+        .all(|&m| m == Measurement::Length(dbu(200))));
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
 }

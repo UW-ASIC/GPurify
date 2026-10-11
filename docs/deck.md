@@ -268,6 +268,9 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `valid(L)` | A drawn polygon that crosses itself or encloses no area (IHP 3.1 "self-intersecting polygons must be avoided"), named one by one, where every other rule on its layer is refused. Write `valid()` for every drawn layer. |
 | `redundant_via(L; within: len) >= count` | A cut with fewer than `count` cuts, itself included, within `within`. |
 | `via_array_space(L; array: count) >= len` | Cuts in a cluster larger than `array`, closer than the limit. |
+| `space(L, center) >= len` | Two cuts whose centres are closer than the limit (LEF `SPACING CENTERTOCENTER`). Cuts are taken as drawn; the centre is the middle of a cut's bounding box. |
+| `adjacent_space(L; cuts: count, within: len) >= len` | Two cuts closer than the limit, where either has at least `cuts` other cuts strictly closer than `within` (LEF `SPACING ADJACENTCUTS count WITHIN within`): `cuts: 3` lets a 2x2 array keep tight spacing and holds a 2x3 one. Distances are boundary to boundary. |
+| `adjacent_space(L, center; cuts: count, within: len) >= len` | The same, with every distance centre to centre. |
 | `patterning(L; colors: count) >= len` | Shapes that cannot be split into `colors` masks with same-mask shapes at least the limit apart. |
 | `forbidden(L)` | Every shape on `L`, reported with its area. Write the forbidden overlap as the layer: `forbidden(licon and poly and (diff or tap))`. On an edge layer, every edge. |
 | `contains(outer, inner) >= count` | An `outer` shape holding fewer than `count` `inner` shapes entirely, as sky130 licon.16 "every tap must enclose at least one licon". An inner shape across the outer's edge is not held, and touching inner shapes count as one. |
