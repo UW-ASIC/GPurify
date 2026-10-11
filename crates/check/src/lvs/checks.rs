@@ -8,11 +8,11 @@ use crate::erc::first_vertex;
 use crate::lvs::graph::{narrow, Graph};
 use crate::lvs::verdict::Discrepancy;
 use crate::report::{record_run, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
-use crate::topology::{DeviceTable, NetId, NetTable, PortTable};
+use crate::topology::{NetId, NetTable, PortTable};
 use crate::Design;
 use gpurify_geom::ops::Point;
 use gpurify_geom::Dbu;
-use gpurify_geom::{LayerId, PolyId};
+use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::{StrId, StrTable};
 
 /// Every rule id LVS reports under, in interning order: one per [`Discrepancy`]
@@ -70,20 +70,24 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 /// `layout` must be [`from_layout`](crate::lvs::graph::from_layout) of the
 /// same `design` and `ports`. Records exactly five [`RuleRun`]s, in the order
 /// below, and appends their violations to `out`. Every violation is an error.
-/// Unless a row says otherwise, it has no layer and no location (both are
-/// sentinels), and its shape is `PolyId(u32::MAX)`.
+/// A row on a shape is located at the shape's first vertex, on its layer;
+/// a row on none (a hand-built graph's structural fault) has no layer and no
+/// location (both are sentinels), and its shape is `PolyId(u32::MAX)`.
 ///
 /// # Rows
 ///
 /// - `lvs.floating_net`: a net that no device terminal lands on, other than a
 ///   net with a port label or one made only of global-layer shapes (the
-///   substrate). Shape: the net's lowest polygon. Measured 0 against a limit
-///   of 1 terminal. Examines every net. Catalog: LVS-006.
+///   substrate). Shape: the net's lowest polygon, located at its first
+///   vertex on its layer. Measured 0 against a limit of 1 terminal. Examines
+///   every net. Catalog: LVS-006.
 /// - `lvs.label_conflict`: one label text on several nets. That is an open,
 ///   since a label never joins shapes by itself. One row per pair of
 ///   consecutive such nets in net order, so a label on `n` nets gives
-///   `n - 1` rows. Shapes: each net's lowest polygon. Measured 2 against a
-///   limit of 1. Examines every net. Catalog: LVS-001, LVS-002 (KLayout's
+///   `n - 1` rows. Shapes: the lowest polygon carrying the label on each of
+///   the two nets, so the two labels are found from the row; the location is
+///   the first vertex of the first, on its layer. Measured 2 against a limit
+///   of 1. Examines every net. Catalog: LVS-001, LVS-002 (`KLayout`'s
 ///   `connect_implicit` would join them instead).
 /// - `lvs.net_seed_conflict`: several label texts on one net, a short between
 ///   named nets. One row per pair of consecutive names on the net in
@@ -94,9 +98,10 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 ///   Measured 2 against a limit of 1. Examines every binding of a name to a
 ///   net. Catalog: LVS-001.
 /// - `lvs.terminal_net`: a device marker no recogniser could bind
-///   ([`DeviceTable::refused`]): a terminal layer with no polygon under it,
-///   or more distinct nets under it than the recogniser has positions on
-///   that layer (two gates under one implant). Shape: the marker,
+///   ([`DeviceTable::refused`]): a terminal position with no shape of its
+///   own under it (a terminal missing, or drawn twice with its twin
+///   missing), or more distinct nets under it than the recogniser has
+///   positions on that layer (two gates under one implant). Shape: the marker,
 ///   located at its first vertex on its layer. Measured the terminals bound
 ///   against the count listed. Also a terminal of `layout` on no net, or on a
 ///   net past its net table, which a hand-built graph can hold: measured the
@@ -132,9 +137,8 @@ pub fn check_layout(
     runs: &mut Vec<RuleRun>,
 ) {
     let id = |name| rule_id(strings, name);
-    let (nets, devices) = (design.nets, design.devices);
-    check_floating_nets(nets, devices, ports, id("lvs.floating_net"), out, runs);
-    check_label_conflicts(nets, ports, id("lvs.label_conflict"), out, runs);
+    check_floating_nets(design, ports, id("lvs.floating_net"), out, runs);
+    check_label_conflicts(design, ports, id("lvs.label_conflict"), out, runs);
     check_net_seed_conflicts(design, ports, strings, out, runs);
     check_topology(
         layout,
@@ -216,17 +220,28 @@ fn graph_violation(
     }
 }
 
+/// `row` located on its first shape: at that shape's first vertex, on its
+/// layer.
+fn on_first_shape(store: &GeometryStore, row: Violation) -> Violation {
+    let shape = row.shapes.0;
+    Violation {
+        layer: store.poly_layer(shape),
+        at: first_vertex(store, shape),
+        ..row
+    }
+}
+
 /// Nets with no device terminal on them; a named (port) net is not floating,
 /// nor is the substrate alone (a global-layer net: always there, it floats
 /// only in the model). Panics when a device terminal names a net past `nets`.
 fn check_floating_nets(
-    nets: &NetTable,
-    devices: &DeviceTable,
+    design: Design<'_>,
     ports: &PortTable,
     rule: StrId,
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
+    let (nets, devices) = (design.nets, design.devices);
     let before = out.len();
     let net_count = narrow(nets.net_count());
 
@@ -245,31 +260,33 @@ fn check_floating_nets(
     }
 
     for &poly in lowest.iter().filter(|&&poly| poly != NO_SHAPE) {
-        out.push(graph_violation(rule, (poly, None), 0, 1));
+        let row = graph_violation(rule, (poly, None), 0, 1);
+        out.push(on_first_shape(design.store, row));
     }
     record_run(runs, out, before, rule, Outcome::Ran, u64::from(net_count));
 }
 
 /// One label resolving to two nets. Reported rather than resolved.
 fn check_label_conflicts(
-    nets: &NetTable,
+    design: Design<'_>,
     ports: &PortTable,
     rule: StrId,
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
     let before = out.len();
-    let net_count = narrow(nets.net_count());
+    let net_count = narrow(design.nets.net_count());
 
     // Every binding, so a name a short hides behind another is still seen.
     let (names, named) = ports.bindings_by_name();
     for at in 1..names.len() {
         if names[at] == names[at - 1] {
             let shapes = (
-                first_poly(nets, named[at - 1]),
-                Some(first_poly(nets, named[at])),
+                labelled(ports, named[at - 1], names[at]),
+                Some(labelled(ports, named[at], names[at])),
             );
-            out.push(graph_violation(rule, shapes, 2, 1));
+            let row = graph_violation(rule, shapes, 2, 1);
+            out.push(on_first_shape(design.store, row));
         }
     }
     record_run(runs, out, before, rule, Outcome::Ran, u64::from(net_count));
@@ -298,12 +315,8 @@ pub fn check_net_seed_conflicts(
     let (nets, _, polys) = ports.bindings();
     for at in 1..nets.len() {
         if nets[at] == nets[at - 1] {
-            let (first, second) = (polys[at - 1], polys[at]);
-            out.push(Violation {
-                layer: design.store.poly_layer(first),
-                at: first_vertex(design.store, first),
-                ..graph_violation(rule, (first, Some(second)), 2, 1)
-            });
+            let row = graph_violation(rule, (polys[at - 1], Some(polys[at])), 2, 1);
+            out.push(on_first_shape(design.store, row));
         }
     }
     record_run(runs, out, before, rule, Outcome::Ran, ports.len() as u64);
@@ -337,11 +350,8 @@ fn check_topology(
     // here, on the marker, rather than missing silently.
     let refused = &design.devices.refused;
     for &(marker, bound, listed) in refused {
-        out.push(Violation {
-            layer: design.store.poly_layer(marker),
-            at: first_vertex(design.store, marker),
-            ..graph_violation(terminal_net, (marker, None), bound, listed)
-        });
+        let row = graph_violation(terminal_net, (marker, None), bound, listed);
+        out.push(on_first_shape(design.store, row));
     }
     record_run(
         runs,
@@ -381,6 +391,14 @@ fn check_topology(
         Outcome::Ran,
         devices as u64,
     );
+}
+
+/// The lowest polygon carrying label `name` on `net`, which `ports` binds.
+fn labelled(ports: &PortTable, net: NetId, name: StrId) -> PolyId {
+    let (nets, names, polys) = ports.bindings();
+    let from = nets.partition_point(|&bound| bound < net);
+    let to = nets.partition_point(|&bound| bound <= net);
+    polys[from + names[from..to].partition_point(|&bound| bound < name)]
 }
 
 /// The lowest polygon of a net, or [`NO_SHAPE`] for a net carrying none.

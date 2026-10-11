@@ -254,6 +254,87 @@ fn two_names_on_one_net_are_one_seed_conflict_row_at_the_first_label() {
     }
 }
 
+/// Oracle: construct-from-answer, testing-plan F70. Three rectangles on one
+/// conductor, apart: the first unlabelled and on no device, so a floating
+/// net; the other two both labelled `VDD`, one name on two nets, an open.
+/// Each row is located on the shape it names, at that shape's first vertex
+/// on its layer: the floating net at its rectangle's (600, 0), the open at the
+/// first labelled rectangle's (200, 0), naming both labelled rectangles. Both
+/// used to report no layer and the origin.
+#[test]
+fn a_floating_net_and_a_split_label_are_located_on_their_shapes() {
+    use gpurify_check::lvs::graph::from_layout;
+    use gpurify_check::report::Measurement;
+    use gpurify_check::topology::{bind_ports_into, extract_nets_into};
+    use gpurify_geom::ops::Point;
+    use gpurify_geom::{Dbu, LayerId};
+    use gpurify_ingest::deck::Connectivity;
+    use gpurify_ingest::Provenance;
+    use gpurify_testgen::LayoutBuilder;
+
+    let metal = LayerId(0);
+    let mut layout = LayoutBuilder::new(1);
+    let lone = layout.rect(metal, 600, 0, 700, 100);
+    let left = layout.rect(metal, 200, 0, 300, 100);
+    let right = layout.rect(metal, 400, 0, 500, 100);
+    let (store, ids) = layout.finish();
+    let (lone, left, right) = (ids.of(lone), ids.of(left), ids.of(right));
+    let connectivity = Connectivity {
+        conductors: vec![metal],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+
+    let mut strings = StrTable::default();
+    intern_rule_ids(&mut strings);
+    let vdd = strings.intern("VDD");
+    let mut provenance = Provenance::default();
+    provenance.label(left, vdd);
+    provenance.label(right, vdd);
+    let mut ports = PortTable::default();
+    bind_ports_into(&nets, &provenance, &mut ports).expect("an open binds");
+    let devices = DeviceTable::default();
+    let design = Design {
+        store: &store,
+        nets: &nets,
+        devices: &devices,
+    };
+    let graph = from_layout(&nets, &devices, &ports, &strings, None);
+    let (mut out, mut runs) = (Violations::default(), Vec::new());
+    check_layout(&graph, design, &ports, &strings, &mut out, &mut runs);
+
+    let point = |x| Point {
+        x: Dbu::new_unchecked(x),
+        y: Dbu::new_unchecked(0),
+    };
+    for (name, shapes, at, counts) in [
+        ("lvs.floating_net", (lone, None), point(600), (0, 1)),
+        (
+            "lvs.label_conflict",
+            (left, Some(right)),
+            point(200),
+            (2, 1),
+        ),
+    ] {
+        let rule = strings.get(name).expect("interned");
+        let found: Vec<_> = (0..out.len())
+            .map(|row| out.get(row))
+            .filter(|row| row.rule == rule)
+            .collect();
+        assert_eq!(found.len(), 1, "{name}: {found:?}");
+        let row = found[0];
+        assert_eq!(row.shapes, shapes, "{name}");
+        assert_eq!((row.at, row.layer), (at, metal), "{name}");
+        assert_eq!(
+            (row.measured, row.limit),
+            (Measurement::Count(counts.0), Measurement::Count(counts.1)),
+            "{name}"
+        );
+    }
+}
+
 /// Oracle: construct-from-answer, testing-plan F32. A marker recognition
 /// refused, here with 2 of its 3 terminals bound, never reaches the graph,
 /// so `lvs.terminal_net` reads it from the device table: one row on the
