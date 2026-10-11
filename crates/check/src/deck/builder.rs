@@ -58,8 +58,8 @@ enum Node {
         /// An unparenthesised fold, which a further operation of the same
         /// kind extends.
         chain: bool,
-        /// A `with_text` pattern.
-        pattern: Option<String>,
+        /// The `with_text` pattern, or the `in_cells` patterns.
+        pattern: Vec<String>,
     },
 }
 
@@ -147,21 +147,21 @@ impl LayerExpr {
                 op: prev,
                 mut operands,
                 chain: true,
-                pattern: None,
+                ..
             } if prev == op => {
                 operands.push(other.node);
                 Node::Op {
                     op,
                     operands,
                     chain: true,
-                    pattern: None,
+                    pattern: Vec::new(),
                 }
             }
             node => Node::Op {
                 op,
                 operands: vec![node, other.node],
                 chain: true,
-                pattern: None,
+                pattern: Vec::new(),
             },
         };
         Self {
@@ -171,7 +171,7 @@ impl LayerExpr {
     }
 
     /// An operation on `self`, with an optional layer argument.
-    fn call(mut self, op: DerivedOp, argument: Option<LayerExpr>, pattern: Option<String>) -> Self {
+    fn call(mut self, op: DerivedOp, argument: Option<LayerExpr>, pattern: Vec<String>) -> Self {
         let mut operands = vec![self.node];
         if let Some(argument) = argument {
             self.faults.extend(argument.faults);
@@ -221,61 +221,61 @@ impl LayerExpr {
     /// negative.
     #[must_use]
     pub fn sized(self, by: Dbu) -> Self {
-        self.call(DerivedOp::Sized(by, by), None, None)
+        self.call(DerivedOp::Sized(by, by), None, Vec::new())
     }
 
     /// `.interacting(other)`.
     #[must_use]
     pub fn interacting(self, other: impl Into<LayerExpr>) -> Self {
-        self.call(DerivedOp::Interacting(true), Some(other.into()), None)
+        self.call(DerivedOp::Interacting(true), Some(other.into()), Vec::new())
     }
 
     /// `.not_interacting(other)`.
     #[must_use]
     pub fn not_interacting(self, other: impl Into<LayerExpr>) -> Self {
-        self.call(DerivedOp::Interacting(false), Some(other.into()), None)
+        self.call(DerivedOp::Interacting(false), Some(other.into()), Vec::new())
     }
 
     /// `.inside(other)`.
     #[must_use]
     pub fn inside(self, other: impl Into<LayerExpr>) -> Self {
-        self.call(DerivedOp::Inside, Some(other.into()), None)
+        self.call(DerivedOp::Inside, Some(other.into()), Vec::new())
     }
 
     /// `.outside(other)`.
     #[must_use]
     pub fn outside(self, other: impl Into<LayerExpr>) -> Self {
-        self.call(DerivedOp::Outside, Some(other.into()), None)
+        self.call(DerivedOp::Outside, Some(other.into()), Vec::new())
     }
 
     /// `.inside_part(other)`, on edges.
     #[must_use]
     pub fn inside_part(self, other: impl Into<LayerExpr>) -> Self {
-        self.call(DerivedOp::Part(true), Some(other.into()), None)
+        self.call(DerivedOp::Part(true), Some(other.into()), Vec::new())
     }
 
     /// `.outside_part(other)`, on edges.
     #[must_use]
     pub fn outside_part(self, other: impl Into<LayerExpr>) -> Self {
-        self.call(DerivedOp::Part(false), Some(other.into()), None)
+        self.call(DerivedOp::Part(false), Some(other.into()), Vec::new())
     }
 
     /// `.holes()`.
     #[must_use]
     pub fn holes(self) -> Self {
-        self.call(DerivedOp::Holes, None, None)
+        self.call(DerivedOp::Holes, None, Vec::new())
     }
 
     /// `.extents()`.
     #[must_use]
     pub fn extents(self) -> Self {
-        self.call(DerivedOp::Extents, None, None)
+        self.call(DerivedOp::Extents, None, Vec::new())
     }
 
     /// `.edges()`.
     #[must_use]
     pub fn edges(self) -> Self {
-        self.call(DerivedOp::Edges, None, None)
+        self.call(DerivedOp::Edges, None, Vec::new())
     }
 
     /// `.rectangles()`: the shapes that are one axis-aligned box.
@@ -303,19 +303,19 @@ impl LayerExpr {
     }
 
     fn rects(self, square: bool, keep: bool) -> Self {
-        self.call(DerivedOp::Rectangles { square, keep }, None, None)
+        self.call(DerivedOp::Rectangles { square, keep }, None, Vec::new())
     }
 
     /// `.horizontal()`, on edges.
     #[must_use]
     pub fn horizontal(self) -> Self {
-        self.call(DerivedOp::Oriented(false), None, None)
+        self.call(DerivedOp::Oriented(false), None, Vec::new())
     }
 
     /// `.vertical()`, on edges.
     #[must_use]
     pub fn vertical(self) -> Self {
-        self.call(DerivedOp::Oriented(true), None, None)
+        self.call(DerivedOp::Oriented(true), None, Vec::new())
     }
 
     /// `.with_bbox_max(bounds)`: a bound on the bounding box's longer side.
@@ -350,7 +350,7 @@ impl LayerExpr {
             keep: true,
             text: 0,
         };
-        self.call(op, Some(texts.into()), Some(pattern.to_owned()))
+        self.call(op, Some(texts.into()), vec![pattern.to_owned()])
     }
 
     /// `.without_text(texts, "pattern")`.
@@ -360,7 +360,29 @@ impl LayerExpr {
             keep: false,
             text: 0,
         };
-        self.call(op, Some(texts.into()), Some(pattern.to_owned()))
+        self.call(op, Some(texts.into()), vec![pattern.to_owned()])
+    }
+
+    /// `.in_cells("p", ...)`: the shapes of a drawn layer placed under a cell
+    /// whose name matches one of `patterns` ([`DerivedOp::InCells`]).
+    #[must_use]
+    pub fn in_cells(self, patterns: &[&str]) -> Self {
+        self.cells(true, patterns)
+    }
+
+    /// `.not_in_cells("p", ...)`: the other shapes of the layer.
+    #[must_use]
+    pub fn not_in_cells(self, patterns: &[&str]) -> Self {
+        self.cells(false, patterns)
+    }
+
+    fn cells(self, keep: bool, patterns: &[&str]) -> Self {
+        let op = DerivedOp::InCells {
+            keep,
+            first: 0,
+            count: 0,
+        };
+        self.call(op, None, patterns.iter().map(|&p| p.to_owned()).collect())
     }
 
     /// `.with_area(bounds)`.
@@ -401,7 +423,7 @@ impl LayerExpr {
     }
 
     fn ranged(self, op: DerivedOp, fault: Option<BuildDiagnostic>) -> Self {
-        let mut expr = self.call(op, None, None);
+        let mut expr = self.call(op, None, Vec::new());
         expr.faults.extend(fault);
         expr
     }
@@ -494,6 +516,10 @@ forward! {
     with_text(texts: LayerRef, pattern: &str);
     /// [`LayerExpr::without_text`].
     without_text(texts: LayerRef, pattern: &str);
+    /// [`LayerExpr::in_cells`].
+    in_cells(patterns: &[&str]);
+    /// [`LayerExpr::not_in_cells`].
+    not_in_cells(patterns: &[&str]);
     /// [`LayerExpr::with_area`].
     with_area(bounds: &[Bound<DbuArea>]);
     /// [`LayerExpr::with_width`].
@@ -584,8 +610,8 @@ pub struct DeckBuilder<'s> {
     names: Vec<String>,
     drawn: Vec<(String, (u16, u16))>,
     ignored: Vec<(u16, u16)>,
-    /// Derived rows in id order, each with its `with_text` pattern.
-    derived: Vec<(DerivedSource, Option<String>)>,
+    /// Derived rows in id order, each with its `with_text` or `in_cells` patterns.
+    derived: Vec<(DerivedSource, Vec<String>)>,
     connectivity: ConnectivitySource,
     devices: Vec<DeviceSource>,
     pex: Vec<(String, StackSource)>,
@@ -678,8 +704,15 @@ impl<'s> DeckBuilder<'s> {
             .into_iter()
             .map(|row| {
                 let pattern = match row.op {
-                    DerivedOp::WithText { text, .. } => source.texts.get(text as usize).cloned(),
-                    _ => None,
+                    DerivedOp::WithText { text, .. } => {
+                        source.texts.get(text as usize).cloned().into_iter().collect()
+                    }
+                    DerivedOp::InCells { first, count, .. } => source
+                        .texts
+                        .get(first as usize..(first + count) as usize)
+                        .map(<[String]>::to_vec)
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
                 };
                 (row, pattern)
             })
@@ -1132,7 +1165,7 @@ impl<'s> DeckBuilder<'s> {
     /// as `name#k` in post-order, then the layer itself, as the parser lowers
     /// `layer name = expr`.
     #[track_caller]
-    fn lower_named(&mut self, name: &str, expr: LayerExpr) -> Vec<(DerivedSource, Option<String>)> {
+    fn lower_named(&mut self, name: &str, expr: LayerExpr) -> Vec<(DerivedSource, Vec<String>)> {
         for fault in expr.faults {
             if self.errors.len() < MAX_ERRORS {
                 self.errors.push(fault);
@@ -1171,7 +1204,7 @@ impl<'s> DeckBuilder<'s> {
         name: &str,
         operands: Vec<Node>,
         count: &mut u32,
-        rows: &mut Vec<(DerivedSource, Option<String>)>,
+        rows: &mut Vec<(DerivedSource, Vec<String>)>,
     ) -> Vec<String> {
         let mut names = Vec::with_capacity(operands.len());
         for operand in operands {
@@ -1210,7 +1243,7 @@ impl<'s> DeckBuilder<'s> {
         &mut self,
         id: &str,
         row: RuleRow,
-        rows: &mut Vec<(DerivedSource, Option<String>)>,
+        rows: &mut Vec<(DerivedSource, Vec<String>)>,
     ) -> RuleSource {
         let mut inline = 0;
         let mut named = Vec::with_capacity(row.args.len());
@@ -1315,10 +1348,18 @@ impl<'s> DeckBuilder<'s> {
         let derived = derived
             .into_iter()
             .map(|(mut row, pattern)| {
-                if let DerivedOp::WithText { keep, .. } = row.op {
-                    let text = u32::try_from(texts.len()).expect("a deck has few patterns");
-                    texts.push(pattern.unwrap_or_default());
-                    row.op = DerivedOp::WithText { keep, text };
+                let first = u32::try_from(texts.len()).expect("a deck has few patterns");
+                match row.op {
+                    DerivedOp::WithText { keep, .. } => {
+                        texts.push(pattern.into_iter().next().unwrap_or_default());
+                        row.op = DerivedOp::WithText { keep, text: first };
+                    }
+                    DerivedOp::InCells { keep, .. } => {
+                        let count = u32::try_from(pattern.len()).expect("a deck has few patterns");
+                        texts.extend(pattern);
+                        row.op = DerivedOp::InCells { keep, first, count };
+                    }
+                    _ => {}
                 }
                 row
             })

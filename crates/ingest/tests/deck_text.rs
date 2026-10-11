@@ -1610,6 +1610,55 @@ fn a_text_selection_needs_a_drawn_layer_and_a_pattern() {
     );
 }
 
+/// `in_cells` / `not_in_cells` (DRC-092) select a drawn layer by one or more
+/// quoted cell-name patterns, `*` and `?` only, at most 64 in a deck.
+///
+/// Oracle: the `in_cells` operation of `docs/deck.md`: a drawn receiver, a
+/// non-empty pattern list, `KLayout`'s other glob characters refused rather
+/// than read differently, and `MAX_CELL_SELECTIONS` (one tag bit each).
+#[test]
+fn a_cell_selection_takes_a_drawn_layer_and_glob_patterns() {
+    let (deck, strings) = ok("layer pad = met1.in_cells(\"PAD_*\", \"pad?\")\n\
+         layer rest = met1.not_in_cells(\"PAD_*\")\n");
+    let pad = deck.layers.id(&strings, "pad").expect("pad");
+    assert!(deck.layers.is_derived(pad) && !deck.layers.is_edges(pad));
+    assert!(matches!(
+        deck.layers.op(pad),
+        Some(gpurify_ingest::deck::DerivedOp::InCells {
+            keep: true,
+            count: 2,
+            ..
+        })
+    ));
+    one_error(
+        "layer x = met1 and met2\nlayer y = x.in_cells(\"A\")\n",
+        "apply it to a `gds(..)` layer",
+    );
+    one_error(
+        "layer y = (met1 and met2).not_in_cells(\"A\")\n",
+        "apply it to a `gds(..)` layer",
+    );
+    one_error(
+        "layer y = met1.in_cells(PAD)\n",
+        "expected a cell-name pattern in quotes",
+    );
+    one_error(
+        "layer y = met1.in_cells(\"\")\n",
+        "an empty pattern matches no cell",
+    );
+    for refused in ["[AB]*", "{A,B}", "A\\\\*"] {
+        one_error(
+            &format!("layer y = met1.in_cells(\"{refused}\")\n"),
+            "takes `*` and `?` only",
+        );
+    }
+    let mut many = String::new();
+    for i in 0..=gpurify_ingest::deck::MAX_CELL_SELECTIONS {
+        writeln!(many, "layer s{i} = met1.in_cells(\"C{i}\")").expect("a String takes any write");
+    }
+    one_error(&many, "at most 64");
+}
+
 /// `ignore gds(L, D)` lists stream pairs to drop. It may not repeat, nor name a
 /// declared layer's pair, whichever statement comes first.
 ///

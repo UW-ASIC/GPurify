@@ -150,6 +150,8 @@ this way. Operations on shapes:
 | `.non_rectangles()` / `.non_squares()` | The other shapes. |
 | `.with_text(T, "pattern")` | The shapes holding a text on layer `T` that matches `pattern`, as IHP picks devices by their text. `*` matches any run of characters and `?` one; everything else matches itself, case included. A text on a shape's edge counts. `T` must be a drawn layer. |
 | `.without_text(T, "pattern")` | The shapes holding no such text. |
+| `.in_cells("pattern", ...)` | The shapes of a drawn layer placed under a cell whose name matches one of the patterns: the cell the shape is drawn in, or any cell above it, the top included. A pattern is a glob over the whole name, case included: `*` matches any run of characters and `?` one. `[`, `]`, `{`, `}` and `\` are refused, since KLayout reads them as classes, alternatives and escapes. Shapes are taken as drawn, before they merge. This is KLayout's `source.select("-", "+pattern")`, and how a foundry rule written "for cell names ..." or "except inside cell ..." is stated. At most 64 per deck. |
+| `.not_in_cells("pattern", ...)` | The other shapes of the layer, as KLayout's `select("-pattern")`: with `.in_cells` of the same patterns, it splits the layer. |
 | `.edges()` | The boundary of each shape, as an edge layer. |
 
 Bounds are one or two comparisons with `>=`, `>`, `<=`, `<`, or a single `==`:

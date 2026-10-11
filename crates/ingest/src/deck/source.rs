@@ -30,7 +30,8 @@ pub struct DeckSource {
     /// inside a rule `<rule id>@k`, numbered in argument order. No deck text
     /// can name either.
     pub derived: Vec<DerivedSource>,
-    /// Text patterns, indexed by [`DerivedOp::WithText`]'s `text`, in the
+    /// Text and cell-name patterns, indexed by [`DerivedOp::WithText`]'s `text`
+    /// and [`DerivedOp::InCells`]'s `first..first + count`, in the
     /// order the derived rows name them.
     pub texts: Vec<String>,
     /// Every rule, in deck order (a `for` loop's in iteration order).
@@ -219,6 +220,34 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
     {
         return malformed(format!("layer {}: its text pattern is missing", row.name));
     }
+    // What the parser refuses, refused for a source built by hand too.
+    let mut selections = 0;
+    for row in &doc.derived {
+        let DerivedOp::InCells { first, count, .. } = row.op else {
+            continue;
+        };
+        selections += 1;
+        let patterns = (first.checked_add(count).filter(|&end| count > 0 && end <= texts))
+            .map(|end| &doc.texts[first as usize..end as usize]);
+        let Some(patterns) = patterns else {
+            return malformed(format!("layer {}: its cell-name patterns are missing", row.name));
+        };
+        if patterns
+            .iter()
+            .any(|p| p.is_empty() || p.contains(['[', ']', '{', '}', '\\']))
+        {
+            return malformed(format!(
+                "layer {}: a cell-name pattern is empty or holds `[`, `]`, `{{`, `}}` or `\\`",
+                row.name
+            ));
+        }
+    }
+    if selections > super::MAX_CELL_SELECTIONS {
+        return malformed(format!(
+            "a deck holds at most {} cell selections",
+            super::MAX_CELL_SELECTIONS
+        ));
+    }
     layers.ignored.clone_from(&doc.ignored);
     layers.ignored.sort_unstable();
     for rule in &doc.rules {
@@ -362,6 +391,12 @@ fn check_operands(
                 return wrong("text is drawn on a GDS layer, not a derived one");
             }
         }
+    }
+    // A cell tag belongs to a drawn ring; a derived layer has none.
+    if matches!(row.op, DerivedOp::InCells { .. })
+        && (operands.len() != 1 || layers.is_derived(operands[0]))
+    {
+        return wrong("a cell selection reads one drawn layer");
     }
     Ok(())
 }

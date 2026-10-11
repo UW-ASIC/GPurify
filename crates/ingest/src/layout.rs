@@ -8,7 +8,8 @@
 //! [`gds::Library::parse`] reads the records with the hierarchy intact and
 //! states the grid ([`gds::Library::grid`]), and [`gds::Library::flatten`]
 //! places every shape in the root frame on the deck's layers. Coordinates stay
-//! in the file's database units throughout; nothing is scaled.
+//! in the file's database units throughout; nothing is scaled. Cell names are
+//! gone after the walk, except as the deck's `in_cells` selections read them.
 
 use crate::deck::{DerivedOp, LayerTable};
 use crate::provenance::{PlacedLabel, Provenance};
@@ -209,17 +210,22 @@ pub fn derive_layers<D: AsRef<LayerTable> + ?Sized>(
     provenance: &Provenance,
     strings: &StrTable,
 ) -> Result<(), LayoutError> {
-    derive_layers_into(store, deck.as_ref(), &provenance.placed, strings)
+    // A store built in memory has no cells: every shape's tag is empty.
+    derive_layers_into(store, deck.as_ref(), &provenance.placed, strings, &[])
 }
 
 /// Compute every deck-derived layer and append it to the store, in id order.
 /// Operands only name lower ids, so one forward pass suffices. `labels` are
-/// the placed texts, named in `strings`, that `with_text` reads.
+/// the placed texts, named in `strings`, that `with_text` reads. `cells` is
+/// each stored row's cell tag, bit `k` set when a cell on its placement path
+/// matches the deck's `k`th cell selection ([`LayerTable::cell_selections`]);
+/// a row past its end has no bit set.
 fn derive_layers_into(
     store: &mut GeometryStore,
     layers: &LayerTable,
     labels: &[PlacedLabel],
     strings: &StrTable,
+    cells: &[u64],
 ) -> Result<(), LayoutError> {
     let mut folded = ValidatedLayer::default();
     let mut operand = ValidatedLayer::default();
@@ -228,8 +234,30 @@ fn derive_layers_into(
     let (mut edges, mut edges_out) = (Vec::<Seg>::new(), Vec::<Seg>::new());
     let (mut xs, mut ys) = (Vec::<Dbu>::new(), Vec::<Dbu>::new());
     let (mut start, mut len) = (Vec::<u32>::new(), Vec::<u32>::new());
+    let mut selection = 0;
 
     for (layer, op, operands) in layers.derived() {
+        // The receiver's rows as drawn, unmerged: a tag belongs to a drawn ring.
+        if let DerivedOp::InCells { keep, .. } = *op {
+            let bit = 1u64 << selection;
+            selection += 1;
+            xs.clear();
+            ys.clear();
+            start.clear();
+            len.clear();
+            for row in store.polys_on_layer(operands[0]) {
+                let tagged = cells.get(row as usize).is_some_and(|&tag| tag & bit != 0);
+                if tagged == keep {
+                    let (ring_xs, ring_ys) = store.poly_verts(gpurify_geom::PolyId(row));
+                    start.push(crate::narrow(xs.len()));
+                    len.push(crate::narrow(ring_xs.len()));
+                    xs.extend_from_slice(ring_xs);
+                    ys.extend_from_slice(ring_ys);
+                }
+            }
+            store.append_layer(*layer, &xs, &ys, &start, &len);
+            continue;
+        }
         let blame = |why: BooleanError| LayoutError::Derived(*layer, why);
         // An operand's polygons, merged: selections and sizing read whole shapes.
         let mut merged = |id: LayerId, out: &mut ValidatedLayer| {
@@ -425,7 +453,10 @@ fn on_material(poly: PolygonRef<'_>, p: Point) -> bool {
 
 /// A glob over the whole text: `*` matches any run, `?` one character, and
 /// every other character itself, case included. The deck's text patterns
-/// (`with_text`, `lvs connect_implicit`) match so.
+/// (`with_text`, `lvs connect_implicit`) and cell names (`in_cells`)
+/// match so. `KLayout`'s glob also reads `[…]`, `{a,b}` and `\`
+/// (docs/klayout-mirror.md, Q3); a cell-name pattern holding one is
+/// refused by the deck parser, so the two read every accepted pattern alike.
 pub fn glob_matches(pattern: &str, text: &str) -> bool {
     let (pattern, text): (Vec<char>, Vec<char>) =
         (pattern.chars().collect(), text.chars().collect());
@@ -1529,6 +1560,14 @@ pub mod gds {
         /// Each cell's flat polygon and text counts, from
         /// [`Library::flat_counts`].
         counts: Vec<[u64; 2]>,
+        /// Each cell's own tag: bit `k` when its name matches the deck's
+        /// `k`th cell selection. Empty when the deck makes none, and then
+        /// nothing is tagged.
+        own: Vec<u64>,
+        /// The tag of the current placement path: its cells' own tags, or-ed.
+        tag: u64,
+        /// One tag per pushed ring, in arrival order, while `own` is not empty.
+        tags: Vec<u64>,
         level: Level,
         /// Per-element scratch.
         rx: Vec<i64>,
@@ -1556,6 +1595,12 @@ pub mod gds {
         ///
         /// The walk costs the flat polygon count times the depth: a
         /// placement of a cell holding no polygon is skipped, never expanded.
+        ///
+        /// Cell names survive only as the deck asks for them: when it makes
+        /// `in_cells` selections ([`crate::deck::DerivedOp::InCells`]), each
+        /// placed ring carries a 64-bit tag, bit `k` set when a cell on its
+        /// placement path matches selection `k`, read while derived layers
+        /// are computed and then dropped. A deck without one pays nothing.
         ///
         /// # Errors
         ///
@@ -1604,6 +1649,20 @@ pub mod gds {
             }
 
             let layers = deck.as_ref();
+            let selections: Vec<&[String]> = layers.cell_selections().collect();
+            let own = if selections.is_empty() {
+                Vec::new()
+            } else {
+                let tag_of = |cell: &Cell| {
+                    let name = strings.resolve(cell.name);
+                    (0..).zip(&selections).fold(0u64, |tag, (k, patterns)| {
+                        let hit = patterns.iter().any(|p| super::glob_matches(p, name));
+                        tag | (u64::from(hit) << k)
+                    })
+                };
+                self.cells.iter().map(tag_of).collect()
+            };
+
             let mut walk = Flatten {
                 lib: self,
                 layers,
@@ -1614,6 +1673,9 @@ pub mod gds {
                 provenance: Provenance::default(),
                 on_chain: vec![false; self.cells.len()],
                 counts,
+                own,
+                tag: 0,
+                tags: Vec::new(),
                 level: Level::new(),
                 rx: Vec::new(),
                 ry: Vec::new(),
@@ -1626,9 +1688,20 @@ pub mod gds {
                 }
             }
 
-            // Labels are not bound yet, so the layer-sort permutation has nothing to move.
-            let (mut store, _) = walk.builder.finish(layers.len());
-            super::derive_layers_into(&mut store, layers, &walk.provenance.placed, strings)?;
+            // Labels are not bound yet; only the cell tags follow the layer sort.
+            let (mut store, order) = walk.builder.finish(layers.len());
+            let cells: Vec<u64> = if walk.tags.is_empty() {
+                Vec::new()
+            } else {
+                order.iter().map(|&old| walk.tags[old as usize]).collect()
+            };
+            super::derive_layers_into(
+                &mut store,
+                layers,
+                &walk.provenance.placed,
+                strings,
+                &cells,
+            )?;
             Ok((store, walk.provenance))
         }
     }
@@ -1758,6 +1831,8 @@ pub mod gds {
                 ));
             }
             self.on_chain[index] = true;
+            let parent = self.tag;
+            self.tag |= self.own.get(index).copied().unwrap_or(0);
 
             let entry = &lib.cells[index];
             let elems = &lib.elems[entry.elem_start as usize..entry.elem_end as usize];
@@ -1799,6 +1874,7 @@ pub mod gds {
                 }
             }
 
+            self.tag = parent;
             self.on_chain[index] = false;
             Ok(())
         }
@@ -1937,6 +2013,9 @@ pub mod gds {
                 self.ty[1..].reverse();
             }
             self.builder.push(layer, &self.tx, &self.ty);
+            if !self.own.is_empty() {
+                self.tags.push(self.tag);
+            }
         }
     }
 }
@@ -4152,6 +4231,122 @@ layer rest = activ.without_text(text, \"npn13G2*\")
             boxes("rest"),
             [(400, 500, 100), (600, 900, 400), (1_000, 1_100, 100)]
         );
+    }
+
+    /// DRC-092: `in_cells` keeps the shapes placed under a matching cell, the
+    /// cell itself or any cell above it, root included, and `not_in_cells` the
+    /// rest. `PAD_A` holds a square and places `INNER`; `TOP` places `PAD_A`
+    /// under each of the eight orientations (`STRANS` reflect × four angles)
+    /// and once magnified two times, which takes the per-element path rather
+    /// than the per-placement one, and places `core` and `INNER` directly.
+    /// Every square is centred on its cell's origin, so each placement's boxes
+    /// are known without composing a transform.
+    ///
+    /// Oracle: construct-from-answer under `DerivedOp::InCells`'s definition:
+    /// the `INNER` under a `PAD_A` is in `PAD_*`, the one `TOP` places is not;
+    /// `TOP` matching makes every shape in; the glob is case-sensitive, so
+    /// `pad_*` holds nothing.
+    #[test]
+    fn in_cells_keeps_the_shapes_under_a_matching_cell_in_every_orientation() {
+        let mut strings = StrTable::default();
+        let grid = gpurify_geom::Grid::new(1000).expect("1 nm");
+        let deck = crate::deck::parse_deck(
+            "grid 1nm
+layer m = gds(1, 0)
+layer pad = m.in_cells(\"PAD_*\")
+layer rest = m.not_in_cells(\"PAD_*\")
+layer every = m.in_cells(\"core\", \"T?P\")
+layer nothing = m.in_cells(\"pad_*\")
+",
+            grid,
+            &mut strings,
+        )
+        .expect("the deck parses");
+        let square = |half: i64| {
+            boundary(
+                1,
+                0,
+                &[-half, half, half, -half],
+                &[-half, -half, half, half],
+            )
+        };
+        let mut refs = Vec::new();
+        let orientations = [0, REFLECT]
+            .into_iter()
+            .flat_map(|s| [0.0, 90.0, 180.0, 270.0].map(|a| (s, a)));
+        for (i, (strans, angle)) in (1..).zip(orientations) {
+            refs.push(sref("PAD_A", strans, angle, 1_000 * i, 0));
+        }
+        refs.push(sref("PAD_A", 0, 0.0, 9_000, 0).magnified(2));
+        refs.push(sref("core", 0, 0.0, 0, 3_000));
+        refs.push(sref("INNER", 0, 0.0, 0, 6_000));
+        let top_square = [boundary(
+            1,
+            0,
+            &[4_990, 5_010, 5_010, 4_990],
+            &[4_990, 4_990, 5_010, 5_010],
+        )];
+        let bytes = gds_hierarchy(&[
+            ("TOP", &top_square, &refs),
+            ("PAD_A", &[square(50)], &[sref("INNER", 0, 0.0, 0, 0)]),
+            ("core", &[square(30)], &[]),
+            ("INNER", &[square(20)], &[]),
+        ]);
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("reads");
+        let boxes = |name: &str| {
+            let layer = deck.layers.id(&strings, name).expect("declared");
+            let mut out: Vec<_> = layout
+                .store
+                .polys_on_layer(layer)
+                .map(|row| {
+                    let b = layout.store.poly_bbox(PolyId(row));
+                    (b.xlo.raw(), b.ylo.raw(), b.xhi.raw(), b.yhi.raw())
+                })
+                .collect();
+            out.sort_unstable();
+            out
+        };
+        let at = |x: i64, y: i64, half: i64| (x - half, y - half, x + half, y + half);
+        let mut pad: Vec<_> = (1..=8)
+            .flat_map(|i| [at(1_000 * i, 0, 50), at(1_000 * i, 0, 20)])
+            .chain([at(9_000, 0, 100), at(9_000, 0, 40)])
+            .collect();
+        pad.sort_unstable();
+        let mut rest = vec![at(5_000, 5_000, 10), at(0, 3_000, 30), at(0, 6_000, 20)];
+        rest.sort_unstable();
+        let mut all: Vec<_> = pad.iter().chain(&rest).copied().collect();
+        all.sort_unstable();
+        assert_eq!(boxes("pad"), pad);
+        assert_eq!(boxes("rest"), rest);
+        assert_eq!(boxes("every"), all);
+        assert_eq!(boxes("nothing"), []);
+    }
+
+    /// A store built in memory has no cells: `in_cells` selects nothing and
+    /// `not_in_cells` the whole layer, whatever the pattern.
+    ///
+    /// Oracle: `DerivedOp::InCells`'s rustdoc, which states this case.
+    #[test]
+    fn a_store_built_in_memory_is_in_no_cell() {
+        let mut strings = StrTable::default();
+        let grid = gpurify_geom::Grid::new(1000).expect("1 nm");
+        let deck = crate::deck::parse_deck(
+            "grid 1nm\nlayer m = gds(1, 0)\nlayer sel = m.in_cells(\"*\")\nlayer unsel = m.not_in_cells(\"*\")\n",
+            grid,
+            &mut strings,
+        )
+        .expect("the deck parses");
+        let mut builder = LayoutBuilder::new(deck.layers.len());
+        builder.push(LayerId(0), &[0, 100, 100, 0], &[0, 0, 100, 100]);
+        let (mut store, _) = builder.finish();
+        super::derive_layers(&mut store, &deck, &crate::Provenance::default(), &strings)
+            .expect("derives");
+        let count = |name: &str| {
+            store
+                .polys_on_layer(deck.layers.id(&strings, name).expect("declared"))
+                .len()
+        };
+        assert_eq!((count("sel"), count("unsel")), (0, 1));
     }
 
     /// Oracle: the glob `docs/deck.md` documents for `with_text`: `*` any run,
