@@ -692,74 +692,79 @@ fn overlap(depth: Depth) -> Vec<Fixture> {
 
 // ------------------------------------------------------- containment, inside
 
-/// `contains(tap, licon) >= 1` and `>= 2` (`must_contain`, DRC-048 and
-/// DRC-049), and `contains(nwell, ntap) >= 1` (DRC-085, tap presence per
-/// well): one finding per merged outer figure holding fewer merged inner
-/// figures entirely, counting what it holds.
+/// `contains(tap, licon) >= 1`, `>= 2`, `<= 1` and `== 2` (`must_contain`,
+/// DRC-048 and DRC-049), and `contains(nwell, ntap) >= 1` (DRC-085, tap
+/// presence per well): one finding per merged outer figure holding fewer, or
+/// more, merged inner figures entirely than its bound, measuring what it
+/// holds.
 ///
-/// Shapes: none, one and two held; one touching the tap's edge from inside
-/// (held); one straddling the edge and one touching it from outside (not
-/// held); two touching or overlapping licons (one figure); a tap of two
+/// Oracle: each case states how many licons each tap holds, by
+/// construction, and every rule's findings follow from that count and the
+/// rule's bound.
+///
+/// Shapes: none, one, two and three held; one touching the tap's edge from
+/// inside (held); one straddling the edge and one touching it from outside
+/// (not held); two touching or overlapping licons (one figure); a tap of two
 /// abutting halves holding a licon across the seam; two taps; a licon in a
 /// tap ring's hole (not held); an empty tap layer. For wells: tapped,
 /// untapped, a tap across the well's edge.
 fn must_contain() -> Vec<Fixture> {
     let deck_tap = new_deck(
         &["tap", "licon"],
-        "rule one contains(tap, licon) >= 1\nrule two contains(tap, licon) >= 2\n",
+        "rule one contains(tap, licon) >= 1\nrule two contains(tap, licon) >= 2\n\
+         rule most contains(tap, licon) <= 1\nrule exact contains(tap, licon) == 2\n",
     );
-    let case = |name: &str, layout: Layout, one: Vec<Finding>, two: Vec<Finding>| {
+    // `held` is what each tap figure holds.
+    let case = |name: &str, layout: Layout, held: &[u32]| {
+        let failing = |bad: fn(u32) -> bool| -> Vec<Finding> {
+            held.iter()
+                .filter(|&&h| bad(h))
+                .map(|&h| count(h))
+                .collect()
+        };
         fixture(
             &format!("must_contain/{name}"),
             &["DRC-048", "DRC-049"],
             &deck_tap,
             layout,
-            &[("one", one), ("two", two)],
+            &[
+                ("one", failing(|h| h < 1)),
+                ("two", failing(|h| h < 2)),
+                ("most", failing(|h| h > 1)),
+                ("exact", failing(|h| h != 2)),
+            ],
         )
     };
     let tap = || Layout::default().rect("tap", 0, 0, 1000, 500);
     let mut cases = Vec::new();
-    for (name, licons, one, two) in [
-        ("none", vec![], vec![count(0)], vec![count(0)]),
-        ("one", vec![(100, 100, 200, 200)], vec![], vec![count(1)]),
+    for (name, licons, held) in [
+        ("none", vec![], 0),
+        ("one", vec![(100, 100, 200, 200)], 1),
+        ("two", vec![(100, 100, 200, 200), (400, 100, 500, 200)], 2),
         (
-            "two",
-            vec![(100, 100, 200, 200), (400, 100, 500, 200)],
-            vec![],
-            vec![],
+            "three",
+            vec![
+                (100, 100, 200, 200),
+                (400, 100, 500, 200),
+                (700, 100, 800, 200),
+            ],
+            3,
         ),
-        (
-            "edge_inside",
-            vec![(0, 0, 100, 100)],
-            vec![],
-            vec![count(1)],
-        ),
-        (
-            "straddling",
-            vec![(950, 100, 1050, 200)],
-            vec![count(0)],
-            vec![count(0)],
-        ),
-        (
-            "touching_outside",
-            vec![(1000, 100, 1100, 200)],
-            vec![count(0)],
-            vec![count(0)],
-        ),
+        ("edge_inside", vec![(0, 0, 100, 100)], 1),
+        ("straddling", vec![(950, 100, 1050, 200)], 0),
+        ("touching_outside", vec![(1000, 100, 1100, 200)], 0),
         (
             "touching_pair",
             vec![(100, 100, 200, 200), (200, 100, 300, 200)],
-            vec![],
-            vec![count(1)],
+            1,
         ),
         (
             "overlapping_pair",
             vec![(100, 100, 250, 200), (200, 100, 300, 200)],
-            vec![],
-            vec![count(1)],
+            1,
         ),
     ] {
-        cases.push(case(name, rects(tap(), "licon", &licons), one, two));
+        cases.push(case(name, rects(tap(), "licon", &licons), &[held]));
     }
     cases.push(case(
         "tap_halves",
@@ -767,22 +772,19 @@ fn must_contain() -> Vec<Fixture> {
             .rect("tap", 0, 0, 500, 500)
             .rect("tap", 500, 0, 1000, 500)
             .rect("licon", 450, 100, 550, 200),
-        vec![],
-        vec![count(1)],
+        &[1],
     ));
     cases.push(case(
         "two_taps",
         tap()
             .rect("licon", 100, 100, 200, 200)
             .rect("tap", 2000, 0, 3000, 500),
-        vec![count(0)],
-        vec![count(1), count(0)],
+        &[1, 0],
     ));
     cases.push(case(
         "empty_tap",
         Layout::default().rect("licon", 100, 100, 200, 200),
-        vec![],
-        vec![],
+        &[],
     ));
     cases.push(case(
         "in_hole",
@@ -792,8 +794,7 @@ fn must_contain() -> Vec<Fixture> {
             (0, 0, 1000, 500),
             (300, 100, 700, 400),
         ),
-        vec![count(0)],
-        vec![count(0)],
+        &[0],
     ));
 
     let deck_well = new_deck(

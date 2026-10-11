@@ -915,19 +915,31 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 outer,
                 inner,
                 min_count,
+                max_count,
             } => {
                 let name = fig(outer, &mut reads);
                 fig(inner, &mut reads);
-                writeln!(
-                    body,
-                    // `covering` drops an outer figure that an inner one
-                    // straddles, whatever else it holds: count only inners
-                    // that some outer figure holds.
-                    "emit({q}, {o}.not_covering({i}.inside({o}), {min_count})) {{ |p| {{ v: {i}.data.merged.inside(RBA::Region.new(p)).count }} }}",
-                    o = var(outer),
-                    i = var(inner)
-                )
-                .expect("a String");
+                // `covering` drops an outer figure that an inner one
+                // straddles, whatever else it holds: count only inners that
+                // some outer figure holds. Too few and too many are disjoint.
+                let (o, i) = (var(outer), var(inner));
+                let held =
+                    format!("{{ |p| {{ v: {i}.data.merged.inside(RBA::Region.new(p)).count }} }}");
+                if min_count > 0 {
+                    writeln!(
+                        body,
+                        "emit({q}, {o}.not_covering({i}.inside({o}), {min_count})) {held}"
+                    )
+                    .expect("a String");
+                }
+                if max_count < u32::MAX {
+                    writeln!(
+                        body,
+                        "emit({q}, {o}.covering({i}.inside({o}), {})) {held}",
+                        u64::from(max_count) + 1
+                    )
+                    .expect("a String");
+                }
                 exact("must_contain", Key::FigAt(name), Value::Count)
             }
             Rule::MustBeInside { inner, outer } => {
