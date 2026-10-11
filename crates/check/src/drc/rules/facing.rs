@@ -1,6 +1,6 @@
 //! Spacing read off the edges of the merged layer: facing edges classed by
 //! their lengths, gaps in a forbidden range, and the space in front of an end
-//! of line as LEF defines it.
+//! of line as LEF defines it, keep-out boxes included.
 //!
 //! Data in: one layer, validated and merged into `s.layer_out`; every rule
 //! here reads whole edges of the merged figures, so a side drawn as several
@@ -9,13 +9,16 @@
 //! two nearest offending edges face each other over.
 
 use super::spacing::{line_of, nearest, on_line, spacing_violation};
-use super::{owners_of, ring_segs, Verdict, REFUSED};
+use super::{centre, owners_of, ring_segs, SortedRects, Verdict, REFUSED};
 use crate::drc::ruleset::{ClassTable, EolParallel};
 use crate::drc::Scratch;
-use crate::report::{Outcome, Violations};
+use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::derive::merge_into;
 use gpurify_geom::ops::Seg;
-use gpurify_geom::{Dbu, GeometryStore, LayerId, PolyId, ValidatedLayer};
+use gpurify_geom::rects::decompose_into;
+use gpurify_geom::{
+    Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer, MAX_ABS_DBU,
+};
 use gpurify_ingest::StrId;
 
 /// One edge of a merged figure. Field order is the sort order the facing scan
@@ -325,5 +328,99 @@ fn beside(edges: &[Edge], end: &Edge, parallel: EolParallel, within: i64) -> boo
         low && high
     } else {
         low || high
+    }
+}
+
+/// LEF58 end-of-line keep-out (`LEF58_EOLKEEPOUT`): every other figure whose
+/// material overlaps an end of line's box with a positive area, one finding
+/// per end and figure, measuring that area. `examined` counts ends of line.
+pub(crate) fn eol_keep_out(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    eol_width: Dbu,
+    (backward, side, forward): (Dbu, Dbu, Dbu),
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(owners) = merged_owners(store, layer, s) else {
+        return REFUSED;
+    };
+    let edges = figure_edges(&s.layer_out);
+    let (mut rects, mut start) = (Vec::new(), Vec::new());
+    decompose_into(&s.layer_out, &mut rects, &mut start);
+    let material = SortedRects::new(
+        start
+            .windows(2)
+            .zip(0u32..)
+            .flat_map(|(span, figure)| {
+                rects[span[0] as usize..span[1] as usize]
+                    .iter()
+                    .map(move |&r| (r, figure))
+            })
+            .collect(),
+    );
+    let mut examined = 0u64;
+    for end in edges
+        .iter()
+        .filter(|e| e.convex && e.length() < eol_width.raw())
+    {
+        examined += 1;
+        let zone = keep_out_box(end, (backward.raw(), side.raw(), forward.raw()));
+        let mut inside: Vec<(u32, Bbox)> = material
+            .overlapping(zone)
+            .filter(|&(_, figure)| figure != end.figure)
+            .map(|(part, figure)| (figure, part))
+            .collect();
+        inside.sort_unstable_by_key(|&(figure, _)| figure);
+        for intruder in inside.chunk_by(|a, b| a.0 == b.0) {
+            let area = intruder
+                .iter()
+                .fold(DbuArea::new(0), |sum, &(_, part)| sum + part.area());
+            let bounds = intruder
+                .iter()
+                .fold(Bbox::EMPTY, |sum, &(_, part)| sum.union(part));
+            out.push(Violation {
+                rule,
+                layer,
+                severity: Severity::Error,
+                at: centre(bounds),
+                measured: Measurement::Area(area),
+                limit: Measurement::Area(DbuArea::new(0)),
+                shapes: (
+                    owners[end.figure as usize],
+                    Some(owners[intruder[0].0 as usize]),
+                ),
+            });
+        }
+    }
+    (Outcome::Ran, examined)
+}
+
+/// The keep-out box of the end of line `end`: its span widened by `side` on
+/// each side, from `backward` behind its line to `forward` past it, clamped
+/// to the coordinate domain.
+fn keep_out_box(end: &Edge, (backward, side, forward): (i64, i64, i64)) -> Bbox {
+    let at = |v: i64| Dbu::new_unchecked(v.clamp(-MAX_ABS_DBU, MAX_ABS_DBU));
+    let (along_lo, along_hi) = (end.lo - side, end.hi + side);
+    let (across_lo, across_hi) = if end.faces_up {
+        (end.pos - backward, end.pos + forward)
+    } else {
+        (end.pos - forward, end.pos + backward)
+    };
+    if end.vertical {
+        Bbox {
+            xlo: at(across_lo),
+            ylo: at(along_lo),
+            xhi: at(across_hi),
+            yhi: at(along_hi),
+        }
+    } else {
+        Bbox {
+            xlo: at(along_lo),
+            ylo: at(across_lo),
+            xhi: at(along_hi),
+            yhi: at(across_hi),
+        }
     }
 }

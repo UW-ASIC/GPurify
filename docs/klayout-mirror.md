@@ -1088,6 +1088,18 @@ the space when the facing edge is an end of line too. `TritonRoute` defines the 
 parallel reach each swept one step either side, and both-sides and end-to-end cases, hand-derived
 under the square's symmetries (SY, MR).
 
+### 39. eol_keep_out — NONE: KLayout has no end-of-line keep-out box
+
+**GPurify** (`facing.rs` `eol_keep_out`): each end of line (as rule 38) owns a box, the end widened
+by `side` each way, from `backward` behind its line to `forward` past it; each other figure whose
+material overlaps the box with positive area is a finding, measuring that area.
+
+**KLayout.** Not mirrored: picking the edges whose two corners are convex and testing each one's
+box against the other figures is a loop over polygons, not a KLayout check. `TritonRoute` defines
+the rule (`checkMetalEOLkeepout_main`), but it is not run as a differential. The oracles: the
+box's forward, side and backward reaches each swept one step either side, with the area inside
+derived by hand as a rectangle's, under the square's symmetries (SY, MR).
+
 ---
 
 ## (c) Derived layers, connectivity, antenna
@@ -1134,7 +1146,7 @@ Each operation runs on merged operands at the default coherence (a3).
 
 ### Antenna
 
-`antenna` is an ERC kind, not one of the 38, but `antenna_check` mirrors it. Not translated yet.
+`antenna` is an ERC kind, not one of the 39, but `antenna_check` mirrors it. Not translated yet.
 
 **GPurify** (`erc/rules/antenna.rs`)
 - For each rule row, the nets are those standing at that etch step: conductors up to the highest
@@ -1168,6 +1180,7 @@ KLayout, but only by positive overlap in GPurify.
   conflict graphs (testing-plan L6 skip list); a KLayout conflict graph could feed it.
 - **eol_within_spacing.** Reported as not mirrored. The oracles are the LEF 5.8 worked example and
   hand-derived fixtures (rule 38).
+- **eol_keep_out.** Reported as not mirrored. The oracle is hand-derived fixtures (rule 39).
 - **net_spacing on a deck without `touch_within_layer`.** The oracle is construct-from-answer
   tests with planted nets.
 
