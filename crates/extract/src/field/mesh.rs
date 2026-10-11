@@ -6,7 +6,11 @@
 //! layer abuts it, so no panel sits inside metal.
 //! Data out: a [`Mesh`] — panels banded by conductor, Morton-ordered within each
 //! band. That order is the matvec's summation order, so it fixes output bits.
+//! In a stack whose dielectric changes with height, a last band holds the
+//! panels of every interface between two dielectrics, and each conductor
+//! panel carries the permittivity outside its face (`super::dielectric`).
 
+use super::dielectric::{interface_panels_into, Footprint, Profile};
 use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::rects::decompose_into;
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
@@ -45,8 +49,15 @@ pub struct Mesh {
     pub conductor_start: Vec<u32>,
     /// The net of each conductor, in the order it was selected.
     pub conductor_net: Vec<NetId>,
-    /// Relative permittivity above each panel.
+    /// Relative permittivity per panel: in a uniform stack each layer's own,
+    /// the dielectric its panels sit in; in a stratified one, the
+    /// permittivity just outside the panel's face (above a top face, below a
+    /// bottom face, beside a side face), and 1 on an interface panel.
     pub epsilon: Vec<f64>,
+    /// `λ = (ε_below − ε_above)/(ε_below + ε_above)` of each interface panel:
+    /// the panels after the conductors', `panel[conductor_start[n] ..]` for
+    /// `n` conductors. Empty in a uniform stack.
+    pub interface: Vec<f64>,
 }
 
 /// How finely to mesh, and when to refuse.
@@ -83,6 +94,13 @@ pub enum MeshError {
     /// cannot be cut into rectangles exactly.
     #[error("not valid rectilinear geometry, so it cannot be meshed exactly")]
     InvalidGeometry(LayerId),
+    /// The layer's `pex` row states a dielectric that differs from another
+    /// row's at the same height, so the stack has no one permittivity there.
+    #[error(
+        "its dielectric differs from another layer's at the same height, so the stack's \
+         permittivity there is not defined"
+    )]
+    DielectricConflict(LayerId),
 }
 
 impl MeshError {
@@ -90,7 +108,9 @@ impl MeshError {
     /// to name as the deck does; `None` for a refusal about no one layer.
     pub fn layer(self) -> Option<LayerId> {
         match self {
-            Self::MissingThickness(layer) | Self::InvalidGeometry(layer) => Some(layer),
+            Self::MissingThickness(layer)
+            | Self::InvalidGeometry(layer)
+            | Self::DielectricConflict(layer) => Some(layer),
             Self::TooManyPanels | Self::EmptyConductor => None,
         }
     }
@@ -150,6 +170,10 @@ pub fn build_into(
     out.conductor_start.clear();
     out.conductor_net.clear();
     out.epsilon.clear();
+    out.interface.clear();
+    let profile = Profile::of(stack)
+        .map_err(|conflict| MeshError::DielectricConflict(LayerId(conflict.layer)))?;
+    let layered = profile.is_layered();
 
     // One database unit, in metres.
     #[expect(clippy::cast_precision_loss, reason = "a resolution is a small count")]
@@ -249,6 +273,12 @@ pub fn build_into(
             let edge_here = edge / f64::from(1 + u8::from(near));
             for (axis, sign) in [(2, -1.0), (2, 1.0)] {
                 let plane = if sign < 0.0 { lo[axis] } else { hi[axis] };
+                // Stratified, a face sees the dielectric outside it.
+                let epsilon = match (layered, sign < 0.0) {
+                    (false, _) => here.epsilon,
+                    (true, true) => profile.below(plane),
+                    (true, false) => profile.above(plane),
+                };
                 mesh_face(
                     axis,
                     plane,
@@ -256,7 +286,7 @@ pub fn build_into(
                     hi,
                     edge_here,
                     conductor,
-                    here.epsilon,
+                    epsilon,
                     &mut remaining,
                     &mut scratch,
                 )?;
@@ -275,17 +305,45 @@ pub fn build_into(
                         piece_lo[along] = from as f64 * metre;
                         piece_hi[along] = to as f64 * metre;
                     }
-                    mesh_face(
-                        axis,
-                        plane,
-                        piece_lo,
-                        piece_hi,
-                        edge_here,
-                        conductor,
-                        here.epsilon,
-                        &mut remaining,
-                        &mut scratch,
-                    )?;
+                    if !layered {
+                        mesh_face(
+                            axis,
+                            plane,
+                            piece_lo,
+                            piece_hi,
+                            edge_here,
+                            conductor,
+                            here.epsilon,
+                            &mut remaining,
+                            &mut scratch,
+                        )?;
+                        continue;
+                    }
+                    // Stratified, the face is cut at every interface it
+                    // crosses, each slab seeing its own dielectric.
+                    let mut cuts: Vec<f64> = profile
+                        .interfaces()
+                        .map(|(z, _, _)| z)
+                        .filter(|&z| z > lo[2] + SAME_PLANE && z < hi[2] - SAME_PLANE)
+                        .collect();
+                    cuts.insert(0, lo[2]);
+                    cuts.push(hi[2]);
+                    for slab in cuts.windows(2) {
+                        let (mut slab_lo, mut slab_hi) = (piece_lo, piece_hi);
+                        slab_lo[2] = slab[0];
+                        slab_hi[2] = slab[1];
+                        mesh_face(
+                            axis,
+                            plane,
+                            slab_lo,
+                            slab_hi,
+                            edge_here,
+                            conductor,
+                            profile.above(slab[0]),
+                            &mut remaining,
+                            &mut scratch,
+                        )?;
+                    }
                 }
             }
         }
@@ -339,8 +397,42 @@ pub fn build_into(
             .all(|(panel, &epsilon)| panel.area > 0.0 && epsilon > 0.0),
         "every panel has a positive area and permittivity"
     );
+
+    if layered {
+        let footprints: Vec<Footprint> = solid
+            .iter()
+            .map(|here| {
+                #[expect(clippy::cast_precision_loss, reason = "|Dbu| <= 2^40, exact in f64")]
+                let at = |v: Dbu| v.raw() as f64 * metre;
+                Footprint {
+                    lo: [at(here.bbox.xlo), at(here.bbox.ylo)],
+                    hi: [at(here.bbox.xhi), at(here.bbox.yhi)],
+                    z: here.z,
+                }
+            })
+            .collect();
+        let after = u32::try_from(selected.len()).expect("a selection is indexed by a u32");
+        let mut interfaces = Vec::new();
+        interface_panels_into(
+            &profile,
+            &footprints,
+            edge,
+            after,
+            &mut remaining,
+            &mut interfaces,
+        )
+        .map_err(|()| MeshError::TooManyPanels)?;
+        for (panel, lambda) in interfaces {
+            out.panel.push(panel);
+            out.epsilon.push(1.0);
+            out.interface.push(lambda);
+        }
+    }
     Ok(())
 }
+
+/// Two heights closer than this, in metres, are one plane.
+const SAME_PLANE: f64 = 1e-12;
 
 /// One rectangle of a conductor polygon as a solid: grid-unit footprint, z
 /// extent in metres.

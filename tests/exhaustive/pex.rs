@@ -2553,6 +2553,134 @@ fn spef_writes_process_corners_as_triplets() {
     );
 }
 
+/// [`COARSE`] with every row's dielectric `k`.
+fn uniform(k: f64) -> Stack {
+    Stack {
+        m1: Row { k, ..COARSE.m1 },
+        v1: Row { k, ..COARSE.v1 },
+        m2: Row { k, ..COARSE.m2 },
+    }
+}
+
+/// [`COARSE`] with `m1`'s dielectric `below` and the rest `above`: the stack
+/// is `below` up to 750 nm, `m1`'s top, where `v1`'s row starts, and `above`
+/// over it: one interface, on `m1`'s top face.
+fn stratified(below: f64, above: f64) -> Stack {
+    Stack {
+        m1: Row {
+            k: below,
+            ..COARSE.m1
+        },
+        ..uniform(above)
+    }
+}
+
+/// The field-solved Maxwell matrix of `labels` on `stack`, in fF, and what
+/// the solve reports of itself.
+fn solved_matrix(
+    stack: Stack,
+    layout: Layout,
+    labels: &[&str],
+) -> (Vec<Vec<f64>>, gpurify::extract::field::Accuracy) {
+    let ran = run(&deck(stack, &[], ""), layout, NONE, &[]);
+    let nets: Vec<NetId> = labels.iter().map(|label| net(&ran, label)).collect();
+    let (mut matrix, mut network) = (CapMatrix::default(), ParasiticNetwork::default());
+    let accuracy = gpurify::extract::quasistatic::extract_into(
+        &ran.loaded.store,
+        &ran.extracted.nets,
+        &ran.loaded.deck.connectivity,
+        &nets,
+        &ran.loaded.deck.stack,
+        ran.loaded.grid,
+        &mut matrix,
+        &mut network,
+    )
+    .expect("the field solve converges");
+    let n = nets.len();
+    let row_of = |net: NetId| {
+        matrix
+            .net
+            .iter()
+            .position(|&m| m == net)
+            .expect("a selected net")
+    };
+    let c = nets
+        .iter()
+        .map(|&i| {
+            nets.iter()
+                .map(|&j| matrix.value[row_of(i) * n + row_of(j)] * 1e15)
+                .collect()
+        })
+        .collect();
+    (c, accuracy)
+}
+
+/// PEX-003: an 8 um `m1` plate 250 nm over the substrate in a stratified
+/// stack, 7 up to its top and 3.9 over it. Oracle: laws. Capacitance grows
+/// with any permittivity (Thomson's principle), so it lies strictly between
+/// the stack all 3.9 and the stack all 7; it is at least the column under
+/// it, `ε₀·7·A/h` (a flux tube); and with every permittivity doubled it
+/// doubles, to the solve's tolerance (the interfaces' contrast is unchanged,
+/// and free charge is permittivity times total charge). Fails if the
+/// interface's polarisation has the wrong sign (the plate drops under the
+/// 3.9 stack's), if a face reads the wrong side's permittivity, or if the
+/// free charge is not scaled.
+#[test]
+fn a_stratified_plate_lies_between_its_two_uniform_stacks() {
+    let plate = || {
+        Layout::default()
+            .rect("m1", 0, 0, 8_000, 8_000)
+            .label("m1_label", 500, 500, "A")
+    };
+    let ground = |stack: Stack| solved_matrix(stack, plate(), &["A"]).0[0][0];
+    let (low, high) = (ground(uniform(3.9)), ground(uniform(7.0)));
+    let (middle, accuracy) = solved_matrix(stratified(7.0, 3.9), plate(), &["A"]);
+    let middle = middle[0][0];
+    let column = EPSILON0_AF_PER_UM * 7.0 * 64.0 / (COARSE.m1.height / 1e3) / 1e3;
+    assert!(
+        low < middle && middle < high && middle >= column,
+        "3.9 stack {low} fF < stratified {middle} < 7 stack {high}, column {column}"
+    );
+    assert!(accuracy.reciprocity > accuracy.tolerance, "{accuracy:?}");
+    let doubled = solved_matrix(stratified(14.0, 7.8), plate(), &["A"]).0[0][0];
+    assert!(
+        relative(doubled, 2.0 * middle) < SAME_FIELD,
+        "doubled {doubled} against twice {middle}"
+    );
+}
+
+/// PEX-003: two `m1` bars 3 um long, 500 nm wide and 500 nm apart, the
+/// stratified stack of [`a_stratified_plate_lies_between_its_two_uniform_stacks`]
+/// around them. Oracle: laws, as there: their coupling lies strictly between
+/// the all-3.9 and all-7 stacks' (with a per-panel permittivity it read the
+/// all-7 stack's, ignoring the 3.9 over the bars); the solve is reciprocal
+/// within what its interfaces allow and the matrix reported is symmetric;
+/// and the engine runs it through its reciprocity gate.
+#[test]
+fn stratified_coupling_lies_between_its_two_uniform_stacks() {
+    let pair = || parallel(Metal::M1, 3_000, 500, 500, 0);
+    let coupling = |stack: Stack| -solved_matrix(stack, pair(), &["A", "B"]).0[0][1];
+    let (low, high) = (coupling(uniform(3.9)), coupling(uniform(7.0)));
+    let (c, accuracy) = solved_matrix(stratified(7.0, 3.9), pair(), &["A", "B"]);
+    let middle = -c[0][1];
+    assert!(
+        low < middle && middle < high,
+        "3.9 stack {low} fF < stratified {middle} < 7 stack {high}"
+    );
+    assert!(
+        accuracy.asymmetry < gpurify::extract::field::STRATIFIED_RECIPROCITY,
+        "{accuracy:?}"
+    );
+    assert_eq!(c[0][1].to_bits(), c[1][0].to_bits(), "reported symmetric");
+    let ran = run(
+        &deck(stratified(7.0, 3.9), &[], ""),
+        pair(),
+        PEX,
+        &["A", "B"],
+    );
+    assert_eq!(ran.summary.pex, StageStatus::Ran);
+}
+
 mod fastcap;
 mod fasthenry;
 mod magic;

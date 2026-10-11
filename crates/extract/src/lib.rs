@@ -68,6 +68,19 @@
 //! capacitance and `−C_ij` as the coupling between nets `i` and `j`. The
 //! engine refuses a matrix that is not symmetric to the solve's tolerance.
 //!
+//! The dielectric is stratified by the stack: each `pex` row's dielectric
+//! fills the stack from its height up to the next row's. Where it changes
+//! with height, every panel carries its total charge in vacuum and each
+//! interface between two dielectrics is meshed too, over a window around the
+//! selection, its panels holding the polarisation charge that keeps the
+//! normal displacement continuous: `FastCap`'s formulation for several
+//! dielectrics (Nabors & White, *IEEE Trans. Circuits Syst. I* 39(11), 1992).
+//! A conductor's capacitance is then its free charge, each face's total
+//! charge times the permittivity outside it. Those interface rows are
+//! collocated, so the matrix is reciprocal only to the discretisation: it is
+//! reported symmetrised, and refused past
+//! [`field::STRATIFIED_RECIPROCITY`].
+//!
 //! [`field::henry`] merges each selected net's shapes per layer, as the
 //! closed forms do, cuts them into rectangles, and makes each rectangle a
 //! straight filament along its centre line; rectangles that share an edge
@@ -111,13 +124,18 @@
 //!   shielding either: a third shape or layer between two plates does not
 //!   reduce their coupling, and a plate's ground capacitance ignores the
 //!   plates beneath it.
-//! - **No dielectric images**: the field solve images each panel in the
-//!   substrate, a grounded plane at height 0, so a net's ground capacitance
-//!   is to the substrate; but each panel pair sees the mean of their two
-//!   permittivities and dielectric interfaces reflect nothing, so same-layer
-//!   coupling is under-predicted by 14–159%. The panel edge is set by the
-//!   stack's thicknesses and gaps, not by a layer's height, so a panel much
-//!   wider than twice its height reads its own image coarsely.
+//! - **Dielectric interfaces are windowed**: the field solve images each
+//!   panel in the substrate, a grounded plane at height 0, so a net's ground
+//!   capacitance is to the substrate, and meshes each interface between two
+//!   dielectrics over the selection's footprint grown by eight times the
+//!   interface's (or the highest conductor's) height: the polarisation
+//!   charge beyond is left out, which reaches a conductor with the window's
+//!   inverse square. The stratification is horizontal only: no conformal
+//!   dielectric around a wire, no dielectric of a layer's own beside its
+//!   wires. The analytical closed forms see one permittivity per layer. The
+//!   panel edge is set by the stack's thicknesses and gaps, not by a layer's
+//!   height, so a panel much wider than twice its height reads its own image
+//!   coarsely.
 //! - **Junctions are closed form**: a shape on a layer at height 0 (a well,
 //!   a diffusion) sits in the substrate plane, and its capacitance to it is
 //!   a depletion capacitance, so the field solve leaves it out and adds
@@ -179,7 +197,7 @@
 //! |---|---|---|---|
 //! | PEX-001 | Sheet R × squares, via R | implemented | [`analytical`] |
 //! | PEX-002 | Area + fringe C to substrate | implemented | [`analytical`] |
-//! | PEX-003 | Coupling C, same-layer and cross-layer | partial | [`analytical`]; [`quasistatic`] for selected nets, over the substrate plane but without dielectric images |
+//! | PEX-003 | Coupling C, same-layer and cross-layer | partial | [`analytical`]; [`quasistatic`] for selected nets, over the substrate plane and through the stack's horizontal dielectric interfaces, windowed; no conformal dielectrics |
 //! | PEX-004 | Partial self and mutual inductance | partial | [`field::henry`]: one series L per selected net, and the mutual L between every pair of them; no current crowding |
 //! | PEX-005 | Field-solver reference for selected nets | implemented | [`quasistatic`] |
 //! | PEX-006 | Multi-corner extraction | implemented | the deck's `corner` lines ([`gpurify_ingest::deck::ProcessCorner`]): the engine runs both methods once per corner's stack; SPEF writes `min:typ:max` triplets |

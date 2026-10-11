@@ -302,7 +302,12 @@ converge: PEX reports
 the refusal and the rest of the report is still written. The field solve
 holds the substrate at ground as a plane at height 0, so a field-solved
 net's capacitance to ground
-is to the substrate, as the closed forms' is. A shape on a layer at height 0
+is to the substrate, as the closed forms' is. Where the deck's dielectrics
+change with height (see [deck.md](deck.md#parasitic-stack)), the solve
+meshes each interface between two dielectrics over a window around the
+solved nets and solves the polarisation on it, so a wire sitting in one
+dielectric under another sees both; the matrix is then reciprocal only to
+the solve's discretisation, and is written symmetrised. A shape on a layer at height 0
 (a well or a diffusion) is a junction in that plane, whose capacitance is a
 depletion capacitance rather than a field: it is left out of the solve, and
 the net's capacitance to ground adds the closed form from that layer's `pex`
