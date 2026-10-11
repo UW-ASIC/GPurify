@@ -447,6 +447,11 @@ Every criterion is a number or a yes/no that a script can check.
 
 ## 8. Order of work and progress
 
+Since 2026-10-11 the work runs in parallel on branches `agent/<id>`, each a
+draft pull request into `verification-hardening`, built and tested only by
+GitHub Actions (the merge tier on every push; the nightly tier on a pull
+request labelled `heavy`); nothing is built on the development machine.
+
 This is one ordered list covering this plan and the
 [deck-library plan](deck-library-plan.md). Work happens on branch
 `verification-hardening`, with one commit per line. Each commit also updates
@@ -461,7 +466,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | A1 | Planning docs: this plan, check-sources.md, check-catalog.tsv, deck-library-plan.md | — | done |
 | A2 | Doc-count test; fix the stale counts and claims (README kinds, fixtures README, `counts` block, `limitations.md` esd_latchup, `ci.yml` GPU comment) | F5, F10, L8 | done |
 | A3 | Golden report snapshots run by plain `cargo test` (`tests/golden/`; delete a file and rerun to re-bless; no env vars, no scripts); every corpus case run twice and byte-compared; RAYON 1 vs N; `tools/gate/` deleted | F7, L7, L8 | done |
-| A5 | Every `implemented`/`partial` catalog row cites a test that names its id; `tests/catalog.rs` asserts it | L9 | todo |
+| A5 | Every `implemented`/`partial` catalog row cites a test that names its id; `tests/catalog.rs` asserts it | L9 | doing (agent/a5) |
 | S1 | Minimal CLI. Runtime flags are only the required inputs (`<layout>`, `--deck`, `--reference`, `--intent`; `lib`: `--spec`, `--lef`, `--output-dir`), the output form (`--format`) and the method choice (`--quasistatic <net>` for PEX, `--accuracy` for `lib`). Grid from the GDS UNITS record; unknown-layer policy in the deck (`ignore gds(L, D)`); `--output`, `--quasistatic-inductance`, `--check-determinism`, `--work` removed | user direction | done |
 | A4 | `tests/catalog.rs` (L9 assertions); `limitations.md` lists every missing/partial catalog row | L9, B6 | done |
 | B8 | LVS: rows only for configured checks, so a clean LVS run can pass | F17 | done |
@@ -500,7 +505,7 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | C4 | L5 metamorphic relations: every corpus cell under the seven other symmetries and a translation (`tests/exhaustive/corpus.rs`); limit monotonicity is the X1/X2 limit sweeps | L3, L5 | done |
 | C5 | Bitmap reference DRC, kind by kind; fix what it finds (bbox `extension`/`overlap` first) | L3, B1, B3 | done: the bitmap reference (X3) and its first fixes (B15) |
 | C6 | ERC naive references (dense nodal solve, BFS); PEX matrix properties and monotonicity | L3 | done: ERC (erc_reference.rs: dense nodal solve, graph search) and PEX (X6 laws; mesh convergence and passivity) |
-| C7 | Assertion pass on `geom` and `check` (runs alongside C3–C6) | F9, L1 | todo |
+| C7 | Assertion pass on `geom` and `check` (runs alongside C3–C6) | F9, L1 | doing (agent/c7) |
 | X0 | Exhaustive-fixture harness `tests/exhaustive/`: fixtures run in memory through the real reader, symmetry and translation transforms, expected-failure markers tied to findings, catalog-row coverage per complete domain; `min_width` as the worked example | user direction, §6 | done |
 | X1 | Exhaustive fixtures: DRC dimension, spacing and integrity kinds | DRC-001…038 | done |
 | X2 | Exhaustive fixtures: DRC overlay, cut, density, presence and edge kinds, and the derived-layer operations | DRC-040…123 | done |
@@ -508,24 +513,24 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | X4 | Exhaustive fixtures: every ERC kind, closed forms and enumerated topologies (supersedes C6 for ERC) | ERC-* | done |
 | X5 | Exhaustive fixtures: LVS over every small circuit and every single fault, against a brute-force isomorphism; device classes, reductions, hierarchy | LVS-* | done |
 | X6 | Exhaustive fixtures: PEX analytic geometries, matrix laws, refinement convergence (supersedes C6 for PEX) | PEX-* | done |
-| D1 | Deck library P0: `gpurify::pdks` constants | deck §5 | todo |
-| D2 | Deck library P1: `CompiledDeck`, engine takes it, validation on typed rules | deck §5 | todo |
-| D3 | Deck library P2: query API with the shared spacing-threshold function | deck §5 | todo |
-| D4 | Deck library P3: builder, overrides with provenance, printer, macro kind table | deck §5, L9b | todo |
-| D5 | Deck library P4: custom rules, `gpurify::cli::main_with` | deck §5, L9b | todo |
+| D1 | Deck library P0: `gpurify::pdks` constants | deck §5 | doing (agent/d) |
+| D2 | Deck library P1: `CompiledDeck`, engine takes it, validation on typed rules | deck §5 | doing (agent/d) |
+| D3 | Deck library P2: query API with the shared spacing-threshold function | deck §5 | doing (agent/d) |
+| D4 | Deck library P3: builder, overrides with provenance, printer, macro kind table | deck §5, L9b | doing (agent/d) |
+| D5 | Deck library P4: custom rules, `gpurify::cli::main_with` | deck §5, L9b | doing (agent/d) |
 | E1 | `fuzz/` targets + stable regression replay (deck round trip needs D4) | L4 | done (the deck round trip waits for D4's printer) |
 | F1 | `.#oracles` nix shell; KLayout mirror-deck translator per [klayout-mirror.md](klayout-mirror.md) (23 kinds exact, 11 approximate, `multi_patterning` none); retire the stale `drc_oracle.rb` families | L6 | done: tests/klayout (release tier: corpus, merge-depth DRC fixtures, 3000 random layouts; 23 kinds exact, 11 approximate, multi_patterning none); reconciled with B24 (angle on drawn layers, with_width measured exactly); found F88 |
-| F2 | Foundry-deck cross-check: sky130, gf180mcu, IHP, with ledgers | L6, F4 | todo |
+| F2 | Foundry-deck cross-check: sky130, gf180mcu, IHP, with ledgers | L6, F4 | doing (agent/f2) |
 | F3 | Netgen and FasterCap/FastHenry differential; Liberty ngspice spot checks | L6 | done: netgen_differential (all 4223 X5 circuits × every single fault + 17 curated; series-MOS merge and near-equal-L parallel merge are documented differences), fastcap_differential (FastCap 2.0 with image conductors, 25 geometries / 74 entries, 2.5 % default mesh, 0.5 % fine cube), fasthenry_differential (12 geometries, R 1e-4, L 1 %), ngspice_differential (inverter, 16 table points within 0.5 % + 0.1 ps, leakage 1e-4); FastCap 2.0 is the reference (FasterCap is not packaged); the full Netgen run is nightly-only, and a disagreement it finds is triaged, never allowed |
-| O1 | ERC against open-source tools: antenna ratios against KLayout `antenna_check` and OpenROAD's antenna checker; IR drop against OpenROAD PDNSim; topology rules (floating gates, multiple drivers) against KLayout's netlist and Yosys where they express them. Each kind's oracle, setup and tolerance documented | L6, ERC-* | todo |
-| O2 | Analytical PEX against Magic's extraction (`extract`, `ext2spice` with R and C) under a tech file carrying the same coefficients; FastCap/FastHenry cover the field solve (F3) | L6, PEX-001…005 | todo |
-| P1 | A second independent oracle for every check no open tool performs (`check-sources.md` §4a): LVS-020, LVS-066, LVS-071, ERC-D3, ERC-F6, ERC-F12, PEX-010, FLOW-005; `tests/catalog.rs` `EVIDENCE_GAPS` may only shrink | §4a, L9 | todo |
+| O1 | ERC against open-source tools: antenna ratios against KLayout `antenna_check` and OpenROAD's antenna checker; IR drop against OpenROAD PDNSim; topology rules (floating gates, multiple drivers) against KLayout's netlist and Yosys where they express them. Each kind's oracle, setup and tolerance documented | L6, ERC-* | doing (agent/o1) |
+| O2 | Analytical PEX against Magic's extraction (`extract`, `ext2spice` with R and C) under a tech file carrying the same coefficients; FastCap/FastHenry cover the field solve (F3) | L6, PEX-001…005 | doing (agent/o2) |
+| P1 | A second independent oracle for every check no open tool performs (`check-sources.md` §4a): LVS-020, LVS-066, LVS-071, ERC-D3, ERC-F6, ERC-F12, PEX-010, FLOW-005; `tests/catalog.rs` `EVIDENCE_GAPS` may only shrink | §4a, L9 | doing (agent/p1) |
 | T1 | Test audit: every test has an oracle; delete those that assert nothing, have no oracle, duplicate another exactly, test nothing of this project, or test dead behaviour (each deletion and its reason in the commit body); past-bug regression tests and golden snapshots stay | methodology, L1–L10 | done: 14 of 897 tests deleted (asserted nothing that can fail, no oracle, exact duplicates, or tested only std/derived code), each with its reason in the commit body; no catalog row lost its proof |
-| T2 | Test audit follow-ups: an `Oracle:` line on the 267 useful tests that lack one; strengthen the doubtful ones (an infeasible colouring names its documented node; `net_spacing` without nets asserts its row count; drop the duplicated case from `an_unreducible_graph_comes_through_byte_identical`); the LVS digest locks state their review log as their oracle; fix the stale docs T1 listed | methodology | todo |
-| B30 | Netlist flattening: a depth cap or an iterative walk, and linear expansion | F95, F96 | todo |
-| B31 | LVS follow-ups: Spectre model-less primitives bound as SPICE's (decided); a diffusion-aware source/drain orientation; counts compared exactly (decided); Liberty reads topology's diffusion measures | F97, F98, F99, F100 | todo |
+| T2 | Test audit follow-ups: an `Oracle:` line on the 267 useful tests that lack one; strengthen the doubtful ones (an infeasible colouring names its documented node; `net_spacing` without nets asserts its row count; drop the duplicated case from `an_unreducible_graph_comes_through_byte_identical`); the LVS digest locks state their review log as their oracle; fix the stale docs T1 listed | methodology | doing (agent/t2) |
+| B30 | Netlist flattening: a depth cap or an iterative walk, and linear expansion | F95, F96 | doing (agent/b30) |
+| B31 | LVS follow-ups: Spectre model-less primitives bound as SPICE's (decided); a diffusion-aware source/drain orientation; counts compared exactly (decided); Liberty reads topology's diffusion measures | F97, F98, F99, F100 | doing (agent/b31) |
 | G1 | Coverage floor, mutation gate, bench thresholds; nightly CI workflow | L10, §5 | done; bench gate `tests/scaling.rs` (ns/poly at 16× within 3× of 1×, one run, alone on the runner) |
-| H | Catalog gaps in the priority order of check-sources.md §4, one kind per commit | check-sources §4 | todo |
+| H | Catalog gaps in the priority order of check-sources.md §4, one kind per commit | check-sources §4 | doing, in nine branches: agent/h1 DRC spacing; h2 DRC overlay and cut; h3 DRC dimension, integrity, density, device, chip; h4 DRC multi-patterning, DFM, infra; h5 ERC antenna and EM; h6 ERC voltage, DRC net, PERC; h7 ERC ESD and latch-up; h8 LVS; h9 PEX and flow |
 
 **How code on this branch is written:**
 - **Data-oriented.** Answer the six questions (data in/out, how many, how wide, access pattern, lifetime, parallelism) before writing. SoA tables, the narrowest type the range allows, caller-owned `_into` buffers, indices not pointers, as the existing crates do.
