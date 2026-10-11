@@ -1248,12 +1248,16 @@ fn parallel(metal: Metal, length: i64, width: i64, gap: i64, shift: i64) -> Layo
 
 /// PEX-009: `rc` qualified against `rcc` on the two bars of [`extraction`].
 /// Oracle: law, through `compare`: grounding a coupling conserves each net's
-/// total capacitance and every node's capacitance, so each net's total C,
-/// pin-to-pin resistance and Elmore delay agree to round-off; the one
-/// coupling reads 0 in the candidate, an error of −100 %; each bar's ground
-/// C grows by the coupling, `ε₀εr·t·L/S` over `Ca·A + Cf·P`. Fails if the
-/// comparison leaves the coupling out of a total or a delay, or pairs the
-/// wrong nets.
+/// total capacitance and every node's capacitance, so each net's total C
+/// and pin-to-pin resistance agree to round-off; the one coupling reads 0
+/// in the candidate, an error of −100 %; each bar's ground C grows by the
+/// coupling, `ε₀εr·t·L/S` over `Ca·A + Cf·P`. Each bar is one region, its
+/// capacitance (ground and coupling) on its first node, the driver, and its
+/// resistance from there to its far node, which holds none: no capacitance
+/// lies past a resistance, so the Elmore delay is exactly 0 in both (the
+/// delay of a ladder, coupling and all, is `compare`'s unit test). Fails if
+/// the comparison leaves the coupling out of a total, reads a delay where
+/// no capacitance is driven through a resistance, or pairs the wrong nets.
 #[test]
 fn a_qualification_of_rc_against_rcc_finds_every_net_s_totals_unchanged() {
     let layout = parallel(Metal::M1, 6_000, 1_000, 1_000, 0);
@@ -1266,14 +1270,14 @@ fn a_qualification_of_rc_against_rcc_finds_every_net_s_totals_unchanged() {
     let out = gpurify::extract::compare::compare(&network(""), &network("extraction rc\n"));
     assert_eq!(out.only_reference, Vec::new());
     assert_eq!(out.only_candidate, Vec::new());
-    for (what, metric) in [
-        ("total C", &out.total_cap),
-        ("resistance", &out.resistance),
-        ("delay", &out.delay),
-    ] {
+    for (what, metric) in [("total C", &out.total_cap), ("resistance", &out.resistance)] {
         let errors = metric.errors(1e-12, 1e-9);
         assert_eq!((errors.count, errors.within), (2, 2), "{what}: {errors:?}");
     }
+    assert_eq!(out.delay.key.len(), 2, "{:?}", out.delay);
+    // No row reaches the smallest normal number: every delay is 0.
+    let delay = out.delay.errors(0.0, f64::MIN_POSITIVE);
+    assert_eq!(delay.count, 0, "{:?}", out.delay);
     let coupling = out.coupling.errors(1e-12, 1e-9);
     assert_eq!((coupling.count, coupling.within), (1, 0), "{coupling:?}");
     assert!((coupling.worst + 1.0).abs() < 1e-12, "{coupling:?}");
@@ -1780,7 +1784,9 @@ fn an_unmeshable_field_solved_net_is_refused_by_its_deck_layer() {
 
 /// C6: a field-solved capacitance converges as the panel edge shrinks.
 ///
-/// A 1 µm cube in vacuum (`k = 1`), its centre `H = 50` µm over the
+/// A 1 µm cube in vacuum (`k = 1` on every row: a row's dielectric fills
+/// the stack from its height up, so a `v1` or `m2` row of 3.9 would put
+/// the cube on a dielectric half-space), its centre `H = 50` µm over the
 /// substrate, cut into 2, 4, 8, 16 and 32 panels a side, each mesh the last
 /// one with every panel quartered. The limit is the cube's capacitance in
 /// free space, `0.66068 · 4πε₀a` (Read, *J. Comput. Phys.* 1997; Hwang,
@@ -1815,14 +1821,15 @@ fn a_field_solved_capacitance_converges_as_the_mesh_is_refined() {
     use gpurify::geom::Dbu;
 
     let (side, centre) = (1_000.0, 50_000.0);
+    let vacuum = |row: Row| Row { k: 1.0, ..row };
     let cube = Stack {
         m1: Row {
             thickness: side,
             height: centre - side / 2.0,
-            k: 1.0,
-            ..COARSE.m1
+            ..vacuum(COARSE.m1)
         },
-        ..COARSE
+        v1: vacuum(COARSE.v1),
+        m2: vacuum(COARSE.m2),
     };
     let layout = Layout::default()
         .rect("m1", 0, 0, 1_000, 1_000)
