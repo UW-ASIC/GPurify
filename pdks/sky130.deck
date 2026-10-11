@@ -519,11 +519,11 @@ rule well_bias well_bias(; pmos: pfets, nmos: nfets)
 # Electromigration, average current at Tj = 90C [S8]: each metal per um of
 # width, paired with the cut below it per cut. via3/via4 are the metal vias,
 # not the MiM top-plate contacts.
-rule EM.met1_mcon em_current_density(met1, mcon; max_density: 2.8mA/um, max_current_per_cut: 0.36mA)
-rule EM.met2_via1 em_current_density(met2, via; max_density: 2.8mA/um, max_current_per_cut: 0.29mA)
-rule EM.met3_via2 em_current_density(met3, via2; max_density: 6.8mA/um, max_current_per_cut: 0.48mA)
-rule EM.met4_via3 em_current_density(met4, via3_m3; max_density: 6.8mA/um, max_current_per_cut: 0.48mA)
-rule EM.met5_via4 em_current_density(met5, via4_m4; max_density: 10.17mA/um, max_current_per_cut: 2.49mA)
+rule EM.met1_mcon em_current_density(met1, mcon; max_density: 2.8mA/um, max_current_per_cut: 0.36mA, narrow: none)
+rule EM.met2_via1 em_current_density(met2, via; max_density: 2.8mA/um, max_current_per_cut: 0.29mA, narrow: none)
+rule EM.met3_via2 em_current_density(met3, via2; max_density: 6.8mA/um, max_current_per_cut: 0.48mA, narrow: none)
+rule EM.met4_via3 em_current_density(met4, via3_m3; max_density: 6.8mA/um, max_current_per_cut: 0.48mA, narrow: none)
+rule EM.met5_via4 em_current_density(met5, via4_m4; max_density: 10.17mA/um, max_current_per_cut: 2.49mA, narrow: none)
 
 # Maximum metal density [S8]: 700um windows stepped by 70um, met1-met4 (met5
 # states none). The router's limit, not a sign-off rule ([S1] m1.pd.1-m4.pd.1

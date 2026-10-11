@@ -196,7 +196,7 @@ ERC-D8	erc	latchup	Forward-biased diode marked and ringed	GF:14.3.3	-	missing	SY
 ERC-D9	erc	latchup	PMOS/NMOS devices sharing one well	HoganMedhat2021	-	missing	SY	Named as a Calibre PERC layout check without a public definition of which sharing is illegal
 ERC-E1	erc	em	DC current per width	GF:Table 14.3; IHP:2.15	em_current_density	implemented	FR; CF; MR; SY	
 ERC-E2	erc	em	Current per cut	GF:Table 14.4; IHP:2.15	em_current_density	implemented	FR; MR; SY	
-ERC-E3	erc	em	Width-banded absolute current for narrow lines	IHP:2.15	em_current_density	partial	FR; MR; SY	Limit is max_density x width only, with no width band or absolute cap (erc::rules::electrical::check_em_current_density). The IHP deck states JMAX only: it may over-report, but it cannot under-report
+ERC-E3	erc	em	Width-banded absolute current for narrow lines	IHP:2.15	em_current_density	implemented	SE:IHP 2.15; FR; MR; SY	narrow: (width, current) is the absolute limit of a metal segment at most width wide, max_density x width above it (IHP IMAX beside JMAX); the IHP deck states Metal1-Metal5's bands
 ERC-E4	erc	em	Temperature derating (Black / Arrhenius)	GF:14.2.2; Black1969; JEP122; JESD63	electromigration	implemented	SE:GF formula vs table (1.6% rounding); MR; SY	
 ERC-E5	erc	em	Lifetime target and percentile	GF:14.2; IHP:2.15; JESD202	electromigration,reliability	implemented	SE; MR; SY	
 ERC-E6	erc	em	Blech short-length immortality	Blech1976	electromigration	implemented	CF; MR; SY	L is the line between diffusion barriers (via landing, feed point, loaded device tap); a branched line's L is all its branches

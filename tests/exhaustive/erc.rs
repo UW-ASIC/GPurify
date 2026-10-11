@@ -2188,17 +2188,17 @@ fn vdd_intent(budget: f64) -> String {
 /// `max_density × width` on metal and `max_current_per_cut` on a cut, no
 /// derating. One 8 µm edge of width 0.2, 0.5, 1 and 2 µm carrying 1 mA,
 /// swept by a density one part in a thousand either side of `1 mA / width`
-/// (the narrowest is IHP's narrow-line band, which this kind holds to the
-/// same per-width limit, ERC-E3). A cut carrying 1 mA swept exactly across
-/// 1000 µA. Random ladders swept between every edge's `current / width`.
+/// (the narrowest without a narrow band, ERC-E3's [`ihp_narrow_band`]). A
+/// cut carrying 1 mA swept exactly across 1000 µA. Random ladders swept
+/// between every edge's `current / width`.
 fn em_current_density(depth: Depth) -> Vec<Fixture> {
-    let mut out = Vec::new();
+    let mut out = ihp_narrow_band();
     for width in [200, 500, 1000, 2000] {
         let per_um = 1000.0 / (width as f64 / 1000.0);
         let mut layout = Layout::default();
         rail(&mut layout, "VDD", 20_000, 0, width, &[18_000]);
         let catalog: &[&'static str] = if width == 200 {
-            &["ERC-E1", "ERC-E3", "ERC-E10"]
+            &["ERC-E1", "ERC-E10"]
         } else {
             &["ERC-E1", "ERC-E10", "ERC-C7", "ERC-D4"]
         };
@@ -2207,7 +2207,7 @@ fn em_current_density(depth: Depth) -> Vec<Fixture> {
                 &format!("erc/em_current_density/width_{width}/{}", side(density, per_um)),
                 catalog,
                 &rail_deck(&format!(
-                    "rule em em_current_density(met1; max_density: {density}uA/um, max_current_per_cut: 1000uA)"
+                    "rule em em_current_density(met1; max_density: {density}uA/um, max_current_per_cut: 1000uA, narrow: none)"
                 )),
                 ERC,
             )
@@ -2244,7 +2244,7 @@ fn em_current_density(depth: Depth) -> Vec<Fixture> {
             &format!("erc/em_current_density/per_cut/{}", side(per_cut, 1000.0)),
             &["ERC-E2", "ERC-E10"],
             &rail_deck(&format!(
-                "rule em em_current_density(via1; max_density: 1000mA/um, max_current_per_cut: {per_cut}uA)"
+                "rule em em_current_density(via1; max_density: 1000mA/um, max_current_per_cut: {per_cut}uA, narrow: none)"
             )),
             ERC,
         )
@@ -2267,7 +2267,7 @@ fn em_current_density(depth: Depth) -> Vec<Fixture> {
         "erc/em_current_density/metal_and_cut",
         &["ERC-E1", "ERC-E2"],
         &rail_deck(
-            "rule em em_current_density(met1, via1; max_density: 999uA/um, max_current_per_cut: 2000uA)",
+            "rule em em_current_density(met1, via1; max_density: 999uA/um, max_current_per_cut: 2000uA, narrow: none)",
         ),
         ERC,
     )
@@ -2305,7 +2305,7 @@ fn em_current_density(depth: Depth) -> Vec<Fixture> {
                 &format!("erc/em_current_density/random/{case}/{density}"),
                 &["ERC-E1", "ERC-E10"],
                 &rail_deck(&format!(
-                    "rule em em_current_density(met1; max_density: {density}uA/um, max_current_per_cut: 1000uA)"
+                    "rule em em_current_density(met1; max_density: {density}uA/um, max_current_per_cut: 1000uA, narrow: none)"
                 )),
                 ERC,
             )
@@ -2321,6 +2321,52 @@ fn em_current_density(depth: Depth) -> Vec<Fixture> {
             f.intent = Some(vdd_intent(budget));
             out.push(f);
         }
+    }
+    out
+}
+
+/// IHP SG13G2 process specification §2.15, Metal1: IMAXM1 = 0.36 mA for "w
+/// = 0.16 ... 0.36 µm" and JMAXM1 = 1 mA/µm for "w > 0.36 µm", written
+/// `narrow: (width: 360nm, current: 0.36mA)` beside `max_density: 1mA/um`.
+/// One rail edge carries the budget: at 0.2 µm, 300 µA is within IMAX
+/// (JMAX alone would allow 200) and 400 µA is not; at the band's 0.36 µm
+/// edge, 360 µA passes and 361 µA fails; at 0.4 µm the band no longer
+/// applies and JMAX's 400 µA holds (390 passes, 410 fails). Without the
+/// band, 300 µA on 0.2 µm fails, the over-report the band removes.
+fn ihp_narrow_band() -> Vec<Fixture> {
+    let band = "narrow: (width: 360nm, current: 0.36mA)";
+    let mut out = Vec::new();
+    for (width, current, narrow, fails) in [
+        (200, 300.0, band, false),
+        (200, 400.0, band, true),
+        (360, 360.0, band, false),
+        (360, 361.0, band, true),
+        (400, 390.0, band, false),
+        (400, 410.0, band, true),
+        (200, 300.0, "narrow: none", true),
+    ] {
+        let mut layout = Layout::default();
+        rail(&mut layout, "VDD", 20_000, 0, width, &[18_000]);
+        let banded = if narrow == band { "band" } else { "no_band" };
+        let mut f = Fixture::new(
+            &format!("erc/em_current_density/ihp_narrow/{banded}/w{width}/{current}uA"),
+            &["ERC-E1", "ERC-E3"],
+            &rail_deck(&format!(
+                "rule em em_current_density(met1; max_density: 1mA/um, max_current_per_cut: 1000uA, {narrow})"
+            )),
+            ERC,
+        )
+        .layout(layout)
+        .expect(Expect::rule(
+            "em",
+            if fails {
+                vec![microamps(current).at(10_000, width / 2)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(vdd_intent(current));
+        out.push(f);
     }
     out
 }
@@ -2804,7 +2850,7 @@ const INTENT_ROWS: [(&str, &str); 12] = [
     ("s.ir", "ir_drop()"),
     (
         "s.emcd",
-        "em_current_density(met1; max_density: 1mA/um, max_current_per_cut: 1mA)",
+        "em_current_density(met1; max_density: 1mA/um, max_current_per_cut: 1mA, narrow: none)",
     ),
     (
         "s.em",

@@ -225,6 +225,7 @@ fn em_current_density_skips_without_intent_and_examines_limited_edges_with_it() 
         layer: vec![LayerId(0)],
         max_density: vec![density(1e9)],
         max_current_per_cut: vec![microamps(200.0)],
+        narrow: vec![None],
     };
 
     let (mut violations, mut runs) = empty_report();

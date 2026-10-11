@@ -603,15 +603,16 @@ rule LU.b missing_tie(nact_pw, ptap; max_distance: 20um)
 rule floating_nwell floating_well(nwell, ntap)
 rule supply_short supply_short(ntap, ptap)
 
-# [PS] §2.15 maximum current densities (11 years at 105 C); the narrow-line
-# IMAX values equal JMAX times the upper width of their range.
-rule EM.Metal1    em_current_density(metal1, cont; max_density: 1mA/um, max_current_per_cut: 0.3mA)
-rule EM.Metal2    em_current_density(metal2, via1; max_density: 2mA/um, max_current_per_cut: 0.4mA)
-rule EM.Metal3    em_current_density(metal3, via2; max_density: 2mA/um, max_current_per_cut: 0.4mA)
-rule EM.Metal4    em_current_density(metal4, via3; max_density: 2mA/um, max_current_per_cut: 0.4mA)
-rule EM.Metal5    em_current_density(metal5, via4; max_density: 2mA/um, max_current_per_cut: 0.4mA)
-rule EM.TopMetal1 em_current_density(topmetal1, topvia1_m5; max_density: 15mA/um, max_current_per_cut: 1.4mA)
-rule EM.TopMetal2 em_current_density(topmetal2, topvia2; max_density: 16mA/um, max_current_per_cut: 10mA)
+# [PS] §2.15 maximum current densities (11 years at 105 C): JMAX per width
+# above a band, the absolute IMAX within it (Metal1 0.36 mA up to 0.36 um,
+# Metal2-5 0.6 mA up to 0.3 um), equal to JMAX times the band's upper width.
+rule EM.Metal1    em_current_density(metal1, cont; max_density: 1mA/um, max_current_per_cut: 0.3mA, narrow: (width: 360nm, current: 0.36mA))
+rule EM.Metal2    em_current_density(metal2, via1; max_density: 2mA/um, max_current_per_cut: 0.4mA, narrow: (width: 300nm, current: 0.6mA))
+rule EM.Metal3    em_current_density(metal3, via2; max_density: 2mA/um, max_current_per_cut: 0.4mA, narrow: (width: 300nm, current: 0.6mA))
+rule EM.Metal4    em_current_density(metal4, via3; max_density: 2mA/um, max_current_per_cut: 0.4mA, narrow: (width: 300nm, current: 0.6mA))
+rule EM.Metal5    em_current_density(metal5, via4; max_density: 2mA/um, max_current_per_cut: 0.4mA, narrow: (width: 300nm, current: 0.6mA))
+rule EM.TopMetal1 em_current_density(topmetal1, topvia1_m5; max_density: 15mA/um, max_current_per_cut: 1.4mA, narrow: none)
+rule EM.TopMetal2 em_current_density(topmetal2, topvia2; max_density: 16mA/um, max_current_per_cut: 10mA, narrow: none)
 
 # [PS] §1: thin oxide for 1.2 V logic, thick oxide for a 3.3 V supply. The
 # PDK publishes no absolute maximum, so the nominal supply is the limit.

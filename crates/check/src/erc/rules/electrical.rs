@@ -106,27 +106,28 @@ pub struct IrDropTable {
 
 /// Current density on the supply grid: deck kind `em_current_density`,
 /// written `em_current_density(layers..; max_density: current per width,
-/// max_current_per_cut: current)`.
+/// max_current_per_cut: current, narrow: (width: len, current: current) |
+/// none)`.
 ///
 /// The grid is solved as for [`IrDropTable`], which gives every resistor its
 /// DC branch current. A metal segment on a listed layer may carry
 /// `max_density` times its width, the narrowest width the segment's cross
 /// section finds; a via cut on a listed cut layer may carry
-/// `max_current_per_cut`. A row flags a segment or cut whose current
-/// magnitude is above that. A layer the row does not list is not checked. The
-/// limit is taken as given, with no temperature derating
-/// ([`ElectromigrationTable`] derates).
+/// `max_current_per_cut`. With `narrow`, a segment at most `width` wide may
+/// carry `current` instead: IHP SG13G2's process specification §2.15 states
+/// Metal1 as IMAXM1 = 0.36 mA "w = 0.16 ... 0.36 µm" and JMAXM1 = 1 mA/µm
+/// "w > 0.36 µm", and Metal2-5 as 0.6 mA up to 0.3 µm and 2 mA/µm above. A
+/// row flags a segment or cut whose current magnitude is above its limit. A
+/// layer the row does not list is not checked. The limit is taken as given,
+/// with no temperature derating ([`ElectromigrationTable`] derates).
 ///
 /// # Limits
 ///
-/// The limit is `max_density` times width only, with no width band or absolute
-/// cap for narrow lines (ERC-E3); IHP states only JMAX, so this may
-/// over-report but cannot under-report. The current is the static budget's,
-/// with no ESD stimulus and no It2 limits (ERC-C7), and no injection stimulus
-/// for a guard ring (ERC-D4).
+/// The current is the static budget's, with no ESD stimulus and no It2
+/// limits (ERC-C7), and no injection stimulus for a guard ring (ERC-D4).
 ///
-/// Catalog: ERC-C7 (partial), ERC-D4 (partial), ERC-E1, ERC-E2, ERC-E3
-/// (partial), ERC-E10 in the [check catalog]. Defined by [GF180MCU] Tables
+/// Catalog: ERC-C7 (partial), ERC-D4 (partial), ERC-E1, ERC-E2, ERC-E3,
+/// ERC-E10 in the [check catalog]. Defined by [GF180MCU] Tables
 /// 14.3 and 14.4; [IHP SG13G2] §2.15; [OpenROAD psm] `-enable_em`;
 /// [ESDA TR18.0-01] Fig. 58; [ESDA TR22] §4.4; [ESDA TR18.0-02] §2.3. Source
 /// tags are in [check-sources.md].
@@ -153,6 +154,10 @@ pub struct EmCurrentDensityTable {
     pub max_density: Vec<Qty<CurrentDensity, { prefix::BASE }>>,
     /// Via limits are per cut: a via has no width to divide by.
     pub max_current_per_cut: Vec<Qty<Current, { prefix::MICRO }>>,
+    /// Parallel to `layer`: `(width, current)`, the absolute limit of a metal
+    /// segment at most `width` wide, in place of `max_density` times its
+    /// width; `None` for no narrow band.
+    pub narrow: Vec<Option<(Dbu, Qty<Current, { prefix::MICRO }>)>>,
 }
 
 /// Electromigration lifetime at temperature: deck kind `electromigration`,
@@ -411,24 +416,30 @@ struct LayerLimits<'a> {
     max_current_per_cut: &'a [Qty<Current, { prefix::MICRO }>],
     /// Blech product per layer, or empty when nothing is immortal.
     blech: &'a [Qty<Current, { prefix::MICRO }>],
+    /// Narrow-line band per layer, or empty when no layer has one.
+    narrow: &'a [Option<(Dbu, Qty<Current, { prefix::MICRO }>)>],
 }
 
-/// The current one edge may carry: density times width for metal, the per-cut
-/// limit for a via (one cut per edge). A zero width allows nothing.
+/// The current one edge may carry: density times width for metal, or the
+/// narrow band's current for metal at most its width wide; the per-cut limit
+/// for a via (one cut per edge). A zero width allows nothing unless a narrow
+/// band covers it.
 fn allowed_current(
     kind: EdgeKind,
     width: Dbu,
     grid: Grid,
     max_density: Qty<CurrentDensity, { prefix::BASE }>,
     max_current_per_cut: Qty<Current, { prefix::MICRO }>,
+    narrow: Option<(Dbu, Qty<Current, { prefix::MICRO }>)>,
 ) -> Qty<Current, { prefix::MICRO }> {
-    match kind {
+    match (kind, narrow) {
+        (EdgeKind::Metal, Some((band, current))) if width <= band => current,
         // `A/m * m = A`, on base values.
-        EdgeKind::Metal => {
+        (EdgeKind::Metal, _) => {
             Qty::<Current, { prefix::BASE }>::new(max_density.raw() * grid.to_length(width).base())
                 .to::<{ prefix::MICRO }>()
         }
-        EdgeKind::Via => max_current_per_cut,
+        (EdgeKind::Via, _) => max_current_per_cut,
     }
 }
 
@@ -548,6 +559,7 @@ fn check_branches(
             grid,
             limits.max_density[limit_row],
             limits.max_current_per_cut[limit_row],
+            limits.narrow.get(limit_row).copied().flatten(),
         ) * derate;
         let (measured, limit) = (Measurement::Current(current), Measurement::Current(allowed));
         if immortal || !measured.violates(limit, LimitSense::Maximum) {
@@ -594,7 +606,12 @@ fn check_current_rows(
             blech: if all.blech.is_empty() {
                 &[]
             } else {
-                &all.blech[span]
+                &all.blech[span.clone()]
+            },
+            narrow: if all.narrow.is_empty() {
+                &[]
+            } else {
+                &all.narrow[span]
             },
         };
         let examined = check_branches(solved, grid, (id, head.severity[row]), &limits, derate, out);
@@ -629,6 +646,7 @@ pub fn check_em_current_density(
         max_density: &table.max_density,
         max_current_per_cut: &table.max_current_per_cut,
         blech: &[],
+        narrow: &table.narrow,
     };
     check_current_rows(
         solved,
@@ -700,6 +718,7 @@ pub fn check_electromigration(
         max_density: &table.max_density,
         max_current_per_cut: &table.max_current_per_cut,
         blech: &table.blech_limit,
+        narrow: &[],
     };
     check_current_rows(
         solved,

@@ -222,6 +222,12 @@ const DENSITY_LIMIT: Option<Param> = Some(p("", "limit", Dim::Fraction));
 const COUNT: Option<Param> = Some(p("", "limit", Dim::Count));
 /// MINSTEP's corner kinds, in the order of the engine's index.
 const STEP_CORNERS: &[&str] = &["outside", "inside", "step"];
+/// A narrow-line current band: a metal line at most `width` wide may carry
+/// `current` (IHP SG13G2 §2.15's IMAX beside JMAX).
+const EM_NARROW: &[Param] = &[
+    p("width", "narrow_width", Dim::Length),
+    p("current", "narrow_current", Dim::Current),
+];
 const CMP_MODEL: &[Param] = &[
     p("target", "cmp_target_density", Dim::Fraction),
     p("sensitivity", "cmp_thickness_sensitivity", Dim::Length),
@@ -649,6 +655,7 @@ pub(crate) const KINDS: &[Kind] = &[
         &[
             p("max_density", "max_density", Dim::CurrentPerWidth),
             p("max_current_per_cut", "max_current_per_cut", Dim::Current),
+            opt("narrow", "", Dim::Group(EM_NARROW)),
         ],
     ),
     erc(

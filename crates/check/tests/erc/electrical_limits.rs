@@ -252,6 +252,7 @@ fn density_table(id: StrId, layer: LayerId, limit: f64) -> EmCurrentDensityTable
         layer: vec![layer],
         max_density: vec![density(limit)],
         max_current_per_cut: vec![microamps(200.0)],
+        narrow: vec![None],
     }
 }
 

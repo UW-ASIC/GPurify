@@ -485,10 +485,10 @@ for (id, v) in ant_vias {
 # --- Electromigration at 85 C, unidirectional (DC) limits [DRM 54, tables 14.3 and 14.4] ---
 # A cut row's max_density is not read (a cut carries per-cut current); it
 # restates the wire limit because the parameter is required.
-rule EM.14.3_Mn em_current_density(metal1_con, metal2_con, metal3_con, metal4, metal5; max_density: 2.09mA/um, max_current_per_cut: 0.58mA)
-rule EM.14.3_MT em_current_density(metaltop_con; max_density: 3.77mA/um, max_current_per_cut: 0.58mA)
-rule EM.14.4_Vn em_current_density(via1, via2, via3, via4, via5_nomim; max_density: 2.09mA/um, max_current_per_cut: 0.58mA)
-rule EM.14.4_CO em_current_density(contact; max_density: 2.09mA/um, max_current_per_cut: 0.43mA)
+rule EM.14.3_Mn em_current_density(metal1_con, metal2_con, metal3_con, metal4, metal5; max_density: 2.09mA/um, max_current_per_cut: 0.58mA, narrow: none)
+rule EM.14.3_MT em_current_density(metaltop_con; max_density: 3.77mA/um, max_current_per_cut: 0.58mA, narrow: none)
+rule EM.14.4_Vn em_current_density(via1, via2, via3, via4, via5_nomim; max_density: 2.09mA/um, max_current_per_cut: 0.58mA, narrow: none)
+rule EM.14.4_CO em_current_density(contact; max_density: 2.09mA/um, max_current_per_cut: 0.43mA, narrow: none)
 
 # --- Electrical ---
 # LU.9 / LU.10: Nwell taps go to the most positive supply and substrate taps to
