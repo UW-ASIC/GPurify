@@ -317,6 +317,11 @@ fn net_spacing_on_a_layer_that_is_not_a_conductor_is_refused_at_load() {
 }
 
 /// Without nets the rule cannot run, and says so.
+///
+/// Oracle: the contract of `RuleSet::run`, which records one `RuleRun` row per
+/// rule and `Refused` for a net spacing rule without nets. The deck has two
+/// rules, NW.2a and NW.2b, so two refused rows that examined nothing and no
+/// violation; an empty `runs` would pass the `all` alone.
 #[test]
 fn net_spacing_without_nets_is_refused_not_clean() {
     let mut strings = StrTable::default();
@@ -327,7 +332,13 @@ fn net_spacing_without_nets_is_refused_not_clean() {
     let (store, _) = layout.finish();
     let (mut out, mut runs) = (gpurify_check::report::Violations::default(), Vec::new());
     rules.run(&store, &mut out, &mut runs);
-    assert!(runs.iter().all(|r| r.outcome == Outcome::Refused));
+    assert_eq!(runs.len(), 2, "one row per rule: {runs:?}");
+    assert!(
+        runs.iter()
+            .all(|r| r.outcome == Outcome::Refused && r.examined == 0 && r.violations == 0),
+        "{runs:?}"
+    );
+    assert!(out.is_empty());
 }
 
 // ---------------------------------------------------------- spacing table
