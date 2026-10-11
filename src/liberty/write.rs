@@ -543,7 +543,7 @@ pub fn write_blackbox(cell: &str, pins: &[PinSpec], tool_version: &str, out: &mu
 
 #[cfg(test)]
 mod tests {
-    use super::{num, write_blackbox, Table};
+    use super::{num, write_blackbox};
     use crate::liberty::spec::{PinSpec, Role};
 
     #[test]
@@ -602,10 +602,5 @@ mod tests {
             out.contains("`ifdef USE_POWER_PINS\n    inout vdd,\n    inout vss\n`endif\n);"),
             "{out}"
         );
-        let _ = Table {
-            index_1: vec![],
-            index_2: vec![],
-            values: vec![],
-        };
     }
 }

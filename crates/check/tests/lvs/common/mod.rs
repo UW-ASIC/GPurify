@@ -19,8 +19,7 @@ use gpurify_testgen::Rng;
 ///
 /// [`StrId`] is a transparent newtype over an index into the one string table a
 /// run owns. Nothing in this suite resolves an id back to text, so the ids can
-/// be written directly and `StrTable::intern` — a `todo!()` until the
-/// Implementation-Phase — never has to be called.
+/// be written directly and no string table is needed.
 pub const NCH: StrId = StrId(1);
 pub const PCH: StrId = StrId(2);
 pub const NPN: StrId = StrId(3);

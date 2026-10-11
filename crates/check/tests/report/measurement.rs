@@ -179,10 +179,6 @@ fn is_finite_rejects_every_non_finite_value_and_accepts_every_exact_one() {
 /// says mismatched dimensions "are asserted, not silently answered", so
 /// comparing a length against a count must panic rather than return a bool
 /// nobody can interpret.
-///
-/// In the Testing-Phase this passes for the wrong reason: the body is `todo!()`
-/// and every call panics. It is written for the Implementation-Phase, where the
-/// only way to keep it green is the assert the doc promises.
 #[test]
 fn comparing_two_dimensions_is_a_programming_error_rather_than_an_answer() {
     let length = Measurement::Length(dbu(200));

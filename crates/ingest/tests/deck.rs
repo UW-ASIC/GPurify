@@ -1,5 +1,4 @@
-//! `RuleTable`'s CSR accessors, and the deck reader's refusal to read what it
-//! cannot open.
+//! `RuleTable`'s CSR accessors.
 //!
 //! `RuleTable` is the one part of a deck a test can build: its columns are
 //! public and it derives `Default`. `LayerTable` is not — every field is

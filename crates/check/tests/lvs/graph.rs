@@ -208,8 +208,7 @@ fn a_reference_subcircuit_projects_to_the_graph_it_describes() {
 
 /// A resistor and a transistor in one subcircuit over five nets.
 ///
-/// Written as columns rather than parsed, because `spice::read` is a `todo!()`
-/// until the Implementation-Phase and every field of [`Netlist`] is public
+/// Written as columns rather than parsed: every field of [`Netlist`] is public
 /// precisely so a test does not have to go through a parser to get one.
 fn one_subcircuit() -> Netlist {
     Netlist {
