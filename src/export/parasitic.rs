@@ -9,13 +9,15 @@
 //!
 //! A label on several disconnected nets would write one `*D_NET` per piece
 //! under one name, so the pieces read as one net: both writers refuse it
-//! ([`WriteError::SplitLabel`]).
+//! ([`WriteError::SplitLabel`]). A net with several labels, a short, would
+//! be written under one of them and lose the rest, since neither format can
+//! give a net two names: both refuse that too ([`WriteError::ShortedLabels`]).
 
 use std::fmt::Write as _;
 use std::ops::Range;
 
 use crate::export::json::format_f64;
-use crate::export::{check_unsplit, narrow, Header, WriteError};
+use crate::export::{check_labels_one_to_one, narrow, Header, WriteError};
 use gpurify_check::topology::{NetId, PortTable};
 use gpurify_extract::network::{NodeId, Parasitic};
 use gpurify_extract::ParasiticNetwork;
@@ -206,7 +208,8 @@ fn spef_section(
 /// resistance or inductance with no far node, or a NaN or infinite value,
 /// checked before anything is written, and for an element on a node outside
 /// the network, found while writing. [`WriteError::SplitLabel`] for a net
-/// whose label also names another net, checked before anything is written.
+/// whose label also names another net, and [`WriteError::ShortedLabels`]
+/// for a net with several labels, checked before anything is written.
 /// [`WriteError::UnnamedNet`] for a net with no label, found while writing.
 pub fn write_spef(
     network: &ParasiticNetwork,
@@ -218,7 +221,7 @@ pub fn write_spef(
     let nodes = network.node_count();
     let elements = network.element_count();
     check_canonical(network)?;
-    check_unsplit(
+    check_labels_one_to_one(
         network.node_net.chunk_by(|a, b| a == b).map(|run| run[0]),
         ports,
         strings,
@@ -331,7 +334,7 @@ pub fn write_dspf(
     let nodes = network.node_count();
     let elements = network.element_count();
     check_canonical(network)?;
-    check_unsplit(
+    check_labels_one_to_one(
         network.node_net.chunk_by(|a, b| a == b).map(|run| run[0]),
         ports,
         strings,

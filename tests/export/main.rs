@@ -343,6 +343,31 @@ fn every_writer_refuses_a_label_on_two_nets() {
     assert_eq!(world.spice(Detail::WithParasitics), refusal);
 }
 
+/// Two labels on one net, a short (F71): SPEF's `*D_NET` and DSPF's `*|NET`
+/// take one name and neither format has an alias, so writing the net under
+/// its first label drops the other, and a SPICE node is one name too. Every
+/// writer that names nets by label refuses it, naming both labels.
+#[test]
+fn every_writer_refuses_a_net_with_two_labels() {
+    let mut world = World::new(Some("VSS"));
+    let lower = world.nets.polys_of(world.parasitics.node_net[0])[0];
+    let upper = world.nets.polys_of(world.upper_net)[0];
+    let mut provenance = Provenance::default();
+    for (poly, name) in [(lower, "VDD"), (lower, "AVDD"), (upper, "VSS")] {
+        provenance.label(poly, world.strings.intern(name));
+    }
+    bind_ports_into(&world.nets, &provenance, &mut world.ports).expect("every label on a net");
+    // In the port table's order: `VDD` was interned first.
+    let refusal = Err(WriteError::ShortedLabels(vec![
+        "VDD".to_owned(),
+        "AVDD".to_owned(),
+    ]));
+    assert_eq!(world.spef(), refusal);
+    assert_eq!(world.dspf(), refusal);
+    assert_eq!(world.spice(Detail::Schematic), refusal);
+    assert_eq!(world.spice(Detail::WithParasitics), refusal);
+}
+
 /// A NaN or an infinity in any element is refused by every writer that
 /// prints parasitics (F30): SPEF and DSPF would print `NaN` or `inf`, which no
 /// reader parses as a value, and SPICE would hand a simulator a value it

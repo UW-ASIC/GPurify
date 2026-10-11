@@ -159,7 +159,10 @@ named twice is solved once.
 A net with no text label in the layout has no name to write, and the run
 refuses it rather than inventing one. A label on two nets that are not
 connected cannot name either in a SPEF or DSPF file, which would merge them,
-so the file is refused, naming the label.
+so the file is refused, naming the label. Two labels on one net, a short
+that fails the run anyway, cannot both name it, as both formats give a net
+one name: the file is refused too, naming both, rather than written under
+one.
 
 A wire is measured as drawn, not as cut into polygons: a net's shapes on one
 layer are merged first, so pieces that abut or overlap read as the one

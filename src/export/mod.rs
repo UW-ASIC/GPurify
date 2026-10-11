@@ -46,20 +46,38 @@ pub enum WriteError {
     /// Carries the label. Refused rather than written either way.
     #[error("label {0} names several disconnected nets, which this format cannot tell apart")]
     SplitLabel(String),
+    /// One net carries several labels, a short between named nets, and the
+    /// file names a net once: SPEF's `*D_NET`, DSPF's `*|NET` and a SPICE
+    /// node each take one name, and none has an alias, so writing the net
+    /// under one label would drop the others. Carries every label, in the
+    /// port table's order. Refused rather than written under one.
+    #[error("labels {} name one net, a short, and this format gives a net one name", .0.join(", "))]
+    ShortedLabels(Vec<String>),
 }
 
-/// Refuse a net whose label also names another net. `nets` lists the nets
-/// the file names; `net_of` answers no net for a label on several, so a
-/// labelled net it does not answer is one piece of a split label.
-pub(crate) fn check_unsplit(
+/// Refuse a net that does not have exactly its own one label, or none: one
+/// carrying several labels (a short), or whose label also names another net
+/// (an open). `nets` lists the nets the file names; `net_of` answers no net
+/// for a label on several, so a labelled net it does not answer is one piece
+/// of a split label.
+pub(crate) fn check_labels_one_to_one(
     nets: impl IntoIterator<Item = gpurify_check::topology::NetId>,
     ports: &gpurify_check::topology::PortTable,
     strings: &gpurify_ingest::StrTable,
 ) -> Result<(), WriteError> {
     for net in nets {
-        if let Some(name) = ports.name_of(net) {
-            if ports.net_of(name) != Some(net) {
+        match *ports.names_of(net) {
+            [name] if ports.net_of(name) != Some(net) => {
                 return Err(WriteError::SplitLabel(strings.resolve(name).to_owned()));
+            }
+            [] | [_] => {}
+            ref several => {
+                return Err(WriteError::ShortedLabels(
+                    several
+                        .iter()
+                        .map(|&name| strings.resolve(name).to_owned())
+                        .collect(),
+                ));
             }
         }
     }

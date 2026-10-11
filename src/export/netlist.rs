@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 
 use crate::export::json::format_f64;
 use crate::export::parasitic::{check_finite, node_place, spice_card, DELIMITER};
-use crate::export::{check_unsplit, narrow, Header, WriteError};
+use crate::export::{check_labels_one_to_one, narrow, Header, WriteError};
 use gpurify_check::topology::device::{DeviceId, DeviceMeasure, DeviceParam};
 use gpurify_check::topology::{Extraction, NetId, PortTable, TerminalRole};
 use gpurify_extract::network::NodeId;
@@ -67,11 +67,12 @@ pub enum Detail {
 ///
 /// # Errors
 ///
-/// [`WriteError::SplitLabel`] for a label on several nets, and
+/// [`WriteError::SplitLabel`] for a label on several nets,
+/// [`WriteError::ShortedLabels`] for a net with several labels, and
 /// [`WriteError::Unrepresentable`] for a spliced network holding a NaN or
-/// infinite value, both checked before anything is written;
-/// [`WriteError::Unrepresentable`] for a net with several labels, also
-/// checked first, for a port bound to a net outside the extraction, found
+/// infinite value, all checked before anything is written;
+/// [`WriteError::Unrepresentable`] for a port bound to a net outside the
+/// extraction, found
 /// after the `.subckt` line is written, or a parasitic element on a node
 /// outside the network.
 pub fn write_spice(
@@ -103,14 +104,10 @@ pub fn write_spice(
     // No entry assert that `ports.len() <= net_count`: the pin loop below
     // settles it as a typed error, and a panic here would abort the one path a
     // test of that refusal walks.
-    if ports.shorted_net().is_some() {
-        return Err(WriteError::Unrepresentable("a net with several labels"));
-    }
-
     let before = out.len();
 
     let spliced = parasitics.filter(|_| detail == Detail::WithParasitics);
-    check_unsplit((0..net_count).map(|net| NetId(narrow(net))), ports, strings)?;
+    check_labels_one_to_one((0..net_count).map(|net| NetId(narrow(net))), ports, strings)?;
     if let Some(network) = spliced {
         check_finite(network)?;
     }
