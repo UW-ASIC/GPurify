@@ -284,9 +284,9 @@ single oracle is a named gap that ledger P1 closes.
 | DRC-101 | MP error taxonomy (anchor path, anchor self-conflict, same-mask self-conflict, min opposite-mask spacing) | partial | CAL | NV; MR; SY |
 | DRC-110 | Recommended rules reported as warnings | partial | IHP:R suffix,4.1; SKY:RR,RC; A7:type R; LEF:PREFERENCLOSURE | FR; SY |
 | LVS-005 | Short isolation / localisation | partial | CAL:LVS ISOLATE SHORT; ICV:ShortFinder; PEG | SY; MR |
-| LVS-020 | Undeclared parameter | implemented | - | SY |
-| LVS-066 | Device flavour (HVT/LVT) by implant marker | expressible | GF:App.A; IHP LVS decks | SY |
-| LVS-071 | Spectre reader | implemented | - | SY; fuzz |
+| LVS-020 | Undeclared parameter | implemented | - | SY; MR |
+| LVS-066 | Device flavour (HVT/LVT) by implant marker | expressible | GF:App.A; IHP LVS decks | SY; MR |
+| LVS-071 | Spectre reader | implemented | - | SY; MR; fuzz |
 | ERC-A2 | Side-area (sidewall) ratio | implemented | LEF:App.C; GF:ANT.1-7; SKY:antenna vertical | CF; FR; MR; SY |
 | ERC-A3 | Cumulative ratio (CAR) | implemented | LEF:App.C; IHP:Ant.b,Ant.d | SE:IHP AreaRatio; CF; MR; SY |
 | ERC-A4 | Cut/via ratio, routing-plus-cut accumulation | partial | LEF:ANTENNACUMROUTINGPLUSCUT; GF:ANT.8-13; SKY:licon.1,via.1; IHP:Ant.c | FR; CF; MR; SY |
@@ -300,7 +300,7 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-C7 | ESD-pulse current density | partial | TR18-01:Fig58; TR22:4.4; CAL; ICV; PF | CF; MR; SY |
 | ERC-C11 | ESD device geometry (DCGS, SCGS, fingers) | expressible | GF:LVESD.1-13; IHP:6.8 | FR; MR; SY |
 | ERC-D2 | Pad-diffusion guard ring (spacing, width) | partial | GF:IO.1-4; IHP:7.2.1; TR18-02:3.1.2 | FR; MR; SY |
-| ERC-D3 | Guard ring / well tied to the correct rail | partial | GF:LU.9,LU.10 | SY |
+| ERC-D3 | Guard ring / well tied to the correct rail | partial | GF:LU.9,LU.10 | SY; NV |
 | ERC-D4 | Guard-ring resistance / current under injection | partial | TR18-02:2.3; JESD78:Table 1; CAL | CF; MR; SY |
 | ERC-E1 | DC current per width | implemented | GF:Table 14.3; IHP:2.15 | FR; CF; MR; SY |
 | ERC-E2 | Current per cut | implemented | GF:Table 14.4; IHP:2.15 | FR; MR; SY |
@@ -313,17 +313,17 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-F2 | Gate-oxide overstress | implemented | GF:14.1.4.2; SKY:hv; TR22:4.1; CAL | FR; CF; SY |
 | ERC-F3 | Junction / drain-source overstress | implemented | SKY:hv; IHP:process spec | FR; SY |
 | ERC-F5 | TDDB/BTI/HCI lifetime | implemented | JEP122; JESD263; JESD241; JESD28; JESD60 | CF; MR; SY |
-| ERC-F6 | Missing level shifter | implemented | CAL:WP 81822; IEEE1801 | SY |
+| ERC-F6 | Missing level shifter | implemented | CAL:WP 81822; IEEE1801 | SY; NV |
 | ERC-F9 | DC / sneak path between domains | implemented | CAL:datasheet; CAL:WP 81822 | SE:WP Fig2; SY |
 | ERC-F10 | HV tag consistency | partial | SKY:hv.X.1,hvnwell.9,hvnwell.10 | FR; SY; MR |
-| ERC-F12 | Well / body bias | implemented | GF:LU.9,LU.10 | SY |
+| ERC-F12 | Well / body bias | implemented | GF:LU.9,LU.10 | SY; NV |
 | ERC-G2 | Floating well | implemented | SKY:nwell.4 | FR; SY; MR |
 | ERC-G4 | Supply short (n-tie + p-tie, VDD-GND) | implemented | CAL | SY; MR |
 | ERC-G7 | Gate tied directly to a rail | implemented | CAL (weak sourcing) | SY; NV; MR |
 | PEX-001 | Sheet R x squares, via R | implemented | W&H | CF; MR; SY |
 | PEX-002 | Area + fringe C to substrate | implemented | W&H | CF; MR; SY |
-| PEX-010 | SPEF output | implemented | IEEE1481 | MR; golden |
-| FLOW-005 | In-design / live DRC | partial | CAL:RealTime; ICV:Live; PEG | - |
+| PEX-010 | SPEF output | implemented | IEEE1481 | CF; SE; MR; golden |
+| FLOW-005 | In-design / live DRC | partial | CAL:RealTime; ICV:Live; PEG | FR; MR |
 
 <!-- end of generated block -->
 
