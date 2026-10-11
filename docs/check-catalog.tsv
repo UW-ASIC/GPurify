@@ -255,7 +255,7 @@ FLOW-002	flow	staged	Early / dirty-design staged runs	CAL:Recon; ICV:Explorer	-	
 FLOW-003	flow	soc	SoC integration (macro sync, ports off grid, fill outside boundary, block/pad-ring overlap)	ICV	-	missing	SY	Cheap from LEF/DEF + GDS
 FLOW-004	flow	soc	Interface DRC top vs blocks	CAL; ICV	-	missing	-	
 FLOW-005	flow	ide	In-design / live DRC	CAL:RealTime; ICV:Live; PEG	lib:deck	partial	FR; MR	Shared-deck library (Philis) is the first step
-FLOW-006	flow	custom	User-programmable rules	CAL:TVF; KL:Ruby/Python	deck:rust	missing	SY	Rust decks + Rule::Custom (testing-plan.md L9b)
+FLOW-006	flow	custom	User-programmable rules	CAL:TVF; KL:Ruby/Python	deck:rust	partial	SY; MR	DRC custom rules as Rust fn pointers (deck::CustomRule via DeckBuilder::custom; runner owns accounting) and gpurify::cli::main_with for a binary with its own decks; ERC custom rules and a KLayout snippet per rule not yet (deck-library plan P5)
 FLOW-007	flow	fill	Fill insertion (density-driven, timing-aware)	KL:fill; OR:density_fill; CAL:SmartFill; ICV; PEG	-	missing	TX:KL; SY	DRC-073 checks fill; this generates it
 FLOW-008	flow	staged	Incremental / ECO re-verification (changed regions or nets only)	PEG; SRC:datasheet	-	missing	MR	Metamorphic: an incremental run equals a full run
 FLOW-009	flow	fix	Automated DRC-clean layout enhancement (via and power-grid insertion)	CAL:DesignEnhancer	-	missing	SY	

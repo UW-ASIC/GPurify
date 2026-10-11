@@ -4,7 +4,7 @@
 //! in one string table, on the grid the layout's `UNITS` record states) and
 //! [`Extracted`] (nets, devices, ports).
 
-use gpurify_check::deck::{CompileError, CompiledDeck};
+use gpurify_check::deck::{BuildError, CompileError, CompiledDeck, DeckFn};
 use gpurify_check::topology::{DeviceTable, Extraction, NetTable, PortTable};
 use gpurify_geom::{GeometryStore, Grid};
 use gpurify_ingest::layout::UnknownLayers;
@@ -20,7 +20,8 @@ pub struct Inputs {
     /// The GDSII layout. Its `UNITS` record sets the grid of the whole run.
     pub layout: PathBuf,
     /// The process deck, see
-    /// [deck.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/deck.md).
+    /// [deck.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/deck.md);
+    /// or, for [`load_with`], the name of a deck the binary carries.
     pub deck: PathBuf,
     /// The reference netlist, SPICE or Spectre. Absent means LVS is skipped.
     pub reference: Option<PathBuf>,
@@ -99,12 +100,32 @@ impl Extracted {
 /// an unreadable layout, and a malformed deck is parsed only after the layout,
 /// on its grid.
 pub fn load(inputs: &Inputs) -> Result<Loaded, LoadError> {
-    let source = std::fs::read_to_string(&inputs.deck).map_err(|why| {
-        CompileError::from(gpurify_ingest::DeckError::Io(format!(
-            "{}: {why}",
-            inputs.deck.display()
-        )))
-    })?;
+    load_with(inputs, &[])
+}
+
+/// [`load`], with the decks a binary carries by name
+/// ([`cli::main_with`](crate::cli::main_with)): when [`Inputs::deck`] is
+/// one of the names, that deck is built on the layout's grid, at the point
+/// [`load`] would compile the file, so its names take the same ids; any
+/// other value is a deck file.
+///
+/// # Errors
+///
+/// As [`load`], and [`LoadError::Built`] when the named deck does not build.
+pub fn load_with(inputs: &Inputs, decks: &[(&str, DeckFn)]) -> Result<Loaded, LoadError> {
+    let builtin = decks
+        .iter()
+        .find(|(name, _)| inputs.deck.as_path() == std::path::Path::new(name))
+        .map(|&(_, build)| build);
+    let source = match builtin {
+        Some(_) => String::new(),
+        None => std::fs::read_to_string(&inputs.deck).map_err(|why| {
+            CompileError::from(gpurify_ingest::DeckError::Io(format!(
+                "{}: {why}",
+                inputs.deck.display()
+            )))
+        })?,
+    };
     let bytes = gpurify_ingest::layout::read_gds_bytes(&inputs.layout)?;
 
     // Layout strings are interned before the deck's, which fixes every StrId.
@@ -112,8 +133,11 @@ pub fn load(inputs: &Inputs) -> Result<Loaded, LoadError> {
     let library = gpurify_ingest::layout::gds::Library::parse(&bytes, &mut strings)?;
     // The deck's lengths are converted on the layout's grid, so the layout states it.
     let grid = library.grid()?;
-    let deck = gpurify_check::deck::compile(&source, grid, &mut strings)
-        .map_err(|why| why.in_file(&inputs.deck.display().to_string()))?;
+    let deck = match builtin {
+        Some(build) => build(grid, &mut strings)?,
+        None => gpurify_check::deck::compile(&source, grid, &mut strings)
+            .map_err(|why| why.in_file(&inputs.deck.display().to_string()))?,
+    };
     let (store, mut provenance) = library.flatten(&deck, &strings, UnknownLayers::Reject)?;
     provenance.resolve_labels(&store, &deck.connectivity)?;
 
@@ -267,6 +291,9 @@ pub enum LoadError {
     /// A label the deck claims that lands on no shape.
     #[error(transparent)]
     Label(#[from] gpurify_ingest::LabelError),
+    /// A deck the binary carries by name did not build.
+    #[error(transparent)]
+    Built(#[from] BuildError),
 }
 
 /// Why [`extract`] refused the layout.

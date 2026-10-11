@@ -59,6 +59,11 @@ const PROVED_BY_TEST: &[(&str, &str)] = &[
         "FLOW-005",
         "tests/engine/main.rs::a_consumer_checks_each_edit_against_one_shared_deck",
     ),
+    // A custom rule is the user's Rust function, run by the engine.
+    (
+        "FLOW-006",
+        "tests/engine/custom.rs::a_binary_s_own_deck_runs_its_custom_rules_by_name",
+    ),
 ];
 
 fn all(depth: Depth) -> Vec<Fixture> {

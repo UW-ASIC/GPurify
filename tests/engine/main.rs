@@ -3,6 +3,8 @@
 #[path = "../common/gen_fixtures.rs"]
 mod gen_fixtures;
 
+mod custom;
+
 use gpurify::engine::pipeline::{extract, load, ExtractError, Inputs, LoadError, Loaded};
 use gpurify::engine::run::{
     run, run_checks, Checks, EngineError, RunOptions, StageStatus, Summary,

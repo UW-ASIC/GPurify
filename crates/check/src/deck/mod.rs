@@ -32,11 +32,13 @@
 //! ```
 
 mod builder;
+mod custom;
 mod decompile;
 mod query;
 pub mod rules;
 
 pub use builder::{Bound, BuildDiagnostic, BuildError, DeckBuilder, LayerExpr, LayerRef};
+pub use custom::{run_custom, CustomCheck, CustomCtx, CustomRule, Finding, Findings};
 pub use query::{AntennaLimit, DensityLimit, EmLimit, Enclosure, FetLimits};
 pub use rules::RuleRow;
 
@@ -78,10 +80,18 @@ pub struct CompiledDeck {
     pub drc: drc::RuleSet,
     /// Every ERC rule, typed, one table per kind.
     pub erc: erc::RuleSet,
-    /// Every rule's id in deck order, with where it came from: what a report
-    /// says a consumer changed in a shipped deck.
+    /// Rule kinds written in Rust, run after the DRC rules; empty for a deck
+    /// compiled from text.
+    pub custom: Vec<CustomRule>,
+    /// Every rule's id in deck order (custom rules last), with where it came
+    /// from: what a report says a consumer changed in a shipped deck.
     pub provenance: Vec<(StrId, Origin)>,
 }
+
+/// A deck a binary carries by name, built on the layout's grid into the
+/// run's string table: what [`DeckBuilder::finish`] returns, behind a
+/// function `gpurify::cli::main_with` can call once the layout is read.
+pub type DeckFn = fn(Grid, &mut StrTable) -> Result<CompiledDeck, BuildError>;
 
 /// Where a rule of a [`CompiledDeck`] came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -103,7 +113,9 @@ pub enum Origin {
 /// # Errors
 ///
 /// [`PrintError`] when a value cannot be stated exactly in the deck language
-/// (a grid that is no terminating decimal of a nanometre).
+/// (a grid that is no terminating decimal of a nanometre), or when the deck
+/// holds custom rules, which are Rust functions no deck text states: the
+/// error names them, so a shared deck never drops one silently.
 ///
 /// # Examples
 ///
@@ -119,6 +131,17 @@ pub enum Origin {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn print(deck: &CompiledDeck, strings: &StrTable) -> Result<String, PrintError> {
+    if !deck.custom.is_empty() {
+        let ids: Vec<&str> = deck
+            .custom
+            .iter()
+            .map(|rule| strings.resolve(rule.id))
+            .collect();
+        return Err(PrintError::Unprintable(format!(
+            "custom rules {} are Rust functions, which no deck text states",
+            ids.join(", ")
+        )));
+    }
     gpurify_ingest::deck::print(&deck.source(strings), deck.grid)
 }
 
@@ -215,24 +238,26 @@ impl CompiledDeck {
             temperature_law,
             drc,
             erc,
+            custom: Vec::new(),
             provenance,
         })
     }
 
-    /// The number of rules, both domains: the `RuleRun` rows a run of DRC and
-    /// ERC records.
+    /// The number of rules, both domains and custom: the `RuleRun` rows a
+    /// run of DRC and ERC records.
     pub fn rule_count(&self) -> usize {
-        self.drc.rule_count() + self.erc.len()
+        self.drc.rule_count() + self.erc.len() + self.custom.len()
     }
 
-    /// Every rule's id with its kind name: the DRC rules in deck order, then
-    /// the ERC rows table by table.
+    /// Every rule's id with its kind name: the DRC rules in deck order, the
+    /// ERC rows table by table, then the custom rules as `custom`.
     pub fn rules(&self) -> impl Iterator<Item = (StrId, &'static str)> + '_ {
         self.drc
             .rules
             .iter()
             .map(|&(id, rule)| (id, rule.kind()))
             .chain(self.erc.rules())
+            .chain(self.custom.iter().map(|rule| (rule.id, "custom")))
     }
 }
 

@@ -1094,10 +1094,10 @@ fn a_temperature_moves_each_sheet_resistance_by_its_own_coefficients() {
 #[test]
 fn at_its_nominal_temperature_a_deck_reads_its_sheets_as_written() {
     let (hot, strings) = ok(&format!("temperature 30C nominal 30C\n{SKY130_METALS}"));
-    let plain = SKY130_METALS
+    let plain: String = SKY130_METALS
         .lines()
-        .map(|line| format!("{}\n", &line[..line.find(" tc1").expect("a tc1")]))
-        .collect::<String>();
+        .flat_map(|line| [&line[..line.find(" tc1").expect("a tc1")], "\n"])
+        .collect();
     let (cold, _) = ok(&plain);
     let bits = |stack: &[f64]| stack.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
     let met1 = hot.layers.id(&strings, "met1").expect("met1").idx();
