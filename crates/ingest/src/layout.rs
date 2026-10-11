@@ -978,6 +978,32 @@ pub mod gds {
         seen.windows(2).any(|w| w[0] == w[1])
     }
 
+    /// Whether two axis-parallel edges of a ring share a stretch of one line:
+    /// the ring folds back over itself. A keyhole whose way back out runs on
+    /// along the hole's side, past where the way in started, does so without
+    /// revisiting a vertex (`sky130_fd_sc_hd`'s level shifters draw poly this
+    /// way). Sorts, so O(n log n).
+    fn ring_overlaps_itself(xs: &[i64], ys: &[i64]) -> bool {
+        let n = xs.len();
+        let (mut vertical, mut horizontal) = (Vec::new(), Vec::new());
+        for i in 0..n {
+            let j = if i + 1 == n { 0 } else { i + 1 };
+            let (x0, y0, x1, y1) = (xs[i], ys[i], xs[j], ys[j]);
+            if x0 == x1 && y0 != y1 {
+                vertical.push((x0, y0.min(y1), y0.max(y1)));
+            } else if y0 == y1 && x0 != x1 {
+                horizontal.push((y0, x0.min(x1), x0.max(x1)));
+            }
+        }
+        // Sorted by line, then start: an overlap shows between neighbours.
+        [vertical, horizontal].iter_mut().any(|edges| {
+            edges.sort_unstable();
+            edges
+                .windows(2)
+                .any(|w| w[0].0 == w[1].0 && w[1].1 < w[0].2)
+        })
+    }
+
     /// Whether every vertex is inside the domain `canonical_rings_into` asserts.
     /// A ring outside is left for `emit` to refuse with a better message.
     fn ring_is_in_domain(xs: &[i64], ys: &[i64]) -> bool {
@@ -996,15 +1022,17 @@ pub mod gds {
         area2 < 0
     }
 
-    /// Decompose the ring `lib.xs/ys[first..]`, when it revisits a vertex (how
+    /// Decompose the ring `lib.xs/ys[first..]`, when it revisits a vertex or
+    /// folds back along one line (how
     /// GDSII writes a hole), into its outer ring and holes, each pushed as an
     /// element; returns whether it did. Only then: the sweep reorders vertices,
     /// and vertex 0 is a shape's report point (`erc::first_vertex`). A ring
     /// outside the domain, or one that fails to decompose or traces no ring, is
     /// left untouched for the plain path, where `geom::view` names what is wrong.
     fn push_keyhole(lib: &mut Library, first: usize, layer: u16, datatype: u16) -> bool {
-        if !(ring_revisits_a_vertex(&lib.xs[first..], &lib.ys[first..])
-            && ring_is_in_domain(&lib.xs[first..], &lib.ys[first..]))
+        let (xs, ys) = (&lib.xs[first..], &lib.ys[first..]);
+        if !((ring_revisits_a_vertex(xs, ys) || ring_overlaps_itself(xs, ys))
+            && ring_is_in_domain(xs, ys))
         {
             return false;
         }
@@ -1071,8 +1099,37 @@ pub mod gds {
             at = next;
         };
 
-        // Drop the closing point the format repeats.
+        // A vertex repeated at once is an edge of length zero: it carries no
+        // geometry, writers emit it (gf180mcu's unit structures do), and the
+        // validator would refuse the ring as degenerate. A ring that would
+        // keep fewer than three vertices, its closing point not counted, is
+        // left whole for the validator to name as degenerate. Counting
+        // without the closing point keeps this a fixed point: written back
+        // with its closing point, the stored ring reads back unchanged.
         let first = vert_start as usize;
+        let past = lib.xs.len();
+        let repeats_previous = |xs: &[i64], ys: &[i64], i: usize| {
+            i > first && (xs[i], ys[i]) == (xs[i - 1], ys[i - 1])
+        };
+        let distinct = (first..past)
+            .filter(|&i| !repeats_previous(&lib.xs, &lib.ys, i))
+            .count();
+        let closed =
+            distinct >= 2 && (lib.xs[first], lib.ys[first]) == (lib.xs[past - 1], lib.ys[past - 1]);
+        if distinct - usize::from(closed) >= 3 {
+            let mut kept = first;
+            for i in first..lib.xs.len() {
+                if !repeats_previous(&lib.xs, &lib.ys, i) {
+                    lib.xs[kept] = lib.xs[i];
+                    lib.ys[kept] = lib.ys[i];
+                    kept += 1;
+                }
+            }
+            lib.xs.truncate(kept);
+            lib.ys.truncate(kept);
+        }
+
+        // Drop the closing point the format repeats.
         let last = lib.xs.len().wrapping_sub(1);
         if lib.xs.len() - first >= 2
             && lib.xs[first] == lib.xs[last]
@@ -2450,6 +2507,84 @@ mod tests {
         let polygon = valid.get(0);
         assert_eq!(polygon.holes().count(), 1, "the loop encloses one hole");
         assert_eq!(polygon_area(polygon).raw(), 6000 * 5000 - 2000 * 1000);
+    }
+
+    /// Oracle: `KLayout` 0.30.8 — merging this ring gives one polygon with one
+    /// hole of area 1 199 825 (testing-plan F2, finding N-f2-1).
+    ///
+    /// The poly ring of `sky130_fd_sc_hd__lpflow_lsbuf_lh_isowell_tap_1` enters
+    /// its hole along x = 5700 and leaves along the hole's right side, running
+    /// on past where it entered, so no vertex is revisited. The ring was kept
+    /// whole, every derived layer reading it was refused as self-intersecting,
+    /// and with it the whole library.
+    #[test]
+    fn a_keyhole_leaving_along_the_holes_side_reads_back_with_its_hole() {
+        use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let bytes = gds_library(
+            "TOP",
+            &[boundary(
+                ROWS[0].1,
+                ROWS[0].2,
+                &[
+                    5140, 5140, 5155, 5155, 5700, 5700, 5305, 5305, 5700, 5700, 5710, 5710, 6055,
+                    6055, 5850, 5850, 5290, 5290,
+                ],
+                &[
+                    160, 1220, 1220, 2655, 2655, 2505, 2505, 1485, 1485, 4355, 4355, 4375, 4375,
+                    4015, 4015, 1015, 1015, 160,
+                ],
+            )],
+        );
+
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let mut valid = ValidatedLayer::default();
+        validate_layer_into(&layout.store, LayerId(0), &mut valid)
+            .expect("the ring denotes an outer and the hole it contains");
+        assert_eq!(valid.len(), 1, "one polygon");
+        let polygon = valid.get(0);
+        assert_eq!(polygon.holes().count(), 1, "with one hole");
+        assert_eq!(polygon_area(polygon).raw(), 1_199_825, "KLayout's area");
+    }
+
+    /// Oracle: closed form — a ring that repeats a vertex at once draws the
+    /// ring without the repeat (testing-plan F2, finding N-f2-4).
+    ///
+    /// gf180mcu's `comp.gds` unit structure draws this U (a 27 x 8 um bar
+    /// with a 6 x 6 um notch from below) with its notch corner twice in a
+    /// row. The zero-length edge made the validator refuse the ring as
+    /// degenerate, and with it every derived layer and the whole layout.
+    #[test]
+    fn a_vertex_repeated_at_once_is_dropped() {
+        use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let bytes = gds_library(
+            "TOP",
+            &[boundary(
+                ROWS[0].1,
+                ROWS[0].2,
+                &[0, 0, 6_000, 6_000, 6_000, 8_849, 8_849, -18_151, -18_151],
+                &[0, 6_000, 6_000, 0, 0, 0, 8_000, 8_000, 0],
+            )],
+        );
+
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        assert_eq!(
+            layout.store.poly_verts(PolyId(0)).0.len(),
+            8,
+            "the repeat is gone"
+        );
+        let mut valid = ValidatedLayer::default();
+        validate_layer_into(&layout.store, LayerId(0), &mut valid).expect("a simple U");
+        assert_eq!(
+            polygon_area(valid.get(0)).raw(),
+            27_000 * 8_000 - 6_000 * 6_000,
+            "the bar less its notch"
+        );
     }
 
     /// One shape on a known layer and one on an unknown one: `Reject` names the
