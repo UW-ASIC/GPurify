@@ -35,7 +35,7 @@ use gpurify_geom::{LayerId, PolyId};
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [Yosys `check`]: https://yosyshq.readthedocs.io/projects/yosys/en/latest/cmd/index_passes_status.html
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct FloatingGateTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -62,7 +62,7 @@ pub struct FloatingGateTable {
 /// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
 /// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
 /// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct FloatingWellTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -98,7 +98,7 @@ pub struct FloatingWellTable {
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [Yosys `check`]: https://yosyshq.readthedocs.io/projects/yosys/en/latest/cmd/index_passes_status.html
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct MultipleDriversTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -129,7 +129,7 @@ pub struct MultipleDriversTable {
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
 /// [OpenROAD `check_power_grid`]: https://openroad.readthedocs.io/en/latest/main/src/psm/README.html
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct UnconnectedPinTable {
     /// Rule id and severity per row.
     pub head: RuleHead,

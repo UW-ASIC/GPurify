@@ -437,6 +437,11 @@ device mos diff model \"nfet\" terminals [poly, diff, diff]
             "device resistor poly model \"r\" terminals [li, li] sheet 1fF/um2\n",
             "a resistance",
         ),
+        // Past f64's range a decimal reads as infinite, which no device has.
+        (
+            "device resistor poly model \"r\" terminals [li, li] sheet 1e999ohm\n",
+            "`sheet` is too large a number",
+        ),
     ];
     for (body, needle) in wrong {
         one_error(body, needle);
@@ -724,6 +729,9 @@ fn a_pex_row_with_a_value_no_process_has_is_refused_at_the_value() {
         ("dielectric 0", "dielectric must be positive"),
         ("area_cap -25aF/um2", "area_cap must be zero or more"),
         ("fringe_cap -40aF/um", "fringe_cap must be zero or more"),
+        // Past f64's range a decimal reads as infinite, which no process has.
+        ("thickness 1e999nm", "thickness must be positive and finite"),
+        ("sheet 1e999ohm", "sheet must be zero or more, and finite"),
     ] {
         let body = row(value);
         let mut strings = StrTable::default();

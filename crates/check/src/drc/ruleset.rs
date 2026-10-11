@@ -1446,7 +1446,7 @@ pub struct SpacingQuery {
 }
 
 /// Every DRC rule the deck configures, in deck order.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct RuleSet {
     /// Each rule with its deck id, in deck order: the order of the
     /// [`RuleRun`] rows [`RuleSet::run`] produces. Ids are unique.
@@ -2353,7 +2353,22 @@ impl Rule {
             | Rule::ViaArraySpacing { limit, .. }
             | Rule::EdgeMinLength { limit, .. }
             | Rule::EdgeSpacing { limit, .. }
-            | Rule::EdgeEnclosure { limit, .. } => length(limit),
+            | Rule::EdgeEnclosure { limit, .. }
+            | Rule::EdgeWidth { limit, .. }
+            | Rule::EdgeFacingSpace { limit, .. } => length(limit),
+            Rule::MinStep {
+                limit, length_sum, ..
+            } => length(limit).and(length_sum.map_or(Ok(()), length)),
+            Rule::TotalArea { limit, .. } => area(limit),
+            Rule::AspectRatio { limit, .. }
+            | Rule::RegionDensity { limit, .. }
+            | Rule::MinInteriorAngle { limit, .. } => fraction(limit),
+            // A shape count of zero is a limit: none allowed, or at least none.
+            // The lists are checked where they are filed.
+            Rule::Count { .. }
+            | Rule::CutClass { .. }
+            | Rule::AllowedWidth { .. }
+            | Rule::PolygonValidity { .. } => Ok(()),
             Rule::CutSize { width, height, .. } => length(width).and(length(height)),
             Rule::EolSpacing {
                 eol_width: first,
@@ -2528,6 +2543,17 @@ impl Rule {
             Rule::EdgeMinLength { .. } => "edge_min_length",
             Rule::EdgeSpacing { .. } => "edge_spacing",
             Rule::EdgeEnclosure { .. } => "edge_enclosure",
+            Rule::Count { .. } => "count",
+            Rule::AspectRatio { .. } => "aspect_ratio",
+            Rule::TotalArea { .. } => "total_area",
+            Rule::CutClass { .. } => "cut_class",
+            Rule::EdgeWidth { .. } => "edge_width",
+            Rule::EdgeFacingSpace { .. } => "edge_facing_space",
+            Rule::RegionDensity { .. } => "region_density",
+            Rule::AllowedWidth { .. } => "allowed_width",
+            Rule::MinInteriorAngle { .. } => "min_interior_angle",
+            Rule::PolygonValidity { .. } => "polygon_validity",
+            Rule::MinStep { .. } => "min_step",
         }
     }
 
@@ -2608,56 +2634,4 @@ impl Rule {
     }
 }
 
-/// Every DRC rule kind, by the name a deck row resolves to (`min_width` for
-/// `width(L) >= len`), in [`Rule`] variant order. Disjoint from
-/// [`crate::erc::ruleset::KINDS`]. The engine refuses a deck row whose kind is
-/// in neither ([`DrcError::UnknownKind`]); [`RuleSet::from_deck`] alone steps
-/// over it.
-pub const KINDS: [&str; 46] = [
-    "min_width",
-    "max_width",
-    "cut_size",
-    "min_edge_length",
-    "notch",
-    "min_spacing",
-    "min_spacing_diff",
-    "eol_spacing",
-    "prl_spacing",
-    "corner_to_corner",
-    "wide_dependent_spacing",
-    "min_area",
-    "min_enclosed_area",
-    "cheesing",
-    "density",
-    "global_density",
-    "min_enclosure",
-    "asymmetric_enclosure",
-    "min_extension",
-    "overlap",
-    "max_distance_to_tap",
-    "off_grid",
-    "angle",
-    "redundant_via",
-    "via_array_spacing",
-    "multi_patterning",
-    "forbidden",
-    "must_contain",
-    "must_be_inside",
-    "net_spacing",
-    "spacing_table",
-    "attached_wide_spacing",
-    "edge_min_length",
-    "edge_spacing",
-    "edge_enclosure",
-    "count",
-    "aspect_ratio",
-    "total_area",
-    "cut_class",
-    "edge_width",
-    "edge_facing_space",
-    "region_density",
-    "allowed_width",
-    "min_interior_angle",
-    "polygon_validity",
-    "min_step",
-];
+pub use crate::deck::rules::DRC_KINDS as KINDS;

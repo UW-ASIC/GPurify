@@ -564,6 +564,7 @@ fn deck_of(strings: &mut StrTable, rows: &[(&str, &str)]) -> (Deck, Vec<StrId>) 
         devices: DeviceRecognition::default(),
         stack: ProcessStack::default(),
         temperature: None,
+        temperature_law: None,
     };
     (deck, ids)
 }

@@ -4,8 +4,8 @@
 use super::kinds::{Cmp, Dim, Kind, Param, EDGE_KINDS, KINDS, OPTIONAL_PEX_KEYS, PEX, UNITS};
 use super::lex::{lex, Tok, Token};
 use super::{
-    build, Deck, DeckError, DeckSrc, DerivedOp, DerivedSrc, DeviceKind, DeviceSrc, DeviceValue,
-    LabelSrc, ParamSrc, ParamValue, RuleSrc, StackSrc, ViaSrc,
+    lower, Deck, DeckError, DeckSource, DerivedOp, DerivedSource, DeviceKind, DeviceSource,
+    DeviceValue, LabelSource, ParamSource, ParamValue, RuleSource, StackSource, ViaSource,
 };
 use gpurify_geom::{prefix::NANO, Dbu, DbuArea, Grid, Qty, StrTable};
 use std::collections::{HashMap, HashSet};
@@ -108,6 +108,17 @@ pub(crate) fn render(file: &str, diagnostics: &[Diagnostic]) -> String {
 /// [`DeckError::Malformed`] for the first contradiction between statements. On
 /// error, `strings` may have gained names.
 pub fn parse_deck(source: &str, grid: Grid, strings: &mut StrTable) -> Result<Deck, DeckError> {
+    lower(&parse_source(source, grid)?, strings)
+}
+
+/// Parses deck text to its [`DeckSource`], every value converted onto the
+/// layout grid `grid` and every name still a name: [`parse_deck`] without
+/// the lowering, for a consumer that edits the deck before it is lowered.
+///
+/// # Errors
+///
+/// [`DeckError::Invalid`], as [`parse_deck`] gives it.
+pub fn parse_source(source: &str, grid: Grid) -> Result<DeckSource, DeckError> {
     let mut errors = Vec::new();
     let toks = lex(source, &mut errors);
     let mut parser = Parser::new(source, toks, grid, errors);
@@ -124,7 +135,7 @@ pub fn parse_deck(source: &str, grid: Grid, strings: &mut StrTable) -> Result<De
             diagnostics,
         });
     }
-    build(&parser.out, strings)
+    Ok(parser.out)
 }
 
 /// A value as written, before a parameter gives it a dimension.
@@ -294,7 +305,7 @@ struct Parser<'a> {
     touch: bool,
     /// Each `ignore gds(L, D)` pair, and where it was written.
     ignored_at: Vec<((u16, u16), (u32, u32))>,
-    out: DeckSrc,
+    out: DeckSource,
 }
 
 impl<'a> Parser<'a> {
@@ -326,7 +337,7 @@ impl<'a> Parser<'a> {
             inline: 0,
             touch: false,
             ignored_at: Vec::new(),
-            out: DeckSrc::default(),
+            out: DeckSource::default(),
         }
     }
 
@@ -517,7 +528,7 @@ impl<'a> Parser<'a> {
                 LExpr::Op(op, operands) | LExpr::Group(op, operands) | LExpr::Call(op, operands) => {
                     let mut count = 0;
                     let operands = self.lower_operands(&name, operands, &mut count);
-                    self.out.derived.push(DerivedSrc {
+                    self.out.derived.push(DerivedSource {
                         name: name.clone(),
                         op,
                         layers: operands,
@@ -853,7 +864,7 @@ impl<'a> Parser<'a> {
                     let layers = self.lower_operands(name, inner, count);
                     *count += 1;
                     let hidden = format!("{name}#{count}");
-                    self.out.derived.push(DerivedSrc {
+                    self.out.derived.push(DerivedSource {
                         name: hidden.clone(),
                         op,
                         layers,
@@ -980,7 +991,7 @@ impl<'a> Parser<'a> {
                 let [a, b] = <[String; 2]>::try_from(layers).map_err(|layers| {
                     self.err_tok(list_at, &format!("a via joins 2 layers, got {}", layers.len()))
                 })?;
-                self.out.connectivity.vias.push(ViaSrc {
+                self.out.connectivity.vias.push(ViaSource {
                     layer,
                     connects: (a, b),
                 });
@@ -989,7 +1000,7 @@ impl<'a> Parser<'a> {
                 let layer = self.layer_word()?;
                 self.expect("names")?;
                 let names = self.layer_word()?;
-                self.out.connectivity.labels.push(LabelSrc { layer, names });
+                self.out.connectivity.labels.push(LabelSource { layer, names });
             }
             _ => {
                 return Err(self.err(
@@ -1063,11 +1074,15 @@ impl<'a> Parser<'a> {
             }
             let stated = self.value()?;
             let number = self.quantity(&stated, dim, &key)?.f64();
+            // A decimal past f64's range reads as infinite: no value at all.
+            if !number.is_finite() {
+                return Err(self.err(stated.span(), &format!("`{key}` is too large a number")));
+            }
             if slot.replace(number).is_some() {
                 return Err(self.err(span, &format!("`{key}` is given twice")));
             }
         }
-        self.out.devices.push(DeviceSrc {
+        self.out.devices.push(DeviceSource {
             kind,
             marker,
             model,
@@ -1118,11 +1133,17 @@ impl<'a> Parser<'a> {
             // has a permittivity: both are positive. A temperature
             // coefficient takes either sign. Nothing else here can be below
             // zero, and a zero reads as "not stated" (`ProcessStack`); an
-            // unstated dielectric is left out of the row instead.
+            // unstated dielectric is left out of the row instead. Past f64's
+            // range a decimal reads as infinite, which no process has.
             let (physical, bound) = match key.as_str() {
-                "thickness" | "dielectric" => (number > 0.0, "positive"),
+                "thickness" | "dielectric" => {
+                    (number > 0.0 && number.is_finite(), "positive and finite")
+                }
                 "tc1" | "tc2" => (number.is_finite(), "finite"),
-                _ => (number >= 0.0, "zero or more"),
+                _ => (
+                    number >= 0.0 && number.is_finite(),
+                    "zero or more, and finite",
+                ),
             };
             if !physical {
                 return Err(self.err(
@@ -1163,7 +1184,7 @@ impl<'a> Parser<'a> {
         };
         self.out.pex.push((
             layer,
-            StackSrc {
+            StackSource {
                 thickness_nm: thickness_nm.unwrap_or_default(),
                 height_nm: height_nm.unwrap_or_default(),
                 sheet_res_ohm_sq: sheet_res_ohm_sq.unwrap_or_default(),
@@ -1306,12 +1327,12 @@ impl<'a> Parser<'a> {
         params.extend(
             kind.fixed
                 .iter()
-                .map(|&(flag, on)| (flag, ParamSrc::Value(ParamValue::Flag(on)))),
+                .map(|&(flag, on)| (flag, ParamSource::Value(ParamValue::Flag(on)))),
         );
         if warning.is_some() {
-            params.push(("warning", ParamSrc::Value(ParamValue::Flag(true))));
+            params.push(("warning", ParamSource::Value(ParamValue::Flag(true))));
         }
-        self.out.rules.push(RuleSrc {
+        self.out.rules.push(RuleSource {
             id,
             kind: kind.engine,
             layers,
@@ -1413,7 +1434,7 @@ impl<'a> Parser<'a> {
         let name = format!("{}@{}", self.context, self.inline);
         let mut count = 0;
         let layers = self.lower_operands(&name, operands, &mut count);
-        self.out.derived.push(DerivedSrc {
+        self.out.derived.push(DerivedSource {
             name: name.clone(),
             op,
             layers,
@@ -1545,7 +1566,7 @@ impl<'a> Parser<'a> {
         params: &'static [Param],
         owner: &str,
         owner_span: (u32, u32),
-        out: &mut Vec<(&'static str, ParamSrc)>,
+        out: &mut Vec<(&'static str, ParamSource)>,
     ) -> R<()> {
         let mut failed = false;
         for (at, arg) in given.iter().enumerate() {
@@ -1589,7 +1610,7 @@ impl<'a> Parser<'a> {
         &mut self,
         value: &Val,
         param: Param,
-        out: &mut Vec<(&'static str, ParamSrc)>,
+        out: &mut Vec<(&'static str, ParamSource)>,
     ) -> R<()> {
         let label = param.name;
         if matches!(value, Val::Word { name, .. } if name == "none") {
@@ -1600,24 +1621,24 @@ impl<'a> Parser<'a> {
         }
         let engine = param.engine;
         let converted = match param.dim {
-            Dim::Length => ParamSrc::Value(ParamValue::Length(self.length(value, label)?)),
-            Dim::Area => ParamSrc::Value(ParamValue::Area(self.area(value, label)?)),
-            Dim::Count => ParamSrc::Value(ParamValue::Count(self.count(value, label)?)),
+            Dim::Length => ParamSource::Value(ParamValue::Length(self.length(value, label)?)),
+            Dim::Area => ParamSource::Value(ParamValue::Area(self.area(value, label)?)),
+            Dim::Count => ParamSource::Value(ParamValue::Count(self.count(value, label)?)),
             Dim::Bool => match value {
                 Val::Word { name, .. } if name == "true" || name == "false" => {
-                    ParamSrc::Value(ParamValue::Flag(name == "true"))
+                    ParamSource::Value(ParamValue::Flag(name == "true"))
                 }
                 other => return Err(self.wrong(other, "true or false", label)),
             },
-            Dim::Layer => ParamSrc::Layer(self.layer_name(value)?),
+            Dim::Layer => ParamSource::Layer(self.layer_name(value)?),
             Dim::LengthPair(second) => {
                 let Val::Pair(a, b, _) = value else {
                     return Err(self.wrong(value, "a pair `a x b` of lengths", label));
                 };
                 let a = self.length(a, label)?;
                 let b = self.length(b, label)?;
-                out.push((engine, ParamSrc::Value(ParamValue::Length(a))));
-                out.push((second, ParamSrc::Value(ParamValue::Length(b))));
+                out.push((engine, ParamSource::Value(ParamValue::Length(a))));
+                out.push((second, ParamSource::Value(ParamValue::Length(b))));
                 return Ok(());
             }
             Dim::AngleList => {
@@ -1637,7 +1658,7 @@ impl<'a> Parser<'a> {
                             "an angle is a whole, non-negative number of degrees",
                         ));
                     };
-                    out.push((engine, ParamSrc::Value(ParamValue::Count(whole))));
+                    out.push((engine, ParamSource::Value(ParamValue::Count(whole))));
                 }
                 return Ok(());
             }
@@ -1655,7 +1676,7 @@ impl<'a> Parser<'a> {
                     let Val::Str(model, _) = item else {
                         return Err(self.wrong(item, "a model name in quotes", label));
                     };
-                    out.push((engine, ParamSrc::Model(model.clone())));
+                    out.push((engine, ParamSource::Model(model.clone())));
                 }
                 return Ok(());
             }
@@ -1665,19 +1686,19 @@ impl<'a> Parser<'a> {
                         .iter()
                         .position(|word| *word == name.as_str())
                         .expect("listed");
-                    ParamSrc::Value(ParamValue::Count(u32::try_from(at).expect("few words")))
+                    ParamSource::Value(ParamValue::Count(u32::try_from(at).expect("few words")))
                 }
                 other => return Err(self.wrong(other, &words.join(" or "), label)),
             },
             Dim::Nets => match value {
                 Val::Word { name, .. } if name == "same" || name == "different" => {
-                    ParamSrc::Value(ParamValue::Flag(name == "same"))
+                    ParamSource::Value(ParamValue::Flag(name == "same"))
                 }
                 other => return Err(self.wrong(other, "same or different", label)),
             },
             Dim::LengthList => {
                 for item in self.lengths(value, label)? {
-                    out.push((engine, ParamSrc::Value(ParamValue::Length(item))));
+                    out.push((engine, ParamSource::Value(ParamValue::Length(item))));
                 }
                 return Ok(());
             }
@@ -1694,8 +1715,8 @@ impl<'a> Parser<'a> {
                     };
                     let a = self.length(a, label)?;
                     let b = self.length(b, label)?;
-                    out.push((engine, ParamSrc::Value(ParamValue::Length(a))));
-                    out.push((second, ParamSrc::Value(ParamValue::Length(b))));
+                    out.push((engine, ParamSource::Value(ParamValue::Length(a))));
+                    out.push((second, ParamSource::Value(ParamValue::Length(b))));
                 }
                 return Ok(());
             }
@@ -1705,7 +1726,7 @@ impl<'a> Parser<'a> {
                 };
                 for row in rows {
                     for item in self.lengths(row, label)? {
-                        out.push((engine, ParamSrc::Value(ParamValue::Length(item))));
+                        out.push((engine, ParamSource::Value(ParamValue::Length(item))));
                     }
                 }
                 return Ok(());
@@ -1724,9 +1745,9 @@ impl<'a> Parser<'a> {
                         &format!("`{label}` is a fraction: 0 to 1, or 0% to 100%"),
                     ));
                 }
-                ParamSrc::Value(ParamValue::Ratio(v))
+                ParamSource::Value(ParamValue::Ratio(v))
             }
-            dim => ParamSrc::Value(ParamValue::Ratio(self.physical(value, dim, label)?)),
+            dim => ParamSource::Value(ParamValue::Ratio(self.physical(value, dim, label)?)),
         };
         out.push((engine, converted));
         Ok(())

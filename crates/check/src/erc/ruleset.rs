@@ -15,40 +15,10 @@ use gpurify_geom::{Bbox, LayerId};
 use gpurify_ingest::deck::{Deck, DeviceKind, ParamValue, RuleSpec, RuleTable};
 use gpurify_ingest::{StrId, StrTable};
 
-/// Every rule kind this crate implements, as the deck spells it. Any other
-/// kind belongs to another domain and is stepped over.
-///
-/// Each name is a [`RuleSet`] field of the same name; the crate's
-/// [rule reference](crate#electrical-rules) gives each one's deck syntax.
-pub const KINDS: [&str; 24] = [
-    "antenna",
-    "antenna_electrical",
-    "density_cmp",
-    "domain_crossing",
-    "drain_source",
-    "electromigration",
-    "em_current_density",
-    "esd_latchup",
-    "esd_topological",
-    "floating_gate",
-    "floating_well",
-    "gate_oxide",
-    "hv_domain",
-    "ir_drop",
-    "missing_level_shifter",
-    "missing_tie",
-    "multiple_drivers",
-    "p2p_resistance",
-    "reliability",
-    "soft_connection",
-    "supply_short",
-    "tie_high_low",
-    "unconnected_pin",
-    "well_bias",
-];
+pub use crate::deck::rules::ERC_KINDS as KINDS;
 
 /// The two columns every rule table has.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct RuleHead {
     /// The deck's id for this rule, interned; what a `RuleRun` is attributed to.
     pub rule: Vec<StrId>,
@@ -73,7 +43,7 @@ impl RuleHead {
 /// Built by [`RuleSet::from_deck`] and run by [`RuleSet::run`], usually
 /// through [`erc::check`](crate::erc::check). Each field holds the rows of
 /// the [`KINDS`] entry of the same name; its table type defines the kind.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct RuleSet {
     /// `floating_gate` rows: [`topology::FloatingGateTable`].
     pub floating_gate: topology::FloatingGateTable,
@@ -855,10 +825,8 @@ impl RuleSet {
                     return Err(c.missing("clamp"));
                 }
             }
-            "esd_topological" => {
-                if span(&self.esd_topological.clamp_start).is_empty() {
-                    return Err(c.missing("clamp"));
-                }
+            "esd_topological" if span(&self.esd_topological.clamp_start).is_empty() => {
+                return Err(c.missing("clamp"));
             }
             "gate_oxide" | "drain_source" => {
                 let t = if kind == "gate_oxide" {
@@ -883,10 +851,8 @@ impl RuleSet {
             }
             "missing_tie" => c.length("max_distance", self.missing_tie.max_distance[r])?,
             // Zero permitted drivers flags every driven net.
-            "multiple_drivers" => {
-                if self.multiple_drivers.max_drivers[r] == 0 {
-                    return Err(c.non_positive("max_drivers"));
-                }
+            "multiple_drivers" if self.multiple_drivers.max_drivers[r] == 0 => {
+                return Err(c.non_positive("max_drivers"));
             }
             "p2p_resistance" => {
                 c.positive(
