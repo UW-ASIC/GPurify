@@ -43,6 +43,7 @@
 //! `.subckt` line or an `X` card, and a card outside every subcircuit.
 
 use crate::deck::DeviceKind;
+use crate::layout::MAX_HIERARCHY_DEPTH;
 use crate::narrow;
 use gpurify_geom::{StrId, StrTable};
 
@@ -73,7 +74,8 @@ pub const MAX_FLAT_ELEMENTS: u64 = crate::layout::MAX_FLAT_POLYGONS;
 
 /// Why a netlist was refused. Each but [`NetlistError::Io`] and the
 /// hierarchy's refusals ([`NetlistError::CyclicHierarchy`],
-/// [`NetlistError::TooLarge`]) carries the line and the offending token.
+/// [`NetlistError::TooDeep`], [`NetlistError::TooLarge`]) carries the line
+/// and the offending token.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum NetlistError {
     /// A token that does not fit the card: a missing name, a malformed
@@ -104,6 +106,13 @@ pub enum NetlistError {
     /// hierarchy cannot be flattened ([`Netlist::flatten_top`]).
     #[error("subcircuit {0} places itself through its instances")]
     CyclicHierarchy(String),
+    /// A placement chain from the top deeper than [`MAX_HIERARCHY_DEPTH`]
+    /// levels, the top included, refused as a layout's is: flattening
+    /// recurses once per level, so a deeper chain would overflow the stack.
+    /// Names the subcircuit the chain passes the cap at
+    /// ([`Netlist::flatten_top`]).
+    #[error("the reference hierarchy is deeper than {MAX_HIERARCHY_DEPTH} levels at {0}")]
+    TooDeep(String),
     /// A top that flattens to more than [`MAX_FLAT_ELEMENTS`] devices, nets
     /// and instances, counted from the tables before anything is expanded
     /// ([`Netlist::flatten_top`]).
@@ -225,9 +234,11 @@ impl Netlist {
     /// # Errors
     ///
     /// [`NetlistError::CyclicHierarchy`] when a subcircuit `top` reaches
-    /// places itself, then [`NetlistError::TooLarge`] when the result would
-    /// hold more than [`MAX_FLAT_ELEMENTS`] devices, nets and instances. Both
-    /// are found by counting, before anything is expanded.
+    /// places itself, [`NetlistError::TooDeep`] when a placement chain from
+    /// `top` is more than [`MAX_HIERARCHY_DEPTH`] levels deep, `top`
+    /// included, then [`NetlistError::TooLarge`] when the result
+    /// would hold more than [`MAX_FLAT_ELEMENTS`] devices, nets and
+    /// instances. All are found by counting, before anything is expanded.
     ///
     /// # Panics
     ///
@@ -298,43 +309,54 @@ impl Netlist {
             inner[cell.0 as usize] += u64::from(!on_port[net]);
         }
         let (mut counted, mut on_chain) = (vec![None; cells], vec![false; cells]);
-        let below = self.flat_below(top, (&calls, &inner), &mut counted, &mut on_chain, strings)?;
+        let walk = (&calls[..], &inner[..], strings);
+        let (below, _) = self.flat_below(top, 1, walk, &mut counted, &mut on_chain)?;
         Ok(nets[top.0 as usize].saturating_add(below))
     }
 
-    /// The devices and instances below one placement of `cell`, each
-    /// instance with the nets it adds (`inner` of its callee), saturating;
-    /// memoised in `counted`. Refuses a cycle, naming the subcircuit met
-    /// twice on one chain, as `expand` would.
+    /// The devices and instances below one placement of `cell`, `depth`
+    /// levels down from the top (the top is 1), each instance with the nets
+    /// it adds (`inner` of its callee), saturating; and how many levels
+    /// `cell` spans, itself included. Both memoised in `counted`, so a cell
+    /// first counted shallow and met again deep is held to the depth cap as
+    /// walking it again would be. Refuses a cycle, naming the subcircuit met
+    /// twice on one chain, as `expand` would, and a chain past the cap.
     fn flat_below(
         &self,
         cell: SubcktId,
-        (calls, inner): (&[Vec<SubcktId>], &[u64]),
-        counted: &mut [Option<u64>],
+        depth: u32,
+        (calls, inner, strings): (&[Vec<SubcktId>], &[u64], &StrTable),
+        counted: &mut [Option<(u64, u32)>],
         on_chain: &mut [bool],
-        strings: &StrTable,
-    ) -> Result<u64, NetlistError> {
+    ) -> Result<(u64, u32), NetlistError> {
         let row = cell.0 as usize;
-        if let Some(count) = counted[row] {
-            return Ok(count);
+        let name = || strings.resolve(self.subckt_name[row]).to_owned();
+        if let Some((count, levels)) = counted[row] {
+            if depth + levels - 1 > MAX_HIERARCHY_DEPTH {
+                return Err(NetlistError::TooDeep(name()));
+            }
+            return Ok((count, levels));
         }
         if on_chain[row] {
-            return Err(NetlistError::CyclicHierarchy(
-                strings.resolve(self.subckt_name[row]).to_owned(),
-            ));
+            return Err(NetlistError::CyclicHierarchy(name()));
+        }
+        if depth > MAX_HIERARCHY_DEPTH {
+            return Err(NetlistError::TooDeep(name()));
         }
         on_chain[row] = true;
         let devices = self.devices_of(cell);
-        let mut count = u64::from(devices.end - devices.start);
+        let (mut count, mut levels) = (u64::from(devices.end - devices.start), 1);
         for &callee in &calls[row] {
-            let below = self.flat_below(callee, (calls, inner), counted, on_chain, strings)?;
+            let walk = (calls, inner, strings);
+            let (below, spans) = self.flat_below(callee, depth + 1, walk, counted, on_chain)?;
             count = count
                 .saturating_add(1 + inner[callee.0 as usize])
                 .saturating_add(below);
+            levels = levels.max(spans + 1);
         }
         on_chain[row] = false;
-        counted[row] = Some(count);
-        Ok(count)
+        counted[row] = Some((count, levels));
+        Ok((count, levels))
     }
 
     /// Append `cell`'s devices to `out`, its nets mapped by `map` (indexed by
