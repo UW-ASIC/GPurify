@@ -47,7 +47,7 @@ DRC-048	drc	overlay	Containment (inside / enclose at least N)	IHP:Cnt.g,Cnt.h; A
 DRC-049	drc	overlay	Exact or maximum count	SKY:rpm.1g-1k; SKY:via.13	must_contain	implemented	FR; MR; SY; TX:KL	sky130 via.13 "Max of 5 vias within 0.350 µm" is not written: the manual does not say whether 0.35 µm bounds a window or a distance from each via
 DRC-050	drc	overlay	Forbidden overlap / straddle / partial overlap	IHP:Cnt.j; SKY:licon.6,licon.17,x.23a-f; GF:PL.9; KL:overlapping,in_and_out; MAG:no_overlap,exact_overlap	forbidden	implemented	FR; TX:KL; MR; SY	Written as forbidden(derived layer)
 DRC-051	drc	overlay	Abutment / butting edges	IHP:pSD.e-g; GF:DF.3b,NP.3d; SKY:difftap.4-7,licon.5b; MAG:edge4way	edge_min_length,edge_spacing,edge_enclosure	partial	FR; SY; MR; TX:KL	Edge layers cannot be extended (difftap.6; limitations.md, "Checks that do not exist yet"); edge enclosure misses diagonal gaps (limitations.md, "Rules that can pass a layout signoff would flag")
-DRC-052	drc	overlay	Gate-shape rules (no bends, no poly on inner diff corners)	SKY:poly.10,poly.11; IHP:Gat.f; A7:GATE.AUX.1; GF:PL.6	-	missing	FR	Needs corner/turn selection (sky130.deck)
+DRC-052	drc	overlay	Gate-shape rules (no bends, no poly on inner diff corners)	SKY:poly.10,poly.11; IHP:Gat.f; A7:GATE.AUX.1; GF:PL.6	gate_corner	implemented	FR; MR; SY; TX:KL	
 DRC-053	drc	overlay	Exact alignment / width match across layers	A7:V1.M2.AUX.2; LEF58_SPACING EXACTALIGNED	-	missing	FR	
 DRC-054	drc	overlay	Enclosure excluding coincident edges	SKY:lvtn.10	-	missing	FR	
 DRC-055	drc	overlay	Direction-dependent (S/D-direction) spacing	SKY:lvtn.3b	-	missing	FR	

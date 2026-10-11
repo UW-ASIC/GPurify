@@ -59,6 +59,7 @@
 //! | `enclosure(inner, outer[; width: len, below: len]) >= len` | `min_enclosure` | [`drc::Rule::MinEnclosure`] | an inner shape not surrounded by the limit on every side | DRC-040, DRC-043, DRC-090, DRC-096 |
 //! | `enclosure(inner, outer, opposite[; width: len, below: len]) >= len` | `asymmetric_enclosure` | [`drc::Rule::AsymmetricEnclosure`] | an inner shape without the limit on two opposite sides | DRC-041, DRC-042, DRC-043 |
 //! | `extension(A, B) >= len` | `min_extension` | [`drc::Rule::MinExtension`] | A not extending past B by the limit | DRC-045 |
+//! | `bend(A, B)`, `covers_corner(A, B)` | `gate_corner` | [`drc::Rule::GateCorner`] | A turning on B, or A over an inner corner of B | DRC-052 |
 //! | `overlap(A, B) >= len` | `overlap` | [`drc::Rule::Overlap`] | A and B overlapping by less than the limit | DRC-046 |
 //! | `tap_distance(well, tap) <= len` | `max_distance_to_tap` | [`drc::Rule::MaxDistanceToTap`] | a point of a well too far from a tap | ERC-D1 |
 //! | `off_grid(; pitch: len)` | `off_grid` | [`drc::Rule::OffGrid`] | a vertex off the manufacturing grid | DRC-001 |

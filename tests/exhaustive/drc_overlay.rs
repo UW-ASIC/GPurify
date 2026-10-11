@@ -37,6 +37,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         asymmetric_enclosure(depth),
         wire_enclosure(),
         min_extension(depth),
+        gate_corner(),
         overlap(depth),
         must_contain(),
         must_be_inside(),
@@ -721,6 +722,108 @@ fn min_extension(depth: Depth) -> Vec<Fixture> {
             }
         }
     }
+    every_placement(cases)
+}
+
+/// `bend(poly, diff)` (sky130 poly.11, "No 90 deg turns of poly on diff")
+/// and `covers_corner(poly, diff)` (poly.10, "Poly can't overlap inner
+/// corners of diff") (`gate_corner`, DRC-052): one finding per concave
+/// corner of the shared area that is a concave corner of poly, or of diff,
+/// at the corner.
+///
+/// Oracle: every corner is drawn where it is; a concave corner of an
+/// intersection of rectilinear shapes is a concave corner of one of them.
+///
+/// Diffusion is `[0, 1000]^2` unless said. Shapes: a straight gate (clean);
+/// an L poly bent inside the diffusion (a bend at (500, 500)), above it
+/// (clean), and with its bend on the diffusion's top edge (the gate is a
+/// rectangle: clean); a gate with a stub inside the diffusion (two bends);
+/// a gate over a jog in the diffusion's edge (an inner corner at (450,
+/// 300)); a poly square over an L diffusion's inner corner (500, 500), with
+/// no gate bend; an empty poly layer.
+fn gate_corner() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["diff", "poly"],
+        "rule poly.11 bend(poly, diff)\nrule poly.10 covers_corner(poly, diff)\n",
+    );
+    let corner = |x: i64, y: i64| Finding {
+        measured: Some(Measurement::Count(1)),
+        at: Some((x, y)),
+    };
+    let case = |name: &str, layout: Layout, bends: Vec<Finding>, covers: Vec<Finding>| {
+        fixture(
+            &format!("gate_corner/{name}"),
+            &["DRC-052"],
+            &deck,
+            layout,
+            &[("poly.11", bends), ("poly.10", covers)],
+        )
+    };
+    let diff = || Layout::default().rect("diff", 0, 0, 1000, 1000);
+    // An L poly: a bar x 400..500 from y -200 up to `y + 100`, turning right
+    // along y..y + 100 to x 1200; its concave corner is (500, y).
+    let l_poly = |y: i64| {
+        [
+            (400, -200),
+            (500, -200),
+            (500, y),
+            (1200, y),
+            (1200, y + 100),
+            (400, y + 100),
+        ]
+    };
+    let mut cases = Vec::new();
+    cases.push(case(
+        "straight",
+        diff().rect("poly", 400, -200, 500, 1200),
+        vec![],
+        vec![],
+    ));
+    cases.push(case(
+        "bent_inside",
+        diff().polygon("poly", &l_poly(500)),
+        vec![corner(500, 500)],
+        vec![],
+    ));
+    cases.push(case(
+        "bent_outside",
+        diff().polygon("poly", &l_poly(1100)),
+        vec![],
+        vec![],
+    ));
+    cases.push(case(
+        "bent_on_edge",
+        diff().polygon("poly", &l_poly(1000)),
+        vec![],
+        vec![],
+    ));
+    cases.push(case(
+        "stub",
+        diff()
+            .rect("poly", 400, -200, 500, 1200)
+            .rect("poly", 500, 400, 700, 500),
+        vec![corner(500, 400), corner(500, 500)],
+        vec![],
+    ));
+    cases.push(case(
+        "diffusion_jog",
+        Layout::default()
+            .rect("diff", 0, 0, 450, 400)
+            .rect("diff", 450, 0, 1000, 300)
+            .rect("poly", 400, -200, 500, 600),
+        vec![],
+        vec![corner(450, 300)],
+    ));
+    cases.push(case(
+        "inner_corner_covered",
+        Layout::default()
+            .rect("diff", 0, 0, 1000, 500)
+            .rect("diff", 0, 500, 500, 1000)
+            .rect("poly", 300, 300, 700, 700),
+        vec![],
+        vec![corner(500, 500)],
+    ));
+    cases.push(case("empty_poly", diff(), vec![], vec![]));
     every_placement(cases)
 }
 
