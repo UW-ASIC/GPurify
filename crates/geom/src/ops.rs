@@ -261,7 +261,12 @@ fn pinches_are_corners(xs: &[Dbu], ys: &[Dbu]) -> bool {
 /// Twice the signed area of a closed coordinate run, by the shoelace formula.
 ///
 /// Positive for counter-clockwise.
+///
+/// # Panics
+///
+/// When `xs` and `ys` differ in length.
 pub fn area2(xs: &[Dbu], ys: &[Dbu]) -> DbuArea {
+    assert_eq!(xs.len(), ys.len(), "one y per x");
     let n = xs.len();
     if n < 3 {
         return DbuArea::new(0);
@@ -297,6 +302,11 @@ pub fn winding_of(xs: &[Dbu], ys: &[Dbu]) -> Option<Winding> {
 /// Squared distance from a point to a closed segment, rounded up to a whole
 /// square unit: zero only when `p` is on the segment, so a comparison against
 /// a squared limit never passes a point that is too close.
+///
+/// # Panics
+///
+/// In debug builds, when a skew segment's distance reaches `2^42`, which
+/// only points outside `±`[`crate::MAX_ABS_DBU`] can.
 pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
     let vx = i128::from(seg.b.x.raw() - seg.a.x.raw());
     let vy = i128::from(seg.b.y.raw() - seg.a.y.raw());
@@ -333,6 +343,11 @@ pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
         // `cross²` reaches 166 bits at the domain corners: divide at 256 bits.
         None => ceil_sq_div(drop, scale),
     };
+    // At most the squared diagonal of the `±2^40` domain, `2^83`.
+    debug_assert!(
+        dist2 < 1 << 84,
+        "a squared distance in the domain is under 2^84"
+    );
 
     #[expect(
         clippy::cast_possible_wrap,
@@ -345,6 +360,7 @@ pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
 /// `ceil(a² / d)` exactly, for `d > 0`: `a²` as a 256-bit pair, restoring division.
 fn ceil_sq_div(a: u128, d: u128) -> u128 {
     const HALF: u128 = u64::MAX as u128;
+    debug_assert!(d > 0, "a divisor is positive");
 
     // `a = h·2^64 + l`, so `a² = h²·2^128 + 2hl·2^64 + l²`.
     let (l, h) = (a & HALF, a >> 64);

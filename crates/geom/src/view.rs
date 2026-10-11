@@ -320,6 +320,10 @@ pub fn validate_layer_into(
         out.push_ring(outer_xs, outer_ys, outer);
         while cursor < owned.len() && owned[cursor].0 == slot {
             let hole = owned[cursor].1;
+            debug_assert!(
+                store.poly_bbox(outer).contains(store.poly_bbox(hole)),
+                "a hole lies inside its outer's box"
+            );
             let (hole_xs, hole_ys) = store.poly_verts(hole);
             out.push_ring(hole_xs, hole_ys, hole);
             cursor += 1;
@@ -329,6 +333,11 @@ pub fn validate_layer_into(
         out.poly_ring_len.push(span_len - span_start);
         out.poly_bbox.push(store.poly_bbox(outer));
     }
+    debug_assert_eq!(
+        cursor,
+        owned.len(),
+        "every bound hole is emitted after its outer"
+    );
 
     Ok(())
 }

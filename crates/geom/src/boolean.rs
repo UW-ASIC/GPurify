@@ -134,6 +134,12 @@ impl Slabs {
     }
 
     fn close_slab(&mut self) {
+        let from = *self.start.last().expect("`open` seeds the offsets") as usize;
+        let slab = &self.ivals[from..];
+        debug_assert!(
+            slab.iter().all(|&(lo, hi)| lo < hi) && slab.windows(2).all(|w| w[0].1 < w[1].0),
+            "a slab's intervals are non-empty, ascending and apart: {slab:?}"
+        );
         self.start.push(ring_mark(self.ivals.len()));
     }
 
@@ -279,6 +285,22 @@ fn intervals_into(ymap: &[(i64, i32)], out: &mut Vec<(i64, i64)>) {
             out.push((open, y));
         }
     }
+    // Every edge adds its delta at `ylo` and takes it back at `yhi`.
+    debug_assert_eq!(sum, 0, "the winding returns to zero above the top edge");
+}
+
+/// The area of a slab list over its axis, exact.
+fn region_area(xs: &[i64], region: &Slabs) -> i128 {
+    (0..xs.len().saturating_sub(1))
+        .map(|c| {
+            let height: i128 = region
+                .slab(c)
+                .iter()
+                .map(|&(lo, hi)| i128::from(hi - lo))
+                .sum();
+            i128::from(xs[c + 1] - xs[c]) * height
+        })
+        .sum()
 }
 
 /// Occupancy of every x-slab, by the nonzero-winding rule. `xs` holds every
@@ -594,6 +616,45 @@ fn trace(xs: &[i64], region: &Slabs, sweep: &mut Sweep) {
         &mut sweep.link_start,
         &mut sweep.used,
     );
+    if cfg!(debug_assertions) {
+        check_traced(xs, region, sweep);
+    }
+}
+
+/// Debug check of [`trace`]'s rings against the region they bound: each ring
+/// is closed, its edges alternating horizontal and vertical with the closing
+/// edge included (so every collinear run was merged), and the rings' signed
+/// areas (outers CCW, holes CW) sum to exactly twice the region's area, so no
+/// boundary was lost, doubled or wound the wrong way.
+fn check_traced(xs: &[i64], region: &Slabs, sweep: &Sweep) {
+    let mut area2 = 0i128;
+    for run in sweep.link_start.windows(2) {
+        let (lo, hi) = (run[0] as usize, run[1] as usize);
+        let (rx, ry) = (&sweep.link_x[lo..hi], &sweep.link_y[lo..hi]);
+        let n = rx.len();
+        debug_assert!(
+            n >= 4 && n.is_multiple_of(2),
+            "a traced ring has an even count of at least four vertices, not {n}"
+        );
+        for i in 0..n {
+            let (j, k) = ((i + 1) % n, (i + 2) % n);
+            let horizontal = ry[i] == ry[j];
+            debug_assert!(
+                horizontal != (rx[i] == rx[j]),
+                "a traced edge is axis-parallel and not a point"
+            );
+            debug_assert!(
+                horizontal != (ry[j] == ry[k]),
+                "traced edges alternate horizontal and vertical"
+            );
+            area2 += i128::from(rx[i]) * i128::from(ry[j]) - i128::from(rx[j]) * i128::from(ry[i]);
+        }
+    }
+    debug_assert_eq!(
+        area2,
+        2 * region_area(xs, region),
+        "the traced rings enclose exactly the region's area"
+    );
 }
 
 /// Trace the region and validate its rings into `out`, through a one-layer store
@@ -626,7 +687,14 @@ fn emit(
     }
 
     let (store, _permutation) = builder.finish(1);
-    validate_layer_into(&store, RESULT_LAYER, out)?;
+    let valid = validate_layer_into(&store, RESULT_LAYER, out);
+    // An error here is an internal fault (see `union_into`): crash where a
+    // fuzzer can see it rather than refuse a rule.
+    debug_assert!(
+        valid.is_ok(),
+        "a traced boolean result validates: {valid:?}"
+    );
+    valid?;
     Ok(())
 }
 
@@ -662,6 +730,11 @@ fn combine_into(
 
     let mut result = Slabs::default();
     combine_slabs(xs.len(), &sa, &sb, op, &mut sweep, &mut result);
+    // Union, intersection and difference are all empty where neither operand is.
+    debug_assert!(
+        region_area(&xs, &result) <= region_area(&xs, &sa) + region_area(&xs, &sb),
+        "area(result) <= area(a) + area(b)"
+    );
     emit(&xs, &result, &mut sweep, out)
 }
 
