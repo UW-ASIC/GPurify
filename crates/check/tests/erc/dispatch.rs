@@ -155,6 +155,8 @@ fn every_kind() -> RuleSet {
             diode_bonus: vec![0.0],
             area_minus_diode: vec![0.0],
             gate_plus_diode: vec![0.0],
+            diode_reduce: vec![Vec::new()],
+            diode_max_ratio: vec![Vec::new()],
             max_ratio: vec![50.0],
             stack: antenna::Stack::default(),
         },

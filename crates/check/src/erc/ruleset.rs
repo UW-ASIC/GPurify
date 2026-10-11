@@ -10,7 +10,7 @@ use crate::erc::voltage::NetVoltage;
 use crate::erc::{Design, ErcError, Scratch};
 use crate::report::{RuleRun, Severity, Violations};
 use crate::topology::PortTable;
-use gpurify_geom::{prefix, Dbu, Grid, Qty, Temperature};
+use gpurify_geom::{prefix, Dbu, DbuArea, Grid, Qty, Temperature};
 use gpurify_geom::{Bbox, LayerId};
 use gpurify_ingest::deck::{Deck, DeviceKind, ParamValue, RuleSpec, RuleTable};
 use gpurify_ingest::{StrId, StrTable};
@@ -125,7 +125,8 @@ pub struct RunInputs<'a> {
     /// The die boundary: the denominator of every density.
     pub die: Bbox,
     /// The layout's grid, which turns a width in database units into metres
-    /// for a current-density limit.
+    /// for a current-density limit, and a diode's area into the square
+    /// micrometres an antenna credit is stated per.
     pub grid: Grid,
     /// The applied sign-off temperature, absolute; distinct from each row's
     /// characterisation temperature.
@@ -226,6 +227,32 @@ impl Row<'_> {
             ParamValue::Ratio(value) => Ok(value),
             _ => Err(self.wrong_type(param)),
         }
+    }
+
+    /// A piecewise-linear table, `(area, value)` points in deck order; empty
+    /// when absent.
+    fn area_table(
+        &self,
+        area: &'static str,
+        value: &'static str,
+    ) -> Result<Vec<(DbuArea, f64)>, ErcError> {
+        let (Some(area_key), Some(value_key)) = (self.strings.get(area), self.strings.get(value))
+        else {
+            return Ok(Vec::new());
+        };
+        let (mut areas, mut values) = (Vec::new(), Vec::new());
+        for &(key, param) in self.rules.params_of(self.spec) {
+            match param {
+                ParamValue::Area(at) if key == area_key => areas.push(at),
+                ParamValue::Ratio(of) if key == value_key => values.push(of),
+                _ if key == area_key || key == value_key => return Err(self.wrong_type(value)),
+                _ => {}
+            }
+        }
+        if areas.len() != values.len() {
+            return Err(self.wrong_type(value));
+        }
+        Ok(areas.into_iter().zip(values).collect())
     }
 
     fn opt_number(&self, param: &'static str) -> Result<Option<f64>, ErcError> {
@@ -436,6 +463,8 @@ impl RuleSet {
                     let bonus = row.opt_number("diode_bonus")?.unwrap_or(0.0);
                     let minus = row.opt_number("area_minus_diode")?.unwrap_or(0.0);
                     let plus = row.opt_number("gate_plus_diode")?.unwrap_or(0.0);
+                    let reduce = row.area_table("diode_reduce_area", "diode_reduce")?;
+                    let diode_max = row.area_table("diode_max_ratio_area", "diode_max_ratio")?;
                     let table = &mut set.antenna_electrical;
                     row.head(&mut table.head)?;
                     table.gate.push(layers[0]);
@@ -448,6 +477,8 @@ impl RuleSet {
                     table.diode_bonus.push(bonus);
                     table.area_minus_diode.push(minus);
                     table.gate_plus_diode.push(plus);
+                    table.diode_reduce.push(reduce);
+                    table.diode_max_ratio.push(diode_max);
                     table.max_ratio.push(max_ratio);
                     close_csr(&mut table.collector_start, table.collector.len());
                 }
@@ -794,6 +825,12 @@ impl RuleSet {
                 c.finite("diode_bonus", t.diode_bonus[r])?;
                 c.not_negative("area_minus_diode", t.area_minus_diode[r])?;
                 c.not_negative("gate_plus_diode", t.gate_plus_diode[r])?;
+                for &(_, factor) in &t.diode_reduce[r] {
+                    c.not_negative("diode_reduce", factor)?;
+                }
+                for &(_, limit) in &t.diode_max_ratio[r] {
+                    c.positive("diode_max_ratio", limit)?;
+                }
             }
             "density_cmp" => {
                 let t = &self.density_cmp;

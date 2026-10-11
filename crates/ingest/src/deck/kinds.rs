@@ -63,6 +63,10 @@ pub(crate) enum Dim {
     LengthPairList(&'static str),
     /// One of the listed bare words; the engine param is its index, a count.
     Word(&'static [&'static str]),
+    /// `[(area, n), ..]`, a piecewise-linear table (LEF's `PWL`) with areas
+    /// rising strictly; per point, the area goes to the param's engine name
+    /// and the number to the named one.
+    AreaTable(&'static str),
 }
 
 /// Units, the dimension each belongs to, and the power of ten to the engine unit.
@@ -593,6 +597,16 @@ pub(crate) const KINDS: &[Kind] = &[
             p("diode_bonus", "diode_bonus", Dim::Scalar),
             p("area_minus_diode", "area_minus_diode", Dim::Scalar),
             p("gate_plus_diode", "gate_plus_diode", Dim::Scalar),
+            opt(
+                "diode_reduce",
+                "diode_reduce_area",
+                Dim::AreaTable("diode_reduce"),
+            ),
+            opt(
+                "diode_max_ratio",
+                "diode_max_ratio_area",
+                Dim::AreaTable("diode_max_ratio"),
+            ),
         ],
     ),
     erc(
