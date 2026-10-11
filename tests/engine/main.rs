@@ -1,4 +1,4 @@
-//! `engine`: load order, extraction, stage statuses, and the pass criterion.
+//! `engine`: load errors, extraction, stage statuses, and the pass criterion.
 
 #[path = "../common/gen_fixtures.rs"]
 mod gen_fixtures;
@@ -49,27 +49,38 @@ fn empty_loaded(store: GeometryStore, deck: Deck) -> Loaded {
     }
 }
 
-fn unreadable_inputs() -> Inputs {
-    Inputs {
-        layout: PathBuf::from("/nonexistent/design.gds"),
-        deck: PathBuf::from("/nonexistent/process.deck"),
-        ..Inputs::default()
-    }
-}
-
-/// The deck is read before the layout; a failed load reaches no later stage.
+/// A missing deck or layout is reported as that input's error; a failed load
+/// reaches no later stage.
 ///
-/// Oracle: construct-from-answer. Both files are missing, so the load must fail
-/// and `run` must return that failure rather than run a stage; the deck is the
-/// first file `load` opens, so its error is the one reported.
+/// Oracle: `load`'s `# Errors`, which names the variant for each input, and
+/// construct-from-answer: each case pairs one missing file with a fixture pair
+/// the engine loads (`a_quasistatic_net_is_solved_for_inductance_too`), so
+/// only that input can be at fault. Which error wins when both are missing is
+/// not a contract (`load`'s `# Errors`), so that case asserts only that `run`
+/// returns the load failure rather than run a stage.
 #[test]
-fn a_load_fails_on_the_deck_before_the_layout() {
+fn a_load_reports_the_input_at_fault_and_reaches_no_stage() {
+    let fixtures = gen_fixtures::fixtures();
+    let missing = PathBuf::from("/nonexistent/missing");
+    let inputs = |layout: PathBuf, deck: PathBuf| Inputs {
+        layout,
+        deck,
+        ..Inputs::default()
+    };
+    let (layout, deck) = (
+        fixtures.join("pex/PEX_COUPLING_C.gds"),
+        fixtures.join("params.deck"),
+    );
     assert!(matches!(
-        load(&unreadable_inputs()),
+        load(&inputs(layout, missing.clone())),
         Err(LoadError::Deck(_))
     ));
     assert!(matches!(
-        run(&unreadable_inputs(), &options(Checks::ALL)),
+        load(&inputs(missing.clone(), deck)),
+        Err(LoadError::Layout(_))
+    ));
+    assert!(matches!(
+        run(&inputs(missing.clone(), missing), &options(Checks::ALL)),
         Err(EngineError::Load(_))
     ));
 }
