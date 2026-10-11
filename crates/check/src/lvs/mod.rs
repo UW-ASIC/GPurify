@@ -16,7 +16,8 @@
 //!    deck's MOS recogniser lists three layers), and every layout parameter
 //!    that no reference device of the same kind and model declares, so it
 //!    cannot block a merge;
-//! 2. reduces both sides by parallel and series merges ([`reduce`]);
+//! 2. reduces both sides by parallel and series merges ([`reduce`]), then
+//!    states `m = 1` on every device that states no count;
 //! 3. partitions the nodes of both sides together by iterative refinement, the
 //!    graph-labelling algorithm of C. Ebeling, "`GeminiII`: a second generation
 //!    layout validation program", ICCAD 1988,
@@ -40,7 +41,9 @@
 //!    and parameters. Parameter presence is per device: each parameter the
 //!    reference card states must be measured and agree, and a measure the
 //!    card omits is not compared, whatever other cards of the model state
-//!    (testing-plan F68). Everything else is a [`Discrepancy`].
+//!    (testing-plan F68). The count `m` is no measure: a card without one
+//!    counts one device, and is compared so. Everything else is a
+//!    [`Discrepancy`].
 //!
 //! Roles decide which terminals are interchangeable. Positions never matter.
 //!

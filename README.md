@@ -126,8 +126,8 @@ LVS   ██████                                  16
 ```
 
 Expected answers were derived from the geometry and the physics first, then
-compared against the previous implementation's output. 116 agree, so two
-independent routes reached the same number. 27 disagree, and each records which
+compared against the previous implementation's output. 115 agree, so two
+independent routes reached the same number. 28 disagree, and each records which
 side is wrong and why.
 
 ### The test that matters

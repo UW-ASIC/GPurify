@@ -7,20 +7,23 @@
 //!
 //! | Kind | Parallel | Series | `m` |
 //! |---|---|---|---|
-//! | MOS | sums `W` and `nf`; every other parameter, `L` included, agrees | sums `L`, which both state; every other parameter agrees | folded into `W` |
-//! | resistor, capacitor, diode, bipolar | sums the count `m` (1 when the card states none); every other parameter agrees | never | kept: that many in parallel |
+//! | MOS stating `W` | sums `W` and `nf`; every other parameter, `L` included, agrees | sums `L`, which both state; every other parameter agrees | folded into `W` |
+//! | MOS stating no `W` | sums the count `m` (1 when the card states none); every other parameter agrees | as above | kept: that many in parallel |
+//! | resistor, capacitor, diode, bipolar | sums the count `m`; every other parameter agrees | never | kept |
 //!
 //! "Agrees" means the same parameter names with bit-identical values: the
 //! comparison's tolerance plays no part here. A summed parameter must be
-//! stated by every member or by none, so no member's share is dropped. A sized
-//! MOS merges only when [`ParamNames`] says which parameter is `W` and which
-//! is `L`, and any other device only when it names `m`, the parameter its
-//! count is kept in. A series merge also needs `L` stated on both devices:
+//! stated by every member or by none, so no member's share is dropped. A MOS
+//! stating `W` merges only when [`ParamNames`] says which parameter is `W`
+//! and which is `L`; any other device, a MOS with no `W` to sum included,
+//! only when it names `m`, the parameter its count is kept in, so two
+//! unsized transistors in parallel are one with `m = 2`, not one transistor
+//! (testing-plan F83). A series merge also needs `L` stated on both devices:
 //! with no length to sum, two transistors in series would read as one and
 //! the stack count would be lost, so they stay two (testing-plan F67). A
-//! passive's value is kept, not combined: two capacitors
-//! of one `c` in parallel are one of that `c` with `m = 2`, as a card stating
-//! `m = 2` is, and do not match one card of twice the `c`.
+//! passive's value is kept, not combined: two capacitors of one `c` in
+//! parallel are one of that `c` with `m = 2`, as a card stating `m = 2` is,
+//! and do not match one card of twice the `c`.
 //!
 //! - **Parallel** (catalog LVS-040, LVS-043, LVS-044; `KLayout` and Netgen both
 //!   do it): devices of one kind and one model whose terminals land on the
@@ -45,7 +48,8 @@
 //! - **Multiplier** (catalog LVS-046): with both the `W` and `m` names given,
 //!   each MOS's `W` is multiplied by its `m` and the `m` is dropped, before
 //!   any merge. A MOS with no `W`, and every other device, keeps its `m`,
-//!   except an `m` of 1, which is dropped as the count every card has.
+//!   except an `m` of 1, which is dropped as the count every card has;
+//!   [`compare`](crate::lvs::compare) reads a missing count as that 1 again.
 //!
 //! A device with a terminal on no net never merges. Each pass applies one law
 //! to the whole graph, parallel first, so every sum within a pass is well
@@ -60,31 +64,32 @@ use gpurify_ingest::StrId;
 /// Which interned parameter names mean width, length, fingers and multiplier.
 /// A name absent from both netlists is `None`.
 ///
-/// The default names nothing, and then a MOS that declares any parameter, and
-/// every other device, never merges, and nothing merges in series.
+/// The default names nothing, and then nothing merges: no device has a `W` to
+/// sum or a count to keep, and nothing merges in series.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ParamNames {
-    /// `W`: summed by a parallel MOS merge, multiplied by `m`. With `length`,
-    /// it lets sized MOS merge at all.
+    /// `W`: summed by a parallel merge of MOS that state it, multiplied by
+    /// `m`. With `length`, it lets such MOS merge at all.
     pub width: Option<StrId>,
     /// `L`: summed by a series merge, which needs it stated on both devices,
     /// so without this name nothing merges in series. With `width`, it lets
-    /// sized MOS merge at all.
+    /// MOS stating `W` merge at all.
     pub length: Option<StrId>,
-    /// `nf`: summed by a parallel MOS merge.
+    /// `nf`: summed by a parallel merge of MOS stating `W`.
     pub fingers: Option<StrId>,
     /// `m`: a MOS's is folded into its `W`, when `width` is also named and
-    /// the MOS states one. Any other device's is its count of identical
-    /// devices in parallel, which a parallel merge sums; without this name
-    /// they do not merge, since the count would have nowhere to go.
+    /// the MOS states one. Any other device's, a MOS with no `W` included,
+    /// is its count of identical devices in parallel, which a parallel merge
+    /// sums; without this name they do not merge in parallel, since the count
+    /// would have nowhere to go.
     pub multiplier: Option<StrId>,
 }
 
 /// Which law a merge applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeKind {
-    /// Devices on the same nets became one: a MOS's `W` and `nf` were summed
-    /// (and an unsized one's `m`), any other device's count `m`.
+    /// Devices on the same nets became one: a MOS's `W` and `nf` were summed,
+    /// or any other device's count `m`, a MOS with no `W` included.
     Parallel,
     /// Devices stacked through an internal net became one; `L` was summed and
     /// the net was consumed.
@@ -134,13 +139,24 @@ use crate::lvs::graph::{narrow, transpose_into, Graph};
 use crate::lvs::refine::{kind_code, role_code};
 use gpurify_ingest::deck::DeviceKind;
 
-/// The parameters a parallel merge of `kind` sums, each stated by every member
-/// or by none: a MOS's `W`, `nf`, and the `m` only one with no `W` keeps.
-/// Any other kind sums its count `m` instead, which [`count_of`] reads.
-fn parallel_sums(kind: DeviceKind, names: ParamNames) -> [Option<StrId>; 3] {
-    match kind {
-        DeviceKind::Mos => [names.width, names.fingers, names.multiplier],
-        _ => [None; 3],
+/// Whether a parallel merge sums this device's `W`: a MOS stating one, whose
+/// `m` was folded into it. Any other device, a MOS with no `W` included,
+/// keeps its count in `m` instead (testing-plan F83).
+fn sums_width(kind: DeviceKind, params: &[(StrId, f64)], names: ParamNames) -> bool {
+    kind == DeviceKind::Mos
+        && names
+            .width
+            .is_some_and(|width| params.iter().any(|&(name, _)| name == width))
+}
+
+/// The parameters a parallel merge sums, each stated by every member or by
+/// none: a MOS's `W` and `nf` when it [`sums_width`]. Any other device sums
+/// its count `m` instead, which [`count_of`] reads.
+fn parallel_sums(wide: bool, names: ParamNames) -> [Option<StrId>; 2] {
+    if wide {
+        [names.width, names.fingers]
+    } else {
+        [None; 2]
     }
 }
 
@@ -204,9 +220,12 @@ struct Plan {
     /// `new_net[old]` is the surviving net's row, or `u32::MAX` for a consumed
     /// one. Ascending over the survivors, so their relative order is the input's.
     new_net: Vec<u32>,
-    /// Devices that may merge at all: no declared parameter, and no terminal on
-    /// no net. Both are refusals rather than oversights.
+    /// Devices that may merge in series: no terminal on no net, and a MOS
+    /// stating a parameter only with the `W` and `L` names given.
     mergeable: Vec<bool>,
+    /// Devices that may merge in parallel: no terminal on no net, and a `W`
+    /// to sum with the `L` name given, or else the `m` name to count in.
+    parallel_ok: Vec<bool>,
     /// Each device's terminals as [`terminal_key`]s, ascending, CSR into `key`.
     key_start: Vec<u32>,
     key: Vec<u64>,
@@ -277,24 +296,23 @@ fn join(root: &mut [u32], a: u32, b: u32) {
     root[left.max(right) as usize] = left.min(right);
 }
 
-/// Reduce to parallel normal form, merging only MOS that state no parameter:
-/// with no `m` name, no other kind has a count to keep, and with no `L` name
-/// no series merge has a length to sum (testing-plan F67).
-/// Devices come out one per group ascending by the group's lowest row;
-/// surviving nets keep their order. A graph with nothing to merge comes through
-/// byte-identical.
-///
-/// Reducing a reduced graph changes nothing: the output is a fixed point.
+/// [`reduce_with`] told no parameter names, which merges nothing: with no
+/// `W` name no MOS has a width to sum, with no `m` name no device a count to
+/// keep (testing-plan F83), and with no `L` name no series merge a length
+/// (F67). The graph comes through byte-identical.
 ///
 /// # Panics
 ///
-/// Panics, or reduces wrongly, when `src` breaks the [`Graph`] invariants.
+/// As [`reduce_with`].
 pub fn reduce(src: &Graph) -> Graph {
     reduce_with(src, ParamNames::default()).0
 }
 
-/// [`reduce`], merging sized devices by `names`, and every merge it made, in
-/// the order made.
+/// Reduce to parallel and series normal form by the laws of the module docs,
+/// reading `W`, `L`, `nf` and `m` by `names`, and every merge made, in the
+/// order made. Devices come out one per group ascending by the group's lowest
+/// row; surviving nets keep their order. Reducing a reduced graph changes
+/// nothing: the output is a fixed point.
 ///
 /// With `names.multiplier` set, every MOS's `m` is folded into its `W` (when
 /// `names.width` is set too) and every `m` of 1 is dropped, even when nothing
@@ -305,7 +323,7 @@ pub fn reduce(src: &Graph) -> Graph {
 ///
 /// # Panics
 ///
-/// As [`reduce`].
+/// Panics, or reduces wrongly, when `src` breaks the [`Graph`] invariants.
 pub fn reduce_with(src: &Graph, names: ParamNames) -> (Graph, Vec<Merge>) {
     let mut plan = Plan::default();
     let mut out = fold_multiplier(src, names);
@@ -367,10 +385,9 @@ fn fold_multiplier(src: &Graph, names: ParamNames) -> Graph {
     for device in 0..narrow(src.device_count()) {
         let params = src.params_of(device);
         let m = count_of(params, multiplier);
-        let into = names.width.filter(|&width| {
-            src.device_kind[device as usize] == DeviceKind::Mos
-                && params.iter().any(|&(name, _)| name == width)
-        });
+        let into = names
+            .width
+            .filter(|_| sums_width(src.device_kind[device as usize], params, names));
         for &(name, value) in params {
             if name == multiplier {
                 // Folded, or a count of one: nothing left to say.
@@ -442,6 +459,8 @@ fn prepare(src: &Graph, names: ParamNames, plan: &mut Plan, devices: usize, nets
     plan.key_start.push(0);
     plan.mergeable.clear();
     plan.mergeable.reserve(devices);
+    plan.parallel_ok.clear();
+    plan.parallel_ok.reserve(devices);
     plan.parallel_sig.clear();
     plan.series_sig.clear();
     for device in 0..narrow(devices) {
@@ -464,9 +483,18 @@ fn prepare(src: &Graph, names: ParamNames, plan: &mut Plan, devices: usize, nets
         };
         let bound = !terminal_nets.contains(&u32::MAX);
         plan.mergeable.push(free & bound);
-        let counted = names.multiplier.filter(|_| kind != DeviceKind::Mos);
+        // A merge with no `W` to sum keeps the count, which needs the `m`
+        // name to be kept under (testing-plan F83).
+        let wide = sums_width(kind, params, names);
+        let room = if wide {
+            sized
+        } else {
+            names.multiplier.is_some()
+        };
+        plan.parallel_ok.push(room & bound);
+        let counted = names.multiplier.filter(|_| !wide);
         plan.parallel_sig
-            .push(signature(params, &parallel_sums(kind, names), counted));
+            .push(signature(params, &parallel_sums(wide, names), counted));
         let states_length = names
             .length
             .is_some_and(|length| params.iter().any(|&(name, _)| name == length));
@@ -484,7 +512,7 @@ fn join_parallel(src: &Graph, plan: &mut Plan, devices: usize) {
     let Plan {
         root,
         order,
-        mergeable,
+        parallel_ok,
         key,
         key_start,
         parallel_sig,
@@ -512,7 +540,7 @@ fn join_parallel(src: &Graph, plan: &mut Plan, devices: usize) {
         // anywhere in the run is skipped rather than splitting it.
         let mut anchor = u32::MAX;
         for &device in &order[at..end] {
-            if !mergeable[device as usize] {
+            if !parallel_ok[device as usize] {
                 continue;
             }
             if anchor == u32::MAX {
@@ -789,17 +817,18 @@ fn emit_into(src: &Graph, plan: &Plan, names: ParamNames, out: &mut Graph) {
         } else {
             // The head's parameters, the summed ones totalled over the group,
             // which states each of them on every member or on none.
-            let kind = src.device_kind[head as usize];
+            let wide = sums_width(src.device_kind[head as usize], src.params_of(head), names);
             let group = &plan.order[at..end];
             let summed = match plan.mode {
-                Some(MergeKind::Series) => [names.length, None, None],
-                _ => parallel_sums(kind, names),
+                Some(MergeKind::Series) => [names.length, None],
+                _ => parallel_sums(wide, names),
             };
-            // Any kind but MOS keeps its count in `m`, which a card may leave
-            // out: summed with a missing one read as 1, and written last.
+            // A device with no `W` to sum keeps its count in `m`, which a card
+            // may leave out: summed with a missing one read as 1, and written
+            // last.
             let counted = names
                 .multiplier
-                .filter(|_| plan.mode == Some(MergeKind::Parallel) && kind != DeviceKind::Mos);
+                .filter(|_| plan.mode == Some(MergeKind::Parallel) && !wide);
             for &(name, value) in src.params_of(head) {
                 if Some(name) == counted {
                     continue;

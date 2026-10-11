@@ -16,7 +16,8 @@
 //! test over them cannot be passing for some other reason. Its devices state
 //! `L`, since a series merge sums it and a stack with none stays two
 //! (testing-plan F67); the corpus's `LVS_SERIES_MERGE` reference states none,
-//! so that case is a mismatch.
+//! so that case is a mismatch. So is `LVS_PARALLEL_MERGE`: its two unsized
+//! fingers keep their count, `m = 2`, and its card states none (F83).
 
 use crate::common;
 
@@ -146,13 +147,14 @@ fn the_same_pair_with_its_gates_on_two_nets_stays_two_devices() {
     assert_eq!(out, src, "an unreducible graph is passed through unchanged");
 }
 
-/// Oracle: construct-from-answer. Two transistors between one pair of nets are
-/// one transistor of twice the width. Nothing is consumed — a parallel merge
-/// drops no net — so the reduced graph is the same four nets with one device on
-/// them.
+/// Oracle: construct-from-answer. Two unsized transistors between one pair of
+/// nets are one transistor counted twice, `m = 2`: with no `W` to sum, the
+/// count is what keeps them two (testing-plan F83). Nothing is consumed — a
+/// parallel merge drops no net — so the reduced graph is the same four nets
+/// with one device on them.
 #[test]
 fn two_transistors_in_parallel_become_one() {
-    let out = reduce(&parallel_pair(NCH, 1, 2));
+    let out = reduce_sized(&parallel_pair(NCH, 1, 2));
 
     assert_eq!(out.device_count(), 1);
     assert_eq!(out.net_count(), 4, "a parallel merge consumes no net");
@@ -160,6 +162,7 @@ fn two_transistors_in_parallel_become_one() {
         terminals(&out, 0),
         [(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)]
     );
+    assert_eq!(out.params_of(0), [(M, 2.0)], "the count was lost");
 }
 
 /// Oracle: construct-from-answer. A MOS channel is symmetric — which end is the
@@ -167,13 +170,56 @@ fn two_transistors_in_parallel_become_one() {
 /// with the upper one's source and drain exchanged are still one device.
 #[test]
 fn a_parallel_pair_merges_with_its_channel_ends_exchanged() {
-    let out = reduce(&parallel_pair(NCH, 2, 1));
+    let out = reduce_sized(&parallel_pair(NCH, 2, 1));
 
     assert_eq!(out.device_count(), 1);
     assert_eq!(
         terminals(&out, 0),
         [(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)]
     );
+}
+
+/// Oracle: construct-from-answer, testing-plan F83. Two unsized transistors
+/// in parallel are one card of `m = 2`, and not one card stating no count:
+/// that card is one transistor, so the layout's count, 2, disagrees with its
+/// 1. With no `m` name the count has nowhere to go and the two stay two.
+#[test]
+fn unsized_parallel_transistors_match_a_counted_card_and_not_a_bare_one() {
+    let options = CompareOptions {
+        params: NAMES,
+        ..CompareOptions::default()
+    };
+    let card = |params: &[(StrId, f64)]| {
+        let mut builder = GraphBuilder::new(4);
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[(Drain, 2), (Gate, 0), (Source, 1), (Bulk, 3)],
+            params,
+        );
+        builder.finish()
+    };
+    let layout = parallel_pair(NCH, 1, 2);
+    assert_eq!(
+        compare(&layout, &card(&[(M, 2.0)]), options),
+        Verdict::Match
+    );
+    assert_eq!(
+        compare(&layout, &card(&[]), options),
+        Verdict::Mismatch(vec![gpurify_check::lvs::Discrepancy::ParameterMismatch {
+            layout_device: 0,
+            ref_device: 0,
+            param: M,
+            layout_value: 2.0,
+            ref_value: 1.0,
+        }])
+    );
+    let uncounted = gpurify_check::lvs::ParamNames {
+        multiplier: None,
+        ..NAMES
+    };
+    let (out, merges) = gpurify_check::lvs::reduce::reduce_with(&layout, uncounted);
+    assert_eq!((out.device_count(), merges.len()), (2, 0));
 }
 
 /// Oracle: construct-from-answer. An nfet and a pfet wired identically are two
@@ -712,12 +758,59 @@ fn a_counted_card_matches_two_drawn_capacitors_and_not_one() {
     let one = passives(DeviceKind::Capacitor, &[&[]]);
     assert_eq!(
         compare(&one, &card, options),
-        Verdict::Mismatch(vec![gpurify_check::lvs::Discrepancy::UndeclaredParam {
-            side: gpurify_check::lvs::verdict::Side::Reference,
+        Verdict::Mismatch(vec![gpurify_check::lvs::Discrepancy::ParameterMismatch {
             layout_device: 0,
             ref_device: 0,
             param: M,
+            layout_value: 1.0,
+            ref_value: 2.0,
         }])
+    );
+}
+
+/// Oracle: construct-from-answer. A card without `m` is one device, whatever
+/// another card states. Four capacitors drawn as two parallel pairs, on nets
+/// 0-1 and 2-3, against one card on 0-1 stating no count and one on 2-3
+/// stating `m = 2`: three devices against four, a mismatch. The count used to
+/// be compared only where the card stated it, so the bare card passed the
+/// pair's `m = 2` and the two netlists matched.
+#[test]
+fn a_card_without_a_count_is_one_device_whatever_another_card_states() {
+    let options = CompareOptions {
+        params: NAMES,
+        ..CompareOptions::default()
+    };
+    let caps = |counts: &[Option<f64>]| {
+        let mut builder = GraphBuilder::new(4);
+        for (pair, count) in counts.iter().enumerate() {
+            let at = 2 * u32::try_from(pair).expect("two pairs");
+            let stated: Vec<(StrId, f64)> = count.iter().map(|&m| (M, m)).collect();
+            builder.device_with_params(
+                DeviceKind::Capacitor,
+                RES,
+                &[(Pin(0), at), (Pin(1), at + 1)],
+                &stated,
+            );
+        }
+        builder.finish()
+    };
+    let mut drawn = GraphBuilder::new(4);
+    for at in [0, 0, 2, 2] {
+        drawn.device(
+            DeviceKind::Capacitor,
+            RES,
+            &[(Pin(0), at), (Pin(1), at + 1)],
+        );
+    }
+    let drawn = drawn.finish();
+    assert_ne!(
+        compare(&drawn, &caps(&[None, Some(2.0)]), options),
+        Verdict::Match,
+        "four capacitors matched three"
+    );
+    assert_eq!(
+        compare(&drawn, &caps(&[Some(2.0), Some(2.0)]), options),
+        Verdict::Match
     );
 }
 

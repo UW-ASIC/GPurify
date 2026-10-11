@@ -1,12 +1,14 @@
 //! Byte-identity lock on the whole comparison: every verdict of a seeded corpus,
 //! folded into one hash twice: as listed, and with each report's lines sorted.
 //! Class numbering orders `ClassImbalance`, so a numbering change moves only the
-//! first; a change in what is reported moves both. Last moved when a series
-//! merge began to need `L` on both devices (testing-plan F67): the generated
-//! graphs state no parameters, so their stacks stop merging. The same 188 of
-//! 325 verdicts match, and one mismatch lists one more unpaired device on
-//! each side (10 to 11) and one more unpaired net on each (7 to 8), the stack
-//! that is now two devices and keeps its middle net.
+//! first; a change in what is reported moves both. Last moved when unsized
+//! transistors in parallel began to keep their count in `m` (testing-plan
+//! F83): the generated graphs state no parameters and the comparison here
+//! names no `m`, so parallel devices no longer merge at all. 186 of 325
+//! verdicts match, down from 188: rounds 244 and 246 compare a copy with one
+//! terminal moved, which made a device parallel to others, and they matched
+//! only because the merge dropped the count. 27 other mismatches list more
+//! unpaired devices, the parallel devices that now stay apart.
 //!
 //! When a hash moves, `cargo run --release -p gpurify-check --example
 //! lvs_corpus` prints each canonical verdict on its own line, to diff two
@@ -36,7 +38,7 @@ fn the_seeded_corpus_verdicts_are_unchanged() {
     assert_eq!(verdicts.len(), 325);
     assert_eq!(
         digest(&verdicts, |v| format!("{v:?}")),
-        4_344_967_435_229_249_166
+        15_831_399_851_773_943_039
     );
 }
 
@@ -45,6 +47,6 @@ fn the_seeded_corpus_verdicts_are_unchanged() {
 fn the_seeded_corpus_verdicts_say_the_same_in_any_order() {
     assert_eq!(
         digest(&seeded_corpus(), canonical),
-        9_965_298_889_440_497_151
+        13_774_904_995_842_023_266
     );
 }

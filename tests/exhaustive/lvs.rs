@@ -188,6 +188,9 @@ struct Dev {
     /// Drawn or declared width and length in nm; MOS only.
     w: i64,
     l: i64,
+    /// Whether the card writes `w` and `l`: a MOS card may leave either
+    /// out, and is then sized by neither (testing-plan F83, F84).
+    writes: (bool, bool),
     /// The card's `m`; 1 writes none.
     m: u32,
     /// An `area=` the card declares, in nm². The layout always has its
@@ -209,6 +212,7 @@ impl Dev {
             pins: vec![g, s, d],
             w: 1000,
             l: 150,
+            writes: (true, true),
             m: 1,
             area: None,
             value: None,
@@ -223,6 +227,7 @@ impl Dev {
             pins: pins.to_vec(),
             w: 0,
             l: 0,
+            writes: (false, false),
             m: 1,
             area: None,
             value: None,
@@ -233,6 +238,12 @@ impl Dev {
     fn sized(mut self, w: i64, l: i64) -> Self {
         self.w = w;
         self.l = l;
+        self
+    }
+
+    /// The card writes `w` only where `w`, `l` only where `l`.
+    fn writes(mut self, w: bool, l: bool) -> Self {
+        self.writes = (w, l);
         self
     }
 
@@ -463,15 +474,23 @@ fn card(out: &mut String, index: usize, dev: &Dev, names: &[String], spectre: bo
     let _ = match dev.model {
         Model::N | Model::P | Model::H | Model::B => {
             let bulk = if dev.model == Model::B { n(3) } else { n(1) };
+            let w = if dev.writes.0 {
+                format!(" w={}n", dev.w)
+            } else {
+                String::new()
+            };
+            let l = if dev.writes.1 {
+                format!(" l={}n", dev.l)
+            } else {
+                String::new()
+            };
             write!(
                 out,
-                "M{index} {open}{} {} {} {bulk}{close} {} w={}n l={}n",
+                "M{index} {open}{} {} {} {bulk}{close} {}{w}{l}",
                 n(2),
                 n(0),
                 n(1),
                 dev.model.name(),
-                dev.w,
-                dev.l
             )
         }
         Model::R | Model::C | Model::D => {
@@ -618,15 +637,16 @@ fn flatten(top: &Circuit, block: &Circuit, on: &[usize]) -> Circuit {
 // The oracle
 // ---------------------------------------------------------------------------
 
-/// A device after reduction: `w`, `l` in nm, summed by merges, and how many
-/// identical devices in parallel it stands for, which is how a passive with no
-/// summed parameter keeps its count (F20, F21).
+/// A device after reduction: `w`, `l` in nm where it is sized by them,
+/// summed by merges, and how many identical devices in parallel it stands
+/// for, which is how a device with no width to sum keeps its count (F20,
+/// F21, F83).
 #[derive(Debug, Clone)]
 struct Reduced {
     model: Model,
     pins: Vec<usize>,
-    w: f64,
-    l: f64,
+    w: Option<f64>,
+    l: Option<f64>,
     mult: u32,
     area: Option<i64>,
     value: Option<f64>,
@@ -651,35 +671,79 @@ fn same_pins(model: Model, a: &[usize], b: &[usize], map: impl Fn(usize) -> usiz
     }
 }
 
-/// The documented reductions to a fixed point, parallel first:
+/// The parameter names a reference's cards state, per model: what the
+/// layout is measured on, since a measure no card of the model declares is
+/// dropped before reduction (F22).
+struct Declared(BTreeSet<(Model, &'static str)>);
+
+impl Declared {
+    fn of(reference: &Circuit) -> Self {
+        let mut names = BTreeSet::new();
+        for d in &reference.devs {
+            let primary = match d.model {
+                Model::C => "c",
+                _ => "r",
+            };
+            let sizes = [(d.writes.0, "w"), (d.writes.1, "l")];
+            let stated = sizes
+                .into_iter()
+                .filter(|&(written, _)| written && d.model.is_mos())
+                .map(|(_, name)| name)
+                .chain(d.area.map(|_| "area"))
+                .chain(d.value.map(|_| primary))
+                .chain(d.params.iter().map(|&(name, _)| name));
+            names.extend(stated.map(|name| (d.model, name)));
+        }
+        Declared(names)
+    }
+
+    fn has(&self, model: Model, name: &'static str) -> bool {
+        self.0.contains(&(model, name))
+    }
+}
+
+/// The documented reductions to a fixed point, parallel first. A MOS is
+/// sized by `w` and `l` where its card writes them, or, `drawn`, where some
+/// reference card of its model does:
 ///
-/// - **multiplier:** a MOS's `m` multiplies its `W`; any other device's `m` is
-///   that many in parallel;
+/// - **multiplier:** a MOS's `m` multiplies its `W`; any other device's `m`,
+///   a MOS with no `W` included, is that many in parallel;
 /// - **parallel:** devices of one model on the same nets role for role become
-///   one; a MOS needs `L` equal and sums `W`, anything else needs its
-///   parameters equal and sums its count;
-/// - **series** (MOS only): two devices with gates (and bulks) on one net and
-///   equal `W`, whose channels meet at a net that is not a port and that no
-///   other terminal touches, become one with `L` summed; the net is consumed.
+///   one; a MOS with `W` needs its other sizes equal and sums `W`, anything
+///   else needs its parameters equal and sums its count;
+/// - **series** (MOS only): two devices that both state `L`, with gates (and
+///   bulks) on one net and equal `W` and count, whose channels meet at a net
+///   that is not a port and that no other terminal touches, become one with
+///   `L` summed; the net is consumed.
 ///
 /// A net no terminal lands on survives only as a port: a floating shape is
 /// not a node, and SPICE cannot even write one.
-fn reduce(c: &Circuit) -> Reduction {
+fn reduce(c: &Circuit, declared: &Declared, drawn: bool) -> Reduction {
     #[allow(clippy::cast_precision_loss, reason = "nanometre sizes are small")]
     let mut devs: Vec<Reduced> = c
         .devs
         .iter()
         .map(|d| {
-            let (w, mult) = if d.model.is_mos() {
-                (d.w as f64 * f64::from(d.m), 1)
-            } else {
-                (0.0, d.m)
+            let sized = |written: bool, name, value: i64| {
+                let stated = if drawn {
+                    declared.has(d.model, name)
+                } else {
+                    written
+                };
+                (d.model.is_mos() && stated).then_some(value as f64)
+            };
+            let (w, l) = (sized(d.writes.0, "w", d.w), sized(d.writes.1, "l", d.l));
+            // A drawn device is one device; only a card counts more.
+            let m = if drawn { 1 } else { d.m };
+            let (w, mult) = match w {
+                Some(w) => (Some(w * f64::from(m)), 1),
+                None => (None, m),
             };
             Reduced {
                 model: d.model,
                 pins: d.pins.clone(),
                 w,
-                l: d.l as f64,
+                l,
                 mult,
                 area: d.area,
                 value: d.value,
@@ -693,17 +757,16 @@ fn reduce(c: &Circuit) -> Reduction {
             for j in i + 1..devs.len() {
                 let (a, b) = (&devs[i], &devs[j]);
                 #[allow(clippy::float_cmp, reason = "equal means drawn or written the same")]
-                let params = if a.model.is_mos() {
-                    a.l == b.l
-                } else {
-                    a.area == b.area && a.value == b.value && a.params == b.params
-                };
+                let params = a.l == b.l
+                    && a.w.is_some() == b.w.is_some()
+                    && a.area == b.area
+                    && a.value == b.value
+                    && a.params == b.params;
                 if a.model == b.model && params && same_pins(a.model, &a.pins, &b.pins, |n| n) {
                     let b = devs.remove(j);
-                    if b.model.is_mos() {
-                        devs[i].w += b.w;
-                    } else {
-                        devs[i].mult += b.mult;
+                    match (&mut devs[i].w, b.w) {
+                        (Some(w), Some(more)) => *w += more,
+                        _ => devs[i].mult += b.mult,
                     }
                     continue 'pass;
                 }
@@ -724,7 +787,10 @@ fn reduce(c: &Circuit) -> Reduction {
                     && a.model == b.model
                     && a.pins[0] == b.pins[0]
                     && a.pins[3..] == b.pins[3..]
-                    && a.w == b.w;
+                    && a.l.is_some()
+                    && b.l.is_some()
+                    && a.w == b.w
+                    && a.mult == b.mult;
                 if !mergeable {
                     continue;
                 }
@@ -735,7 +801,7 @@ fn reduce(c: &Circuit) -> Reduction {
                             let (far_a, far_b, l) = (a.pins[3 - ea], b.pins[3 - eb], b.l);
                             devs[i].pins[1] = far_a;
                             devs[i].pins[2] = far_b;
-                            devs[i].l += l;
+                            devs[i].l = devs[i].l.zip(l).map(|(a, b)| a + b);
                             devs.remove(j);
                             alive[x] = false;
                             continue 'pass;
@@ -806,7 +872,10 @@ fn pairs(a: &Reduced, b: &Reduced, map: &[usize]) -> bool {
     let sized = stated
         .into_iter()
         .all(|(name, v)| measured(b.model, name).is_some_and(|d| close(d, v)));
-    area && sized && (!a.model.is_mos() || (close(a.w, b.w) && close(a.l, b.l)))
+    // A size the card writes, against the layout's, which measures it since
+    // the card's model declares it.
+    let size = |a: Option<f64>, b: Option<f64>| b.is_none_or(|b| a.is_some_and(|a| close(a, b)));
+    area && sized && size(a.w, b.w) && size(a.l, b.l)
 }
 
 /// What the layout measures on a drawn passive or bipolar of `model`, in SI,
@@ -874,7 +943,11 @@ fn assign(a: &[Reduced], b: &[Reduced], map: &[usize], used: &mut [bool], from: 
 /// The oracle: whether `layout` and `reference` are one circuit, by brute
 /// force over every bijection of their reduced nets.
 fn equivalent(layout: &Circuit, reference: &Circuit) -> bool {
-    matches(&reduce(layout), &reduce(reference))
+    let declared = Declared::of(reference);
+    matches(
+        &reduce(layout, &declared, true),
+        &reduce(reference, &declared, false),
+    )
 }
 
 /// Whether some bijection of `a`'s surviving nets onto `b`'s pairs every
@@ -1063,7 +1136,7 @@ fn faults(c: &Circuit) -> Vec<(String, Circuit, &'static [&'static str])> {
 /// matches is kept, since that is where a false mismatch hides, and of those
 /// that must mismatch, one per kind, drawn from `pick`. Without it, all.
 fn enumerated(c: &Circuit, mut pick: Option<Rng>) -> Vec<Fixture> {
-    let reduced = reduce(c);
+    let reduced = reduce(c, &Declared::of(c), true);
     let mut seen = BTreeSet::from([key(c)]);
     // `(label, reference, catalog rows, matches)`; the first two keep `c`.
     let mut kept = vec![(
@@ -1081,7 +1154,7 @@ fn enumerated(c: &Circuit, mut pick: Option<Rng>) -> Vec<Fixture> {
         if !label.starts_with("sd/") && !seen.insert(key(&r)) {
             continue;
         }
-        let matched = matches(&reduced, &reduce(&r));
+        let matched = equivalent(c, &r);
         if matched || pick.is_none() {
             kept.push((label, r, catalog, matched));
         } else {
@@ -1292,6 +1365,22 @@ fn curated() -> Vec<Fixture> {
         &shorted,
         &shorted_wide,
     ));
+    // F83 (fixed in B27): with no `w` written anywhere, two transistors in
+    // parallel keep their count, as passives do: they are one card of
+    // `m = 2`, and not one bare card.
+    let bare = |dev: Dev| Circuit::new(3, vec![dev.writes(false, false)]);
+    for (name, reference) in [
+        (
+            "parallel/mos_unsized_two_vs_one",
+            bare(Dev::mos(N, 0, 1, 2)),
+        ),
+        (
+            "parallel/mos_unsized_two_vs_m2",
+            bare(Dev::mos(N, 0, 1, 2).times(2)),
+        ),
+    ] {
+        out.push(compared(name, &["LVS-040", "LVS-046"], &two, &reference));
+    }
 
     // F20 (fixed in B9), LVS-043, LVS-044: parallel passives keep their count.
     for (model, row) in [(R, "LVS-043"), (C, "LVS-044"), (D, "LVS-044")] {
@@ -1401,6 +1490,25 @@ fn curated() -> Vec<Fixture> {
         &["LVS-046", "LVS-044"],
         &caps,
         &cap_m2,
+    ));
+    // A card without `m` is one device, whatever another card states (found
+    // in B27): two parallel pairs against one bare card and one of `m = 2`.
+    let pairs = Circuit::new(
+        4,
+        [[0, 1], [0, 1], [2, 3], [2, 3]]
+            .iter()
+            .map(|pins| Dev::pins(C, pins))
+            .collect(),
+    );
+    let bare_and_m2 = Circuit::new(
+        4,
+        vec![Dev::pins(C, &[0, 1]), Dev::pins(C, &[2, 3]).times(2)],
+    );
+    out.push(compared(
+        "multiplier/C_two_pairs_vs_bare_and_m2",
+        &["LVS-046", "LVS-044"],
+        &pairs,
+        &bare_and_m2,
     ));
     let m2 = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).times(2)]);
     let one = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2)]);
@@ -1943,6 +2051,26 @@ mod tests {
         assert!(!equivalent(&caps, &cap), "two capacitors are not one");
         let m2 = Circuit::new(2, vec![Dev::pins(C, &[0, 1]).times(2)]);
         assert!(equivalent(&caps, &m2), "but they are one of m = 2");
+        let mut pairs = caps.clone();
+        pairs.names.extend(["n2".to_owned(), "n3".to_owned()]);
+        pairs.ports.extend([true, true]);
+        pairs
+            .devs
+            .extend([Dev::pins(C, &[2, 3]), Dev::pins(C, &[2, 3])]);
+        let mut bare_and_m2 = cap.clone();
+        bare_and_m2.names = pairs.names.clone();
+        bare_and_m2.ports = pairs.ports.clone();
+        bare_and_m2.devs.push(Dev::pins(C, &[2, 3]).times(2));
+        assert!(!equivalent(&pairs, &bare_and_m2), "four are not three");
+        let bare = |dev: Dev| Circuit::new(3, vec![dev.writes(false, false)]);
+        assert!(
+            !equivalent(&two, &bare(Dev::mos(N, 0, 1, 2))),
+            "two unsized transistors are not one"
+        );
+        assert!(
+            equivalent(&two, &bare(Dev::mos(N, 0, 1, 2).times(2))),
+            "but they are one of m = 2"
+        );
         let one = |dev: Dev| Circuit::new(2, vec![dev]);
         let res = one(Dev::pins(R, &[0, 1]));
         let r = |ohms| one(Dev::pins(R, &[0, 1]).value(ohms));

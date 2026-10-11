@@ -4763,13 +4763,13 @@
     "cell": "LVS_PARALLEL",
     "domain": "lvs",
     "check": "compare",
-    "expect_match": true,
+    "expect_match": false,
     "expect_devices": 2,
     "expect_nets": 3,
     "expect_difference": null,
     "provenance": "derived_from_geometry",
-    "corroboration": "manifest_agrees",
-    "dispute": null,
+    "corroboration": "manifest_disagrees",
+    "dispute": "manifest_wrong",
     "strength": "strong",
     "blocked_by": [
      "F5"
@@ -4782,7 +4782,7 @@
     "manifest": {
      "expect_match": true
     },
-    "note": "Two nmos parallel-merge to one: g=A, s=S, d=D, W=400 (W adds), L=50. Both li straps span both diffs; poly (200,-50)-(250,650) crosses both. F1 CLOSED FOR THIS CELL. licon 4/0 x4: (75,75)-(125,125) joins diff_active (0,0)-(200,200) to li (50,50)-(150,550); (75,450)-(125,500) joins diff_active (0,400)-(200,600) to that SAME strap; (375,75)-(425,125) joins diff_active (250,0)-(500,200) to li (350,50)-(450,550); (375,450)-(425,500) joins diff_active (250,400)-(500,600) to that same second strap. Each strap spans both diffusions, so its two cuts are what merge the two source regions into one net and the two drain regions into another - the parallel connection this case is about, drawn rather than assumed. 4 diff_active + 2 li + 1 poly = 7 conductor polygons become 3 nets: S, D and the gate. LABELS LVS_PARALLEL_n1 and LVS_PARALLEL_n2 deleted - both named shapes the cuts put onto the net LVS_PARALLEL_n0 already names. EXPECT_DEVICES CORRECTED 1 -> 2, and the reason is the same category error the f1 pass already fixed on this file's expect_nets. `check_lvs_case` asserts `run.extracted.devices.len()` - the EXTRACTION's device count - while `expect_match` is not asserted at all (the case runs with Checks{lvs:false}, so crates/lvs never executes). 1 is the post-merge NETLIST count. A series or parallel merge is a transformation applied on top of a correct extraction; no extractor can return 1 here, because the layout genuinely draws two transistors. Stating 1 in a field that reads the extractor made this case unfalsifiable: it could only pass while something else was ALSO wrong, which is exactly how it behaved - it agreed by coincidence for months because the extractor dropped a finger (F7) while this field held the merged count. Two errors cancelling.\n\nThe merge claim lives in `expect_match: true`, which is where F5 belongs and which this harness cannot see. F5's real coverage is the unit tests in crates/lvs/tests/, not this case."
+    "note": "Two nmos parallel-merge to one: g=A, s=S, d=D, W=400 (W adds), L=50. Both li straps span both diffs; poly (200,-50)-(250,650) crosses both. F1 CLOSED FOR THIS CELL. licon 4/0 x4: (75,75)-(125,125) joins diff_active (0,0)-(200,200) to li (50,50)-(150,550); (75,450)-(125,500) joins diff_active (0,400)-(200,600) to that SAME strap; (375,75)-(425,125) joins diff_active (250,0)-(500,200) to li (350,50)-(450,550); (375,450)-(425,500) joins diff_active (250,400)-(500,600) to that same second strap. Each strap spans both diffusions, so its two cuts are what merge the two source regions into one net and the two drain regions into another - the parallel connection this case is about, drawn rather than assumed. 4 diff_active + 2 li + 1 poly = 7 conductor polygons become 3 nets: S, D and the gate. LABELS LVS_PARALLEL_n1 and LVS_PARALLEL_n2 deleted - both named shapes the cuts put onto the net LVS_PARALLEL_n0 already names. EXPECT_DEVICES CORRECTED 1 -> 2, and the reason is the same category error the f1 pass already fixed on this file's expect_nets. `check_lvs_case` asserts `run.extracted.devices.len()` - the EXTRACTION's device count - while `expect_match` is not asserted at all (the case runs with Checks{lvs:false}, so crates/lvs never executes). 1 is the post-merge NETLIST count. A series or parallel merge is a transformation applied on top of a correct extraction; no extractor can return 1 here, because the layout genuinely draws two transistors. Stating 1 in a field that reads the extractor made this case unfalsifiable: it could only pass while something else was ALSO wrong, which is exactly how it behaved - it agreed by coincidence for months because the extractor dropped a finger (F7) while this field held the merged count. Two errors cancelling.\n\nThe merge claim lives in `expect_match: true`, which is where F5 belongs and which this harness cannot see. F5's real coverage is the unit tests in crates/lvs/tests/, not this case. EXPECT_MATCH CORRECTED true -> false by testing-plan F83 (B27), and the manifest is the side that is wrong. The reference card `M0 D A S S nfet_01v8` states no W, and nothing in the run names w, so the layout's two channels are unsized too. A parallel merge with no W to sum keeps the count in m, as a passive's does, and the card states no m: it is one transistor. Merged with the count dropped, the two fingers read as that one transistor, the false clean F83 names. The decided definition (docs/usage.md, LVS reduction) keeps the count, so the layout has 2 devices against the reference's 1: a mismatch. A reference writing `m=2` would match."
    },
    {
     "id": "LVS_ISOMORPHIC",

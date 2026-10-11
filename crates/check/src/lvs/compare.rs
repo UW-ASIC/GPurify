@@ -61,7 +61,8 @@ impl Default for CompareOptions {
 /// nothing about its transistors' areas, which must not block their merges).
 /// Then both sides are reduced and refined together. A paired device's
 /// parameters are compared per device: those its reference card states,
-/// whatever other cards of the model state (testing-plan F68). A
+/// whatever other cards of the model state (testing-plan F68), and its count
+/// `m`, 1 where a side states none, once the `m` name is given. A
 /// symmetry pairs its lowest layout node with the reference node whose
 /// parameters are closest, so a stall resolves by property value rather than
 /// by row order, and a pairing that leaves a class short of layout nodes or
@@ -125,8 +126,12 @@ pub fn compare_logged(
     protect_labelled(layout, &mut declared);
     let mut measured = layout.clone();
     keep_declared_params(reference, &mut measured);
-    let (layout, layout_merges) = reduce_with(&measured, options.params);
-    let (reference, reference_merges) = reduce_with(&declared, options.params);
+    let (mut layout, layout_merges) = reduce_with(&measured, options.params);
+    let (mut reference, reference_merges) = reduce_with(&declared, options.params);
+    if let Some(multiplier) = options.params.multiplier {
+        state_count(&mut layout, multiplier);
+        state_count(&mut reference, multiplier);
+    }
     let merges = layout_merges
         .into_iter()
         .map(|m| (Side::Layout, m))
@@ -141,6 +146,28 @@ pub fn compare_logged(
         interpret(&layout, &reference, &partition, options.param_tolerance),
         merges,
     )
+}
+
+/// Writes the count every card has, `m = 1`, on each device that states
+/// none. A card without `m` is one device whatever other cards state, so
+/// its count is compared like any stated one: per-device presence
+/// (testing-plan F68) is for measures, and a count is none. Without this, two
+/// devices merged into `m = 2` matched a card stating no `m` once any card
+/// named it.
+fn state_count(graph: &mut Graph, multiplier: StrId) {
+    let mut param = Vec::with_capacity(graph.param.len() + graph.device_count());
+    let mut start = Vec::with_capacity(graph.device_count() + 1);
+    start.push(0);
+    for device in 0..narrow(graph.device_count()) {
+        let params = graph.params_of(device);
+        param.extend_from_slice(params);
+        if !params.iter().any(|&(name, _)| name == multiplier) {
+            param.push((multiplier, 1.0));
+        }
+        start.push(narrow(param.len()));
+    }
+    graph.param = param;
+    graph.device_param_start = start;
 }
 
 /// A node no class paired with anything.
