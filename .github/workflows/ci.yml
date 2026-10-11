@@ -33,6 +33,25 @@ jobs:
       # it compiling on stable in between.
       - run: cargo check --manifest-path fuzz/Cargo.toml --bins
       - run: cargo build --workspace --release
+      # On a failure, regenerate what the golden and catalog tests own (the
+      # report snapshots and the generated blocks of docs/), so a branch
+      # written without a local toolchain can download, review and commit
+      # them: `gh run download <run> -n regenerated`.
+      - name: regenerate goldens and generated docs
+        if: failure()
+        run: |
+          find tests/golden -type f -delete
+          for pass in 1 2; do
+            cargo test --test golden || true
+            cargo test --test catalog || true
+          done
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regenerated
+          path: |
+            tests/golden
+            docs
 
   mutants-in-diff:
     # Mutants only in the lines a pull request changes in geom or check, each
