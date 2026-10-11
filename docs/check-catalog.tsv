@@ -207,7 +207,7 @@ ERC-E10	erc	em	Per-segment PDN EM	OR:psm -enable_em	em_current_density	implement
 ERC-E11	erc	em	Dynamic / vectorless IR	RH; VOL; MP; TOT	-	missing	-	In scope since 2026-10-11 (was: Static analysis only: dynamic IR needs switching activity)
 ERC-E12	erc	em	Stress voiding / slotting	JEP139; JESD214; GF:14.6	cheesing	partial	FR; MR; SY	cheesing requires a slot in wide shapes; stress-voiding rules beyond slotting are missing
 ERC-E13	erc	em	Thermal-aware / statistical EM, self-heating	RH; TOT; VOL	-	missing	-	In scope since 2026-10-11 (was: One temperature, 85 C (limitations.md, "Power grid"))
-ERC-F1	erc	voltage	Static voltage propagation, conditional on gate voltage	CAL:WP 81822; SKY:hv.X.1; patents P5,P9	erc:voltage	partial	SE:Siemens WP; SY	Channels pass unconditionally
+ERC-F1	erc	voltage	Static voltage propagation, conditional on gate voltage	CAL:WP 81822; SKY:hv.X.1; patents P5,P9	erc:voltage	implemented	SE:Siemens WP; SY; NV	A MOS whose device row states on_gate_min or on_gate_max conducts only while its gate can reach it (WP 81822 fig. 1); a gate no supply reaches may be anything; no threshold drop or body effect; no shipped deck states a condition
 ERC-F2	erc	voltage	Gate-oxide overstress	GF:14.1.4.2; SKY:hv; TR22:4.1; CAL	gate_oxide	implemented	FR; CF; SY	Can over-report (limitations.md, "Rules that can pass a layout signoff would flag")
 ERC-F3	erc	voltage	Junction / drain-source overstress	SKY:hv; IHP:process spec	drain_source	implemented	FR; SY	
 ERC-F4	erc	voltage	HCI susceptibility flag	CAL:WP 81822 Eq.1; GF:14.1.4.1	-	missing	SE	

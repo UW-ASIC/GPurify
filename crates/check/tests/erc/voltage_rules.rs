@@ -20,7 +20,7 @@ use gpurify_check::erc::Design;
 use gpurify_check::report::{Measurement, Outcome, RuleRun, Violations};
 use gpurify_check::topology::{DeviceTable, NetId, NetTable, TerminalRole};
 use gpurify_geom::PolyId;
-use gpurify_ingest::deck::{DeviceKind, DeviceRecognition};
+use gpurify_ingest::deck::{DeviceKind, DeviceRecognition, DeviceValue};
 use gpurify_ingest::intent::{DomainId, SupplyRole};
 use gpurify_ingest::{StrId, StrTable};
 use gpurify_testgen::{layout_from_netlist, DeviceSpec, Floorplan, NetlistCase, NetlistSpec};
@@ -614,4 +614,153 @@ fn a_rail_clamp_completes_every_pad_path() {
     let run = common::run_of(&runs, id);
     assert_eq!((run.examined, run.violations), (4, 0));
     assert!(violations.rule.is_empty());
+}
+
+// ----------------------------------------- conditional propagation (ERC-F1)
+
+/// `circuit` with device `device`'s gate condition set as a deck row would:
+/// `on_gate_min` or `on_gate_max`, mV.
+fn switched(mut circuit: Circuit, device: usize, min: Option<f64>, max: Option<f64>) -> Circuit {
+    let count = circuit.devices.len();
+    circuit.devices.value.resize(count, DeviceValue::default());
+    circuit.devices.value[device] = DeviceValue {
+        on_gate_min_mv: min,
+        on_gate_max_mv: max,
+        ..DeviceValue::default()
+    };
+    circuit
+}
+
+/// Nets: 0 VH (3.3 V), 1 G, 2 X, 3 VSS. One transistor from VH to X, its gate
+/// on G, which the test ties to a supply of its own (or to nothing).
+fn one_switch(min: Option<f64>, max: Option<f64>) -> Circuit {
+    switched(build(4, vec![mos("sw", 1, 0, 2, 3)]), 0, min, max)
+}
+
+/// The intent of [`one_switch`]: VH and VSS, and G held at `gate` mV (a
+/// ground at 0 V, a power supply of its own domain otherwise), or `None`
+/// for a gate no supply reaches.
+fn gate_at(circuit: &Circuit, gate: Option<f64>) -> IntentMap {
+    let mut supplies = vec![
+        (0, SupplyRole::Power, IO, 3_300.0),
+        (3, SupplyRole::Ground, IO, 3_300.0),
+    ];
+    match gate {
+        None => {}
+        Some(mv) if mv > 0.0 => supplies.push((1, SupplyRole::Power, CORE, mv)),
+        Some(_) => supplies.push((1, SupplyRole::Ground, CORE, 1_000.0)),
+    }
+    circuit.intent(&supplies)
+}
+
+/// Oracle: the public Calibre PERC white paper (Siemens 81822, figure 1):
+/// "The NMOS is ON when the voltage at gate pin is >= 1 V, and OFF when the
+/// voltage at gate pin is < 1 V"; "The PMOS is ON when the voltage at gate
+/// pin is <= 0 V, and OFF when the voltage at gate pin is > 0 V". An ON
+/// switch passes VH (3.3 V) to X; an OFF one leaves X unreached. Each
+/// threshold is swept a millivolt either side, and a gate no supply reaches
+/// may be anything, so its switch conducts.
+#[test]
+fn a_switch_passes_voltage_only_when_its_gate_can_turn_it_on() {
+    let reaches = |circuit: &Circuit, gate: Option<f64>| {
+        let voltage = circuit.voltage(&gate_at(circuit, gate));
+        let x = circuit.net(2);
+        voltage
+            .known(x)
+            .then(|| (voltage.lo[x.idx()], voltage.hi[x.idx()]))
+    };
+    let nmos = one_switch(Some(1_000.0), None);
+    for (gate, on) in [
+        (999.0, false),
+        (1_000.0, true),
+        (1_001.0, true),
+        (0.0, false),
+    ] {
+        assert_eq!(
+            reaches(&nmos, Some(gate)),
+            on.then_some((3_300.0, 3_300.0)),
+            "an on_gate_min 1V switch with its gate at {gate} mV"
+        );
+    }
+    assert_eq!(
+        reaches(&nmos, None),
+        Some((3_300.0, 3_300.0)),
+        "an undriven gate"
+    );
+    let pmos = one_switch(None, Some(0.0));
+    for (gate, on) in [(0.0, true), (1.0, false), (3_300.0, false)] {
+        assert_eq!(
+            reaches(&pmos, Some(gate)),
+            on.then_some((3_300.0, 3_300.0)),
+            "an on_gate_max 0V switch with its gate at {gate} mV"
+        );
+    }
+    let plain = build(4, vec![mos("sw", 1, 0, 2, 3)]);
+    assert_eq!(
+        reaches(&plain, Some(0.0)),
+        Some((3_300.0, 3_300.0)),
+        "a transistor with no condition conducts whatever its gate"
+    );
+}
+
+/// Nets: 0 VH (3.3 V), 1 VSS, 2 G, 3 X. Switch 0 (`on_gate_min 1V`, gate on
+/// VSS) can never turn on; it is G's only path to a supply. Switch 1 (the
+/// same condition, gate on G) joins VH to X.
+///
+/// Oracle: construct-from-answer. With every channel conducting, G would
+/// reach VH, so G is not an input to the cell; but switch 0 is always off,
+/// so G floats, may be anything, and switch 1 may conduct: X reaches 3.3 V
+/// and G stays unreached. A wrong model either leaves switch 1 off (X
+/// unreached) or lets switch 0 conduct (G reached).
+#[test]
+fn a_gate_behind_a_switch_that_never_turns_on_floats_and_its_switch_conducts() {
+    let circuit = build(4, vec![mos("sw", 1, 0, 2, 1), mos("sw", 2, 0, 3, 1)]);
+    let circuit = switched(circuit, 0, Some(1_000.0), None);
+    let circuit = switched(circuit, 1, Some(1_000.0), None);
+    let voltage = circuit.voltage(&circuit.intent(&[
+        (0, SupplyRole::Power, IO, 3_300.0),
+        (1, SupplyRole::Ground, IO, 3_300.0),
+    ]));
+    assert!(!voltage.known(circuit.net(2)), "G floats");
+    let x = circuit.net(3).idx();
+    assert_eq!((voltage.lo[x], voltage.hi[x]), (3_300.0, 3_300.0));
+}
+
+/// Nets: 0 VDD (1.8 V), 1 VSS, 2 VH (3.3 V), 3 IN, 4 A, 5 OUT, 6 B. A 1.8 V
+/// inverter (IN to A) drives the gates of an `on_gate_min 2.5V` switch from
+/// VH to OUT and an `on_gate_min 1V` switch from VH to B.
+///
+/// Oracle: construct-from-answer. A swings 0 to 1.8 V in the core domain,
+/// which never reaches 2.5 V, so the first switch is off and OUT is
+/// unreached; it reaches 1 V, so the second conducts and B sits at VH's
+/// 3.3 V in the I/O domain. The inverter's own transistors have no
+/// condition, and IN no supply.
+#[test]
+fn a_gate_range_from_propagation_decides_the_switch_it_drives() {
+    let circuit = build(
+        7,
+        vec![
+            mos("pfet18", 3, 0, 4, 0),
+            mos("nfet18", 3, 1, 4, 1),
+            mos("sw", 4, 2, 5, 1),
+            mos("sw", 4, 2, 6, 1),
+        ],
+    );
+    let circuit = switched(circuit, 2, Some(2_500.0), None);
+    let circuit = switched(circuit, 3, Some(1_000.0), None);
+    let voltage = circuit.voltage(&circuit.intent(&[
+        (0, SupplyRole::Power, CORE, 1_800.0),
+        (1, SupplyRole::Ground, CORE, 1_800.0),
+        (2, SupplyRole::Power, IO, 3_300.0),
+    ]));
+    assert!(
+        !voltage.known(circuit.net(5)),
+        "OUT: its switch never turns on"
+    );
+    let a = circuit.net(4).idx();
+    assert_eq!((voltage.lo[a], voltage.hi[a]), (0.0, 1_800.0));
+    assert_eq!(voltage.power[a], 1 << CORE.0);
+    let b = circuit.net(6).idx();
+    assert_eq!((voltage.lo[b], voltage.hi[b]), (3_300.0, 3_300.0));
+    assert_eq!(voltage.power[b], 1 << IO.0);
 }

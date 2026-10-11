@@ -29,8 +29,11 @@ use gpurify_ingest::StrId;
 /// # Limits
 ///
 /// A net's range is the span of every supply it reaches through a device
-/// channel, ignoring threshold drops, switching and power-down, so this can
-/// over-report. A net no supply reaches that way, such as a primary input
+/// channel that can conduct: a transistor whose deck row states a gate
+/// condition only while its gate allows it, any other channel always
+/// ([`propagate_into`](crate::erc::voltage::propagate_into)). Threshold
+/// drops and power-down are ignored, so this can over-report. A net no
+/// supply reaches that way, such as a primary input
 /// with no ESD diode, is not checked, and neither is a device whose measured
 /// terminals sit on such nets. The shipped decks state the operating
 /// voltages the PDKs document, not an absolute maximum rating.
@@ -133,8 +136,9 @@ pub struct MissingLevelShifterTable {
 ///
 /// # Limits
 ///
-/// A channel passes whatever its gate, so an off transistor joins domains
-/// too and this can over-report. This is a functional check, not ESD
+/// A transistor whose deck row states no gate condition passes whatever its
+/// gate, so it joins domains even when it is off, and this can over-report.
+/// This is a functional check, not ESD
 /// protection of a domain crossing (ERC-C4).
 ///
 /// Catalog: ERC-F9 in the [check catalog]. Defined by Calibre PERC (datasheet

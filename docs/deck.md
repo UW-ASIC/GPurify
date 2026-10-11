@@ -312,7 +312,9 @@ A name no device declares is an error.
 The voltage rules read what each net can reach from the supplies in the
 intent file (see [usage.md](usage.md#design-intent)). A device whose terminals
 no supply reaches through a transistor channel, resistor or diode is not
-checked.
+checked. A transistor whose `device` row states `on_gate_min` or
+`on_gate_max` (see [Devices](#devices)) passes voltage only while its gate
+can turn it on.
 
 ```
 let thin = ["sky130_fd_pr__nfet_01v8", "sky130_fd_pr__pfet_01v8"]
@@ -425,6 +427,24 @@ the emitter region as a `bjt`'s second, and these are their measures.
 A value the deck does not give is not computed, never taken as zero, so a
 schematic that states it is reported (`lvs.undeclared_param`). Nothing
 measures a capacitor's `w` and `l`.
+
+A `mos` may state when it conducts, for the voltage rules:
+
+```
+device mos ngate model "nfet" terminals [poly, diff, diff] on_gate_min 1V
+device mos pgate model "pfet" terminals [poly, diff, diff] on_gate_max 0V
+```
+
+`on_gate_min 1V` is an n-channel switch: on while its gate can reach 1 V or
+more, off when its gate stays below. `on_gate_max 0V` is a p-channel switch:
+on while its gate can fall to 0 V or less. This is Calibre PERC's conditional
+voltage propagation as its public white paper states it (Siemens 81822,
+figure 1). The gate's reach is the range its net can take from the declared
+supplies, so a switch turns on in propagation if its gate can reach the
+condition at any time. A gate no supply can reach, such as an input to the
+cell, may be anything, so its transistor conducts. A transistor gives one of
+the two, or neither (it always conducts). When on, a channel passes its full
+range: there is no threshold drop.
 
 ## Parasitic stack
 

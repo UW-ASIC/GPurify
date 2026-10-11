@@ -22,7 +22,7 @@ result from them is weaker than it looks.
 | `enclosure(E, L)` on an edge layer | Measures straight out from each edge, so a gap in `L` diagonally off a corner of the shape is not seen. Pair it with the shape `enclosure` where the corner matters. |
 | `antenna_electrical` | A row with a diode and a non-zero `diode_credit` is refused: the unit of the credit is not settled. |
 | `esd_topological`, `esd_latchup` | Only checks that a clamp path exists. The resistance and current capacity of the path are not checked, and a clamp is any device of a listed model, however it is wired. |
-| `gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`, `domain_crossing` | A net's voltage range is the span of every supply it connects to through a device channel, ignoring threshold drops, switching and power-down, so these rules can over-report. A net that reaches no supply that way, such as a primary input with no ESD diode, is not checked, and neither is a device whose terminals sit on such nets. |
+| `gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`, `domain_crossing` | A net's voltage range is the span of every supply it connects to through a device channel that can conduct. Only a transistor whose `device` row states `on_gate_min` or `on_gate_max` is switched by its gate; every other channel always conducts, and threshold drops and power-down are ignored, so these rules can over-report. No shipped deck states a gate condition. A net that reaches no supply that way, such as a primary input with no ESD diode, is not checked, and neither is a device whose terminals sit on such nets. |
 
 ## Checks that do not exist yet
 

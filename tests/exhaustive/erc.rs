@@ -14,7 +14,8 @@
 //!   met1 risers to one met2 track per net, and every assignment of terminals
 //!   to nets is enumerated (a seeded sample at merge depth). The oracle
 //!   re-derives each rule from its rustdoc: role masks per net, pull networks
-//!   to the declared rails per net, supply reach over transistor channels, the
+//!   to the declared rails per net, supply reach over the transistor channels
+//!   that can conduct (gate-conditioned switches swept to a fixed point), the
 //!   clamp path from a pad.
 //! - Geometric kinds (`floating_well`, `missing_tie`, `supply_short`,
 //!   `soft_connection`, the `esd_latchup` guard ring) on shapes whose answer is
@@ -2297,6 +2298,8 @@ layer mkpb = gds(24, 0)
 layer nwpm = gds(30, 0)
 layer ring = gds(31, 0)
 layer iso = gds(32, 0)
+layer mkcn = gds(25, 0)
+layer mkcp = gds(26, 0)
 connect conductors [diff, poly, well, ntap, ptap, met1, met2, pad]
 connect touch_within_layer
 connect via cont [diff, met1]
@@ -2312,6 +2315,8 @@ device mos mkp model \"pfet\" terminals [poly, diff, diff]
 device mos mkc model \"clamp\" terminals [poly, diff, diff]
 device mos mknb model \"nfet_b\" terminals [poly, diff, diff, well]
 device mos mkpb model \"pfet_b\" terminals [poly, diff, diff, well]
+device mos mkcn model \"nfet_c\" terminals [poly, diff, diff] on_gate_min 1V
+device mos mkcp model \"pfet_c\" terminals [poly, diff, diff] on_gate_max 2.5V
 pex well thickness 100nm height 5nm sheet 1000ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
 pex diff thickness 100nm height 10nm sheet 100ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
 pex ntap thickness 100nm height 10nm sheet 100ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
@@ -2430,6 +2435,10 @@ enum Model {
     Clamp,
     NfetB,
     PfetB,
+    /// `nfet_c`: conducts while its gate can reach 1 V or more.
+    NfetC,
+    /// `pfet_c`: conducts while its gate can fall to 2.5 V or less.
+    PfetC,
 }
 
 impl Model {
@@ -2440,6 +2449,18 @@ impl Model {
             Model::Clamp => "mkc",
             Model::NfetB => "mknb",
             Model::PfetB => "mkpb",
+            Model::NfetC => "mkcn",
+            Model::PfetC => "mkcp",
+        }
+    }
+
+    /// The deck row's gate condition: `(on at or above?, mV)`, as
+    /// `TOPO_PROCESS` states it.
+    fn condition(self) -> Option<(bool, f64)> {
+        match self {
+            Model::NfetC => Some((true, 1000.0)),
+            Model::PfetC => Some((false, 2500.0)),
+            _ => None,
         }
     }
 }
@@ -2477,7 +2498,7 @@ struct Supply {
 }
 
 /// What a net can reach from the supplies (`erc::voltage`'s model).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Reach {
     lo: f64,
     hi: f64,
@@ -2583,56 +2604,84 @@ impl Board {
         self.supplies.iter().find(|s| s.net == net)
     }
 
-    /// The voltage model of `erc::voltage`: a supply net sits at its nominal
-    /// (power) or 0 V (ground); the source/drain nets of a transistor are one
-    /// component unless a supply, and a supply on a transistor's channel
-    /// reaches the components of that transistor's other channel nets. Gates
-    /// and bulks pass nothing.
+    /// The voltage model of `erc::voltage`, by brute force (NV): a supply net
+    /// sits at its nominal (power) or 0 V (ground) and never changes; every
+    /// conducting transistor widens each of its source and drain nets that is
+    /// not a supply to the union of both, swept over every transistor until
+    /// nothing changes. Gates and bulks pass nothing. A transistor of a
+    /// [`Model::condition`] conducts while its gate's range reaches the
+    /// condition (Siemens 81822, figure 1), or when its gate is free: no
+    /// supply reaches it even with every channel conducting, or, after a
+    /// sweep, still none does (it floats behind switches that never turn on).
     fn reach(&self) -> Vec<Option<Reach>> {
-        fn find(parent: &mut [usize], mut x: usize) -> usize {
-            while parent[x] != x {
-                x = parent[x];
-            }
-            x
-        }
-        let mut parent: Vec<usize> = (0..NETS).collect();
-        for dv in &self.devs {
-            if self.supply(dv.s).is_none() && self.supply(dv.d).is_none() {
-                let (a, b) = (find(&mut parent, dv.s), find(&mut parent, dv.d));
-                parent[a] = b;
-            }
-        }
-        let mut reached: Vec<Vec<Supply>> = vec![Vec::new(); NETS];
-        for dv in &self.devs {
-            for (sup, free) in [(dv.s, dv.d), (dv.d, dv.s)] {
-                if let (Some(&s), None) = (self.supply(sup), self.supply(free)) {
-                    let root = find(&mut parent, free);
-                    reached[root].push(s);
-                }
-            }
-        }
-        let own = |s: &Supply| Reach {
-            lo: if s.power { s.nominal } else { 0.0 },
-            hi: if s.power { s.nominal } else { 0.0 },
-            nominal_lo: s.nominal,
-            nominal_hi: s.nominal,
-            power: if s.power { 1 << s.domain } else { 0 },
-        };
-        (0..NETS)
-            .map(|net| {
-                if let Some(s) = self.supply(net) {
-                    return Some(own(s));
-                }
-                let root = find(&mut parent, net);
-                reached[root].iter().map(own).reduce(|a, b| Reach {
+        let sweep = |free: &[bool]| -> Vec<Option<Reach>> {
+            let mut r: Vec<Option<Reach>> = (0..NETS)
+                .map(|net| {
+                    self.supply(net).map(|s| Reach {
+                        lo: if s.power { s.nominal } else { 0.0 },
+                        hi: if s.power { s.nominal } else { 0.0 },
+                        nominal_lo: s.nominal,
+                        nominal_hi: s.nominal,
+                        power: if s.power { 1 << s.domain } else { 0 },
+                    })
+                })
+                .collect();
+            let union = |a: Option<Reach>, b: Option<Reach>| match (a, b) {
+                (Some(a), Some(b)) => Some(Reach {
                     lo: a.lo.min(b.lo),
                     hi: a.hi.max(b.hi),
                     nominal_lo: a.nominal_lo.min(b.nominal_lo),
                     nominal_hi: a.nominal_hi.max(b.nominal_hi),
                     power: a.power | b.power,
-                })
-            })
-            .collect()
+                }),
+                (a, None) => a,
+                (None, b) => b,
+            };
+            loop {
+                let mut changed = false;
+                for (i, dv) in self.devs.iter().enumerate() {
+                    let on = match dv.model.condition() {
+                        None => true,
+                        Some(_) if free[i] => true,
+                        Some((at_least, v)) => {
+                            r[dv.g].is_some_and(|g| if at_least { g.hi >= v } else { g.lo <= v })
+                        }
+                    };
+                    if !on {
+                        continue;
+                    }
+                    let both = union(r[dv.s], r[dv.d]);
+                    for n in [dv.s, dv.d] {
+                        let widened = union(r[n], both);
+                        if self.supply(n).is_none() && widened != r[n] {
+                            r[n] = widened;
+                            changed = true;
+                        }
+                    }
+                }
+                if !changed {
+                    return r;
+                }
+            }
+        };
+        let everything = sweep(&vec![true; self.devs.len()]);
+        let mut free: Vec<bool> = self
+            .devs
+            .iter()
+            .map(|d| everything[d.g].is_none())
+            .collect();
+        loop {
+            let r = sweep(&free);
+            let floating: Vec<usize> = (0..self.devs.len())
+                .filter(|&i| !free[i] && r[self.devs[i].g].is_none())
+                .collect();
+            if floating.is_empty() {
+                return r;
+            }
+            for i in floating {
+                free[i] = true;
+            }
+        }
     }
 
     /// Every rule's expectation, from the definitions in each kind's rustdoc.
@@ -3096,6 +3145,47 @@ fn topology_enumerations(depth: Depth) -> Vec<Fixture> {
             dev(Model::Nfet, a[6], a[7], a[8]),
         ];
         out.push(board.fixture(&format!("erc/topology/rails2/{}", assignment_name(&a))));
+    }
+    // Gate-conditioned switches (ERC-F1): an nfet_c (on at 1 V or more) and a
+    // pfet_c (on at 2.5 V or less), every 4^6 assignment against VDD, VSS and
+    // VDDH, so each gate sits on 0, 1.8 or 3.3 V, on the signal, or on a
+    // channel of its own; then with a plain nfet, sampled, against those
+    // rails and against VDD and VSS alone, so a gate can be driven through
+    // another switch or float behind one that never turns on.
+    for a in sample(&all_assignments(6), depth, 300, 0x7_0006) {
+        let mut board = three_rails(true);
+        board.devs = vec![
+            dev(Model::NfetC, a[0], a[1], a[2]),
+            dev(Model::PfetC, a[3], a[4], a[5]),
+        ];
+        out.push(board.fixture(&format!(
+            "erc/topology/conditional2/{}",
+            assignment_name(&a)
+        )));
+    }
+    for (seed, rails) in [(0x7_0007, 3), (0x7_0008, 2)] {
+        let mut rng = Rng::new(seed);
+        let mut seen = std::collections::BTreeSet::new();
+        while seen.len() < three {
+            let a: Vec<usize> = (0..9).map(|_| rng.below(NETS as u64) as usize).collect();
+            if !seen.insert(a.clone()) {
+                continue;
+            }
+            let mut board = if rails == 3 {
+                three_rails(true)
+            } else {
+                two_rails()
+            };
+            board.devs = vec![
+                dev(Model::NfetC, a[0], a[1], a[2]),
+                dev(Model::PfetC, a[3], a[4], a[5]),
+                dev(Model::Nfet, a[6], a[7], a[8]),
+            ];
+            out.push(board.fixture(&format!(
+                "erc/topology/conditional3/rails{rails}/{}",
+                assignment_name(&a)
+            )));
+        }
     }
     let bulk: Vec<(Model, Vec<usize>)> = [Model::NfetB, Model::PfetB]
         .into_iter()

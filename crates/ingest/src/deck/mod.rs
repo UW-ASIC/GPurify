@@ -535,10 +535,11 @@ pub struct DeviceRecognition {
     pub value: Vec<DeviceValue>,
 }
 
-/// The coefficients a `device` statement may give, from which LVS computes a
-/// resistor's `r` and a capacitor's `c` from what is drawn. One left out is
-/// `None`, and the value it would give is then not computed: never taken as
-/// zero, so a reference that states it gets `lvs.undeclared_param`.
+/// The values a `device` statement may give. LVS computes a resistor's `r`
+/// and a capacitor's `c` from the coefficients and what is drawn: one left
+/// out is `None`, and the value it would give is then not computed, never
+/// taken as zero, so a reference that states it gets `lvs.undeclared_param`.
+/// ERC's voltage propagation reads a transistor's gate condition.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct DeviceValue {
     /// `sheet`: a resistor body's resistance per square, in ohms. `r` is
@@ -550,6 +551,13 @@ pub struct DeviceValue {
     /// perimeter, aF/µm. `c` is `area_cap * area + fringe_cap * perim`, of
     /// the terms the statement gives.
     pub fringe_cap_af_um: Option<f64>,
+    /// `on_gate_min`: a `mos` conducts only when its gate can reach this
+    /// voltage or more (an n-channel switch), mV. At most one of this and
+    /// `on_gate_max` is set; with neither, the channel always conducts.
+    pub on_gate_min_mv: Option<f64>,
+    /// `on_gate_max`: a `mos` conducts only when its gate can fall to this
+    /// voltage or less (a p-channel switch), mV.
+    pub on_gate_max_mv: Option<f64>,
 }
 
 /// The device families this tool recognises, in the deck as `mos`, `bjt`,
