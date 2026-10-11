@@ -255,8 +255,9 @@ explains (kind 30).
 | 39 | cut_class | `size(L; allowed: [..])` | POINT | EXACT | exact | new in H |
 | 40 | edge_width | `width(E) >= l` | POINT | EXACT | exact | new in H |
 | 41 | edge_facing_space | `facing_space(E) >= l` | POINT | EXACT | exact | new in H |
+| 42 | region_density | `region_density(L, R) <= f` | FIG by marker (`R`) | EXACT | exact | new in H |
 
-29 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
+30 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
 The counts were measured on 990376b (after B20 and B24), with the translator reconciled to B24.
@@ -948,6 +949,21 @@ emit(id, E.space(LIM, projection, transparent))
 
 - On an edge layer `space` reports pairs in a "face to face" relation, "their outer sides face
   each other" ([L]). Key POINT, the gap's middle; the length compared.
+
+### 42. region_density — EXACT
+
+**GPurify** (`area.rs` `region_density`): per merged figure of the region layer, the area of the
+merged measured layer inside it over its own area, holes excluded; one finding per figure outside
+the limit, on the region layer, at the centre of its first rectangle.
+
+**KLayout**
+
+```ruby
+region_density(id, L, R, LIMIT, maximum)   # per p in R.data.merged: (L.data.merged & Region(p)).area / p.area
+```
+
+- `Polygon#area` leaves holes out, as GPurify does; both ratios are the quotient of two whole
+  areas at ×2, so the same double. Key FIG by marker on the region's figures; compared to 1e-9.
 
 ---
 

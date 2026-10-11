@@ -316,6 +316,30 @@ pub(crate) const KINDS: &[Kind] = &[
             &[],
         )
     },
+    // Coverage of a layer inside each shape of a region layer (sky130 vpp.5a
+    // "max pattern density of met3 over capacitor", vpp.11).
+    Kind {
+        fixed: &[("maximum", false)],
+        ..drc(
+            "region_density",
+            Cmp::Ge,
+            "region_density",
+            &[0, 1],
+            DENSITY_LIMIT,
+            &[],
+        )
+    },
+    Kind {
+        fixed: &[("maximum", true)],
+        ..drc(
+            "region_density",
+            Cmp::Le,
+            "region_density",
+            &[0, 1],
+            DENSITY_LIMIT,
+            &[],
+        )
+    },
     // The number of merged shapes on the layer in the whole layout, a minimum
     // or a maximum (IHP npn13G2.bR; one seal ring per chip).
     Kind {

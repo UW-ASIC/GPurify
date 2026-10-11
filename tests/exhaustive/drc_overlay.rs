@@ -48,6 +48,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         global_density(),
         density(depth),
         cheesing(),
+        region_density(),
         fill(),
         net_spacing(),
         tap_distance(),
@@ -1747,6 +1748,88 @@ fn density(depth: Depth) -> Vec<Fixture> {
     .collect();
     out.extend(every_offset(&anchored));
     out
+}
+
+/// Pattern density inside each shape of a region layer (`region_density`,
+/// DRC-072: sky130 vpp.5a "max pattern density of met3.dg over capacitor.dg",
+/// vpp.11 the minimum): `region_density(met3, cap) <= 25%` and `>= 10%`, one
+/// finding per capacitor outside a limit, at the centre of its first
+/// rectangle, measuring the fraction.
+///
+/// Oracle: coverages fixed by construction: the met3 inside a 1000 square
+/// swept 249/250/251 rows tall against 25%; two capacitors at 30% and 5%,
+/// each a finding of its own (one extent for the whole layer, as `density`
+/// takes a boundary, reads 17.5% and passes both); met3 reaching outside its
+/// capacitor counted only inside (37.5% if counted whole); met3 filling only
+/// the hole of a ring-shaped capacitor, 0 (a check that fills the hole reads
+/// 25% and passes); met3 with no capacitor, nothing.
+fn region_density() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["met3", "cap"],
+        "rule dmax region_density(met3, cap) <= 25%\nrule dmin region_density(met3, cap) >= 10%\n",
+    );
+    let case = |name: &str, layout: Layout, max: Vec<Finding>, min: Vec<Finding>| {
+        fixture(
+            &format!("region_density/{name}"),
+            &["DRC-072"],
+            &deck,
+            layout,
+            &[("dmax", max), ("dmin", min)],
+        )
+    };
+    let cap = |layout: Layout| layout.rect("cap", 0, 0, 1000, 1000);
+    let mut cases = Vec::new();
+    for (h, side) in sweep(250) {
+        #[allow(clippy::cast_precision_loss, reason = "small integers")]
+        let max = if h > 250 {
+            vec![ratio(h as f64 / 1000.0, (500, 500))]
+        } else {
+            vec![]
+        };
+        cases.push(case(
+            &format!("coverage/{side}"),
+            cap(Layout::default()).rect("met3", 0, 0, 1000, h),
+            max,
+            vec![],
+        ));
+    }
+    cases.push(case(
+        "two_regions",
+        cap(Layout::default())
+            .rect("met3", 0, 0, 1000, 300)
+            .rect("cap", 3000, 0, 4000, 1000)
+            .rect("met3", 3000, 0, 4000, 50),
+        vec![ratio(0.3, (500, 500))],
+        vec![ratio(0.05, (3500, 500))],
+    ));
+    cases.push(case(
+        "outside_not_counted",
+        cap(Layout::default()).rect("met3", -500, 0, 1000, 250),
+        vec![],
+        vec![],
+    ));
+    cases.push(case(
+        "holed_region",
+        ring(
+            Layout::default(),
+            "cap",
+            (0, 0, 1000, 1000),
+            (250, 250, 750, 750),
+        )
+        .rect("met3", 250, 250, 750, 750),
+        vec![],
+        vec![Finding {
+            measured: Some(Measurement::Ratio(0.0)),
+            at: None,
+        }],
+    ));
+    cases.push(case(
+        "no_region",
+        Layout::default().rect("met3", 0, 0, 1000, 1000),
+        vec![],
+        vec![],
+    ));
+    every_placement(cases)
 }
 
 /// `cheesing(met1) <= 1um2` (`cheesing`, DRC-075): one finding per merged

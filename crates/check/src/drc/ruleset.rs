@@ -1161,6 +1161,36 @@ pub enum Rule {
         /// The smallest legal gap, in grid units; positive.
         limit: Dbu,
     },
+    /// A shape of `region` inside which `layer` covers too little, or too
+    /// much, of the area.
+    ///
+    /// Deck: `region_density(L, R) >= frac`, or `<=` for a maximum, kind
+    /// `region_density`. Both layers are merged. Each figure of `R` is
+    /// measured on its own: the area of `L` inside it over its own area,
+    /// holes excluded, the pattern density over a device that
+    /// [`Rule::Density`] cannot take, since its boundary reduces to one
+    /// extent for the whole layer.
+    ///
+    /// One violation per region figure outside the limit, on the `region`
+    /// layer, at the centre of the figure's first rectangle, `measured` the
+    /// fraction. `shapes.0` is the lowest drawn region row under the figure.
+    /// `examined` counts region figures.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-072, DRC-075. Rules: sky130 vpp.5a to vpp.5c ("max pattern density
+    /// of met3.dg over capacitor.dg", 0.25, 0.3, 0.4) and vpp.11 ("min pattern
+    /// density of (poly and diff) over capacitor.dg", 0.87); IHP Slt.i ("min.
+    /// Metal:slit density for any Metal plate bigger than 35 µm x 35 µm", 6 %).
+    RegionDensity {
+        /// The layer whose coverage is measured.
+        layer: LayerId,
+        /// The regions, each measured on its own; findings are reported on it.
+        region: LayerId,
+        /// The fraction; finite, in `0..=1`.
+        limit: f64,
+        /// `Minimum` for `>=`, `Maximum` for `<=`.
+        sense: LimitSense,
+    },
 }
 
 /// A spacing table, LEF `SPACINGTABLE PARALLELRUNLENGTH`: the required space
@@ -1695,6 +1725,15 @@ impl RuleSet {
                     layer: one(spec)?,
                     limit: length(spec, "limit")?,
                 },
+                "region_density" => {
+                    let (layer, region) = two(spec)?;
+                    Rule::RegionDensity {
+                        layer,
+                        region,
+                        limit: ratio(spec, "limit")?,
+                        sense: sense(spec)?,
+                    }
+                }
                 other => {
                     assert!(
                         !KINDS.contains(&other),
@@ -1943,6 +1982,12 @@ impl RuleSet {
                 Rule::EdgeFacingSpace { layer, limit } => {
                     edge::facing(store, id, layer, limit, false, out)
                 }
+                Rule::RegionDensity {
+                    layer,
+                    region,
+                    limit,
+                    sense,
+                } => area::region_density(store, id, (layer, region), limit, sense, s, out),
             };
             record_run(runs, out, before, id, outcome, examined);
             for layer in rule.layers().into_iter().flatten() {
@@ -2012,6 +2057,11 @@ impl Rule {
                 outer: a, inner: b, ..
             }
             | Rule::MustBeInside { inner: a, outer: b }
+            | Rule::RegionDensity {
+                layer: a,
+                region: b,
+                ..
+            }
             | Rule::EdgeEnclosure {
                 edges: a, outer: b, ..
             } => [Some(a), Some(b)],
@@ -2026,7 +2076,7 @@ impl Rule {
 /// [`crate::erc::ruleset::KINDS`]. The engine refuses a deck row whose kind is
 /// in neither ([`DrcError::UnknownKind`]); [`RuleSet::from_deck`] alone steps
 /// over it.
-pub const KINDS: [&str; 41] = [
+pub const KINDS: [&str; 42] = [
     "min_width",
     "max_width",
     "cut_size",
@@ -2068,4 +2118,5 @@ pub const KINDS: [&str; 41] = [
     "cut_class",
     "edge_width",
     "edge_facing_space",
+    "region_density",
 ];

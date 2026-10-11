@@ -173,6 +173,13 @@ def density(rule, layer, die, w, s, limit, maximum)
     end
   end
 end
+# Per merged figure of `region`, the area of `layer` inside it over its own.
+def region_density(rule, layer, region, limit, maximum)
+  region.data.merged.each do |p|
+    r = (layer.data.merged & RBA::Region.new(p)).area.to_f / p.area
+    put({ rule: rule }.merge(poly(p)).merge({ v: r })) if (maximum ? r > limit : r < limit)
+  end
+end
 def global_density(rule, layer, die, limit, maximum)
   return if die.empty?
   r = (layer.data.merged & RBA::Region.new(die)).area.to_f / die.area
@@ -1127,6 +1134,24 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 )
                 .expect("a String");
                 exact("cut_class", Key::Point, Value::Ignore)
+            }
+            Rule::RegionDensity {
+                layer,
+                region,
+                limit,
+                sense,
+            } => {
+                layers.reads(layer, &mut reads);
+                let name = fig(region, &mut reads);
+                writeln!(
+                    body,
+                    "region_density({q}, {}, {}, {limit:?}, {})",
+                    var(layer),
+                    var(region),
+                    sense == LimitSense::Maximum
+                )
+                .expect("a String");
+                exact("region_density", Key::FigAt(name), Value::Ratio)
             }
             Rule::EdgeWidth { layer, limit } | Rule::EdgeFacingSpace { layer, limit } => {
                 let (kind, check) = if matches!(rule, Rule::EdgeWidth { .. }) {

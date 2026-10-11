@@ -6,7 +6,7 @@
 //! decomposed into disjoint rectangles (canonical). Data out: one violation per
 //! offending figure, hole or window.
 
-use super::{centre, owners_of, Verdict, REFUSED};
+use super::{centre, owners_of, SortedRects, Verdict, REFUSED};
 use crate::drc::Scratch;
 use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
@@ -417,6 +417,53 @@ pub(crate) fn total_area(
         });
     }
     (Outcome::Ran, s.layer_out.len() as u64)
+}
+
+/// Per merged figure of `region`, the area of the merged `layer` inside it
+/// over its own area, holes excluded (sky130 vpp.5a, vpp.11: pattern density
+/// over a capacitor), against a minimum or a maximum; one violation per
+/// region figure, on `region`, at the centre of its first rectangle.
+/// `examined` counts region figures.
+pub(crate) fn region_density(
+    store: &GeometryStore,
+    rule: StrId,
+    (layer, region): (LayerId, LayerId),
+    limit: f64,
+    sense: LimitSense,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    if !merge_layer(store, region, s) {
+        return REFUSED;
+    }
+    let owners = figure_owners(store, region, s);
+    let (regions, starts) = (s.rects.clone(), s.rect_start.clone());
+    if !merge_layer(store, layer, s) {
+        return REFUSED;
+    }
+    let material = SortedRects::new(s.rects.iter().map(|&r| (r, ())).collect());
+    let examined = owners.len() as u64;
+    for (figure, owner) in owners.into_iter().enumerate() {
+        let mine = &regions[starts[figure] as usize..starts[figure + 1] as usize];
+        let covered = mine
+            .iter()
+            .flat_map(|&r| material.overlapping(r))
+            .fold(DbuArea::new(0), |sum, (clip, ())| sum + clip.area());
+        let fraction = to_f64(covered.raw()) / to_f64(covered_area(mine).raw());
+        if !Measurement::Ratio(fraction).violates(Measurement::Ratio(limit), sense) {
+            continue;
+        }
+        out.push(Violation {
+            rule,
+            layer: region,
+            severity: Severity::Error,
+            at: centre(mine[0]),
+            measured: Measurement::Ratio(fraction),
+            limit: Measurement::Ratio(limit),
+            shapes: (owner, None),
+        });
+    }
+    (Outcome::Ran, examined)
 }
 
 /// Each merged figure's bounding-box aspect ratio, its longer side over its
