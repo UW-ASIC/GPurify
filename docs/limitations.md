@@ -20,7 +20,6 @@ result from them is weaker than it looks.
 |---|---|
 | `enclosure(inner, outer, opposite)` | An inner shape that is not a rectangle is held to the every-side limit instead. |
 | `enclosure(E, L)` on an edge layer | Measures straight out from each edge, so a gap in `L` diagonally off a corner of the shape is not seen. Pair it with the shape `enclosure` where the corner matters. |
-| `multiple_drivers`, `tie_high_low` | Source and drain are as extraction assigns them, so a transistor drawn output side first drives its supply or ties its gate (testing-plan F28). |
 | `antenna_electrical` | A row with a diode and a non-zero `diode_credit` is refused: the unit of the credit is not settled. |
 | `esd_topological`, `esd_latchup` | Only checks that a clamp path exists. The resistance and current capacity of the path are not checked, and a clamp is any device of a listed model, however it is wired. |
 | `gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`, `domain_crossing` | A net's voltage range is the span of every supply it connects to through a device channel, ignoring threshold drops, switching and power-down, so these rules can over-report. A net that reaches no supply that way, such as a primary input with no ESD diode, is not checked, and neither is a device whose terminals sit on such nets. |
@@ -233,7 +232,7 @@ says which foundry manual, standard or tool defines each one.
 | ERC-A6 | Additive diode credit (gate += MF x diode) | missing | — |
 | ERC-A7 | PWL diffusion-dependent limit | missing | — |
 | ERC-A9 | Minimum protection-diode size | missing | — |
-| ERC-A11 | MIM capacitor as victim | partial | The gate argument takes any layer; a non-conductor gate joins the topmost conductor it overlaps (erc::rules::antenna). gf180 leaves ANT.14/15 out, and the FuseTop/Via5 connectivity needs care |
+| ERC-A11 | MIM capacitor as victim | partial | The gate argument takes any layer; a non-conductor gate joins the conductor it lies on, never metal routed over it (F72, fixed; F81 open). gf180 leaves ANT.14/15 out, and the FuseTop/Via5 connectivity needs care |
 | ERC-A12 | Oxide-class-specific limits | partial | One row per gate layer |
 | ERC-A13 | Exemption for substrate-shorted nets | missing | No exemption: every net with gate area > 0 is checked; reaching diffusion or a tap protects nothing (erc::rules::antenna::check_antenna) |
 | ERC-A14 | Hierarchical / macro-pin antenna | missing | — |
@@ -267,7 +266,6 @@ says which foundry manual, standard or tool defines each one.
 | ERC-F10 | HV tag consistency | partial | The domain span across a device is checked; tag consistency (LV and HV n-wells on one net) is not |
 | ERC-F11 | Voltage-dependent spacing | missing | Same row as DRC-082 |
 | ERC-F13 | Inter-metal dielectric breakdown | missing | — |
-| ERC-G3 | Multiple drivers | partial | Complementary pull-up/pull-down networks are one driver; source and drain are in extraction order, so a transistor drawn output side first drives its supply (F28) |
 | ERC-G8 | Combinational loops | missing | Digital only, optional |
 | ERC-H1 | Static leakage / HiZ / floating in power-down | missing | — |
 | ERC-H2 | Analog constraints (symmetry, common centroid, matching, orientation, dummies, WPE, STI) | missing | Overlaps Philis's own properties |

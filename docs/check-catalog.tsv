@@ -154,13 +154,13 @@ ERC-A7	erc	antenna	PWL diffusion-dependent limit	LEF:ANTENNADIFFAREARATIO PWL,AN
 ERC-A8	erc	antenna	Separate limits with/without diode	IHP:Ant.b/e,Ant.d/f; SKY	antenna,antenna_electrical	implemented	FR	antenna(..; diode: layer) skips a gate whose net reaches the diode layer (KLayout antenna_check); the IHP deck writes diode: none, so its gates with a diode over-report (limitations.md, "Shipped decks"); Ant.g size not checked
 ERC-A9	erc	antenna	Minimum protection-diode size	IHP:Ant.g	-	missing	SE:IHP	
 ERC-A10	erc	antenna	Diode well legality	IHP:Ant.h,Ant.i	forbidden	expressible	FR	
-ERC-A11	erc	antenna	MIM capacitor as victim	GF:ANT.14,ANT.15	antenna	partial	FR	The gate argument takes any layer; a non-conductor gate joins the topmost conductor it overlaps (erc::rules::antenna). gf180 leaves ANT.14/15 out, and the FuseTop/Via5 connectivity needs care
+ERC-A11	erc	antenna	MIM capacitor as victim	GF:ANT.14,ANT.15	antenna	partial	FR	The gate argument takes any layer; a non-conductor gate joins the conductor it lies on, never metal routed over it (F72, fixed; F81 open). gf180 leaves ANT.14/15 out, and the FuseTop/Via5 connectivity needs care
 ERC-A12	erc	antenna	Oxide-class-specific limits	LEF:ANTENNAMODEL OXIDE1-4; GF	antenna	partial	FR	One row per gate layer
 ERC-A13	erc	antenna	Exemption for substrate-shorted nets	SKY:.ar.1	-	missing	SY	No exemption: every net with gate area > 0 is checked; reaching diffusion or a tap protects nothing (erc::rules::antenna::check_antenna)
 ERC-A14	erc	antenna	Hierarchical / macro-pin antenna	LEF:ANTENNAPIN*	-	missing	SE:LEF; TX:OR	
 ERC-A15	erc	antenna	Fix hint: required diode area	CAL:Auto-Waivers	-	missing	CF	Report feature
 ERC-B1	erc	planarity	Windowed density + CMP thickness	GF:13	density_cmp	implemented	CF	partial_windows governs every limit, neighbour deltas included; the CMP model states no nominal thickness
-ERC-C1	erc	esd	Pad ESD path to power and ground	TR18-01:4.5.2-4.5.4; Khazhinsky2012	esd_topological,esd_latchup	implemented	SY	A clamp is any device of a listed model, however wired (limitations.md, "Rules that can pass a layout signoff would flag")
+ERC-C1	erc	esd	Pad ESD path to power and ground	TR18-01:4.5.2-4.5.4; Khazhinsky2012	esd_topological,esd_latchup	implemented	SY; NV	A clamp is any device of a listed model, however wired (limitations.md, "Rules that can pass a layout signoff would flag")
 ERC-C2	erc	esd	ESD device sizing (perimeter, clamp width)	TR18-01:Fig23,Fig24	-	missing	FR; SY	
 ERC-C3	erc	esd	Protected device (pad-exposed gates and drains)	TR18-01:4.5.1; Khazhinsky2012	-	missing	SY; CF	
 ERC-C4	erc	esd	Cross-domain signal ESD protection	TR18-01(2011):5.1.3; TR18-01:5.6.2; Hogan2012	-	missing	SE:Part II pseudocode; SY	domain_crossing and missing_level_shifter are functional checks, not ESD
@@ -209,13 +209,13 @@ ERC-F10	erc	voltage	HV tag consistency	SKY:hv.X.1,hvnwell.9,hvnwell.10	hv_domain
 ERC-F11	erc	voltage	Voltage-dependent spacing	(see DRC-082)	-	missing	FR	Same row as DRC-082
 ERC-F12	erc	voltage	Well / body bias	GF:LU.9,LU.10	well_bias	implemented	SY	Only sky130 connects wells (limitations.md, "Shipped decks")
 ERC-F13	erc	voltage	Inter-metal dielectric breakdown	ICV; JEP159A	-	missing	FR	
-ERC-G1	erc	classic	Floating / undriven gate	CAL:WP 81822; YOSYS:check	floating_gate	implemented	SY; TX:YOSYS	
+ERC-G1	erc	classic	Floating / undriven gate	CAL:WP 81822; YOSYS:check	floating_gate	implemented	SY; NV; TX:YOSYS	
 ERC-G2	erc	classic	Floating well	SKY:nwell.4	floating_well	implemented	FR; SY	
-ERC-G3	erc	classic	Multiple drivers	YOSYS:check	multiple_drivers	partial	SY; TX:YOSYS	Complementary pull-up/pull-down networks are one driver; source and drain are in extraction order, so a transistor drawn output side first drives its supply (F28)
+ERC-G3	erc	classic	Multiple drivers	YOSYS:check	multiple_drivers	implemented	SY; NV; TX:YOSYS	Needs design intent: channels are oriented by the declared rails; complementary networks sharing gate nets are one driver; a pass gate that reaches no rail is not a driver (F28, fixed)
 ERC-G4	erc	classic	Supply short (n-tie + p-tie, VDD-GND)	CAL	supply_short	implemented	SY	No standards-body definition
 ERC-G5	erc	classic	Soft connection through a high-R layer	KL:soft_connect; CAL:SOFTCHK	soft_connection	implemented	SY; TX:KL	Joins only through the deck's connectivity with the soft layers removed
 ERC-G6	erc	classic	Unconnected pin / dangling conductor	OR:check_power_grid	unconnected_pin	implemented	SY	
-ERC-G7	erc	classic	Gate tied directly to a rail	CAL (weak sourcing)	tie_high_low	implemented	SY	
+ERC-G7	erc	classic	Gate tied directly to a rail	CAL (weak sourcing)	tie_high_low	implemented	SY; NV	Needs design intent: a declared rail that reaches a gate (F28, fixed)
 ERC-G8	erc	classic	Combinational loops	YOSYS:check	-	missing	TX:YOSYS	Digital only, optional
 ERC-H1	erc	perc	Static leakage / HiZ / floating in power-down	IA	-	missing	SY	
 ERC-H2	erc	perc	Analog constraints (symmetry, common centroid, matching, orientation, dummies, WPE, STI)	CAL:PERC packaged; ICV:NDL; PEG:Constraint Validator	-	missing	SY	Overlaps Philis's own properties
