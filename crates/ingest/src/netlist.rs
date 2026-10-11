@@ -21,10 +21,16 @@
 //!   `model`, or a built-in primitive master; `\` continuation, `//` comments.
 //!   Case-sensitive.
 //!
+//! An `R` or `C` card may state its value positionally, between its nets and
+//! its model: `R1 a b 1k rpoly` is `R1 a b rpoly r=1k`, and `C1 a b 1p cmim`
+//! is `C1 a b cmim c=1p`. Stating it both ways is refused.
+//!
 //! Refused with [`NetlistError::Unsupported`]: any other dot card (`.param`,
 //! `.include`, `.global`, `.model`, …), sources and other element letters,
-//! SPICE's positional value form (`R1 a b 1k`), parameters on a `.subckt`
-//! line or an `X` card, and a card outside every subcircuit.
+//! a card with a value and no model (`R1 a b 1k`: LVS pairs a device by its
+//! model, and which deck model a bare `R` card is, the deck does not say),
+//! parameters on a `.subckt` line or an `X` card, and a card outside every
+//! subcircuit.
 
 use crate::deck::DeviceKind;
 use crate::narrow;
@@ -126,6 +132,8 @@ pub struct Netlist {
     /// expanded: `w=1u` is `1e-6` and a bare `w=1` is one metre, except on an
     /// `X` card calling a deck device model, where a bare `w`/`l` is in µm
     /// (the PDK convention, `.option scale=1u`). SPICE names are lowercased.
+    /// An `R` or `C` card's positional value is its first parameter, `r` or
+    /// `c`, in ohms or farads.
     pub param: Vec<(StrId, f64)>,
 
     /// One row per subcircuit instance, an `X` card, in file order: the callee.
@@ -270,10 +278,10 @@ impl Netlist {
                 child[port.0 as usize] = map[net.0 as usize];
             }
             // Every other net of the callee is new, named under the path.
-            for net in 0..self.net_name.len() {
-                if self.net_subckt[net] == callee && child[net] == u32::MAX {
+            for (net, slot) in child.iter_mut().enumerate() {
+                if self.net_subckt[net] == callee && *slot == u32::MAX {
                     let local = strings.resolve(self.net_name[net]).to_owned();
-                    child[net] = narrow(out.net_name.len());
+                    *slot = narrow(out.net_name.len());
                     out.net_name
                         .push(strings.intern(&format!("{inner}.{local}")));
                     out.net_subckt.push(SubcktId(0));
@@ -629,24 +637,39 @@ impl Build<'_> {
         Ok((self.strings.intern(&key), value))
     }
 
+    /// `value`: an `R` or `C` card's positional value token, stored as its
+    /// first parameter, `r` or `c`.
     fn device(
         &mut self,
         head: Tok,
         kind: DeviceKind,
         nets: &[Tok],
-        model: Tok,
+        (value, model): (Option<Tok>, Tok),
         params: &[Tok],
         subckt: SubcktId,
         (dialect, micron): (Dialect, bool),
     ) -> Result<(), NetlistError> {
-        // A bare number where a model name belongs is SPICE's positional value
-        // form, `R1 a b 1k`, refused rather than interned as a model name.
+        // A bare number where a model name belongs is a value with no model,
+        // `R1 a b 1k`, refused rather than interned as a model name.
         if spice_number(model.text).is_some() {
             return Err(NetlistError::Unsupported(
                 model.span,
-                model.text.to_string(),
+                format!("{} with no model after it", model.text),
             ));
         }
+        let primary = match value {
+            Some(tok) => {
+                let number = spice_number(tok.text)
+                    .ok_or_else(|| NetlistError::Unexpected(tok.span, tok.text.to_string()))?;
+                let name = if kind == DeviceKind::Capacitor {
+                    "c"
+                } else {
+                    "r"
+                };
+                Some((self.strings.intern(name), number))
+            }
+            None => None,
+        };
         // Not stored; interned only because interning order is report order.
         self.strings.intern(head.text);
         let model = self.strings.intern(model.text);
@@ -664,8 +687,14 @@ impl Build<'_> {
             let net = self.net(net.text, subckt);
             self.out.terminal_net.push(net);
         }
-        for param in params {
-            let param = self.param(*param, dialect, micron)?;
+        self.out.param.extend(primary);
+        for tok in params {
+            let param = self.param(*tok, dialect, micron)?;
+            // The value stated twice, positionally and by name: which one
+            // is meant is a guess.
+            if primary.is_some_and(|(name, _)| name == param.0) {
+                return Err(NetlistError::Unexpected(tok.span, tok.text.to_string()));
+            }
             self.out.param.push(param);
         }
         Ok(())
@@ -760,7 +789,7 @@ fn spice_card(b: &mut Build, card: &[Tok], next: &mut u32) -> Result<(), Netlist
                         head,
                         kind,
                         nets,
-                        model,
+                        (None, model),
                         params,
                         subckt,
                         (Dialect::Spice, true),
@@ -771,12 +800,21 @@ fn spice_card(b: &mut Build, card: &[Tok], next: &mut u32) -> Result<(), Netlist
         }
         _ => return Err(NetlistError::Unsupported(head.span, head.text.to_string())),
     };
-    let (nets, model) = split_terminals(kind, positional, head)?;
+    // `R1 a b 1k rpoly`: two nets, the value, the model.
+    let (nets, value, model) =
+        if let (DeviceKind::Resistor | DeviceKind::Capacitor, [_, _, value, model]) =
+            (kind, positional)
+        {
+            (&positional[..2], Some(*value), *model)
+        } else {
+            let (nets, model) = split_terminals(kind, positional, head)?;
+            (nets, None, model)
+        };
     b.device(
         head,
         kind,
         nets,
-        model,
+        (value, model),
         params,
         subckt,
         (Dialect::Spice, false),
@@ -837,7 +875,7 @@ fn spectre_card(b: &mut Build, card: &[Tok], next: &mut u32) -> Result<(), Netli
         head,
         kind,
         nets,
-        model,
+        (None, model),
         params,
         subckt,
         (Dialect::Spectre, false),

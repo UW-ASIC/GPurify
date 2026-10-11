@@ -384,3 +384,52 @@ X1 x A
         Err(gpurify_ingest::netlist::NetlistError::CyclicHierarchy(_))
     ));
 }
+
+/// Oracle: SPICE's own card syntax (ngspice manual, "Resistors" and
+/// "Capacitors": `RXXXXXXX n+ n- <value> <mname>`). A value written between
+/// a card's nets and its model is the device's `r` or `c`, so the positional
+/// card reads back as the card that names it: `1k` is 1000 ohms and `1p` is
+/// 1e-12 farads. A value with no model is refused, since LVS pairs a device
+/// by its model, and so is a value stated both ways.
+#[test]
+fn an_r_or_c_cards_positional_value_is_its_r_or_c() {
+    let mut strings = StrTable::default();
+    let none = DeviceRecognition::default();
+    let read = |cards: &str, strings: &mut StrTable| {
+        spice::read(
+            &format!(".subckt top a b\n{cards}\n.ends\n"),
+            strings,
+            &none,
+        )
+    };
+    let positional =
+        read("R1 a b 1k rpoly w=1u\nC1 a b 1p cmim", &mut strings).expect("the positional form");
+    let named =
+        read("R1 a b rpoly r=1k w=1u\nC1 a b cmim c=1p", &mut strings).expect("the named form");
+    let (r, w, c) = (
+        strings.intern("r"),
+        strings.intern("w"),
+        strings.intern("c"),
+    );
+    assert_eq!(positional.param, [(r, 1000.0), (w, 1e-6), (c, 1e-12)]);
+    assert_eq!(positional.param, named.param);
+    assert_eq!(positional.device_param_start, named.device_param_start);
+    assert_eq!(positional.device_model, named.device_model);
+    assert_eq!(
+        positional.device_kind,
+        [DeviceKind::Resistor, DeviceKind::Capacitor]
+    );
+
+    for card in ["R1 a b 1k", "C1 a b 1p"] {
+        match read(card, &mut strings) {
+            Err(NetlistError::Unsupported(span, _)) => assert_eq!(span.line, 2, "{card}"),
+            other => panic!("{card}: a value with no model read as {other:?}"),
+        }
+    }
+    match read("R1 a b 1k rpoly r=2k", &mut strings) {
+        Err(NetlistError::Unexpected(span, token)) => {
+            assert_eq!((span.line, token.as_str()), (2, "r=2k"));
+        }
+        other => panic!("a value stated twice read as {other:?}"),
+    }
+}
