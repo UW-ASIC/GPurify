@@ -100,3 +100,83 @@ fn a_supply_listed_twice_in_one_domain_is_named_as_a_repeat() {
         "net VDD is listed more than once in supplies"
     );
 }
+
+/// The `dynamic` entry of the `docs/usage.md` example, on VDD, with `budget`
+/// beside it and `extra` spliced into it.
+fn dynamic_intent(budget: &str, extra: &str) -> String {
+    format!(
+        r#"{{"temperature_c":105,"domains":{{"core":{{"voltage_mv":1800}}}},
+        "supplies":[{{"net":"VDD","domain":"core","role":"power"}}],
+        "limits":[{{"net":"VDD"{budget},"dynamic":{{"max_drop_mv":180,
+        "toggle_rate":0.2,"clock_period_ps":2000,"rise_time_ps":100{extra}}}}}]}}"#
+    )
+}
+
+/// Oracle: round trip against the schema `docs/usage.md` documents: the
+/// junction temperature reads back absolute (105 °C is 378.15 K) and every
+/// `dynamic` number lands in its field, an absent `decap_pf` as zero.
+#[test]
+#[allow(
+    clippy::float_cmp,
+    reason = "a value read back is the value written, bit for bit"
+)]
+fn a_dynamic_entry_and_a_temperature_read_back_as_written() {
+    let mut strings = StrTable::default();
+    let intent = gpurify_ingest::intent::parse_intent(
+        &dynamic_intent(r#","budget_current_ua":2000"#, ""),
+        &mut strings,
+    )
+    .expect("the usage.md example parses");
+    assert_eq!(
+        intent.temperature().map(gpurify_geom::Qty::raw),
+        Some(105.0 + 273.15)
+    );
+    let limits = intent.limits(strings.intern("VDD"));
+    let dynamic = limits.dynamic.expect("VDD states a dynamic entry");
+    assert_eq!(dynamic.max_drop.raw(), 180.0);
+    assert_eq!(dynamic.toggle_rate, 0.2);
+    assert_eq!(dynamic.clock_period_ps, 2000.0);
+    assert_eq!(dynamic.rise_time_ps, 100.0);
+    assert_eq!(dynamic.decap_pf, 0.0);
+    assert!(DesignIntent::default().temperature().is_none());
+}
+
+/// Oracle: construct-from-answer, against `IntentError`'s documented cases: a
+/// `dynamic` entry with no budget beside it, a toggle rate above 1, a rise
+/// longer than the period, a negative decap, a zero toggle rate, and a
+/// temperature below absolute zero are each refused with a message naming
+/// what is wrong.
+#[test]
+fn a_dynamic_entry_that_cannot_be_simulated_is_refused() {
+    let budget = r#","budget_current_ua":2000"#;
+    for (source, message) in [
+        (
+            dynamic_intent("", ""),
+            "malformed intent file: net VDD: dynamic needs budget_current_ua, the current it switches",
+        ),
+        (
+            dynamic_intent(budget, "").replace("0.2", "1.5"),
+            "malformed intent file: net VDD: dynamic toggle_rate is a fraction of cycles, at most 1",
+        ),
+        (
+            dynamic_intent(budget, "").replace(":100", ":3000"),
+            "malformed intent file: net VDD: dynamic rise_time_ps is longer than clock_period_ps",
+        ),
+        (
+            dynamic_intent(budget, r#","decap_pf":-1"#),
+            "malformed intent file: net VDD: dynamic decap_pf is negative or not finite",
+        ),
+        (
+            dynamic_intent(budget, "").replace("0.2", "0"),
+            "net VDD: dynamic.toggle_rate is not a positive finite number",
+        ),
+        (
+            dynamic_intent(budget, "").replace("105", "-300"),
+            "malformed intent file: temperature_c is -300, not a temperature above absolute zero",
+        ),
+    ] {
+        let error = gpurify_ingest::intent::parse_intent(&source, &mut StrTable::default())
+            .expect_err(message);
+        assert_eq!(error.to_string(), message, "{source}");
+    }
+}

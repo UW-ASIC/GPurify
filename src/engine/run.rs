@@ -146,10 +146,16 @@ impl Summary {
     }
 }
 
-/// The temperature every ERC derating is computed at: the deck's
-/// `temperature` statement, else 85 °C.
+/// The temperature every ERC derating is computed at: the intent's
+/// `temperature_c` (this chip's junction), else the deck's `temperature`
+/// statement, else 85 °C.
 fn sign_off_temperature(loaded: &Loaded) -> Qty<Temperature, { prefix::BASE }> {
-    loaded.deck.temperature.unwrap_or_else(|| celsius(85.0))
+    loaded
+        .intent
+        .as_ref()
+        .and_then(gpurify_ingest::DesignIntent::temperature)
+        .or(loaded.deck.temperature)
+        .unwrap_or_else(|| celsius(85.0))
 }
 
 /// Layer names a deck may declare its die outline under, first match wins.
