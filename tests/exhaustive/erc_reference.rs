@@ -747,3 +747,274 @@ fn topology_rules_agree_with_a_search_of_the_extracted_graph() {
         "too few circuits with a finding per rule: {nonempty:?}"
     );
 }
+
+// ------------------------------------------- voltages reached from the supplies
+
+/// The domain nominals the voltage rules' circuits draw their supplies from,
+/// mV: three domains, so a gate and a channel can be reached by different ones.
+const NOMINALS: [f64; 3] = [1800.0, 3300.0, 5000.0];
+
+/// A supply as the reference reads it: its net, role and domain index.
+type Supply = (NetId, SupplyRole, u32);
+
+/// What `from` can reach, re-derived from `erc::voltage`'s module docs by a
+/// breadth-first search from the net itself: a supply sits at its domain's
+/// nominal (power) or 0 V (ground) and passes nothing on; any other net
+/// reaches, through device channels (a MOS's source and drain, every pin of
+/// a diode, never a gate, a bulk or a capacitor), every supply some chain of
+/// channels joins it to. `(lowest, highest, power-domain bits)`, or `None`
+/// when no supply is reached.
+fn reach(c: &Circuit, supplies: &[Supply], from: NetId) -> Option<(f64, f64, u64)> {
+    let held = |net: NetId| {
+        let &(_, role, domain) = supplies.iter().find(|s| s.0 == net)?;
+        Some(match role {
+            SupplyRole::Power => (NOMINALS[domain as usize], 1u64 << domain),
+            SupplyRole::Ground => (0.0, 0),
+        })
+    };
+    let channel = |device: usize| -> Vec<NetId> {
+        let (nets, roles) = c.devices.terminals_of(DeviceId(device as u32));
+        nets.iter()
+            .zip(roles)
+            .filter(|&(&net, &role)| {
+                net != NetId::NONE
+                    && !matches!(role, TerminalRole::Gate | TerminalRole::Bulk)
+                    && c.devices.kind[device] != DeviceKind::Capacitor
+            })
+            .map(|(&net, _)| net)
+            .collect()
+    };
+    if from == NetId::NONE {
+        return None;
+    }
+    if let Some((volts, power)) = held(from) {
+        return Some((volts, volts, power));
+    }
+    let mut seen = vec![false; c.nets.net_count()];
+    seen[from.0 as usize] = true;
+    let mut queue = std::collections::VecDeque::from([from]);
+    let mut found: Option<(f64, f64, u64)> = None;
+    while let Some(net) = queue.pop_front() {
+        if let Some((volts, power)) = held(net) {
+            found = Some(found.map_or((volts, volts, power), |(lo, hi, mask)| {
+                (lo.min(volts), hi.max(volts), mask | power)
+            }));
+            continue;
+        }
+        for device in 0..c.devices.len() {
+            let ends = channel(device);
+            if !ends.contains(&net) {
+                continue;
+            }
+            for next in ends {
+                if !seen[next.0 as usize] {
+                    seen[next.0 as usize] = true;
+                    queue.push_back(next);
+                }
+            }
+        }
+    }
+    found
+}
+
+/// One rule's findings as `(device, measured)` in device order, and how many
+/// devices it examined.
+type Judged = (Vec<(usize, f64)>, u64);
+
+/// `well_bias` and `missing_level_shifter` re-derived from their rustdoc
+/// (`erc::rules::domain`) over [`reach`].
+fn bias_and_shifters(
+    c: &Circuit,
+    supplies: &[Supply],
+    (pmos, nmos, shifter): (StrId, StrId, StrId),
+) -> [Judged; 2] {
+    let (mut bias, mut shifters): (Judged, Judged) = ((Vec::new(), 0), (Vec::new(), 0));
+    for device in 0..c.devices.len() {
+        let (nets, roles) = c.devices.terminals_of(DeviceId(device as u32));
+        let at = |role: TerminalRole| {
+            roles
+                .iter()
+                .position(|&r| r == role)
+                .map_or(NetId::NONE, |k| nets[k])
+        };
+        let of = |role: TerminalRole| reach(c, supplies, at(role));
+        let model = c.devices.model[device];
+        let ends: Vec<(f64, f64, u64)> = [TerminalRole::Source, TerminalRole::Drain]
+            .into_iter()
+            .filter_map(&of)
+            .collect();
+        // well_bias: a pmos end above its bulk's lowest, an nmos end below
+        // its bulk's highest; examined when the bulk and an end are reached.
+        let biased = (model == pmos || model == nmos) && !ends.is_empty();
+        if let Some(bulk) = of(TerminalRole::Bulk).filter(|_| biased) {
+            let excess = if model == pmos {
+                ends.iter().map(|e| e.1).fold(f64::NEG_INFINITY, f64::max) - bulk.0
+            } else {
+                bulk.1 - ends.iter().map(|e| e.0).fold(f64::INFINITY, f64::min)
+            };
+            bias.1 += 1;
+            if excess > 0.0 {
+                bias.0.push((device, excess));
+            }
+        }
+        // missing_level_shifter: power domains that reach a transistor's
+        // gate and neither its source nor its drain; examined when power
+        // reaches the gate and the channel.
+        if c.devices.kind[device] == DeviceKind::Mos && model != shifter {
+            let mask = |role: TerminalRole| of(role).map_or(0, |r| r.2);
+            let gate = mask(TerminalRole::Gate);
+            let channel = mask(TerminalRole::Source) | mask(TerminalRole::Drain);
+            if gate != 0 && channel != 0 {
+                shifters.1 += 1;
+                let count = (gate & !channel).count_ones();
+                if count > 0 {
+                    shifters.0.push((device, f64::from(count)));
+                }
+            }
+        }
+    }
+    [bias, shifters]
+}
+
+/// ERC-D3, ERC-F12, ERC-F6. Oracle: a naive reference over the extracted
+/// graph of three hundred generated circuits ([`reach`], a breadth-first
+/// search from each net, and [`bias_and_shifters`], the rules' rustdoc),
+/// each MOS a `pmos`, an `nmos` or a level shifter at random and each
+/// supply in one of three domains at 1.8, 3.3 or 5 V. `well_bias` and
+/// `missing_level_shifter`, fed by the engine's own propagation
+/// (`erc::voltage::propagate_into`: components and folds, not a search),
+/// flag exactly the devices, with the measures, that the reference derives,
+/// and examine as many. A supply that propagates onward, a gate or bulk that
+/// conducts, or a bias or domain test the wrong way round breaks it.
+#[test]
+fn voltage_rules_agree_with_a_search_from_each_net() {
+    use gpurify::check::erc::rules::domain::{
+        check_missing_level_shifter, check_well_bias, MissingLevelShifterTable, WellBiasTable,
+    };
+    use gpurify::check::erc::voltage::{propagate_into, NetVoltage};
+
+    let mut rng = Rng::new(0x9_1003);
+    let mut nonempty = [0u32; 2];
+    for case in 0..300 {
+        let mut strings = StrTable::default();
+        let mut c = random_circuit(&mut rng, &mut strings);
+        let models = (
+            strings.intern("pmos"),
+            strings.intern("nmos"),
+            strings.intern("shifter"),
+        );
+        for device in 0..c.devices.len() {
+            if c.devices.kind[device] == DeviceKind::Mos {
+                c.devices.model[device] = [models.0, models.1, models.2][rng.below(3) as usize];
+            }
+        }
+        let net = |n: u32| c.nets.net_of(c.case.expected_net_polys[n as usize][0]);
+        let mut supplies: Vec<Supply> = c
+            .supplies
+            .iter()
+            .map(|&(n, role)| (net(n), role, rng.below(3) as u32))
+            .collect();
+        supplies.sort_by_key(|s| s.0);
+        let intent = IntentMap {
+            declared: true,
+            supply_net: supplies.iter().map(|s| s.0).collect(),
+            supply_role: supplies.iter().map(|s| s.1).collect(),
+            supply_domain: supplies.iter().map(|s| DomainId(s.2)).collect(),
+            supply_voltage: supplies
+                .iter()
+                .map(|s| Qty::new(NOMINALS[s.2 as usize]))
+                .collect(),
+            limit_net: Vec::new(),
+            limit: Vec::new(),
+        };
+        let id = strings.intern("rule");
+        let design = Design {
+            store: &c.case.store,
+            nets: &c.nets,
+            devices: &c.devices,
+        };
+        let mut voltage = NetVoltage::default();
+        propagate_into(&c.nets, &c.devices, &intent, &mut voltage);
+
+        let judged = |run: &mut dyn FnMut(&mut Violations, &mut Vec<RuleRun>)| -> Judged {
+            let (mut out, mut runs) = (Violations::default(), Vec::new());
+            run(&mut out, &mut runs);
+            assert_eq!(runs.len(), 1);
+            let mut found: Vec<(usize, f64)> = (0..out.len())
+                .map(|row| {
+                    let v = out.get(row);
+                    let device = c
+                        .devices
+                        .marker
+                        .iter()
+                        .position(|&m| m == v.shapes.0)
+                        .expect("a finding sits on a device marker");
+                    let measured = match v.measured {
+                        Measurement::Voltage(q) => q.raw(),
+                        Measurement::Count(n) => f64::from(n),
+                        other => panic!("case {case}: measured {other:?}"),
+                    };
+                    (device, measured)
+                })
+                .collect();
+            found.sort_by_key(|f| f.0);
+            (found, runs[0].examined)
+        };
+        let bias = judged(&mut |out, runs| {
+            check_well_bias(
+                design,
+                &intent,
+                &voltage,
+                &WellBiasTable {
+                    head: head(id),
+                    pmos_start: vec![0, 1],
+                    pmos: vec![models.0],
+                    nmos_start: vec![0, 1],
+                    nmos: vec![models.1],
+                },
+                out,
+                runs,
+            );
+        });
+        let shifters = judged(&mut |out, runs| {
+            check_missing_level_shifter(
+                design,
+                &intent,
+                &voltage,
+                &MissingLevelShifterTable {
+                    head: head(id),
+                    shifter_start: vec![0, 1],
+                    shifter: vec![models.2],
+                },
+                out,
+                runs,
+            );
+        });
+        let want = bias_and_shifters(&c, &supplies, models);
+        for (k, (rule, got, want)) in [
+            ("well_bias", bias, &want[0]),
+            ("missing_level_shifter", shifters, &want[1]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(got.1, want.1, "case {case}: {rule} examined");
+            let same = got.0.len() == want.0.len()
+                && got
+                    .0
+                    .iter()
+                    .zip(&want.0)
+                    .all(|(g, w)| g.0 == w.0 && (g.1 - w.1).abs() <= 1e-9);
+            assert!(
+                same,
+                "case {case}: {rule} found {:?}, want {:?}",
+                got.0, want.0
+            );
+            nonempty[k] += u32::from(!want.0.is_empty());
+        }
+    }
+    assert!(
+        nonempty.iter().all(|&n| n >= 10),
+        "too few circuits with a finding per rule: {nonempty:?}"
+    );
+}
