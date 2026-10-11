@@ -730,14 +730,15 @@ pub(crate) fn solve_refusal(
     }
 }
 
-/// `Some(reason)` when the matrix is not reciprocal within the solve's own
-/// tolerance. A NaN or infinite asymmetry is refused too.
+/// `Some(reason)` when the matrix is not reciprocal within what its solve
+/// allows: its own tolerance with a symmetric operator, the discretisation's
+/// with dielectric interfaces. A NaN or infinite asymmetry is refused too.
 fn reciprocity_refusal(accuracy: &gpurify_extract::quasistatic::Accuracy) -> Option<String> {
-    let refused = !accuracy.asymmetry.is_finite() || accuracy.asymmetry > accuracy.tolerance;
+    let refused = !accuracy.asymmetry.is_finite() || accuracy.asymmetry > accuracy.reciprocity;
     refused.then(|| {
         format!(
-            "the capacitance matrix is not reciprocal: asymmetry {:e} against a solve tolerance of {:e}, after {} iterations",
-            accuracy.asymmetry, accuracy.tolerance, accuracy.iterations
+            "the capacitance matrix is not reciprocal: asymmetry {:e} against the {:e} its solve allows, after {} iterations",
+            accuracy.asymmetry, accuracy.reciprocity, accuracy.iterations
         )
     })
 }
@@ -811,6 +812,7 @@ mod tests {
             tolerance: 1e-10,
             iterations: 7,
             asymmetry,
+            reciprocity: 1e-10,
         }
     }
 

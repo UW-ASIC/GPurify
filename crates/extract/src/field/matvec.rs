@@ -93,17 +93,24 @@ impl CpuMatVec {
     // ponytail: every pair is tested for nearness; a spatial index when the
     // dense product itself is replaced.
     pub fn build(mesh: &super::mesh::Mesh) -> Self {
+        Self::with_permittivity(&mesh.panel, &mesh.epsilon)
+    }
+
+    /// [`Self::build`] over `panel`, each in the dielectric `epsilon` gives
+    /// it; all 1 for the total-charge formulation of a stratified stack,
+    /// where every charge sits in vacuum (`super::dielectric`).
+    pub fn with_permittivity(panel: &[Panel], epsilon: &[f64]) -> Self {
         let mut out = Self::default();
-        for (panel, &epsilon) in mesh.panel.iter().zip(&mesh.epsilon) {
+        for (panel, &epsilon) in panel.iter().zip(epsilon) {
             out.cx.push(panel.centre[0]);
             out.cy.push(panel.centre[1]);
             out.cz.push(panel.centre[2]);
             out.radius.push(panel.area.sqrt() / SELF_POTENTIAL_SHAPE);
             out.coefficient.push(1.0 / (FOUR_PI_EPS0 * epsilon));
         }
-        let rows: Vec<Vec<(u32, f64)>> = (0..mesh.panel.len())
+        let rows: Vec<Vec<(u32, f64)>> = (0..panel.len())
             .into_par_iter()
-            .map(|i| out.near_row(&mesh.panel, i))
+            .map(|i| out.near_row(panel, i))
             .collect();
         out.near_start.push(0);
         for row in rows {
@@ -196,10 +203,9 @@ impl CpuMatVec {
     /// order; the output bits depend on it. Rows run in parallel, 4 per SIMD
     /// lane group.
     ///
-    /// ponytail: harmonic-mean `k` is the two-medium transmitted image only; no
-    /// reflected images at dielectric interfaces, so same-layer coupling is
-    /// under-predicted 14–159%. Fix: layered Green's function from the
-    /// `ProcessStack`.
+    /// The harmonic mean of `k` is exact in a uniform stack, where every
+    /// panel's `k` is one; a stratified stack is solved with every `k` that of
+    /// vacuum and its interfaces in the mesh (`super::dielectric`).
     pub fn apply(&self, x: &[f64], y: &mut [f64]) {
         let n = self.cx.len();
         // Release-mode length check: a short vector panics, never solves a prefix.

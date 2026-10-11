@@ -2088,7 +2088,10 @@ fn stage_lines_put_every_rule_in_a_stage() {
         .collect();
     assert_eq!(of_rule, [("a", 0), ("met2.w", 1), ("met3.w", 1), ("b", 1)]);
     for spec in &deck.rules.spec {
-        assert!(deck.stages.of(spec.id).is_some(), "every rule is in a stage");
+        assert!(
+            deck.stages.of(spec.id).is_some(),
+            "every rule is in a stage"
+        );
     }
     let (plain, _) = ok("rule a width(met1) >= 140nm\n");
     assert_eq!(plain.stages, gpurify_ingest::deck::Stages::default());

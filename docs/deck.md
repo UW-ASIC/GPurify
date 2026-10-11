@@ -800,6 +800,15 @@ its `area_cap` and `fringe_cap` are its junction capacitance, which a field
 solve (`--quasistatic`) adds in closed form rather than solving, so it needs
 no dielectric.
 
+The dielectrics make a stratified stack for the field solve: each line's
+dielectric fills the stack from its `height` up to the next line's height
+(the dielectric the layer sits in, up to the next layer), the lowest line's
+reaching down to the substrate and the highest line's up without end. Two
+lines at one height must state the same dielectric, or the field solve is
+refused naming the layer. Where the dielectric changes with height, the
+field solve meshes that interface and solves the polarisation on it; a
+stack of one dielectric has none.
+
 ### Temperature
 
 ```
