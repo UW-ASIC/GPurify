@@ -188,6 +188,7 @@ pub mod drc;
 pub mod erc;
 pub mod lvs;
 pub mod report;
+pub mod system;
 pub mod topology;
 
 use gpurify_geom::GeometryStore;

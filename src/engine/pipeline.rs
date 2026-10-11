@@ -10,7 +10,7 @@ use gpurify_geom::{GeometryStore, Grid};
 use gpurify_ingest::layout::UnknownLayers;
 use gpurify_ingest::netlist::Netlist;
 use gpurify_ingest::{DesignIntent, Provenance, StrTable};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// What a run was asked to work on: files only. The grid is the layout's own
 /// (its `UNITS` record), and geometry on a stream pair the deck neither declares
@@ -172,6 +172,68 @@ pub fn load_with(inputs: &Inputs, decks: &[(&str, DeckFn)]) -> Result<Loaded, Lo
     })
 }
 
+/// One layout read with its deck: what [`load`] reads besides the reference
+/// and the intent, and what a multi-die system ([`system`](crate::engine::system))
+/// reads for each of its dies. Its names are in the string table it was read
+/// into.
+#[derive(Debug)]
+pub struct Die {
+    /// The layout's database unit; the deck's lengths are on it.
+    pub grid: Grid,
+    /// The compiled deck.
+    pub deck: CompiledDeck,
+    /// The flattened layout geometry, on the deck's layer ids.
+    pub store: GeometryStore,
+    /// The layout's text labels, placed and bound to the polygons they name.
+    pub provenance: Provenance,
+}
+
+/// Reads one layout and its deck file into `strings`, as [`load`] does: the
+/// deck file, then the layout's bytes, then [`read_die`].
+///
+/// # Errors
+///
+/// As [`load`], but for the reference and the intent.
+pub fn load_die(layout: &Path, deck: &Path, strings: &mut StrTable) -> Result<Die, LoadError> {
+    let source = std::fs::read_to_string(deck).map_err(|why| {
+        CompileError::from(gpurify_ingest::DeckError::Io(format!(
+            "{}: {why}",
+            deck.display()
+        )))
+    })?;
+    let bytes = gpurify_ingest::layout::read_gds_bytes(layout)?;
+    read_die(&bytes, &source, &deck.display().to_string(), strings)
+}
+
+/// Reads one GDSII layout and the deck text `deck` (named `deck_file` in its
+/// errors) into `strings`, as [`load`] does: the layout's names first, then
+/// the deck's, so the same inputs give the same ids. The layout is flattened
+/// through the deck and its labels bound to shapes.
+///
+/// # Errors
+///
+/// [`LoadError::Layout`], [`LoadError::Deck`] and [`LoadError::Label`], as
+/// [`load`] documents them.
+pub fn read_die(
+    gds: &[u8],
+    deck: &str,
+    deck_file: &str,
+    strings: &mut StrTable,
+) -> Result<Die, LoadError> {
+    let library = gpurify_ingest::layout::gds::Library::parse(gds, strings)?;
+    let grid = library.grid()?;
+    let deck =
+        gpurify_check::deck::compile(deck, grid, strings).map_err(|why| why.in_file(deck_file))?;
+    let (store, mut provenance) = library.flatten(&deck, strings, UnknownLayers::Reject)?;
+    provenance.resolve_labels(&store, &deck.connectivity)?;
+    Ok(Die {
+        grid,
+        deck,
+        store,
+        provenance,
+    })
+}
+
 /// Intern every LVS report rule id, so `run_checks` (which borrows `Loaded`
 /// shared) can find them.
 ///
@@ -183,7 +245,7 @@ pub fn intern_report_ids(strings: &mut StrTable) {
 
 /// Read a reference netlist. The first subcircuit opener picks the dialect
 /// (`subckt` Spectre, `.subckt` SPICE); the extension decides only without one.
-fn read_reference(
+pub(crate) fn read_reference(
     path: &std::path::Path,
     devices: &gpurify_ingest::deck::DeviceRecognition,
     strings: &mut StrTable,
@@ -247,27 +309,36 @@ fn spectre_by_opener(source: &str) -> Option<bool> {
 ///   run stops with no report row. A short between two labelled nets is not
 ///   an error here: LVS reports it as `lvs.net_seed_conflict`.
 pub fn extract(loaded: &Loaded) -> Result<Extracted, ExtractError> {
+    extract_layout(&loaded.store, &loaded.deck, &loaded.provenance)
+}
+
+/// [`extract`] on a layout's parts: a [`Die`]'s, or a [`Loaded`]'s.
+///
+/// # Errors
+///
+/// As [`extract`].
+pub fn extract_layout(
+    store: &GeometryStore,
+    deck: &CompiledDeck,
+    provenance: &Provenance,
+) -> Result<Extracted, ExtractError> {
     let mut out = Extracted::default();
 
     // A MOS channel marker over live conductor would fuse source and drain into
     // one net and report the short as clean, so it is refused before nets exist.
     gpurify_check::topology::device::refuse_conducting_channels(
-        &loaded.store,
-        &loaded.deck.connectivity,
-        &loaded.deck.devices,
+        store,
+        &deck.connectivity,
+        &deck.devices,
     )?;
-    gpurify_check::topology::net::extract_nets_into(
-        &loaded.store,
-        &loaded.deck.connectivity,
-        &mut out.nets,
-    );
+    gpurify_check::topology::net::extract_nets_into(store, &deck.connectivity, &mut out.nets);
     gpurify_check::topology::device::recognise_into(
-        &loaded.store,
+        store,
         &out.nets,
-        &loaded.deck.devices,
+        &deck.devices,
         &mut out.devices,
     );
-    gpurify_check::topology::port::bind_ports_into(&out.nets, &loaded.provenance, &mut out.ports)?;
+    gpurify_check::topology::port::bind_ports_into(&out.nets, provenance, &mut out.ports)?;
     Ok(out)
 }
 

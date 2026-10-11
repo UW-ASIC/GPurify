@@ -1,7 +1,8 @@
 //! The command line, as a library: what the `gpurify` binary runs, and what
 //! a binary that carries its own decks runs ([`main_with`]).
 //!
-//! `gpurify <drc|erc|lvs|pex|all|lib> <layout> --deck <deck> [options]`;
+//! `gpurify <drc|erc|lvs|pex|all|lib> <layout> --deck <deck> [options]`,
+//! or `gpurify system <system.json> --reference <netlist>` for several dies;
 //! [usage.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/usage.md)
 //! documents every option, the reports and the exit codes. Every binary
 //! built on [`main_with`] has the same flags, report and exit codes.
@@ -69,6 +70,39 @@ pub fn main_with(decks: &[(&str, DeckFn)]) -> ExitCode {
 /// One whole run, rendered in the requested format. An error has already been
 /// reported on stderr when this returns `Err`.
 fn render(cli: &args::Cli, decks: &[(&str, DeckFn)]) -> Result<(Summary, String), ExitCode> {
+    if let Some(system) = &cli.system {
+        let reference = cli
+            .inputs
+            .reference
+            .as_deref()
+            .expect("the parser requires a system netlist");
+        let run = crate::engine::system::run(system, reference).map_err(|error| fail(&error))?;
+        // A system has no one deck or layout: both name the system file.
+        let header = Header {
+            tool_version: env!("CARGO_PKG_VERSION"),
+            deck_path: system.display().to_string(),
+            layout_path: system.display().to_string(),
+            timestamp: None,
+        };
+        let mut text = String::new();
+        if cli.format == args::Format::Json {
+            json::write_report(
+                &json::Report {
+                    header: &header,
+                    violations: &run.outputs.violations,
+                    runs: &run.outputs.runs,
+                    strings: &run.strings,
+                    grid: run.grid,
+                },
+                &mut text,
+            )
+            .map_err(|error| fail(&error))?;
+        } else {
+            format::write_violations(&run.outputs, &run.strings, run.grid, &mut text);
+            format::write_summary(&run.summary, &mut text);
+        }
+        return Ok((run.summary, text));
+    }
     let (loaded, extracted, outputs, summary) = if let Some(other) = &cli.other {
         let (loaded, outputs, summary) = crate::engine::xor::run_with(&cli.inputs, other, decks)
             .map_err(|error| fail(&error))?;

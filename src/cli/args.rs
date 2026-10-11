@@ -1,5 +1,6 @@
 //! Command line: `gpurify <drc|erc|lvs|pex|all|lib> <layout> --deck <deck> [options]`,
-//! or `gpurify xor <layout> <other> --deck <deck> [--format text|json]`.
+//! `gpurify xor <layout> <other> --deck <deck> [--format text|json]`, or
+//! `gpurify system <system.json> --reference <netlist> [--format text|json]`.
 
 use crate::engine::{Checks, Inputs, RunOptions};
 use crate::liberty::Accuracy;
@@ -24,6 +25,9 @@ pub struct Cli {
     pub lib: Option<LibArgs>,
     /// `xor`: the layout compared with `inputs.layout`, instead of checking.
     pub other: Option<PathBuf>,
+    /// `system`: the system description, checked with `inputs.reference`
+    /// as its system netlist; `inputs.layout` and `inputs.deck` are empty.
+    pub system: Option<PathBuf>,
 }
 
 /// What `lib` was asked for.
@@ -54,7 +58,9 @@ fn usage<T>(message: String) -> Result<T, ArgError> {
 /// D)`, `temperature`). `xor`'s second layout is its second positional input.
 pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     let Some((subcommand, rest)) = argv.split_first() else {
-        return usage("expected a subcommand: drc, erc, lvs, pex, all, lib or xor".to_string());
+        return usage(
+            "expected a subcommand: drc, erc, lvs, pex, all, lib, xor or system".to_string(),
+        );
     };
 
     let mut layouts: Vec<&str> = Vec::new();
@@ -119,11 +125,13 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         "pex" => (Checks { pex: true, ..none }, false, false, true),
         // `all` keeps LVS selected without a reference, so it reports Skipped.
         "all" => (Checks::ALL, true, true, false),
-        // A reference is cross-checked against the spec's pins, never compared.
-        "lib" => (none, false, true, false),
+        // `lib`: a reference is cross-checked against the spec's pins, never
+        // compared. `system`: each die names its deck and intent in the
+        // system file, and the reference is the system netlist.
+        "lib" | "system" => (none, false, true, false),
         other => {
             return usage(format!(
-                "unknown subcommand {other}; expected drc, erc, lvs, pex, all, lib or xor"
+                "unknown subcommand {other}; expected drc, erc, lvs, pex, all, lib, xor or system"
             ))
         }
     };
@@ -207,6 +215,37 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
             "--format {name} is not something this check produces"
         ));
     }
+    if subcommand == "system" {
+        if deck.is_some() {
+            return usage(
+                "system takes no --deck: each die names its deck in the system file".to_string(),
+            );
+        }
+        let Some(&system) = layouts.first() else {
+            return usage(
+                "system needs a system description: system <system.json> --reference <netlist>"
+                    .to_string(),
+            );
+        };
+        let Some(reference) = reference else {
+            return usage("system requires a system netlist (--reference)".to_string());
+        };
+        return Ok(Cli {
+            inputs: Inputs {
+                reference: Some(PathBuf::from(reference)),
+                ..Inputs::default()
+            },
+            options: RunOptions {
+                checks,
+                lvs: gpurify_check::lvs::CompareOptions::default(),
+                quasistatic_nets: Vec::new(),
+            },
+            format,
+            lib: None,
+            other: None,
+            system: Some(PathBuf::from(system)),
+        });
+    }
     let Some(&layout) = layouts.first() else {
         return usage(format!(
             "{subcommand} needs a layout file: {subcommand} <layout> --deck <deck>"
@@ -231,6 +270,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         format,
         lib,
         other: layouts.get(1).copied().map(PathBuf::from),
+        system: None,
     })
 }
 
@@ -290,6 +330,26 @@ mod tests {
         );
     }
 
+    /// Oracle: `docs/usage.md` ("Multi-die systems"): `system` takes the
+    /// system description as its one positional file and the system netlist
+    /// as `--reference`, and selects none of the single-die checks.
+    #[test]
+    fn system_takes_its_description_and_netlist() {
+        let cli =
+            parse_str("system stack.json --reference sys.spice --format json").expect("legal");
+        assert_eq!(
+            cli.system.as_deref(),
+            Some(std::path::Path::new("stack.json"))
+        );
+        assert_eq!(
+            cli.inputs.reference.as_deref(),
+            Some(std::path::Path::new("sys.spice"))
+        );
+        assert_eq!(cli.format, Format::Json);
+        assert!(cli.lib.is_none());
+        assert_eq!(parse_str("drc t --deck d").expect("legal").system, None);
+    }
+
     /// Oracle: construct-from-answer, against `docs/usage.md`: `xor` takes its
     /// two layouts in the order given and a report format; no other command
     /// has a second layout.
@@ -329,11 +389,31 @@ mod tests {
         let cases = [
             (
                 "",
-                "expected a subcommand: drc, erc, lvs, pex, all, lib or xor",
+                "expected a subcommand: drc, erc, lvs, pex, all, lib, xor or system",
             ),
             (
                 "dcr t --deck d",
-                "unknown subcommand dcr; expected drc, erc, lvs, pex, all, lib or xor",
+                "unknown subcommand dcr; expected drc, erc, lvs, pex, all, lib, xor or system",
+            ),
+            (
+                "system s.json --deck d --reference r",
+                "system takes no --deck: each die names its deck in the system file",
+            ),
+            (
+                "system --reference r",
+                "system needs a system description: system <system.json> --reference <netlist>",
+            ),
+            (
+                "system s.json",
+                "system requires a system netlist (--reference)",
+            ),
+            (
+                "system s.json --reference r --intent i",
+                "system takes no --intent",
+            ),
+            (
+                "system s.json --reference r --format spef",
+                "--format spef is not something this check produces",
             ),
             (
                 "xor t --deck d",
