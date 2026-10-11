@@ -1,5 +1,5 @@
 //! Spacing read off the edges of the merged layer: facing edges classed by
-//! their lengths.
+//! their lengths, and gaps in a forbidden range.
 //!
 //! Data in: one layer, validated and merged into `s.layer_out`; every rule
 //! here reads whole edges of the merged figures, so a side drawn as several
@@ -200,6 +200,36 @@ pub(crate) fn tip_spacing_table(
         let need = table.at(class(e.length()), class(f.length())).raw();
         if gap < need {
             hits.push(hit(e, f, gap, span, need));
+        }
+    });
+    report_pairs(rule, layer, &owners, &mut hits, out);
+    (Outcome::Ran, examined)
+}
+
+/// A gap from `min` to `max`, both included, between facing edges of
+/// different figures that run alongside each other for more than `prl`
+/// (`LEF58_TWOWIRESFORBIDDENSPACING`). `examined` counts the facing pairs of
+/// edges in different figures at most `max` apart running more than `prl`.
+pub(crate) fn forbidden_spacing(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    (min, max, prl): (Dbu, Dbu, Dbu),
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(owners) = merged_owners(store, layer, s) else {
+        return REFUSED;
+    };
+    let edges = figure_edges(&s.layer_out);
+    let (mut hits, mut examined) = (Vec::new(), 0u64);
+    each_facing(&edges, max.raw(), |e, f, gap, (lo, hi)| {
+        if e.figure == f.figure || hi - lo <= prl.raw() {
+            return;
+        }
+        examined += 1;
+        if gap >= min.raw() {
+            hits.push(hit(e, f, gap, (lo, hi), max.raw() + 1));
         }
     });
     report_pairs(rule, layer, &owners, &mut hits, out);

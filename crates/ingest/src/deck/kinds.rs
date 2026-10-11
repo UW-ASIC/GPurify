@@ -578,6 +578,20 @@ pub(crate) const KINDS: &[Kind] = &[
             p("space", "space", Dim::LengthRows),
         ],
     ),
+    // A gap in a forbidden range between facing edges that run alongside
+    // (`LEF58_TWOWIRESFORBIDDENSPACING`).
+    drc(
+        "forbidden_space",
+        Cmp::Absent,
+        "forbidden_spacing",
+        &[0],
+        None,
+        &[
+            p("min", "min", Dim::Length),
+            p("max", "max", Dim::Length),
+            p("prl", "prl", Dim::Length),
+        ],
+    ),
     // Edge layers.
     drc("length", Cmp::Ge, "edge_min_length", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "edge_spacing", &[0], LIMIT, &[]),

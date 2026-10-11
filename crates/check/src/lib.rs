@@ -84,6 +84,7 @@
 //! | `total_area(L) <= area` | `total_area` | [`drc::Rule::TotalArea`] | more area on `L` in the whole layout than the limit | DRC-091 |
 //! | `aspect_ratio(L) <= r` | `aspect_ratio` | [`drc::Rule::AspectRatio`] | a shape whose bounding box is longer than `r` times its width | DRC-022 |
 //! | `tip_space_table(L; length: [..], space: [[..]])` | `tip_spacing_table` | [`drc::Rule::TipSpacingTable`] | facing edges closer than the cell their two length classes select | DRC-031 |
+//! | `forbidden_space(L; min: len, max: len, prl: len)` | `forbidden_spacing` | [`drc::Rule::ForbiddenSpacing`] | facing edges running alongside at a gap in a forbidden range | DRC-033 |
 //!
 //! ## Electrical rules
 //!

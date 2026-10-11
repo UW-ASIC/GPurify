@@ -71,6 +71,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         net_spacing(depth),
         spacing_table(depth),
         tip_spacing_table(depth),
+        forbidden_spacing(depth),
         min_area(depth),
         min_enclosed_area(depth),
         off_grid(depth),
@@ -2777,6 +2778,87 @@ fn tip_spacing_table(depth: Depth) -> Vec<Fixture> {
     );
     let mut out = every_placement(cases);
     out.push(vacuous("tip_spacing_table", &["DRC-031"], TIPS, &["t"]));
+    out
+}
+
+// ---------------------------------------------------------- forbidden_spacing
+
+/// `forbidden_space(met1; min: 100nm, max: 150nm, prl: 200nm)`
+/// (`forbidden_spacing`, DRC-033): facing edges of different figures that
+/// run alongside for more than 200 at a gap from 100 to 150, both included,
+/// are forbidden; one finding per pair of figures, its smallest forbidden
+/// gap, at the middle of the stretch the two edges face each other over.
+///
+/// The gap swept around both ends of the range (both are forbidden: 99 and
+/// 151 are legal), the run swept around 200 at a gap of 120 (200 is not
+/// more than 200). Clean: a diagonal pair, a U whose arms are 120 apart
+/// (one figure). Three bars 120 apart, two findings. A figure facing a bar
+/// 90 away along one step and 130 along another: the narrower gap is below
+/// the range and legal, and the finding is the 130.
+fn forbidden_spacing(depth: Depth) -> Vec<Fixture> {
+    const RULE: &str = "rule f forbidden_space(met1; min: 100nm, max: 150nm, prl: 200nm)";
+    let deck = one_layer_deck(RULE);
+    let mut cases = Vec::new();
+    let mut case = |shape: String, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("forbidden_spacing/{shape}"),
+            &["DRC-033"],
+            &deck,
+            layout,
+            vec![("f", findings)],
+        ));
+    };
+    let bars = |g: i64| met1(&[[0, 0, 100, 1000], [100 + g, 0, 200 + g, 1000]]);
+    for (end, limit) in [("min", 100), ("max", 150)] {
+        for g in sweep(depth, limit) {
+            let findings = if (100..=150).contains(&g) {
+                vec![pin(Finding::length(g), 200 + g, 1000)]
+            } else {
+                Vec::new()
+            };
+            case(format!("gap_{end}/{}", side(g, limit)), bars(g), findings);
+        }
+    }
+    for r in sweep(depth, 200) {
+        let findings = if r > 200 {
+            vec![pin(Finding::length(120), 320, 2000 - r)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("run/{}", side(r, 200)),
+            met1(&[[0, 0, 100, 1000], [220, 1000 - r, 320, 2000 - r]]),
+            findings,
+        );
+    }
+    case(
+        "diagonal".into(),
+        met1(&[[0, 0, 100, 1000], [220, 1100, 320, 2000]]),
+        Vec::new(),
+    );
+    case(
+        "one_figure".into(),
+        met1(&[[0, 0, 100, 1000], [220, 0, 320, 1000], [0, -100, 320, 0]]),
+        Vec::new(),
+    );
+    case(
+        "three_bars".into(),
+        met1(&[[0, 0, 100, 1000], [220, 0, 320, 1000], [440, 0, 540, 1000]]),
+        vec![
+            Finding::length(120).at(160, 500),
+            Finding::length(120).at(380, 500),
+        ],
+    );
+    // The bar's side x = 100 faces the figure's step x = 190 over
+    // y = 0..400 (90: below the range, legal) and x = 230 over y = 400..1000
+    // (130, run 600: forbidden), marked at (165, 700).
+    case(
+        "narrower_step_is_legal".into(),
+        met1(&[[0, 0, 100, 1000], [190, 0, 290, 400], [230, 400, 330, 1000]]),
+        vec![Finding::length(130).at(165, 700)],
+    );
+    let mut out = every_placement(cases);
+    out.push(vacuous("forbidden_spacing", &["DRC-033"], RULE, &["f"]));
     out
 }
 

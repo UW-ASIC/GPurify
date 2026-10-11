@@ -1361,6 +1361,49 @@ pub enum Rule {
         /// Index into [`RuleSet::class_tables`].
         table: u32,
     },
+    /// Two shapes whose facing edges run alongside each other at a gap in a
+    /// forbidden range.
+    ///
+    /// Deck: `forbidden_space(L; min: len, max: len, prl: len)`, kind
+    /// `forbidden_spacing`. Edges and facing are as for
+    /// [`Rule::TipSpacingTable`]: whole edges of the merged layer, of
+    /// different merged figures, parallel and facing each other across empty
+    /// space over a positive run. A facing pair whose run (the length over
+    /// which their spans overlap) is longer than `prl`, and whose gap lies
+    /// from `min` to `max`, both included, is forbidden. A wider gap is
+    /// legal, and so is a narrower one, which the minimum-spacing rule
+    /// judges. This is `OpenROAD` `TritonRoute`'s reading of
+    /// `LEF58_TWOWIRESFORBIDDENSPACING`: the range is closed
+    /// (`isForbiddenSpacing`) and the run strictly longer (`isValidPrl`).
+    ///
+    /// One violation per pair of merged figures with a forbidden facing
+    /// pair: `measured` the smallest such gap and `limit` `max` plus one grid
+    /// unit (the narrowest legal gap above the range), at the middle of the
+    /// stretch the two edges face each other over. `shapes` is the lowest
+    /// drawn row under each figure. `examined` counts facing pairs of edges
+    /// in different figures at most `max` apart that run longer than `prl`.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-033. Rules: `LEF58_TWOWIRESFORBIDDENSPACING` and the range of
+    /// `LEF58_FORBIDDENSPACING`.
+    ///
+    /// Limits: no preferred direction, so both orientations are checked. The
+    /// qualifiers on which wires the range binds are missing: the two-wire
+    /// form's `MINSPANLENGTH` and `MAXSPANLENGTH`, and
+    /// `LEF58_FORBIDDENSPACING`'s `WIDTH`, `WITHIN` and `TWOEDGES`.
+    /// `TritonRoute` reports a `LEF58_FORBIDDENSPACING` pair only when a
+    /// third shape lies in its gap; that reading is not modelled.
+    ForbiddenSpacing {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// The narrowest forbidden gap, in grid units; positive.
+        min: Dbu,
+        /// The widest forbidden gap, in grid units; at least `min`.
+        max: Dbu,
+        /// The run a facing pair must exceed to be judged, in grid units; 0
+        /// or more.
+        prl: Dbu,
+    },
 }
 
 /// Which runs of short edges a [`Rule::MinStep`] rejects, after LEF
@@ -1581,7 +1624,8 @@ impl RuleSet {
     ///   multiple of 45 degrees;
     /// - what [`Rule::validate`] refuses: a limit that is not positive, or a
     ///   spacing table that is not complete and monotone;
-    /// - [`DrcError::BadTable`] when a class table fails its kind's check.
+    /// - [`DrcError::BadTable`] when a class or span table fails its kind's
+    ///   check, or a forbidden range has `min` above `max`.
     pub fn from_deck(deck: &Deck, strings: &StrTable) -> Result<Self, DrcError> {
         let rules = &deck.rules;
         let name_of = |id: StrId| strings.resolve(id).to_owned();
@@ -1650,6 +1694,19 @@ impl RuleSet {
         let bounded = |spec: &RuleSpec| match spec.layer_len {
             1 => Ok((layer(spec, 0), None)),
             _ => two(spec).map(|(layer, boundary)| (layer, Some(boundary))),
+        };
+        // A length that may be 0, as a run a pair must exceed.
+        let at_least_zero = |spec: &RuleSpec, param| -> Result<Dbu, DrcError> {
+            let ParamValue::Length(value) = value(spec, param)? else {
+                return Err(wrong_type(spec, param));
+            };
+            if value.raw() < 0 {
+                return Err(DrcError::NonPositiveLimit {
+                    rule: name_of(spec.id),
+                    limit: value.raw(),
+                });
+            }
+            Ok(value)
         };
         // Every length given for a list parameter, in deck order.
         let lengths = |spec: &RuleSpec, param: &'static str| -> Result<Vec<Dbu>, DrcError> {
@@ -2101,6 +2158,20 @@ impl RuleSet {
                             .expect("a deck has few tables"),
                     }
                 }
+                "forbidden_spacing" => {
+                    let layer = one(spec)?;
+                    let (min, max) = (length(spec, "min")?, length(spec, "max")?);
+                    let prl = at_least_zero(spec, "prl")?;
+                    if min > max {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    Rule::ForbiddenSpacing {
+                        layer,
+                        min,
+                        max,
+                        prl,
+                    }
+                }
                 other => {
                     assert!(
                         !KINDS.contains(&other),
@@ -2380,6 +2451,12 @@ impl RuleSet {
                     s,
                     out,
                 ),
+                Rule::ForbiddenSpacing {
+                    layer,
+                    min,
+                    max,
+                    prl,
+                } => facing::forbidden_spacing(store, id, layer, (min, max, prl), s, out),
             };
             record_run(runs, out, before, id, outcome, examined);
             // A rule over every layer (`angle` with none named, `off_grid`)
@@ -2722,7 +2799,8 @@ impl Rule {
             | Rule::EdgeFacingSpace { layer, .. }
             | Rule::AllowedWidth { layer, .. }
             | Rule::MinStep { layer, .. }
-            | Rule::TipSpacingTable { layer, .. } => [Some(layer), None],
+            | Rule::TipSpacingTable { layer, .. }
+            | Rule::ForbiddenSpacing { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..

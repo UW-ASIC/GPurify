@@ -255,6 +255,12 @@ def tip_table(rule, pairs, classes, space)
     put({ rule: rule, ep: [seg(e), seg(f)] }) if line_gap(e, f) < need
   end
 end
+# Each facing pair `pairs` holds whose lines are at least `lo` apart.
+def forbidden_gap(rule, pairs, lo)
+  pairs.data.each do |ep|
+    put({ rule: rule, ep: [seg(ep.first), seg(ep.second)] }) if line_gap(ep.first, ep.second) >= lo
+  end
+end
 "#;
 
 /// A Ruby string literal.
@@ -1257,6 +1263,28 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 .expect("a String");
                 exact(
                     "tip_spacing_table",
+                    Key::Pair(name.clone(), name, false),
+                    Value::Length,
+                )
+            }
+            Rule::ForbiddenSpacing {
+                layer,
+                min,
+                max,
+                prl,
+            } => {
+                let name = fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "forbidden_gap({q}, {}.isolated({}, projection, transparent, projection_limits({}, nil)), {})",
+                    var(layer),
+                    lim(max) + 1,
+                    lim(prl) + 1,
+                    lim(min)
+                )
+                .expect("a String");
+                exact(
+                    "forbidden_spacing",
                     Key::Pair(name.clone(), name, false),
                     Value::Length,
                 )
