@@ -251,8 +251,9 @@ explains (kind 30).
 | 35 | edge_enclosure | `enclosure(E, L) >= l` | POINT | EXACT | exact | 3112 |
 | 36 | count | `count(L) <= n` / `>= n` | POINT | EXACT | exact | new in H |
 | 37 | aspect_ratio | `aspect_ratio(L) <= r` | FIG by marker | EXACT | exact | new in H |
+| 38 | total_area | `total_area(L) <= a` | POINT | EXACT | exact | new in H |
 
-25 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
+26 kinds are EXACT, 11 APPROX and one NONE; `net_spacing` is NONE on a deck without
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
 The counts were measured on 990376b (after B20 and B24), with the translator reconciled to B24.
@@ -881,6 +882,21 @@ emit(id, L.drc(bbox_aspect_ratio > R)) { |p| { v: [p.bbox.width, p.bbox.height].
   ([X]; the layer form is `with_bbox_aspect_ratio`, [L]), on merged figures. At ×2 both sides
   double, so the quotient, and its comparison with the unscaled limit, is the same double. Key FIG
   by marker; the ratio compared to 1e-9.
+
+### 38. total_area — EXACT
+
+**GPurify** (`area.rs` `total_area`): the area of the merged layer in the whole layout, holes
+excluded; one finding above the limit, at the die's centre (as `count`), `measured` the area.
+
+**KLayout**
+
+```ruby
+a = L.data.merged.area
+put({ rule: id, pt: [die.center.x, die.center.y], v: a / 4.0 }) if !die.empty? && a > AREA4
+```
+
+- `area` on a layer is "the total area of all polygons", merged, so overlaps count once ([L]);
+  IHP's own deck checks MIM.gR as `mim_drw.area > value`. At ×2 the area is four times GPurify's.
 
 ---
 

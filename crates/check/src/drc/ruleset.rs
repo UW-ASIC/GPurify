@@ -1052,6 +1052,28 @@ pub enum Rule {
         /// The largest legal ratio; positive and finite.
         limit: f64,
     },
+    /// More area on a layer, in the whole layout, than `limit`.
+    ///
+    /// Deck: `total_area(L) <= area`, kind `total_area`. The layer is merged
+    /// first, so overlapping shapes count once and holes not at all: the
+    /// area `L` covers in the whole layout, a quantity per chip.
+    ///
+    /// One violation when the area is above `limit`, at the centre of the die
+    /// (the extent of the drawn layers, as [`Rule::Count`] places it),
+    /// `measured` the area. `shapes.0` is the layer's first row, or none on an
+    /// empty layer. `examined` counts figures. Records [`Outcome::Skipped`]
+    /// when nothing is drawn.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-091. Rules: IHP MIM.gR ("max. recommended total MIM area per
+    /// chip", 174800 µm²); `KLayout` `area` on a layer ("the total area of
+    /// all polygons", merged).
+    TotalArea {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// The largest legal area, in square grid units; positive.
+        limit: DbuArea,
+    },
 }
 
 /// A spacing table, LEF `SPACINGTABLE PARALLELRUNLENGTH`: the required space
@@ -1532,6 +1554,10 @@ impl RuleSet {
                     layer: one(spec)?,
                     limit: ratio(spec, "limit")?,
                 },
+                "total_area" => Rule::TotalArea {
+                    layer: one(spec)?,
+                    limit: area_limit(spec, "limit")?,
+                },
                 other => {
                     assert!(
                         !KINDS.contains(&other),
@@ -1767,6 +1793,9 @@ impl RuleSet {
                 Rule::AspectRatio { layer, limit } => {
                     area::aspect_ratio(store, id, layer, limit, s, out)
                 }
+                Rule::TotalArea { layer, limit } => {
+                    area::total_area(store, id, (layer, drawn), limit, s, out)
+                }
             };
             record_run(runs, out, before, id, outcome, examined);
             for layer in rule.layers().into_iter().flatten() {
@@ -1804,7 +1833,8 @@ impl Rule {
             | Rule::AttachedWideSpacing { layer, .. }
             | Rule::EdgeMinLength { layer, .. }
             | Rule::Count { layer, .. }
-            | Rule::AspectRatio { layer, .. } => [Some(layer), None],
+            | Rule::AspectRatio { layer, .. }
+            | Rule::TotalArea { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             Rule::Density {
                 layer, boundary, ..
@@ -1846,7 +1876,7 @@ impl Rule {
 /// [`crate::erc::ruleset::KINDS`]. The engine refuses a deck row whose kind is
 /// in neither ([`DrcError::UnknownKind`]); [`RuleSet::from_deck`] alone steps
 /// over it.
-pub const KINDS: [&str; 37] = [
+pub const KINDS: [&str; 38] = [
     "min_width",
     "max_width",
     "cut_size",
@@ -1884,4 +1914,5 @@ pub const KINDS: [&str; 37] = [
     "edge_enclosure",
     "count",
     "aspect_ratio",
+    "total_area",
 ];

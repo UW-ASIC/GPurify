@@ -1081,6 +1081,18 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 .expect("a String");
                 exact("aspect_ratio", Key::FigAt(name), Value::Ratio)
             }
+            Rule::TotalArea { layer, limit } => {
+                layers.reads(layer, &mut reads);
+                writeln!(
+                    body,
+                    "a = {}.data.merged.area ; \
+                     put({{ rule: {q}, pt: [die.center.x, die.center.y], v: a / 4.0 }}) if !die.empty? && a > {}",
+                    var(layer),
+                    4 * limit.raw()
+                )
+                .expect("a String");
+                exact("total_area", Key::Point, Value::Area)
+            }
         };
         reads.sort();
         reads.dedup();

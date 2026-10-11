@@ -55,6 +55,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         exemption(),
         chip_and_device(),
         chip_count(),
+        chip_area(),
         dangling_metal(),
         drc_warning(),
         multi_patterning(depth),
@@ -2329,6 +2330,65 @@ fn chip_count() -> Vec<Fixture> {
         ),
         &[("seal.out", areas(&[10_000, 10_000]))],
     ));
+    every_placement(cases)
+}
+
+/// A total area per chip (`total_area`, DRC-091: IHP MIM.gR's total MIM
+/// area): `total_area(a) <= 30000nm2`, one finding at the die's centre
+/// measuring the area; the die is a frame on another layer, `[0, 4000]²`.
+///
+/// Oracle: areas fixed by construction at the limit and one 100 nm² step
+/// either side; the area summed over separate shapes; two overlapping shapes
+/// counted once (summing drawn rows reads 40100 for the 30100 they cover); a
+/// ring of 30200 whose filled box is 40200; an empty layer.
+fn chip_area() -> Vec<Fixture> {
+    let deck = new_deck(&["a", "frame"], "rule ta total_area(a) <= 30000nm2\n");
+    let at = |area: i128| Finding::area(area).at(2000, 2000);
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("total_area/{name}"),
+            &["DRC-091"],
+            &deck,
+            layout.rect("frame", 0, 0, 4000, 4000),
+            &[("ta", findings)],
+        )
+    };
+    let a = |boxes: &[Rect]| rects(Layout::default(), "a", boxes);
+    let mut cases = Vec::new();
+    for (h, side) in sweep(300) {
+        let area = i128::from(100 * h);
+        let findings = if area > 30_000 {
+            vec![at(area)]
+        } else {
+            vec![]
+        };
+        cases.push(case(
+            &format!("bar/{side}"),
+            a(&[(100, 100, 200, 100 + h)]),
+            findings,
+        ));
+    }
+    cases.push(case(
+        "summed_over_shapes",
+        a(&[(100, 100, 200, 250), (500, 100, 600, 251)]),
+        vec![at(30_100)],
+    ));
+    cases.push(case(
+        "overlap_counted_once",
+        a(&[(100, 100, 200, 300), (100, 200, 200, 401)]),
+        vec![at(30_100)],
+    ));
+    cases.push(case(
+        "ring",
+        ring(
+            Layout::default(),
+            "a",
+            (100, 100, 300, 301),
+            (150, 150, 250, 250),
+        ),
+        vec![at(30_200)],
+    ));
+    cases.push(case("empty", Layout::default(), vec![]));
     every_placement(cases)
 }
 
