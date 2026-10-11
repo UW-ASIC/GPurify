@@ -515,7 +515,7 @@ fn run_pex(
         grid,
         &mut network,
     ) {
-        return StageStatus::Refused(format!("layer {}: {why}", layer_name(loaded, why.layer())));
+        return StageStatus::Refused(pex_refusal(loaded, why));
     }
     if !options.quasistatic_nets.is_empty() {
         let mut matrix = gpurify_extract::quasistatic::CapMatrix::default();
@@ -559,7 +559,7 @@ fn run_pex(
 }
 
 /// A layer as the deck names it; the id for a layer past the deck's table.
-fn layer_name(loaded: &Loaded, layer: LayerId) -> String {
+pub(crate) fn layer_name(loaded: &Loaded, layer: LayerId) -> String {
     if layer.idx() < loaded.deck.layers.len() {
         loaded
             .strings
@@ -570,9 +570,20 @@ fn layer_name(loaded: &Loaded, layer: LayerId) -> String {
     }
 }
 
+/// Why the closed forms refused, naming the deck layer.
+pub(crate) fn pex_refusal(
+    loaded: &Loaded,
+    why: gpurify_extract::analytical::AnalyticalError,
+) -> String {
+    format!("layer {}: {why}", layer_name(loaded, why.layer()))
+}
+
 /// Why a field solve produced no capacitance, naming the deck layer a mesh
 /// refusal is about.
-fn solve_refusal(loaded: &Loaded, why: gpurify_extract::quasistatic::solve::SolveError) -> String {
+pub(crate) fn solve_refusal(
+    loaded: &Loaded,
+    why: gpurify_extract::quasistatic::solve::SolveError,
+) -> String {
     match why {
         gpurify_extract::quasistatic::solve::SolveError::Mesh(mesh) => match mesh.layer() {
             Some(layer) => format!("layer {}: {mesh}", layer_name(loaded, layer)),

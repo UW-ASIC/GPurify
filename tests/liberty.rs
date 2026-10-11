@@ -11,6 +11,7 @@ mod gen_fixtures;
 
 use gen_fixtures::fixtures;
 use gpurify::engine::pipeline::{extract, load, Inputs};
+use gpurify::ingest::deck::ProcessStack;
 use gpurify::liberty::{generate, spec, Accuracy, LibError, Request};
 
 fn inputs(reference: bool) -> Inputs {
@@ -153,5 +154,56 @@ fn two_pins_labelled_on_one_net_are_refused_as_shorted() {
             );
         }
         other => panic!("{other:?}"),
+    }
+}
+
+/// Testing-plan F78. A PEX refusal in `lib` names the layer as the deck
+/// does, as `pex` reports it, rather than passing the extractor's message
+/// through with no layer. Both refusals come before any simulation: the
+/// closed forms (`analytical`) with `poly` given no sheet resistance, and
+/// the field solve (`field`) with `poly` given no dielectric, which the
+/// input pin's gate is drawn on.
+#[test]
+fn a_pex_refusal_names_the_deck_layer() {
+    let refusal = |accuracy: Accuracy, unstate: fn(&mut ProcessStack, usize)| {
+        let mut loaded = load(&inputs(false)).expect("the corpus cell loads");
+        let poly = loaded
+            .deck
+            .layers
+            .id(&loaded.strings, "poly")
+            .expect("params.deck has poly")
+            .idx();
+        unstate(&mut loaded.deck.stack, poly);
+        let extracted = extract(&loaded).expect("and extracts");
+        let work = std::env::temp_dir().join(format!("gpurify-liberty-pex-{}", std::process::id()));
+        let spec = spec_with(PINS);
+        let request = Request {
+            spec: &spec,
+            accuracy,
+            lef: None,
+            work: &work,
+            tool_version: "test",
+        };
+        let why = generate(&loaded, &extracted, &request).expect_err("poly is not described");
+        let _ = std::fs::remove_dir_all(&work);
+        why
+    };
+    match refusal(Accuracy::Analytical, |stack, poly| {
+        stack.sheet_res_ohm_sq[poly] = 0.0;
+    }) {
+        LibError::Pex(why) => assert!(
+            why.starts_with("layer poly: ") && why.contains("sheet resistance"),
+            "{why}"
+        ),
+        other => panic!("{other:?}, want a PEX refusal naming poly"),
+    }
+    match refusal(Accuracy::Field, |stack, poly| {
+        stack.dielectric_k[poly] = 0.0;
+    }) {
+        LibError::Solve(why) => assert!(
+            why.starts_with("layer poly: ") && why.contains("permittivity"),
+            "{why}"
+        ),
+        other => panic!("{other:?}, want a field-solve refusal naming poly"),
     }
 }

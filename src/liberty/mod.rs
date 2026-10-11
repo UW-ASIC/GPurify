@@ -207,13 +207,17 @@ pub enum LibError {
     #[error(transparent)]
     Sim(#[from] SimError),
     /// The field solve of the wiring failed (`field`, `spice`,
-    /// `statistical`).
-    #[error(transparent)]
-    Solve(#[from] gpurify_extract::quasistatic::solve::SolveError),
+    /// `statistical`): a layer it cannot mesh, named as the deck names it,
+    /// or a solve that did not converge. The message is the one `pex`
+    /// reports for the same refusal.
+    #[error("{0}")]
+    Solve(String),
     /// The closed-form extraction of the wiring refused a conductor or via
-    /// layer with no `pex` row (every level but `interface`).
-    #[error(transparent)]
-    Pex(#[from] gpurify_extract::analytical::AnalyticalError),
+    /// layer with no `pex` row, or a conductor it cannot merge (every level
+    /// but `interface`). The message names the layer as the deck does, as
+    /// `pex` reports it.
+    #[error("{0}")]
+    Pex(String),
     /// `statistical` was asked of a corner with no
     /// [`mc_models`](spec::CornerSpec::mc_models).
     #[error("{0}")]
@@ -504,7 +508,8 @@ impl<'a> Prepared<'a> {
             &loaded.deck.stack,
             loaded.grid,
             &mut analytical,
-        )?;
+        )
+        .map_err(|why| LibError::Pex(crate::engine::run::pex_refusal(loaded, why)))?;
         let pin_nets = circuit::pin_nets(loaded, extracted, spec)?;
         match accuracy {
             Accuracy::Interface => unreachable!("returned above"),
@@ -1167,7 +1172,8 @@ fn field_solve(
             meshing,
             solver,
             &mut matrix,
-        )?;
+        )
+        .map_err(|why| LibError::Solve(crate::engine::run::solve_refusal(loaded, why)))?;
         let owner_of = |conductor: NetId| {
             owner[conductors
                 .binary_search(&conductor)
