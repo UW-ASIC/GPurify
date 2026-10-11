@@ -1494,8 +1494,18 @@ impl<'a> Parser<'a> {
                 .filter(|arg| k.params.iter().any(|p| p.name == arg.name))
                 .count()
         };
+        // A kind with forms both with and without a comparison (`width(L) >=
+        // len` beside `width(L; allowed: [..])`): with no comparison and none
+        // of the comparison-free form's arguments named, the comparison is
+        // what is missing.
+        let compared = by_arity.iter().any(|k| k.cmp != Cmp::Absent);
+        let missing_comparison =
+            |k: &Kind| given == Cmp::Absent && compared && named.is_empty() && !k.params.is_empty();
         let mut best: Option<&'static Kind> = None;
-        for &kind in by_arity.iter().filter(|k| k.cmp == given) {
+        for &kind in by_arity
+            .iter()
+            .filter(|&&k| k.cmp == given && !missing_comparison(k))
+        {
             if best.is_none_or(|b| known(kind) > known(b)) {
                 best = Some(kind);
             }
@@ -1503,7 +1513,11 @@ impl<'a> Parser<'a> {
         if let Some(kind) = best {
             return Ok(kind);
         }
-        let legal: Vec<&str> = by_arity.iter().map(|k| cmp_text(k.cmp)).collect();
+        let legal: Vec<&str> = by_arity
+            .iter()
+            .filter(|k| !(cmp.is_none() && compared && k.cmp == Cmp::Absent))
+            .map(|k| cmp_text(k.cmp))
+            .collect();
         Err(match cmp {
             None => self.err(
                 span,

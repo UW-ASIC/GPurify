@@ -539,6 +539,8 @@ fn the_wrong_comparator_is_an_error_not_a_flip() {
         "`>=` is not legal on `tap_distance`; it takes `<=`",
     );
     one_error("rule w width(met1)\n", "`width` needs a comparison");
+    // `size` also has a form without one, `size(L; allowed: [..])`.
+    one_error("rule s size(met1)\n", "`size` needs a comparison: `==`");
     one_error(
         "rule g off_grid(; pitch: 5nm) >= 5nm\n",
         "`off_grid` takes no comparison",
@@ -608,9 +610,12 @@ fn edge_layers_are_typed_and_only_edge_operations_take_them() {
         assert!(deck.layers.is_edges(id), "{name} is edges");
     }
     one_error(
-        "layer e = diff.edges()\nrule w width(e) >= 100nm\n",
+        "layer e = diff.edges()\nrule n notch(e) >= 100nm\n",
         "`e` is an edge layer; only a check that takes edges can use it",
     );
+    // `width` takes edges as the edge twin of its polygon check.
+    let (deck, strings) = ok("layer e = diff.edges()\nrule w width(e) >= 100nm\n");
+    assert_eq!(strings.resolve(deck.rules.spec[0].kind), "edge_width");
     one_error(
         "layer e = diff.edges()\nconnect conductors [e]\n",
         "`e` is an edge layer",
