@@ -363,7 +363,8 @@ connect label met1_label names met1                # text on met1_label names th
 
 Name your nets with text labels in the layout. LVS, SPEF and the intent file
 all refer to nets by those names. One name on two nets the layout does not
-join is an open (`lvs.label_conflict`), and a field solve or netlist export of
+join is an open (`lvs.label_conflict`; a warning for a must-connect name, see
+[LVS controls](#lvs-controls)), and a field solve or netlist export of
 that name is refused. Two names on one net is a short between them
 (`lvs.net_seed_conflict`, reported by every run), and where the short runs
 follows as `lvs.short_path`: the fewest shapes joining the two labelled
@@ -444,6 +445,8 @@ lvs ignore_shorted "nfet"
 lvs ports_by_name
 lvs range "nfet" w >= 420nm <= 100um
 lvs topology relaxed
+lvs connect_implicit "VDD*"
+lvs connect_explicit "VSS" "GND"
 ```
 
 An `lvs` statement changes how LVS compares the devices of one model, which
@@ -533,6 +536,15 @@ adding (two of 0.5 fF are one of 1 fF); a resistor's `w`, and `area`,
 topology strict`, the default, never combines values: two capacitors are
 one of the same value with `m=2`. Passives never merge in series either
 way.
+
+**`lvs connect_implicit "pattern"`** declares must-connect nets, as
+KLayout's `connect_implicit` does: layout nets whose label matches the
+pattern (`*` any run of characters, `?` one) are one net for the comparison
+with every other net of that label, as rails that are connected only above
+this layout are. **`lvs connect_explicit "a" "b" ...`** joins the nets
+labelled with any of the names. The layout keeps its open, and
+`lvs.label_conflict` still reports it, as a warning rather than an error,
+as KLayout warns for a top cell's must-connect nets.
 
 **`lvs ignore_shorted "model"`** leaves out only the model's dummies: each
 device whose every terminal is on one net, as Netgen's `ignore shorted`

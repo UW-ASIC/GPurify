@@ -679,7 +679,8 @@ fn lvs_ignore_names_any_model_once() {
 /// Oracle: the language spec (deck.md, "LVS controls"). `lvs ports_by_name`
 /// sets the flag, which is off without it; stated twice it is refused. `lvs
 /// topology` is strict unless it says relaxed, takes one of the two words,
-/// and is stated once.
+/// and is stated once. `lvs connect_implicit` keeps its pattern and `lvs
+/// connect_explicit` its labels, two or more.
 #[test]
 fn lvs_ports_by_name_is_a_flag() {
     assert!(!ok("").0.lvs.ports_by_name);
@@ -688,6 +689,13 @@ fn lvs_ports_by_name_is_a_flag() {
     assert!(ok("lvs topology relaxed\n").0.lvs.relaxed);
     assert!(!ok("lvs topology strict\n").0.lvs.relaxed);
     one_error("lvs topology loose\n", "unknown topology `loose`");
+    let (deck, strings) =
+        ok("lvs connect_implicit \"VDD*\"\nlvs connect_explicit \"VSS\" \"GND\"\n");
+    assert_eq!(deck.lvs.connect_implicit, ["VDD*"]);
+    let id = |name: &str| strings.get(name).expect("interned");
+    assert_eq!(deck.lvs.connect_explicit, [vec![id("VSS"), id("GND")]]);
+    one_error("lvs connect_explicit \"VSS\"\n", "joins two labels or more");
+    one_error("lvs connect_implicit VDD\n", "a label pattern in quotes");
     one_error(
         "lvs topology strict\nlvs topology relaxed\n",
         "the topology is already stated",

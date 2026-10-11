@@ -6,7 +6,7 @@ use crate::common;
 use common::{GraphBuilder, LENGTH, NCH, PCH, WIDTH};
 use gpurify_check::lvs::graph::Graph;
 use gpurify_check::lvs::verdict::Verdict;
-use gpurify_check::lvs::{compare_with, CompareOptions, ParamNames};
+use gpurify_check::lvs::{compare_with, join_must_connect, CompareOptions, ParamNames};
 use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Source};
 use gpurify_ingest::deck::{DeviceKind, LvsControls, LvsTolerance};
 use gpurify_ingest::StrId;
@@ -542,4 +542,72 @@ fn relaxed_parallel_passives_combine_their_value_by_its_law() {
     assert_eq!(one(&counted, names(true)), [(c, 2e-15)]);
     let bare = parallel(DeviceKind::Capacitor, CAP, &[&[], &[]]);
     assert_eq!(one(&bare, names(true)), [(MULT, 2.0)]);
+}
+
+/// Oracle: `KLayout`'s `connect_implicit` ("for nets matching the net name
+/// pattern and for which there is more than one subnet, the subnets are
+/// connected") and `connect_explicit`, by hand. Two transistors' sources on
+/// two nets both labelled `VDD` are two nets, so they do not match a
+/// reference that ties both sources to one `VDD`; once `VDD*` is
+/// must-connect, or `VDD` and `VCC` are joined explicitly with the second
+/// labelled `VCC`, they do. A pattern that matches nothing changes nothing.
+/// Breaks if the join misses a matching label, joins a non-matching one, or
+/// leaves a terminal on the dropped row.
+#[test]
+fn must_connect_nets_are_one_net_to_compare() {
+    use gpurify_ingest::StrTable;
+    let mut strings = StrTable::default();
+    let [vdd, vcc, out1, out2, gate] =
+        ["VDD", "VCC", "OUT1", "OUT2", "G"].map(|n| strings.intern(n));
+    // Gate net 0; sources on nets 1 and 2, named `first` and `second`;
+    // drains on 3 and 4; bulk on 5.
+    let split = |first, second| {
+        let mut builder = GraphBuilder::new(6);
+        for (net, name) in [(0, gate), (1, first), (2, second), (3, out1), (4, out2)] {
+            builder.name_net(net, name);
+            builder.port(net);
+        }
+        for (source, drain) in [(1, 3), (2, 4)] {
+            builder.device(
+                DeviceKind::Mos,
+                NCH,
+                &[(Gate, 0), (Source, source), (Drain, drain), (Bulk, 5)],
+            );
+        }
+        builder.finish()
+    };
+    let tied = {
+        let mut builder = GraphBuilder::new(5);
+        for (net, name) in [(0, gate), (1, vdd), (2, out1), (3, out2)] {
+            builder.name_net(net, name);
+            builder.port(net);
+        }
+        for drain in [2, 3] {
+            builder.device(
+                DeviceKind::Mos,
+                NCH,
+                &[(Gate, 0), (Source, 1), (Drain, drain), (Bulk, 4)],
+            );
+        }
+        builder.finish()
+    };
+    let none = LvsControls::default();
+    let implicit = |pattern: &str| LvsControls {
+        connect_implicit: vec![pattern.to_owned()],
+        ..LvsControls::default()
+    };
+    let joined = |layout: &Graph, controls: &LvsControls| {
+        verdict(&join_must_connect(layout, controls, &strings), &tied, &none)
+    };
+    let same = split(vdd, vdd);
+    assert_ne!(joined(&same, &none), Verdict::Match);
+    assert_eq!(joined(&same, &implicit("VDD*")), Verdict::Match);
+    assert_ne!(joined(&same, &implicit("GND*")), Verdict::Match);
+    let renamed = split(vdd, vcc);
+    assert_ne!(joined(&renamed, &implicit("VDD*")), Verdict::Match);
+    let explicit = LvsControls {
+        connect_explicit: vec![vec![vdd, vcc]],
+        ..LvsControls::default()
+    };
+    assert_eq!(joined(&renamed, &explicit), Verdict::Match);
 }

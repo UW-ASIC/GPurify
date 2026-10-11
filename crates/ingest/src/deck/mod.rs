@@ -654,6 +654,16 @@ pub struct LvsControls {
     /// (catalog LVS-043, LVS-044, LVS-049); `lvs topology strict`, the
     /// default, keeps a count instead.
     pub relaxed: bool,
+    /// `lvs connect_implicit "pattern"`: label globs (`*` any run, `?` one
+    /// character; [`glob_matches`](crate::layout::glob_matches)). Layout nets
+    /// whose label matches one are joined for the comparison with every
+    /// other net of that label, `KLayout`'s `connect_implicit` ("must
+    /// connect" nets; catalog LVS-002).
+    pub connect_implicit: Vec<String>,
+    /// `lvs connect_explicit "a" "b" ...`: groups of labels, two or more
+    /// each, whose layout nets are joined for the comparison, `KLayout`'s
+    /// `connect_explicit` (catalog LVS-002).
+    pub connect_explicit: Vec<Vec<StrId>>,
 }
 
 /// One `lvs range` statement: the bounds a parameter measured on every
@@ -812,6 +822,11 @@ fn build_lvs(
     }
     lvs.ports_by_name = declared.ports_by_name;
     lvs.relaxed = declared.topology == Some(true);
+    lvs.connect_implicit.clone_from(&declared.connect_implicit);
+    for group in &declared.connect_explicit {
+        lvs.connect_explicit
+            .push(group.iter().map(|name| strings.intern(name)).collect());
+    }
     for (model, param, min, max) in &declared.range {
         known(model, "range")?;
         lvs.range.push(LvsRange {
@@ -877,6 +892,8 @@ pub struct LvsSrc {
     range: Vec<(String, String, Option<LvsLimit>, Option<LvsLimit>)>,
     /// `lvs topology`, once: `Some(true)` relaxed, `Some(false)` strict.
     topology: Option<bool>,
+    connect_implicit: Vec<String>,
+    connect_explicit: Vec<Vec<String>>,
 }
 
 /// `lvs tolerance "model" param relative r absolute a`, converted to SI.

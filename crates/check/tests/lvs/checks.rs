@@ -20,6 +20,7 @@ use gpurify_check::report::{Outcome, RuleRun, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable, PortTable};
 use gpurify_check::Design;
 use gpurify_geom::GeometryStore;
+use gpurify_ingest::deck::LvsControls;
 use gpurify_ingest::StrTable;
 
 /// The structural rows `check_layout` writes for `graph`, and their violations.
@@ -35,7 +36,7 @@ fn check_topology(graph: &Graph, out: &mut Violations, runs: &mut Vec<RuleRun>) 
             devices: &DeviceTable::default(),
         },
         &PortTable::default(),
-        &strings,
+        (&strings, &LvsControls::default()),
         out,
         &mut all,
     );
@@ -229,7 +230,14 @@ fn two_names_on_one_net_are_one_seed_conflict_row_at_the_first_label() {
         bind_ports_into(&nets, &provenance, &mut ports).expect("a short binds");
         let graph = from_layout(&nets, &devices, &ports, &strings, None);
         let (mut out, mut runs) = (Violations::default(), Vec::new());
-        check_layout(&graph, design, &ports, &strings, &mut out, &mut runs);
+        check_layout(
+            &graph,
+            design,
+            &ports,
+            (&strings, &LvsControls::default()),
+            &mut out,
+            &mut runs,
+        );
 
         let run = runs.iter().find(|run| run.rule == rule).expect("a row");
         assert_eq!(run.outcome, Outcome::Ran);
@@ -303,7 +311,14 @@ fn a_floating_net_and_a_split_label_are_located_on_their_shapes() {
     };
     let graph = from_layout(&nets, &devices, &ports, &strings, None);
     let (mut out, mut runs) = (Violations::default(), Vec::new());
-    check_layout(&graph, design, &ports, &strings, &mut out, &mut runs);
+    check_layout(
+        &graph,
+        design,
+        &ports,
+        (&strings, &LvsControls::default()),
+        &mut out,
+        &mut runs,
+    );
 
     let point = |x| Point {
         x: Dbu::new_unchecked(x),
@@ -367,7 +382,7 @@ fn a_refused_marker_is_one_terminal_net_row_on_the_marker() {
             devices: &devices,
         },
         &PortTable::default(),
-        &strings,
+        (&strings, &LvsControls::default()),
         &mut out,
         &mut runs,
     );

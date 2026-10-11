@@ -115,6 +115,10 @@
 //!   in parallel by the value's law, `r` harmonically and `c`, `area`, `ae`
 //!   by adding (catalog LVS-043, LVS-044, LVS-049; Netgen's `property
 //!   topology relaxed`); strict, the default, keeps a count.
+//! - `lvs connect_implicit "pattern"` and `lvs connect_explicit "a" "b"`:
+//!   must-connect nets, joined for the comparison ([`join_must_connect`],
+//!   catalog LVS-002; `KLayout`'s `connect_implicit` and
+//!   `connect_explicit`), their open reported as a warning.
 //! - `lvs ignore_shorted "model"`: the same for each device of the model
 //!   whose every terminal is on one net, a dummy (catalog LVS-035; Netgen's
 //!   `ignore shorted`).
@@ -201,6 +205,7 @@ pub use checks::{
     record_discrepancies, RULE_IDS,
 };
 pub use compare::{compare, compare_logged, compare_with, CompareOptions};
+pub use controls::join_must_connect;
 pub use graph::Graph;
 pub use reduce::{Merge, MergeKind, ParamNames};
 pub use verdict::{Discrepancy, Verdict};
