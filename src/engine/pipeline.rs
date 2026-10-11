@@ -91,6 +91,11 @@ impl Extracted {
 /// - [`LoadError::Label`]: a label the deck claims lands on no shape.
 /// - [`LoadError::Netlist`], [`LoadError::Intent`]: the reference or intent
 ///   file cannot be read or parsed.
+///
+/// With more than one input at fault, one of their errors is reported; which
+/// one is not part of this contract. Nothing orders an unreadable deck before
+/// an unreadable layout, and a malformed deck is parsed only after the layout,
+/// on its grid.
 pub fn load(inputs: &Inputs) -> Result<Loaded, LoadError> {
     let source = std::fs::read_to_string(&inputs.deck).map_err(|why| {
         gpurify_ingest::DeckError::Io(format!("{}: {why}", inputs.deck.display()))
