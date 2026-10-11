@@ -26,11 +26,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # The exhaustive enumerations, the 10^5-case property twins and the
       # nightly golden field solves; a failing property prints its seed. The
-      # differentials need the oracle shell and run in the `oracles` job.
+      # differentials need the oracle shell and run in the `oracles` job; the
+      # bench gate runs alone below, so other tests do not skew its timings.
       - run: >-
           cargo test --workspace -- --ignored --skip klayout_mirror
           --skip netgen_differential --skip fastcap_differential
           --skip fasthenry_differential --skip ngspice_differential
+          --skip the_engine_costs_about_the_same_per_polygon_at_every_size
+      # The bench gate (tests/scaling.rs): ns per polygon at 16x a layout's
+      # size within 3x of 1x's, on an otherwise idle runner.
+      - run: cargo test --test scaling -- --ignored --test-threads=1
 
   oracles:
     name: differentials in the oracle shell

@@ -242,10 +242,14 @@ hierarchical or tiled modes and is not a claim about its DRC engine in general.
 KLayout's DRC is a programmable Ruby DSL, so it can express rules a fixed
 vocabulary of rule kinds cannot; a rule count is not a comparison between the two.
 
-Everything above is one release build on an Intel i9-14900HX. Timings are
-recorded, not enforced: no run fails a build for being slow. `cargo run
---release --example bench_all` reprints these tables on your own machine,
-including a per-rule breakdown of which rule costs what.
+Everything above is one release build on an Intel i9-14900HX. These timings
+are recorded, not enforced; what is enforced is their shape. The nightly tier
+times the engine on one generated layout at 1, 4 and 16 times a base size and
+fails if the cost per polygon at 16 times is over three times the base's
+(`tests/scaling.rs`), so a path that grows faster than the input fails a build
+whatever the machine. `cargo run --release --example bench_all` reprints the
+tables on your own machine, including a per-rule breakdown of which rule costs
+what.
 
 ## What it cannot do yet
 
