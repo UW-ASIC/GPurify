@@ -314,6 +314,31 @@ pub fn build_into(
         out.panel.push(panel);
         out.epsilon.push(epsilon);
     }
+    debug_assert!(
+        out.conductor_start.len() == out.conductor_net.len() + 1
+            && out.conductor_start.last().map(|&end| end as usize) == Some(out.panel.len()),
+        "the conductor bands are CSR over the panels"
+    );
+    debug_assert!(
+        out.conductor_start
+            .windows(2)
+            .enumerate()
+            .all(
+                |(conductor, band)| out.panel[band[0] as usize..band[1] as usize]
+                    .iter()
+                    .all(|panel| panel.conductor as usize == conductor)
+            ),
+        "every panel sits in its own conductor's band"
+    );
+    // A zero-area panel would divide by zero in its self-term. (A non-finite
+    // one, from an overflowed stack value, is the solve's `NonFinite`.)
+    debug_assert!(
+        out.panel
+            .iter()
+            .zip(&out.epsilon)
+            .all(|(panel, &epsilon)| panel.area > 0.0 && epsilon > 0.0),
+        "every panel has a positive area and permittivity"
+    );
     Ok(())
 }
 
