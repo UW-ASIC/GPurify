@@ -195,3 +195,55 @@ fn the_run_twice_comparison_catches_a_nondeterministic_rule() {
     assert!(twice(flags_each));
     assert!(!twice(nondeterministic));
 }
+
+/// An equation-based spacing (Calibre eqDRC's form, a limit that is an
+/// expression over measured values): two rectangles on input 0 must be at
+/// least `50 + w / 2` apart, `w` the wider one's shorter side. Each pair
+/// closer than its own limit is one finding measuring the gap.
+fn width_dependent_space(ctx: &CustomCtx<'_>, out: &mut Findings) {
+    let store = ctx.store();
+    for (p, q) in ctx.pairs_within(0, 0, dbu(1000)) {
+        let (a, b) = (store.poly_bbox(p), store.poly_bbox(q));
+        let side = |r: gpurify_geom::Bbox| (r.xhi - r.xlo).min(r.yhi - r.ylo).raw();
+        let need = 50 + side(a).max(side(b)) / 2;
+        let gap = (b.xlo - a.xhi).max(a.xlo - b.xhi).raw();
+        if gap < need {
+            out.flag(ctx, p, Measurement::Length(dbu(gap)));
+        }
+    }
+}
+
+/// Catalog DRC-115, equation-based DRC: a limit computed from measured
+/// values is a Rust custom rule, run and accounted as any other.
+///
+/// Oracle: the equation by hand: bars 100 and 200 wide, 1000 tall, side by
+/// side, need `50 + 200 / 2 = 150`; gaps 149, 150, 151 give one finding of
+/// 149 and none at or above 150.
+#[test]
+fn an_equation_based_limit_is_a_custom_rule() {
+    for gap in [149, 150, 151] {
+        let mut layout = LayoutBuilder::new(1);
+        layout.rect(FULL, 0, 0, 100, 1000);
+        layout.rect(FULL, 100 + gap, 0, 300 + gap, 1000);
+        let store = layout.finish().0;
+        let mut strings = StrTable::default();
+        let rules = [CustomRule {
+            id: strings.intern("eq.space"),
+            inputs: vec![FULL],
+            severity: Severity::Error,
+            check: width_dependent_space,
+        }];
+        let mut out = Violations::default();
+        let mut runs = Vec::new();
+        let grid = Grid::new(1000).expect("a 1 nm grid");
+        run_custom(&rules, &store, None, grid, &strings, &mut out, &mut runs);
+        let found: Vec<Measurement> = (0..out.len()).map(|row| out.get(row).measured).collect();
+        let want = if gap < 150 {
+            vec![Measurement::Length(dbu(gap))]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(found, want, "gap {gap}");
+        assert_eq!(runs[0].outcome, Outcome::Ran);
+    }
+}
