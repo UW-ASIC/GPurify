@@ -14,6 +14,12 @@ use gpurify_check::erc::rules::domain::{
     check_domain_crossing, check_drain_source, check_gate_oxide, check_missing_level_shifter,
     check_well_bias, DomainCrossingTable, MissingLevelShifterTable, ModelLimitTable, WellBiasTable,
 };
+use gpurify_check::erc::rules::esd::{
+    check_esd_cross_domain, check_esd_exposed, EsdCrossDomainTable, EsdExposedTable,
+};
+use gpurify_check::erc::rules::latchup::{
+    check_forward_diode, check_guard_ring_bias, ForwardDiodeTable, GuardRingBiasTable,
+};
 use gpurify_check::erc::rules::supply::{check_esd_topological, EsdTopologicalTable};
 use gpurify_check::erc::voltage::{propagate_into, NetVoltage};
 use gpurify_check::erc::Design;
@@ -763,4 +769,237 @@ fn a_gate_range_from_propagation_decides_the_switch_it_drives() {
     let b = circuit.net(6).idx();
     assert_eq!((voltage.lo[b], voltage.hi[b]), (3_300.0, 3_300.0));
     assert_eq!(voltage.power[b], 1 << IO.0);
+}
+
+/// Nets: 0 VDD1, 1 VSS1, 2 VDD2, 3 VSS2, 4 SIG, 5 OUT, 6 IN (driven by
+/// nothing). An IO inverter (IN to SIG) on VDD1/VSS1 drives a core inverter
+/// (SIG to OUT) on VDD2/VSS2; `coupled` adds anti-parallel `dio` diodes
+/// between the two grounds.
+fn crossing(coupled: bool) -> Circuit {
+    let mut devices = vec![
+        mos("pfet", 6, 0, 4, 0),
+        mos("nfet", 6, 1, 4, 1),
+        mos("pfet", 4, 2, 5, 2),
+        mos("nfet", 4, 3, 5, 3),
+        // A rail diode, so `dio` is named either way.
+        two_pin(DeviceKind::Diode, "dio", 1, 0),
+    ];
+    if coupled {
+        devices.push(two_pin(DeviceKind::Diode, "dio", 1, 3));
+        devices.push(two_pin(DeviceKind::Diode, "dio", 3, 1));
+    }
+    build(7, devices)
+}
+
+fn run_crossing(circuit: &Circuit, id: StrId) -> (Violations, Vec<RuleRun>) {
+    let intent = circuit.intent(&[
+        (0, SupplyRole::Power, IO, 1_800.0),
+        (1, SupplyRole::Ground, IO, 1_800.0),
+        (2, SupplyRole::Power, CORE, 1_800.0),
+        (3, SupplyRole::Ground, CORE, 1_800.0),
+    ]);
+    let (mut violations, mut runs) = report();
+    check_esd_cross_domain(
+        circuit.design(),
+        &intent,
+        &circuit.voltage(&intent),
+        &EsdCrossDomainTable {
+            head: head(id),
+            diode_start: vec![0, 1],
+            diode: circuit.models(&["dio"]),
+            local_start: vec![0, 0],
+            local: Vec::new(),
+        },
+        &mut violations,
+        &mut runs,
+    );
+    (violations, runs)
+}
+
+/// The two core transistors take their gate from the IO domain: with the
+/// grounds coupled both directions they are protected, and with no local
+/// clamp named none is needed.
+///
+/// Oracle: construct-from-answer, read off `crossing`: SIG swings on VDD1,
+/// which neither core channel reaches, so both core transistors are
+/// receivers; the IO pair's gate IN reaches no supply and is none. The
+/// anti-parallel pair puts VSS1 and VSS2 in one group.
+#[test]
+fn a_crossing_with_coupled_grounds_is_protected() {
+    let circuit = crossing(true);
+    let id = rule(15);
+    let (violations, runs) = run_crossing(&circuit, id);
+    let run = common::run_of(&runs, id);
+    assert_eq!((run.examined, run.violations), (2, 0));
+    assert!(violations.rule.is_empty());
+}
+
+/// The same crossing with its grounds uncoupled flags both receivers.
+///
+/// Oracle: construct-from-answer: VSS1 and VSS2 share no diode, so each of
+/// the two receivers measures 0 coupled pairs against 1.
+#[test]
+fn a_crossing_with_uncoupled_grounds_flags_each_receiver() {
+    let circuit = crossing(false);
+    let id = rule(16);
+    let (violations, runs) = run_crossing(&circuit, id);
+    let run = common::run_of(&runs, id);
+    assert_eq!((run.examined, run.violations), (2, 2));
+    assert!(violations
+        .measured
+        .iter()
+        .all(|&m| m == Measurement::Count(0)));
+}
+
+/// Nets: 0 VDD, 1 VSS, 2 PAD, 3 IN2. PAD is the one net with an emitter
+/// (the pad layer); a series `rs` resistor carries it to IN2, the gate of
+/// an nfet. `clamped` adds an up diode IN2 to VDD and a down diode VSS to
+/// IN2.
+fn exposed(clamped: bool) -> Circuit {
+    let mut devices = vec![
+        DeviceSpec {
+            kind: DeviceKind::Bjt,
+            model: "npn".to_owned(),
+            terminals: vec![
+                (TerminalRole::Base, 2),
+                (TerminalRole::Emitter, 2),
+                (TerminalRole::Collector, 2),
+            ],
+        },
+        two_pin(DeviceKind::Resistor, "rs", 2, 3),
+        mos("nfet", 3, 1, 1, 1),
+        two_pin(DeviceKind::Diode, "dio", 1, 0),
+    ];
+    if clamped {
+        devices.push(two_pin(DeviceKind::Diode, "dio", 3, 0));
+        devices.push(two_pin(DeviceKind::Diode, "dio", 1, 3));
+    }
+    build(4, devices)
+}
+
+fn run_exposed(circuit: &Circuit, id: StrId) -> (Violations, Vec<RuleRun>) {
+    let intent = rails(circuit);
+    let (mut violations, mut runs) = report();
+    check_esd_exposed(
+        circuit.design(),
+        &intent,
+        &EsdExposedTable {
+            head: head(id),
+            pad: vec![circuit.case.layers.layer_of(TerminalRole::Emitter)],
+            clamp_start: vec![0, 1],
+            clamp: circuit.models(&["dio"]),
+            resistor_start: vec![0, 1],
+            resistor: circuit.models(&["rs"]),
+            rated_start: vec![0, 0],
+            rated: Vec::new(),
+        },
+        &mut violations,
+        &mut runs,
+    );
+    (violations, runs)
+}
+
+/// A gate behind a series resistor from a pad is exposed: bare it is
+/// flagged, clamped to both rails it is clean.
+///
+/// Oracle: construct-from-answer, read off `exposed`: the resistor carries
+/// PAD to IN2, so the nfet's gate is exposed; bare, its clamps reach 0 rail
+/// kinds of the 2 it needs, and with the up and the down diode both.
+#[test]
+fn a_gate_behind_a_series_resistor_needs_both_clamps() {
+    let id = rule(17);
+    let (violations, runs) = run_exposed(&exposed(false), id);
+    assert_eq!(violations.measured, vec![Measurement::Count(0)]);
+    assert_eq!(common::run_of(&runs, id).examined, 1);
+    let (violations, runs) = run_exposed(&exposed(true), id);
+    assert!(violations.rule.is_empty(), "{:?}", violations.measured);
+    assert_eq!(common::run_of(&runs, id).examined, 1);
+}
+
+/// Nets: 0 VDD, 1 VSS, 2 SIG; a `dio` diode with its anode on VDD and its
+/// cathode on VSS, and a resistor from SIG to VSS.
+fn backwards() -> Circuit {
+    build(
+        3,
+        vec![
+            two_pin(DeviceKind::Diode, "dio", 0, 1),
+            two_pin(DeviceKind::Resistor, "rs", 2, 1),
+        ],
+    )
+}
+
+fn rails(circuit: &Circuit) -> IntentMap {
+    circuit.intent(&[
+        (0, SupplyRole::Power, CORE, 1_800.0),
+        (1, SupplyRole::Ground, CORE, 1_800.0),
+    ])
+}
+
+/// A diode from VDD to VSS is forward-biased by the full supply.
+///
+/// Oracle: construct-from-answer: anode at 1.8 V, cathode at 0 V, and no
+/// polygon of the marker layer (the rails) encloses the diode's marker, so
+/// it is flagged at 1800 mV.
+#[test]
+fn a_diode_from_vdd_to_vss_is_forward_biased() {
+    let circuit = backwards();
+    let intent = rails(&circuit);
+    let id = rule(18);
+    let (mut violations, mut runs) = report();
+    check_forward_diode(
+        circuit.design(),
+        &intent,
+        &circuit.voltage(&intent),
+        &ForwardDiodeTable {
+            head: head(id),
+            marker: vec![circuit.case.layers.rail],
+            model_start: vec![0, 1],
+            model: circuit.models(&["dio"]),
+        },
+        &mut violations,
+        &mut runs,
+    );
+    assert_eq!(
+        violations.measured,
+        vec![Measurement::Voltage(millivolts(1_800.0))]
+    );
+}
+
+/// A p-type ring drawn on the rail layer: the VDD rail is above 0 V, the
+/// SIG rail is on no supply, the VSS rail is right.
+///
+/// Oracle: construct-from-answer, read off `backwards`: the rails are the
+/// ring polygons; VDD measures 1800 mV against 0, SIG 0 supplies against 1,
+/// VSS nothing.
+#[test]
+fn a_p_ring_belongs_on_a_ground() {
+    let circuit = backwards();
+    let id = rule(19);
+    let (mut violations, mut runs) = report();
+    check_guard_ring_bias(
+        circuit.design(),
+        &rails(&circuit),
+        &GuardRingBiasTable {
+            head: head(id),
+            ring: vec![circuit.case.layers.rail],
+            power: vec![false],
+        },
+        &mut violations,
+        &mut runs,
+    );
+    let on = |n: usize| circuit.case.expected_net_polys[n][0];
+    let mut flagged: Vec<_> = violations
+        .shape_a
+        .iter()
+        .copied()
+        .zip(violations.measured.iter().copied())
+        .collect();
+    flagged.sort_by_key(|f| f.0);
+    assert_eq!(
+        flagged,
+        vec![
+            (on(0), Measurement::Voltage(millivolts(1_800.0))),
+            (on(2), Measurement::Count(0)),
+        ]
+    );
 }

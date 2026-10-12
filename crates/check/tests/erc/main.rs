@@ -6,6 +6,7 @@ mod dispatch;
 mod dynamic_and_thermal;
 mod effective_resistance_laws;
 mod electrical_limits;
+mod esd_geometry;
 mod intent_gate;
 mod net_facts;
 mod p2p_resistance_rule;
