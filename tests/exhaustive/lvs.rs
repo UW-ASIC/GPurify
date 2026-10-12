@@ -3066,14 +3066,16 @@ fn layout_rows() -> Vec<Fixture> {
         .expect(Expect::clean("lvs.floating_net").examined(port.nets() as u64)),
     );
 
-    // LVS-001, LVS-002: one label on two nets is an open, not a join.
+    // LVS-001, LVS-002: one label on two nets is an open, not a join. DRC-084:
+    // a pin's ports (its label on disjoint shapes) left unjoined, what LEF58
+    // MUSTJOINALLPORTS forbids at the top.
     let mut split = Circuit::new(4, vec![Dev::mos(N, 0, 1, 2), Dev::mos(N, 3, 1, 2)]);
     "n0".clone_into(&mut split.names[3]);
     let joined = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2), Dev::mos(N, 0, 1, 2)]);
     out.push(
         compared(
             "checks/label_on_two_nets",
-            &["LVS-001", "LVS-002", "LVS-015"],
+            &["LVS-001", "LVS-002", "LVS-015", "DRC-084"],
             &split,
             &joined,
         )
