@@ -278,7 +278,7 @@ says which foundry manual, standard or tool defines each one.
 | LVS-065 | Inductor | missing | — |
 | LVS-067 | Subcircuit-modelled devices (rsubcircuit, fixed cells: VPP, ESD) | missing | sky130 VPP caps have no marker (limitations.md) |
 | LVS-068 | Device-count and parameter-range limits (devices per model, W/L inside the model's valid range) | partial | The deck's `lvs range "model" param >= min <= max` holds every layout device of the model to bounds on a measured parameter (w, l, perim, ps, pd, pe, area, as, ad, ae, nf; a bound is legal), reported as lvs.param_range on the marker; a device whose parameter was not measured refuses the row. Recorded only when the deck states a range, with LVS. Per-model device counts are missing |
-| LVS-073 | 3D / system LVS across dies | missing | In scope since 2026-10-11 (was: Single-die only) |
+| LVS-073 | 3D / system LVS across dies | partial | gpurify system: dies placed by a system description (origin, quarter turns, mirror), bonded where rectangular bumps of facing faces overlap; system.unbonded_bump, then system.open and system.short pin by pin against the system netlist's die instances and top ports, then the flat device comparison. Bumps must be rectangles and every die on one grid; cross-die bump alignment, size and spacing (DRC-129) and 3D extraction (PEX-015) are not checked |
 | LVS-074 | Layout-dependent-effect parameters (LOD SA/SB/SD, WPE SCA/SCB/SCC) | missing | BSIM4 defines the instance parameters and their geometry; no open PDK deck extracts them |
 | LVS-075 | Structural Verilog reference netlist | missing | Digital top levels arrive as gate-level Verilog |
 
@@ -294,8 +294,8 @@ says which foundry manual, standard or tool defines each one.
 | ERC-C6 | P2P resistance on the discharge path, per pin pair | partial | Pin-to-supply pairs only: two signal pins meet only through the supplies between them; a clamp is its on-resistance, with no turn-on or holding voltage |
 | ERC-C8 | Path voltage vs device failure (ESD window) | partial | The pin's voltage under a forced current through linear clamps: a clamp's turn-on or holding voltage is folded into the limit, and each protected device's own terminal voltages are not read |
 | ERC-C9 | CDM checks (bus inductance, local clamps, driver/receiver ground R) | partial | Local clamps at a domain-crossing receiver only: the driver/receiver ground resistance and the bus inductance are not checked |
-| ERC-C12 | Package / 2.5D / 3D ESD | missing | In scope since 2026-10-11 (was: On-chip only: package and multi-die ESD models are outside a layout verifier) |
-| ERC-C13 | System-level ESD | missing | In scope since 2026-10-11 (was: A board and system concern, outside a layout verifier) |
+| ERC-C12 | Package / 2.5D / 3D ESD | partial | gpurify system: system.esd_package holds each package pin to clamps reaching a power and a ground rail through the assembled system (any die); system.esd_d2d holds each die-to-die bump to its own die alone (JEP196). Path existence only: no resistance, current, clamp size or CDM level; no wafer-on-wafer exemption; package R, L and C not modelled |
+| ERC-C13 | System-level ESD | partial | gpurify system: system.esd_iec holds each package pin the system names as exposed to both rails through clamps of the models it names as system-rated. System robustness itself (board TVS, residual pulse, soft failures, powered latch-up) needs simulation, not a layout (WP3 Part I 6.3.1; TR18-01:7) |
 | ERC-C14 | ESD layout rules on recognised devices (clamp distance to pad, minimum ESD-path metal width) | missing | Numeric limits are NDA |
 | ERC-D5 | Voltage-aware aggressor/victim | partial | Aggressors are chosen by pad connection or layer, not by the voltage the intent propagates; the whole victim polygon is held to the limit |
 | ERC-D7 | Native-device guard ring | partial | LU.5's "no other NCOMP, NWELL in between" the device and its ring is not checked |
