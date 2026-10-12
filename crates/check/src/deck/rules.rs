@@ -48,6 +48,7 @@
 //! [`DeckBuilder::finish`]: super::DeckBuilder::finish
 
 use super::builder::{LayerExpr, LayerRef};
+use crate::drc::ruleset::EolParallel;
 use crate::drc::StepKind;
 use gpurify_geom::{Dbu, DbuArea};
 use gpurify_ingest::deck::ParamValue;
@@ -203,6 +204,27 @@ impl Arg for StepKind {
             StepKind::Step => ("corner", 2),
         };
         value.put(name, params);
+    }
+}
+
+/// A run per width, `none` (the flag `false`) where a width states none.
+impl Arg for &[Option<Dbu>] {
+    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
+        for &run in self {
+            match run {
+                Some(run) => run.put(name, params),
+                None => false.put(name, params),
+            }
+        }
+    }
+}
+
+/// LEF `PARALLELEDGE`: its space, `within` and `two_edges` rows.
+impl Arg for EolParallel {
+    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
+        self.space.put(name, params);
+        self.within.put("par_within", params);
+        self.two_edges.put("two_edges", params);
     }
 }
 
@@ -403,6 +425,52 @@ kinds! {
     /// `min_step(layer; max_edges: n | corner: .., length_sum) >= limit`;
     /// `length_sum` only with a corner.
     min_step(layer: one) [] { limit: Dbu = "limit", kind: StepKind = "corner", length_sum: Option<Dbu> = "length_sum" }
+    /// [`Rule::TipSpacingTable`](crate::drc::Rule::TipSpacingTable):
+    /// `tip_space_table(layer; length: [..], space: [[..], ..])`, `space` row
+    /// by row.
+    tip_spacing_table(layer: one) [] { length: &[Dbu] = "length", space: &[Dbu] = "space" }
+    /// [`Rule::ForbiddenSpacing`](crate::drc::Rule::ForbiddenSpacing):
+    /// `forbidden_space(layer; min, max, prl)`.
+    forbidden_spacing(layer: one) [] { min: Dbu = "min", max: Dbu = "max", prl: Dbu = "prl" }
+    /// [`Rule::EolWithinSpacing`](crate::drc::Rule::EolWithinSpacing):
+    /// `eol_space(layer; eol_width, within, parallel: (..) | none,
+    /// end_to_end: space | none) >= limit`.
+    eol_within_spacing(layer: one) [] {
+        eol_width: Dbu = "eol_width",
+        within: Dbu = "eol_within",
+        parallel: Option<EolParallel> = "par_space",
+        end_to_end: Option<Dbu> = "end_to_end",
+        limit: Dbu = "limit",
+    }
+    /// [`Rule::EolKeepOut`](crate::drc::Rule::EolKeepOut):
+    /// `eol_keep_out(layer; eol_width, backward, side, forward)`.
+    eol_keep_out(layer: one) [] {
+        eol_width: Dbu = "eol_width",
+        backward: Dbu = "backward",
+        side: Dbu = "side",
+        forward: Dbu = "forward",
+    }
+    /// [`Rule::TwoWidthSpacingTable`](crate::drc::Rule::TwoWidthSpacingTable):
+    /// `two_width_table(layer; width: [..], prl: [none, ..], space: [[..], ..])`,
+    /// `space` row by row.
+    two_width_spacing_table(layer: one) [] {
+        width: &[Dbu] = "width",
+        prl: &[Option<Dbu>] = "prl",
+        space: &[Dbu] = "space",
+    }
+    /// [`Rule::SpanLength`](crate::drc::Rule::SpanLength):
+    /// `span_length(layer; x: [..], y: [..])`.
+    span_length(layer: one) [] { x: &[Dbu] = "x_spans", y: &[Dbu] = "y_spans" }
+    /// [`Rule::ConvexCornerSpacing`](crate::drc::Rule::ConvexCornerSpacing):
+    /// `corner_space(layer; corner_to_corner, except_eol: width | none) >= limit`.
+    convex_corner_spacing(layer: one) [] {
+        corner_to_corner: bool = "corner_to_corner",
+        except_eol: Option<Dbu> = "except_eol",
+        limit: Dbu = "limit",
+    }
+    /// [`Rule::ExactPitch`](crate::drc::Rule::ExactPitch):
+    /// `pitch(layer, vertical | horizontal) == pitch`.
+    exact_pitch(layer: one) [] { vertical: bool = "vertical", pitch: Dbu = "limit" }
 }
 
 kinds! {

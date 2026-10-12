@@ -584,6 +584,7 @@ impl Printer<'_> {
                     | Dim::LengthPair(_)
                     | Dim::LengthPairList(_)
                     | Dim::LengthList
+                    | Dim::OptLengthList
                     | Dim::LengthRows,
                     ParamValue::Length(length),
                 ) => self.length(i128::from(length.raw())),
@@ -595,6 +596,7 @@ impl Printer<'_> {
                     .ok_or_else(wrong),
                 (Dim::AngleList, ParamValue::Count(degrees)) => Ok(format!("{degrees}deg")),
                 (Dim::Bool, ParamValue::Flag(flag)) => Ok(flag.to_string()),
+                (Dim::OptLengthList, ParamValue::Flag(false)) => Ok("none".to_owned()),
                 (Dim::Nets, ParamValue::Flag(same)) => {
                     Ok(if same { "same" } else { "different" }.to_owned())
                 }
@@ -649,7 +651,9 @@ impl Printer<'_> {
                 let other = other.first().ok_or_else(missing)?;
                 Ok(format!("{} x {}", one(values[0])?, one(other)?))
             }
-            Dim::AngleList | Dim::LengthList => Ok(format!("[{}]", list(&values)?.join(", "))),
+            Dim::AngleList | Dim::LengthList | Dim::OptLengthList => {
+                Ok(format!("[{}]", list(&values)?.join(", ")))
+            }
             Dim::LengthPairList(second) => {
                 let others = stated(second);
                 if values.len() != others.len() {
@@ -681,7 +685,14 @@ impl Printer<'_> {
                 Ok(format!("[{}]", points.join(", ")))
             }
             Dim::LengthRows => {
-                let columns = stated("prl").len().max(1);
+                // A spacing table has a column per run; a table without runs
+                // (a tip table) is square.
+                let columns = match stated("prl").len() {
+                    0 => (1..=values.len())
+                        .find(|side| side * side >= values.len())
+                        .unwrap_or(1),
+                    runs => runs,
+                };
                 let cells = list(&values)?;
                 let rows: Vec<String> = cells
                     .chunks(columns)

@@ -6,10 +6,13 @@ use super::builder::assert_same;
 use super::grid;
 use super::printer::assert_round_trip;
 use gpurify_check::deck::rules::{
-    allowed_width, aspect_ratio, count, cut_class, edge_facing_space, edge_width, forbidden,
-    min_interior_angle, min_step, polygon_validity, region_density, total_area,
+    allowed_width, aspect_ratio, convex_corner_spacing, count, cut_class, edge_facing_space,
+    edge_width, eol_keep_out, eol_within_spacing, exact_pitch, forbidden, forbidden_spacing,
+    min_interior_angle, min_step, polygon_validity, region_density, span_length, tip_spacing_table,
+    total_area, two_width_spacing_table,
 };
 use gpurify_check::deck::{compile, Bound, CompiledDeck, DeckBuilder};
+use gpurify_check::drc::ruleset::EolParallel;
 use gpurify_check::drc::StepKind;
 use gpurify_geom::{Dbu, DbuArea, StrTable};
 use gpurify_ingest::deck::StackSource;
@@ -41,6 +44,17 @@ rule ms.edges min_step(m; max_edges: 2) >= 50nm
 rule ms.inside min_step(m; corner: inside, length_sum: 100nm) >= 50nm
 rule ms.step min_step(m; corner: step, length_sum: none) >= 60nm
 rule odd.none forbidden(odd)
+rule tip tip_space_table(m; length: [0nm, 100nm], space: [[60nm, 70nm], [70nm, 80nm]])
+rule tw two_width_table(m; width: [0nm, 200nm], prl: [none, 300nm], space: [[50nm, 60nm], [60nm, 90nm]])
+rule sl span_length(m; x: [100nm, 200nm], y: [150nm])
+rule fsp forbidden_space(m; min: 40nm, max: 50nm, prl: 0nm)
+rule eol.w eol_space(m; eol_width: 60nm, within: 20nm, parallel: none, end_to_end: none) >= 80nm
+rule eol.p eol_space(m; eol_width: 60nm, within: 20nm, parallel: (space: 120nm, within: 50nm, two_edges: true), end_to_end: 70nm) >= 80nm
+rule ko eol_keep_out(m; eol_width: 60nm, backward: 0nm, side: 30nm, forward: 90nm)
+rule cs corner_space(m; corner_to_corner: true, except_eol: 60nm) >= 100nm
+rule cs.none corner_space(m; corner_to_corner: false, except_eol: none) >= 100nm
+rule pv pitch(m, vertical) == 27nm
+rule ph pitch(m, horizontal) == 54nm
 temperature 358.15K nominal 303.15K
 pex m thickness 360nm height 1376nm sheet 0.125ohm area_cap 25.8aF/um2 fringe_cap 40.5aF/um tc1 3.179e-3/K tc2 3.094e-7/K2
 ";
@@ -88,6 +102,39 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     );
     d.rule("ms.step", min_step(m, nm(60), StepKind::Step, None));
     d.rule("odd.none", forbidden(odd));
+    d.rule(
+        "tip",
+        tip_spacing_table(m, &[nm(0), nm(100)], &[nm(60), nm(70), nm(70), nm(80)]),
+    );
+    d.rule(
+        "tw",
+        two_width_spacing_table(
+            m,
+            &[nm(0), nm(200)],
+            &[None, Some(nm(300))],
+            &[nm(50), nm(60), nm(60), nm(90)],
+        ),
+    );
+    d.rule("sl", span_length(m, &[nm(100), nm(200)], &[nm(150)]));
+    d.rule("fsp", forbidden_spacing(m, nm(40), nm(50), nm(0)));
+    d.rule(
+        "eol.w",
+        eol_within_spacing(m, nm(60), nm(20), None, None, nm(80)),
+    );
+    let parallel = EolParallel {
+        space: nm(120),
+        within: nm(50),
+        two_edges: true,
+    };
+    d.rule(
+        "eol.p",
+        eol_within_spacing(m, nm(60), nm(20), Some(parallel), Some(nm(70)), nm(80)),
+    );
+    d.rule("ko", eol_keep_out(m, nm(60), nm(0), nm(30), nm(90)));
+    d.rule("cs", convex_corner_spacing(m, true, Some(nm(60)), nm(100)));
+    d.rule("cs.none", convex_corner_spacing(m, false, None, nm(100)));
+    d.rule("pv", exact_pitch(m, true, nm(27)));
+    d.rule("ph", exact_pitch(m, false, nm(54)));
     d.temperature(358.15, 303.15);
     d.pex(
         m,
