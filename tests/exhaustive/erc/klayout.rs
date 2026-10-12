@@ -285,6 +285,21 @@ fn define(deck: &Deck, layer: LayerId, done: &mut Vec<LayerId>, out: &mut String
         Some(DerivedOp::And) => join(" & "),
         Some(DerivedOp::Or) => join(" | "),
         Some(DerivedOp::Not) => join(" - "),
+        // Inclusive bounds in nm² (the GDS unit, 1 nm); KLayout's upper bound
+        // is exclusive (the mirror deck's translation, at magnification 1).
+        Some(DerivedOp::WithArea(lo, hi)) => {
+            let bound = |v: i128, end: bool| match v {
+                i128::MIN | i128::MAX => "nil".to_owned(),
+                v if end => (v + 1).to_string(),
+                v => v.to_string(),
+            };
+            format!(
+                "{}.with_area({}, {})",
+                var(operands[0]),
+                bound(lo, false),
+                bound(hi, true)
+            )
+        }
         Some(op) => panic!("an antenna fixture derives a layer by {op:?}, which is not translated"),
     };
     let _ = writeln!(out, "  {} = {expr}", var(layer));
@@ -712,6 +727,40 @@ fn compare_all(fixtures: &[Fixture]) -> Tally {
 }
 
 /// A seeded board as a fixture: every row of the board deck.
+/// Every X4 antenna fixture and a board translate into `KLayout` script
+/// without `KLayout`: each row is mirrored (its layers defined, its gate on
+/// a standing conductor) or counted as not mirrored, so the nightly run never
+/// stops on a deck it cannot read.
+///
+/// Oracle: construct-from-definition. A row the translator cannot state
+/// panics (`define`, `ruby`); every row of a fixture is either among the
+/// mirrored rows or the counted ones.
+#[test]
+fn every_antenna_fixture_translates_or_is_counted() {
+    let dir = oracle::scratch("klayout-antenna-translate");
+    let fixtures = [
+        super::antenna_lef(),
+        super::antenna_sidewall(),
+        super::antenna_variants(),
+        super::antenna_electrical(),
+        vec![board_fixture(0)],
+    ]
+    .concat();
+    for (i, fixture) in fixtures.iter().enumerate() {
+        let job = job(fixture, &dir, i);
+        let stated = job.rows.len() + job.skipped.len();
+        let (_, deck, strings) = harness::written(fixture).expect("written");
+        let rules = RuleSet::from_deck(&deck, &strings).expect("builds");
+        assert_eq!(
+            stated,
+            rules.antenna.head.len() + rules.antenna_electrical.head.len(),
+            "{}",
+            fixture.name
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 pub(super) fn board_fixture(seed: u64) -> Fixture {
     Fixture::new(
         &format!("erc/antenna_board/{seed}"),

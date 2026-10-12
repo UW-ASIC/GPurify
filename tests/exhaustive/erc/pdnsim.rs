@@ -120,7 +120,7 @@ device resistor mk model \"load\" terminals [met1, poly]
     s.push_str(
         "pex poly thickness 100nm height 50nm sheet 8ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
 rule ir ir_drop()
-rule em em_current_density(met1, via1, met2, via2, met3; max_density: 0.000001uA/um, max_current_per_cut: 0.000001uA)
+rule em em_current_density(met1, via1, met2, via2, met3; max_density: 0.000001uA/um, max_current_per_cut: 0.000001uA, narrow: none)
 ",
     );
     s
@@ -591,6 +591,38 @@ fn compare(openroad: &Path, mesh: &Mesh) -> Tally {
         tally.broken.push(super::kept(&dir));
     }
     tally
+}
+
+/// The mesh deck runs on 10 meshes, every load reads a drop, and the via2
+/// cut under the pad carries the whole budget.
+///
+/// Oracle: Kirchhoff's current law: the pad is the only source and joins
+/// the grid through its one via2 cut, so that cut carries `B` and every
+/// load sits below it.
+#[test]
+fn the_mesh_deck_runs_and_the_pad_cut_carries_the_budget() {
+    for seed in FIRST_SEED..FIRST_SEED + 10 {
+        let mesh = Mesh::random(seed);
+        let ours = ours(&mesh.fixture());
+        for &(r, x) in &mesh.loads {
+            assert!(
+                ours.drop
+                    .get(&(x, mesh.rails[r].0))
+                    .is_some_and(|&d| d > 0.0),
+                "mesh {seed}: no drop at the load at x = {x}"
+            );
+        }
+        let pad = ours
+            .current
+            .iter()
+            .find(|(l, p, _)| l == "via2" && *p == mesh.pad_at())
+            .map(|c| c.2);
+        assert!(
+            pad.is_some_and(|i| (i - mesh.budget).abs() <= 1e-6 * mesh.budget),
+            "mesh {seed}: the pad cut carries {pad:?} µA, the budget is {}",
+            mesh.budget
+        );
+    }
 }
 
 /// 100 seeded meshes: every load's voltage, every cut's current and every
