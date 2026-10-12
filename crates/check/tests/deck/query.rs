@@ -256,6 +256,9 @@ fn enclosure_case(deck: &CompiledDeck, inner: LayerId, outer: LayerId, opposite:
         } => !opposite && (o, i) == (outer, inner),
         Rule::AsymmetricEnclosure {
             outer: o, inner: i, ..
+        }
+        | Rule::AdjacentEnclosure {
+            outer: o, inner: i, ..
         } => opposite && (o, i) == (outer, inner),
         _ => false,
     });
@@ -386,7 +389,8 @@ fn every_query_is_the_limit_the_checker_reports() {
                 Rule::MinEnclosure { outer, inner, .. } => {
                     enclosure_case(&deck, inner, outer, false, &what);
                 }
-                Rule::AsymmetricEnclosure { outer, inner, .. } => {
+                Rule::AsymmetricEnclosure { outer, inner, .. }
+                | Rule::AdjacentEnclosure { outer, inner, .. } => {
                     enclosure_case(&deck, inner, outer, true, &what);
                 }
                 Rule::ViaArraySpacing {

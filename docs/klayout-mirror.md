@@ -277,8 +277,9 @@ explains (kind 30).
 | 61 | via_stack | `via_stack(C1, C2, ..) <= n` | ROW | EXACT (scripted) | exact | new |
 | 62 | full_width | `full_width(i, o)` | FIG by shape (inner) | EXACT (scripted) | exact | new |
 | 63 | projection_spacing | `space(A, B, projection) >= l` | PAIR | APPROX | KLayout ⊆ GPurify | new |
+| 64 | adjacent_enclosure | `enclosure(i, o, adjacent) >= l` | FIG by shape (inner) | APPROX | exact when the inner layer is R, else KLayout ⊆ GPurify | new |
 
-41 kinds are EXACT (five scripted over KLayout's polygons), 15 APPROX and seven NONE; `convex_corner_spacing` is NONE on a deck with
+41 kinds are EXACT (five scripted over KLayout's polygons), 16 APPROX and seven NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1356,6 +1357,25 @@ emit(id, A.separation(B, LIM, projection, transparent)) ; emit(id, A & B)
   measurement is not compared, and the comparison is the safe bracket until a run settles how
   KLayout pairs edges that meet only at a projection's end.
 
+### 64. adjacent_enclosure — APPROX (exact when the inner layer is R, else KLayout ⊆ GPurify)
+
+**GPurify** (`overlay.rs` `strip_ends`, `adjacent_enclosure`): each inner edge is read straight
+out at each of its two ends; the measure is the least, over the inner's convex corners, of the
+better edge meeting there, read at that corner. For a rectangle in a host that does not step along
+it, that is `max(min(l, r), min(b, t))`, the asymmetric value. An unhosted inner is 0.
+
+**KLayout** (sky130A_mr.drc's own idiom for m1.5 and li.5)
+
+```ruby
+c = O.enclosing(I, LIM, projection).second_edges
+emit(id, I.interacting(c.width(angle_limit(100.0), 1.dbu).polygons(1.dbu)))   # a corner of short edges
+emit(id, I.not_inside(O))
+```
+
+- An inner edge enclosed by less (projected) is short; a corner where two short edges meet fails.
+- A non-rectangular inner that KLayout passes, GPurify may fail, so off R KLayout ⊆ GPurify. The
+  measurement is not compared.
+
 ## (c) Derived layers, connectivity, antenna
 
 ### Derived-layer operations
@@ -1451,6 +1471,7 @@ KLayout, but only by positive overlap in GPurify.
 | corner_to_corner | Exact on R after dropping pairs whose edges overlap or touch on an axis; off R GPurify ⊆ KLayout. |
 | attached_wide_spacing | KLayout ⊆ GPurify. |
 | asymmetric_enclosure | Exact when the inner layer is R; off R KLayout ⊆ GPurify. |
+| adjacent_enclosure | Exact when the inner layer is R; off R KLayout ⊆ GPurify. |
 | min_extension | Exact on R+; not compared off it (bitmap rectangle pairs and the exhaustive fixtures are its oracle). |
 | max_distance_to_tap, redundant_via, via_array_spacing | lo ⊆ GPurify ⊆ hi (square and diamond growth), the tap kind with its tap-interior and well-hole allowance. |
 | edge_spacing | KLayout ⊆ GPurify; collinear end-to-end pairs are GPurify's only. |

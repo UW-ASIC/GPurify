@@ -36,7 +36,7 @@ rule nwell.1  width(nwell)            >= 840nm
 rule nwell.2a space(nwell)            >= 1270nm
 rule m1.1     width(met1)             >= 140nm
 rule m1.4     enclosure(mcon, met1)   >= 30nm
-rule m1.5     enclosure(mcon, met1, opposite) >= 60nm
+rule m1.5     enclosure(mcon, met1, adjacent) >= 60nm
 rule m1.6     area(met1)              >= 0.083um2
 
 let metals = [(met1, 140nm), (met2, 140nm), (met3, 300nm)]
@@ -258,7 +258,8 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `region_density(L, R) <= frac` | A shape of `R` inside which `L` covers more than the limit of its area, each shape measured on its own: the pattern density over a device, as sky130 vpp.5a "max pattern density of met3.dg over capacitor.dg". Use `>=` for a minimum (vpp.11). |
 | `global_density(L) >= frac` | Coverage of the whole layout (the drawn layers' extent, as for `density`) below the limit. Add a boundary layer, `global_density(L, boundary)`, to measure over the die outline. Use `<=` for a maximum. |
 | `enclosure(inner, outer) >= len` | An `inner` shape not surrounded by `outer` by the limit on every side, measured to the outer shape's real edges, holes included. |
-| `enclosure(inner, outer, opposite) >= len` | An `inner` shape without the limit on both sides of at least one axis (LEF `ENCLOSURE` "on two opposite sides"; for a rectangle the same as sky130 m1.5 "on one of two adjacent sides"). Each edge is measured straight out to the outer shape, so an L-shaped inner needs the limit past every vertical edge, or past every horizontal one. LEF `ENCLOSURE o1 o2` is this rule at `o1` plus `enclosure(inner, outer) >= o2`. |
+| `enclosure(inner, outer, opposite) >= len` | An `inner` shape without the limit on both sides of at least one axis (LEF `ENCLOSURE` "on two opposite sides"). Each edge is measured straight out to the outer shape, so an L-shaped inner needs the limit past every vertical edge, or past every horizontal one. LEF `ENCLOSURE o1 o2` is this rule at `o1` plus `enclosure(inner, outer) >= o2`. |
+| `enclosure(inner, outer, adjacent) >= len` | An `inner` shape with a corner where neither edge meeting it has the limit, each edge read straight out at that corner (sky130 m1.5 "on one of two adjacent sides", as the foundry's sky130A_mr.drc reads it). Where the outer shape does not step along a rectangle's sides this is `opposite`; where it steps, a side far enclosed at one corner and short at the other is read at each. |
 | `enclosure(inner, outer[, opposite]; width: len, below: len) >= len` | Either enclosure, only for an `inner` shape lying on a part of `outer` at least `width` wide and not on a part `below` wide: where a square that wide fits around all of it (LEF `ENCLOSURE ... WIDTH minWidth`). Either bound can be left out. LEF applies the rule with the largest `minWidth` the wire reaches, so write one row per band, each `below` the next one's `width`; a shape on no `outer` falls in the lowest band. GF180 CO.6 "Metal1 (< 0.34 µm) end-of-line overlap" is `enclosure(contact, metal1, opposite; below: 340nm) >= 60nm`. |
 | `enclosure(inner, outer, noncoincident) >= len` | An `inner` shape closer than the limit to `outer`'s edge, except where its edges lie on `outer`'s edge, as sky130 lvtn.10 "(exclude coincident edges)": each edge is measured to the parallel `outer` edges facing the same way beyond it, and pairs that touch (coincident edges, a corner on the edge) are not measured. |
 | `full_width(inner, outer)` | An `inner` shape that does not span `outer`'s full width along one axis: on one axis, every edge of `inner` must meet `outer`'s edge, as ASAP7 V1.M2.AUX.2 "V1 must exactly be the same width as M2 along the direction perpendicular to the M2 length". Reported with the widest gap on the better axis. An `inner` shape on no `outer` shape is for `inside`. |
@@ -713,6 +714,6 @@ fix a deck in one pass:
 
 ```
 pdks/sky130.deck:41:28: m1.5: enclosure needs a length, got 60 (no unit)
-rule m1.5 enclosure(mcon, met1, opposite) >= 60
+rule m1.5 enclosure(mcon, met1, adjacent) >= 60
                                              ^^
 ```

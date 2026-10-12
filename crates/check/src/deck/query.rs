@@ -25,7 +25,9 @@ pub struct Enclosure {
     /// limit, `None` without one.
     pub all_sides: Option<Dbu>,
     /// The enclosure both sides of one axis need: the largest
-    /// [`Rule::AsymmetricEnclosure`] limit, `None` without one.
+    /// [`Rule::AsymmetricEnclosure`] or [`Rule::AdjacentEnclosure`] limit,
+    /// `None` without one. For a rectangular cut in a shape whose edges do
+    /// not step along its sides the two rules read the same enclosure.
     pub opposite: Option<Dbu>,
     /// The enclosure every side not on the host's boundary needs: the
     /// largest [`Rule::NoncoincidentEnclosure`] limit, `None` without one.
@@ -255,6 +257,13 @@ impl CompiledDeck {
                     inner: i,
                     min_one_side,
                     ..
+                } if (o, i) == (outer, inner) => {
+                    found.opposite = found.opposite.max(Some(min_one_side));
+                }
+                Rule::AdjacentEnclosure {
+                    outer: o,
+                    inner: i,
+                    min_one_side,
                 } if (o, i) == (outer, inner) => {
                     found.opposite = found.opposite.max(Some(min_one_side));
                 }

@@ -8,7 +8,7 @@
 #![allow(clippy::unreadable_literal, reason = "values as the deck writes them")]
 
 use gpurify_check::deck::rules::{
-    angle, antenna, antenna_electrical, asymmetric_enclosure, attached_wide_spacing, cut_size,
+    adjacent_enclosure, angle, antenna, antenna_electrical, attached_wide_spacing, cut_size,
     density_cmp, drain_source, edge_enclosure, edge_min_length, edge_spacing, edge_width,
     em_current_density, esd_topological, floating_gate, floating_well, forbidden, gate_oxide,
     ir_drop, min_area, min_enclosed_area, min_enclosure, min_extension, min_spacing,
@@ -781,16 +781,16 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     );
     d.rule(
         "licon.5c",
-        asymmetric_enclosure(l["licon_diff"], l["diff"], nm(60)),
+        adjacent_enclosure(l["licon_diff"], l["diff"], nm(60)),
     );
     d.rule(
         "licon.7",
-        asymmetric_enclosure(l["licon_iso_tap"], l["tap"], nm(120)),
+        adjacent_enclosure(l["licon_iso_tap"], l["tap"], nm(120)),
     );
     d.rule("licon.8", min_enclosure(l["poly_licon"], l["poly"], nm(50)));
     d.rule(
         "licon.8a",
-        asymmetric_enclosure(l["poly_licon"], l["poly"], nm(80)),
+        adjacent_enclosure(l["poly_licon"], l["poly"], nm(80)),
     );
     d.rule(
         "licon.9",
@@ -823,7 +823,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     d.rule("li.1", min_width(l["li"], nm(170)));
     d.rule("li.3", min_spacing(l["li"], nm(170)));
     d.rule("li.3.notch", notch(l["li"], nm(170)));
-    d.rule("li.5", asymmetric_enclosure(l["licon"], l["li"], nm(80)));
+    d.rule("li.5", adjacent_enclosure(l["licon"], l["li"], nm(80)));
     d.rule("li.6", min_area(l["li"], nm2(56100)));
     d.rule("li.7", min_width(l["li_res"], nm(290)));
     d.rule("ct.1", cut_size(l["mcon"], nm(170), nm(170)));
@@ -883,22 +883,22 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     d.rule("m5.2.notch", notch(l["met5"], nm(1600)));
     d.rule("m5.4", min_area(l["met5"], nm2(4000000)));
     d.rule("m1.4", min_enclosure(l["mcon"], l["met1"], nm(30)));
-    d.rule("m1.5", asymmetric_enclosure(l["mcon"], l["met1"], nm(60)));
+    d.rule("m1.5", adjacent_enclosure(l["mcon"], l["met1"], nm(60)));
     d.rule("via.1a", cut_size(l["via"], nm(150), nm(150)));
     d.rule("via.2", min_spacing(l["via"], nm(170)));
     d.rule("via.4a", min_enclosure(l["via"], l["met1"], nm(55)));
-    d.rule("via.5a", asymmetric_enclosure(l["via"], l["met1"], nm(85)));
+    d.rule("via.5a", adjacent_enclosure(l["via"], l["met1"], nm(85)));
     d.rule("m2.4", min_enclosure(l["via"], l["met2"], nm(55)));
-    d.rule("m2.5", asymmetric_enclosure(l["via"], l["met2"], nm(85)));
+    d.rule("m2.5", adjacent_enclosure(l["via"], l["met2"], nm(85)));
     d.rule("via2.1a", cut_size(l["via2"], nm(200), nm(200)));
     d.rule("via2.2", min_spacing(l["via2"], nm(200)));
     d.rule("via2.4", min_enclosure(l["via2"], l["met2"], nm(40)));
-    d.rule("via2.5", asymmetric_enclosure(l["via2"], l["met2"], nm(85)));
+    d.rule("via2.5", adjacent_enclosure(l["via2"], l["met2"], nm(85)));
     d.rule("m3.4", min_enclosure(l["via2"], l["met3"], nm(65)));
     d.rule("via3.1", cut_size(l["via3"], nm(200), nm(200)));
     d.rule("via3.2", min_spacing(l["via3"], nm(200)));
     d.rule("via3.4", min_enclosure(l["via3"], l["met3"], nm(60)));
-    d.rule("via3.5", asymmetric_enclosure(l["via3"], l["met3"], nm(90)));
+    d.rule("via3.5", adjacent_enclosure(l["via3"], l["met3"], nm(90)));
     d.rule("m4.3", min_enclosure(l["via3"], l["met4"], nm(65)));
     d.rule("via4.1", cut_size(l["via4"], nm(800), nm(800)));
     d.rule("via4.2", min_spacing(l["via4"], nm(800)));

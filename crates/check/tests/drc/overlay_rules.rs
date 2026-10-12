@@ -1008,3 +1008,124 @@ fn a_via_must_span_its_wire_along_one_axis() {
     sink.run(&store, &table);
     assert_clean(&sink.runs, &sink.out, RULE);
 }
+
+// ------------------------------------------------------ adjacent_enclosure
+
+fn adjacent_table(limit: i64) -> Vec<(StrId, Rule)> {
+    vec![(
+        RULE,
+        Rule::AdjacentEnclosure {
+            outer: B,
+            inner: A,
+            min_one_side: dbu(limit),
+        },
+    )]
+}
+
+/// A map of the plane.
+type Symmetry = fn(i64, i64) -> (i64, i64);
+
+/// The eight symmetries of the square.
+const SYMMETRIES: [Symmetry; 8] = [
+    |x, y| (x, y),
+    |x, y| (-y, x),
+    |x, y| (-x, -y),
+    |x, y| (y, -x),
+    |x, y| (-x, y),
+    |x, y| (x, -y),
+    |x, y| (y, x),
+    |x, y| (-y, -x),
+];
+
+/// `rects` (layer, xlo, ylo, xhi, yhi) under symmetry `s`, run under `table`:
+/// each finding's measured length, and the run's examined count.
+fn run_transformed(
+    s: Symmetry,
+    rects: &[(gpurify_geom::LayerId, [i64; 4])],
+    table: &[(StrId, Rule)],
+) -> Vec<Measurement> {
+    let mut layout = LayoutBuilder::new(2);
+    for &(layer, [xlo, ylo, xhi, yhi]) in rects {
+        let (ax, ay) = s(xlo, ylo);
+        let (bx, by) = s(xhi, yhi);
+        layout.rect(layer, ax.min(bx), ay.min(by), ax.max(bx), ay.max(by));
+    }
+    let (store, _ids) = layout.finish();
+    let mut sink = Sink::default();
+    sink.run(&store, table);
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
+    sink.out.measured.clone()
+}
+
+/// The licon of `sky130_fd_sc_hd__a2111oi_1` (at 1.12, 0.645 um), its li
+/// stepping along the licon's sides: a 170 nm cut, with the host 75 nm out on
+/// the left and 85 nm on the right below y = 100, 900 and 830 nm out above
+/// it, 65 nm above the cut and 100 nm below. Two rectangles, merged.
+const STEPPED: [(gpurify_geom::LayerId, [i64; 4]); 3] = [
+    (A, [0, 0, 170, 170]),
+    (B, [-75, -100, 255, 100]),
+    (B, [-900, 100, 1000, 235]),
+];
+
+/// sky130 li.5 "Enclosure of licon by one of two adjacent LI sides: 0.080 um"
+/// (periphery rules, google/skywater-pdk docs/rules/periphery/periphery.csv),
+/// read at each corner of the cut. The corners: bottom-left max(75, 100),
+/// top-left max(900, 65), top-right max(830, 65), bottom-right max(85, 100):
+/// the least is 100. Each side's least along its whole length, as two
+/// opposite sides read it, gives max(min(75, 85), min(65, 100)) = 75, which
+/// fails li.5's 80 on a cell the foundry deck passes (finding N-f2-2).
+///
+/// Oracle: foundry example, sky130 li.5 on `sky130_fd_sc_hd__a2111oi_1`,
+/// clean under the foundry's `sky130A_mr.drc`; the corner values by hand.
+/// Under all eight symmetries of the square, the limit swept one grid step
+/// either side of 100: 99 and 100 pass, 101 fails measuring 100; li.5's 80
+/// passes, where the opposite-sides rule fails it measuring 75.
+#[test]
+fn sky130_li_5_reads_each_corner_of_a_cut_whose_li_steps_along_its_sides() {
+    for (k, s) in SYMMETRIES.into_iter().enumerate() {
+        for limit in [80, 99, 100] {
+            assert!(
+                run_transformed(s, &STEPPED, &adjacent_table(limit)).is_empty(),
+                "symmetry {k}: limit {limit} passes"
+            );
+        }
+        assert_eq!(
+            run_transformed(s, &STEPPED, &adjacent_table(101)),
+            [Measurement::Length(dbu(100))],
+            "symmetry {k}: limit 101 fails by one"
+        );
+        assert_eq!(
+            run_transformed(s, &STEPPED, &asymmetric_table(80)),
+            [Measurement::Length(dbu(75))],
+            "symmetry {k}: two opposite sides read the stepped side's least"
+        );
+    }
+}
+
+/// A host that does not step along a side reads the same under one of two
+/// adjacent sides as under two opposite sides: the least over the corners of
+/// the better adjacent side is `max(min(l, r), min(b, t))`, `min` over the
+/// four `max`es distributing over `max` of two `min`s.
+///
+/// Oracle: the distributive law of `min` and `max`, over every margin of
+/// {0, 20, 59, 60, 61, 100} on each side of a 100 nm cut in a single
+/// rectangle, at limit 60.
+#[test]
+fn adjacent_and_opposite_sides_agree_when_no_side_steps() {
+    let margins = [0, 20, 59, 60, 61, 100];
+    for l in margins {
+        for r in margins {
+            for b in margins {
+                for t in margins {
+                    let rects = [(A, [0, 0, 100, 100]), (B, [-l, -b, 100 + r, 100 + t])];
+                    let id = SYMMETRIES[0];
+                    assert_eq!(
+                        run_transformed(id, &rects, &adjacent_table(60)),
+                        run_transformed(id, &rects, &asymmetric_table(60)),
+                        "margins l {l} r {r} b {b} t {t}"
+                    );
+                }
+            }
+        }
+    }
+}

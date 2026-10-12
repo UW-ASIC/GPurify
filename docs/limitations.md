@@ -205,7 +205,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-036 | Span-length table | partial | span_length checks every chord against the x and y span lists (LEF58_SPANLENGTHTABLE with and without WRONGDIRECTION); ORTHOGONAL and EXCEPTOTHERSPAN are missing |
 | DRC-037 | Bent / 45-degree features | partial | angle checks the edges; spacing and width rules record Refused on a non-rectilinear layer |
 | DRC-038 | Diagonal width / spacing | missing | In scope since 2026-10-11 (was: Needs non-rectilinear geometry) |
-| DRC-042 | End-cap / one-of-two-adjacent-sides enclosure | partial | One of two adjacent sides is the opposite form for a rectangle (sky130's own KLayout deck checks opposite edges), and IHP M1.c1's end cap reads the same; LEF58_ENCLOSURE EOL (an overhang only toward a metal end of line) is not modelled: no public source defines it beyond its syntax |
+| DRC-042 | End-cap / one-of-two-adjacent-sides enclosure | partial | One of two adjacent sides is adjacent_enclosure, each edge read at the corner as sky130A_mr.drc does (F2); IHP M1.c1's end cap is the opposite form; LEF58_ENCLOSURE EOL (an overhang only toward a metal end of line) is not modelled: no public source defines it beyond its syntax |
 | DRC-043 | Width-dependent enclosure | partial | WIDTH bands only: LEF EXCEPTEXTRACUT and LENGTH, and LEF58_ENCLOSURETABLE, are missing |
 | DRC-044 | Maximum enclosure / min-and-max window | partial | A maximum space (IHP Rppd.c, GF180 NP.3d "min/max space") is not written |
 | DRC-045 | Extension / end-cap / overhang | partial | Each gate of merged A ∩ B measured per crossed axis; a gate that bends or carries a stub inside B measures 0 (fails closed), and bend (gate_corner, DRC-052) reports the bend itself |
