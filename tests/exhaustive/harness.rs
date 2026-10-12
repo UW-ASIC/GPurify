@@ -558,6 +558,7 @@ pub fn run(fixture: &Fixture) -> Result<Ran, String> {
         provenance,
         reference,
         intent,
+        design: None,
     };
     let extracted = extract(&loaded).map_err(|why| format!("extract: {why}"))?;
     let options = RunOptions {

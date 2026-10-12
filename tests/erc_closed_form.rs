@@ -134,6 +134,7 @@ fn erc(
         provenance,
         reference: None,
         intent: Some(intent),
+        design: None,
     };
     let extracted = extract(&loaded).expect("the layout extracts");
     let options = RunOptions {

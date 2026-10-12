@@ -106,6 +106,161 @@ fn a_def_wire_extracts_to_its_closed_form_and_is_checked() {
     assert_eq!(loaded.strings.resolve(outputs.violations.rule[0]), "m1.w");
 }
 
+/// The integration checks (FLOW-003) find exactly the faults planted in a
+/// DEF, one or two per check, and examine what each check covers.
+///
+/// Oracle: construct-from-answer, each fault planted by its definition
+/// (`gpurify::engine::integration`): of three fills one is inside the
+/// die, one crosses its edge and one is outside (2); block `b2`
+/// overlaps `b1` by 2 × 2 µm and `b3` runs past the die's right edge; core
+/// cell `c2` sits 10 nm off its row's 0.2 µm site pitch; pin `q` is 50 nm
+/// off met1's 0.2 µm tracks; one special wire starts 3 nm off the 5 nm
+/// manufacturing grid. (The design's die is 200 µm a side.)
+#[test]
+fn every_integration_fault_planted_in_a_def_is_found() {
+    let lef = format!(
+        "{}SITE core CLASS CORE ; SIZE 0.2 BY 2 ; END core\n\
+         MACRO blk CLASS BLOCK ; SIZE 5 BY 5 ; OBS LAYER met2 ; RECT 0 0 5 5 ; END END blk\n\
+         MACRO inv CLASS CORE ; SIZE 0.4 BY 2 ; SITE core ; END inv\n\
+         MACRO bump CLASS COVER BUMP ; SIZE 5 BY 5 ; END bump\nEND LIBRARY\n",
+        LEF.trim_end().trim_end_matches("END LIBRARY")
+    )
+    .replace(
+        "UNITS DATABASE",
+        "MANUFACTURINGGRID 0.005 ;\nUNITS DATABASE",
+    );
+    let mut inputs = inputs(
+        "integration",
+        &design(
+            "ROW r0 core 0 10000 N DO 50 BY 1 STEP 200 0 ;\n\
+             TRACKS Y 100 DO 100 STEP 200 LAYER met1 ;\n\
+             COMPONENTS 6 ;\n\
+             - b1 blk + FIXED ( 1000 1000 ) N ;\n- b2 blk + PLACED ( 4000 4000 ) N ;\n\
+             - b3 blk + PLACED ( 196000 1000 ) N ;\n- bp bump + COVER ( 1000 1000 ) N ;\n\
+             - c1 inv + PLACED ( 400 10000 ) N ;\n- c2 inv + PLACED ( 1010 10000 ) FN ;\n\
+             END COMPONENTS\n\
+             PINS 2 ;\n- p + NET p + LAYER met1 ( -100 -100 ) ( 100 100 ) + PLACED ( 50000 10100 ) N ;\n\
+             - q + NET q + LAYER met1 ( -100 -100 ) ( 100 100 ) + PLACED ( 50000 10150 ) N ;\n\
+             END PINS\n\
+             SPECIALNETS 1 ;\n- v + ROUTED met2 400 ( 1003 150000 ) ( 2005 150000 ) ;\nEND SPECIALNETS\n\
+             FILLS 3 ;\n- LAYER met2 RECT ( 100000 100000 ) ( 101000 101000 ) ;\n\
+             - LAYER met2 RECT ( 199000 100000 ) ( 201000 101000 ) ;\n\
+             - LAYER met2 RECT ( 300000 0 ) ( 301000 1000 ) ;\nEND FILLS",
+        ),
+    );
+    inputs.lef = vec![{
+        let path = inputs.lef[0].with_file_name("integration.lef");
+        std::fs::write(&path, lef).expect("writable");
+        path
+    }];
+    let options = RunOptions {
+        checks: Checks {
+            drc: true,
+            erc: false,
+            lvs: false,
+            pex: false,
+        },
+        lvs: gpurify_check::lvs::CompareOptions::default(),
+        quasistatic_nets: Vec::new(),
+    };
+    let (loaded, _, outputs, _) = run(&inputs, &options).expect("the DEF runs");
+    let row = |id: &str| {
+        let rule = loaded.strings.get(id).expect("interned");
+        let run = outputs
+            .runs
+            .iter()
+            .find(|r| r.rule == rule)
+            .expect("a run row per check");
+        (run.examined, run.violations)
+    };
+    assert_eq!(row("def.fill_outside_die"), (3, 2));
+    assert_eq!(row("def.component_outside_die"), (6, 1));
+    // The COVER bump over b1 is no overlap; b1 and b2 are.
+    assert_eq!(row("def.component_overlap"), (5, 1));
+    assert_eq!(row("def.off_site"), (2, 1));
+    assert_eq!(row("def.pin_off_track"), (2, 1));
+    assert_eq!(row("def.off_manufacturing_grid").1, 1);
+    let overlap = loaded
+        .strings
+        .get("def.component_overlap")
+        .expect("interned");
+    let at = outputs
+        .violations
+        .rule
+        .iter()
+        .position(|&r| r == overlap)
+        .expect("the overlap row");
+    assert_eq!(
+        outputs.violations.measured[at],
+        gpurify_check::report::Measurement::Area(gpurify_geom::DbuArea::new(2000 * 2000))
+    );
+}
+
+/// Interface DRC (FLOW-004): a top-level wire is checked against a placed
+/// block's abstract, its obstruction and its pin, as drawn by the LEF.
+///
+/// Oracle: construct-from-answer: block `b` (LEF `CLASS BLOCK`) has an
+/// met2 obstruction over (0, 0)-(5, 5) µm and a met1 pin at (4.8, 2)-
+/// (5, 2.4) µm, placed at (10, 10) µm. A top-level met2 special wire 0.1 µm
+/// from the obstruction's right edge breaks a 0.2 µm met2 spacing (one
+/// finding at 100 nm); a met1 wire 0.15 µm wide ending on the pin and one
+/// 1 µm away from the block are both legal under the 0.3 µm met1 width
+/// rule save for their own width (two findings at 150 nm, neither on the
+/// pin, which is 0.4 µm tall).
+#[test]
+fn a_top_level_wire_is_checked_against_a_block_abstract() {
+    let lef = format!(
+        "{}MACRO blk CLASS BLOCK ; SIZE 5 BY 5 ;\n\
+         PIN A DIRECTION INPUT ; PORT LAYER met1 ; RECT 4.8 2 5 2.4 ; END END A\n\
+         OBS LAYER met2 ; RECT 0 0 5 5 ; END END blk\nEND LIBRARY\n",
+        LEF.trim_end().trim_end_matches("END LIBRARY")
+    );
+    let deck = DECK.replace("rule m1.w", "rule m2.s space(met2) >= 200nm\nrule m1.w");
+    let mut inputs = inputs(
+        "interface",
+        &design(
+            "COMPONENTS 1 ;\n- b blk + FIXED ( 10000 10000 ) N ;\nEND COMPONENTS\n\
+             SPECIALNETS 2 ;\n- v + ROUTED met2 400 ( 15300 10000 ) ( 15300 15000 ) ;\n\
+             - w + ROUTED met1 150 ( 14800 12100 ) ( 18000 12100 ) NEW met1 150 ( 16000 9000 ) ( 18000 9000 ) ;\n\
+             END SPECIALNETS",
+        ),
+    );
+    inputs.lef = vec![{
+        let path = inputs.lef[0].with_file_name("interface.lef");
+        std::fs::write(&path, lef).expect("writable");
+        path
+    }];
+    std::fs::write(&inputs.deck, deck).expect("writable");
+    let options = RunOptions {
+        checks: Checks {
+            drc: true,
+            erc: false,
+            lvs: false,
+            pex: false,
+        },
+        lvs: gpurify_check::lvs::CompareOptions::default(),
+        quasistatic_nets: Vec::new(),
+    };
+    let (loaded, _, outputs, _) = run(&inputs, &options).expect("the DEF runs");
+    let found = |id: &str| -> Vec<gpurify_check::report::Measurement> {
+        let rule = loaded.strings.get(id).expect("a deck rule");
+        (0..outputs.violations.len())
+            .filter(|&k| outputs.violations.rule[k] == rule)
+            .map(|k| outputs.violations.measured[k])
+            .collect()
+    };
+    use gpurify_check::report::Measurement::Length;
+    use gpurify_geom::Dbu;
+    assert_eq!(found("m2.s"), [Length(Dbu::new_unchecked(100))]);
+    assert_eq!(
+        found("m1.w"),
+        [
+            Length(Dbu::new_unchecked(150)),
+            Length(Dbu::new_unchecked(150))
+        ]
+    );
+}
+
 /// A DEF whose layer the deck does not have is refused naming it, and an
 /// unreadable LEF names its path.
 ///

@@ -77,6 +77,7 @@ fn engine(bytes: &[u8]) -> Duration {
         provenance,
         reference: None,
         intent: None,
+        design: None,
     };
     let extracted = extract(&loaded).expect("the corpus extracts");
     let options = RunOptions {

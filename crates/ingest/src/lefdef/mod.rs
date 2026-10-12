@@ -69,6 +69,15 @@ pub struct LefDefError {
 /// A point in database units.
 pub type Pt = (i64, i64);
 
+/// A DEF and the LEF library it was read against.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Design {
+    /// The design.
+    pub def: Def,
+    /// Its technology and cell abstracts, in the DEF's units.
+    pub lef: Lef,
+}
+
 /// A closed polygon on one layer, its ring without the repeated first
 /// point, in database units.
 #[derive(Debug, Clone, PartialEq, Eq)]

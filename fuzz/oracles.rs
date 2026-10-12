@@ -521,6 +521,7 @@ pub fn deck(data: &[u8]) {
         provenance,
         reference: None,
         intent: None,
+        design: None,
     };
     let Ok(extracted) = extract(&loaded) else {
         return;

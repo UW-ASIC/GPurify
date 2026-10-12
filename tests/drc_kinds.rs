@@ -78,6 +78,7 @@ fn run(deck: &str, rects: &[(&str, [i64; 4])]) -> Found {
         provenance,
         reference: None,
         intent: None,
+        design: None,
     };
     let extracted = extract(&loaded).expect("extracts");
     let options = RunOptions {
