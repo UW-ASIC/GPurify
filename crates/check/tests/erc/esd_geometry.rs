@@ -167,6 +167,7 @@ fn path_table(it2: f64) -> EsdPathTable {
         max_density: vec![None],
         max_current_per_cut: vec![None],
         max_voltage: vec![None],
+        min_width: vec![None],
     }
 }
 

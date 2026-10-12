@@ -216,6 +216,7 @@ The key patents cited in the catalog:
 | P9 | US9262574B2 (Siemens) | Voltage-related analysis of layout data (voltage-aware DRC) |
 | P10, P11 | US20080115097A1 (granted US10643015B2); US20090106715A1 (abandoned) | Properties in EDA; programmable DRC (equation-based DRC lineage) |
 | P12 | US20100306720A1 (abandoned) | Programmable electrical rule checking |
+| P13 | US11714117B2 (Synopsys) | ESD path resistance as the pin voltage over a unit forced current |
 
 **What was not used:** customer-only manuals and packaged rule sets: the SVRF,
 TVF and PERC references; PERC packaged-check XML; the full LVS discrepancy

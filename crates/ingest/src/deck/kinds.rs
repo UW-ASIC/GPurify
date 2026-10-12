@@ -265,6 +265,7 @@ const ESD_PATH: &[Param] = &[
     opt("max_density", "max_density", Dim::CurrentPerWidth),
     opt("max_current_per_cut", "max_current_per_cut", Dim::Current),
     opt("max_voltage", "max_voltage", Dim::Voltage),
+    opt("min_width", "min_width", Dim::Length),
 ];
 /// An enclosure's wire band: the wire widths the rule holds.
 const WIRE_WIDTH: &[Param] = &[p("width", "wire_width", Dim::Length)];
@@ -1122,6 +1123,15 @@ pub(crate) const KINDS: &[Kind] = &[
     erc("supply_path", &[], false, &[p("both", "both", Dim::Bool)]),
     erc("combinational_loop", &[], false, &[]),
     erc("floating_supply", &[], false, &[]),
+    erc(
+        "esd_clamp_resistance",
+        &[0],
+        false,
+        &[
+            p("clamps", "clamp", Dim::Models),
+            p("max_resistance", "max_resistance", Dim::Resistance),
+        ],
+    ),
     erc(
         "forward_diode",
         &[0],
