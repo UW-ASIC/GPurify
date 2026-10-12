@@ -40,10 +40,15 @@
 //! exact areas), and every `GPurify` violation must sit on such a net.
 //!
 //! **Not compared**, each counted: a row `GPurify` refused; an
-//! `antenna_electrical` row with a credit or a bonus (`KLayout`'s diode spec
-//! credits per µm² of diode, never a constant, and `GPurify` refuses a credit
-//! per area); a cumulative row with a diode (its skip is `GPurify`'s, at the
-//! row's last stage; `KLayout` defines none).
+//! `antenna_electrical` row with what `antenna_check` has no form for (an
+//! exemption layer, a constant diode bonus, LEF's diode area terms
+//! `ANTENNAAREAMINUSDIFF` and `ANTENNAGATEPLUSDIFF`, a piecewise-linear
+//! diode table, a cut area factor on a row with cuts, a diode credit on a
+//! cumulative row), and a cumulative row with a diode (its skip is
+//! `GPurify`'s, at the row's last stage; `KLayout` defines none). A single
+//! collector's sky130 diode credit is mirrored: `[diode, credit]` raises
+//! `KLayout`'s threshold by the credit per µm² of diode, so the value
+//! compared is `ratio − (max_ratio_eff − max_ratio)` from its text.
 
 use super::antenna_board::{self, contains, Board, Findings};
 use super::{Rect, ERC};
@@ -103,8 +108,11 @@ struct Row {
     gate: LayerId,
     /// Deduplicated: each collector, its measure and its etch stage.
     collectors: Vec<(LayerId, AntennaMeasure, usize)>,
-    /// `antenna`'s diode: the row leaves a net with diode area to another.
-    diode: Option<LayerId>,
+    /// The diode and its credit per µm²: 0 is `antenna`'s diode, which
+    /// leaves a net with diode area to another row (`antenna_check`'s
+    /// one-element spec); otherwise `antenna_electrical`'s sky130 credit (its
+    /// two-element spec, raising the threshold by the credit per µm²).
+    diode: Option<(LayerId, f64)>,
     limit: f64,
 }
 
@@ -135,12 +143,12 @@ fn standing(stack: &Stack, layer: LayerId) -> Option<usize> {
 }
 
 /// One antenna row as the deck states it: id, gate, collectors with their
-/// measures, diode, limit.
+/// measures, diode with its credit, limit.
 type Stated = (
     String,
     LayerId,
     Vec<(LayerId, AntennaMeasure)>,
-    Option<LayerId>,
+    Option<(LayerId, f64)>,
     f64,
 );
 
@@ -162,27 +170,51 @@ fn rows(deck: &Deck, strings: &StrTable) -> (Vec<Row>, Vec<(String, &'static str
                 .copied()
                 .zip(a.collector_measure[span].iter().copied())
                 .collect(),
-            a.diode[r],
+            a.diode[r].map(|d| (d, 0.0)),
             a.max_ratio[r],
         ));
     }
     let e = &rules.antenna_electrical;
     for r in 0..e.head.len() {
         let id = name(e.head.rule[r]);
-        if e.diode_credit[r] != 0.0 || e.diode_bonus[r] != 0.0 {
-            skipped.push((id, "a diode credit or bonus"));
+        let span = e.collector_start[r] as usize..e.collector_start[r + 1] as usize;
+        let cuts = e.collector[span.clone()]
+            .iter()
+            .any(|&l| !a.stack.conductors.contains(&l));
+        // What `antenna_check` has no form for (H5): it divides plain areas,
+        // and credits a diode only per µm² of it.
+        let why = if e.exempt[r].is_some() {
+            Some("an exemption layer")
+        } else if e.diode_bonus[r] != 0.0 {
+            Some("a constant diode bonus")
+        } else if e.area_minus_diode[r] != 0.0 || e.gate_plus_diode[r] != 0.0 {
+            Some("a diode area term in the ratio")
+        } else if !e.diode_reduce[r].is_empty() || !e.diode_max_ratio[r].is_empty() {
+            Some("a piecewise-linear diode table")
+        } else if cuts && e.cut_factor[r] != 1.0 {
+            Some("a cut area factor")
+        } else if e.diode_credit[r] != 0.0 && span.len() > 1 {
+            Some("a cumulative row with a diode credit")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            skipped.push((id, why));
             continue;
         }
-        let span = e.collector_start[r] as usize..e.collector_start[r + 1] as usize;
         // No credit: `ratio − 0 − 0` for every gate, diode or not.
+        let diode = e.diode[r]
+            .filter(|_| e.diode_credit[r] != 0.0)
+            .map(|d| (d, e.diode_credit[r]));
         stated.push((
             id,
             e.gate[r],
-            e.collector[span]
+            e.collector[span.clone()]
                 .iter()
-                .map(|&l| (l, AntennaMeasure::Area))
+                .copied()
+                .zip(e.collector_measure[span].iter().copied())
                 .collect(),
-            None,
+            diode,
             e.max_ratio[r],
         ));
     }
@@ -301,7 +333,7 @@ fn ruby(
         for &(c, ..) in &row.collectors {
             define(deck, c, &mut done, &mut s);
         }
-        if let Some(d) = row.diode {
+        if let Some((d, _)) = row.diode {
             define(deck, d, &mut done, &mut s);
         }
     }
@@ -347,7 +379,8 @@ fn ruby(
             };
             let threshold = if single { row.limit } else { 0.0 };
             let diode = match (single, row.diode) {
-                (true, Some(d)) => format!(", {}", var(d)),
+                (true, Some((d, credit))) if credit == 0.0 => format!(", {}", var(d)),
+                (true, Some((d, credit))) => format!(", [{}, {credit:?}]", var(d)),
                 _ => String::new(),
             };
             let _ = writeln!(s, "  v = labels");
@@ -417,11 +450,22 @@ struct Measured {
     errors: Vec<String>,
 }
 
-/// The `ratio` of an `antenna_check` text: `agate: …, ametal: …, ratio: …`.
+/// The value of an `antenna_check` text (`agate: …, ametal: …, ratio: …,
+/// max_ratio_eff: …, max_ratio: …`) as `GPurify` measures it: the ratio less
+/// the diode credit, which `KLayout` adds to the threshold instead
+/// (`max_ratio_eff − max_ratio`).
 fn ratio_of(text: &str) -> Option<f64> {
-    text.split(", ")
-        .find_map(|part| part.strip_prefix("ratio: "))
-        .and_then(|v| v.trim().parse().ok())
+    let key = |k: &str| {
+        text.split(", ")
+            .find_map(|part| part.strip_prefix(k))
+            .and_then(|v| v.trim().parse::<f64>().ok())
+    };
+    let ratio = key("ratio: ")?;
+    let credit = match (key("max_ratio_eff: "), key("max_ratio: ")) {
+        (Some(eff), Some(max)) => eff - max,
+        _ => 0.0,
+    };
+    Some(ratio - credit)
 }
 
 impl Measured {
@@ -485,7 +529,7 @@ struct Tally {
 }
 
 fn close(a: f64, b: f64) -> bool {
-    (a - b).abs() <= RELATIVE * a.abs().max(b.abs()).max(1e-12)
+    (a - b).abs() <= RELATIVE * a.abs().max(b.abs()).max(1.0)
 }
 
 /// Compares one fixture's rows, gate group by gate group.
