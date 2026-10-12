@@ -256,6 +256,17 @@ pub fn compare_logged(
 ///   `ignore shorted` removes dummies. Its terminals are those compared: a
 ///   reference bulk the layout does not extract is already gone, so a dummy
 ///   with gate, source and drain on one net is shorted on both sides.
+/// - **`lvs max_res`, `lvs min_caps`** (catalog LVS-034): a resistor
+///   stating an `r` above the one, or a capacitor stating a `c` below the
+///   other, is dropped the same way on either side, as `KLayout`'s
+///   `max_res` and `min_caps` ignore them; the layout's own value counts,
+///   whether or not the reference states one. A device stating no value
+///   stays.
+/// - **`lvs same_nets`** (catalog LVS-032): the layout net labelled with a
+///   row's first name and the reference net of its second start refinement
+///   in a class of their own, as `KLayout`'s `same_nets!` holds them
+///   together; a pair whose wiring disagrees, or a row only one side has a
+///   net for, leaves its nets unpaired. Seeding only splits classes.
 ///
 /// # Panics
 ///
@@ -280,11 +291,14 @@ pub fn compare_with(
     let ports = controls.ports_by_name.then(|| port_names(reference));
     let mut declared = reference.clone();
     drop_unextracted_bulk(layout, &mut declared);
-    let reference_rows = drop_ignored_devices(&mut declared, controls);
+    let values = (options.params.values[0], options.params.values[1]);
+    let reference_rows = drop_ignored_devices(&mut declared, controls, values);
     protect_labelled(layout, &mut declared);
     let mut measured = layout.clone();
+    // A threshold reads the layout's own value, whether or not the
+    // reference states one, so devices go before measures do.
+    let layout_rows = drop_ignored_devices(&mut measured, controls, values);
     keep_declared_params(reference, &mut measured);
-    let layout_rows = drop_ignored_devices(&mut measured, controls);
     drop_ignored_params(&mut measured, controls);
     drop_ignored_params(&mut declared, controls);
     assign_roles(&mut measured, controls);
@@ -305,7 +319,15 @@ pub fn compare_with(
         .map(|m| (Side::Layout, m))
         .chain(reference_merges.into_iter().map(|m| (Side::Reference, m)))
         .collect();
-    let seeds = ports.map_or_else(Vec::new, |names| port_seeds((&layout, &reference), &names));
+    let seeds = if ports.is_some() || !controls.same_nets.is_empty() {
+        port_seeds(
+            (&layout, &reference),
+            ports.as_deref().unwrap_or_default(),
+            &controls.same_nets,
+        )
+    } else {
+        Vec::new()
+    };
     let mut partition = Partition::default();
     let budget = (options.max_rounds, options.param_tolerance);
     if !refine_into(

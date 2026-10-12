@@ -136,6 +136,9 @@ lvs range \"nfet\" nf <= 8
 lvs topology relaxed
 lvs connect_implicit \"VDD*\"
 lvs connect_explicit \"VSS\" \"GND\"
+lvs max_res 1Mohm
+lvs min_caps 10fF
+lvs same_nets \"OUT_PAD\" \"OUT\"
 ";
     let mut strings = StrTable::default();
     let deck = compile(text, grid(), &mut strings).expect("the deck compiles");
@@ -148,6 +151,9 @@ lvs connect_explicit \"VSS\" \"GND\"
         "lvs permute \"cmim\" top bottom",
         "lvs range \"nfet\" l >= 150nm <= 20000nm",
         "lvs connect_explicit \"VSS\" \"GND\"",
+        "lvs max_res 1e6ohm",
+        "lvs min_caps 1e4aF",
+        "lvs same_nets \"OUT_PAD\" \"OUT\"",
     ] {
         assert!(printed.contains(line), "{line} not in\n{printed}");
     }

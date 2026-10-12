@@ -844,6 +844,19 @@ pub struct LvsControls {
     /// each, whose layout nets are joined for the comparison, `KLayout`'s
     /// `connect_explicit` (catalog LVS-002).
     pub connect_explicit: Vec<Vec<StrId>>,
+    /// `lvs max_res r`: resistors stating a resistance above `r` ohms are
+    /// left out of the comparison on both sides, as opens, `KLayout`'s
+    /// `max_res` (catalog LVS-034).
+    pub max_res: Option<f64>,
+    /// `lvs min_caps c`: capacitors stating a capacitance below `c`, in aF
+    /// as the deck states it (1e-18 F), are left out of the comparison on both sides, as opens, `KLayout`'s
+    /// `min_caps` (catalog LVS-034).
+    pub min_caps: Option<f64>,
+    /// `lvs same_nets "layout" "reference"`: `(layout label, reference net
+    /// name)`, two nets that must pair with each other, `KLayout`'s
+    /// `same_nets!` (catalog LVS-032), in deck order, each name once per
+    /// side.
+    pub same_nets: Vec<(StrId, StrId)>,
 }
 
 /// One `lvs range` statement: the bounds a parameter measured on every
@@ -1026,6 +1039,20 @@ fn build_lvs(
         lvs.connect_explicit
             .push(group.iter().map(|name| strings.intern(name)).collect());
     }
+    lvs.max_res = declared.max_res;
+    lvs.min_caps = declared.min_caps;
+    // A threshold is held to the value LVS computes from the drawing, which
+    // it computes only under an interned name.
+    if lvs.max_res.is_some() {
+        strings.intern("r");
+    }
+    if lvs.min_caps.is_some() {
+        strings.intern("c");
+    }
+    for (layout, reference) in &declared.same_nets {
+        lvs.same_nets
+            .push((strings.intern(layout), strings.intern(reference)));
+    }
     for (model, param, min, max) in &declared.range {
         known(model, "range")?;
         lvs.range.push(LvsRange {
@@ -1094,6 +1121,12 @@ pub struct LvsSrc {
     pub(crate) topology: Option<bool>,
     pub(crate) connect_implicit: Vec<String>,
     pub(crate) connect_explicit: Vec<Vec<String>>,
+    /// `lvs max_res`, in ohms.
+    pub(crate) max_res: Option<f64>,
+    /// `lvs min_caps`, in aF as the deck states it.
+    pub(crate) min_caps: Option<f64>,
+    /// `lvs same_nets`: `(layout label, reference net)`.
+    pub(crate) same_nets: Vec<(String, String)>,
 }
 
 /// `lvs tolerance "model" param relative r absolute a`, the absolute part
@@ -1160,6 +1193,13 @@ impl LvsSrc {
                 .connect_explicit
                 .iter()
                 .map(|group| group.iter().map(|&id| name(id)).collect())
+                .collect(),
+            max_res: controls.max_res,
+            min_caps: controls.min_caps,
+            same_nets: controls
+                .same_nets
+                .iter()
+                .map(|&(layout, reference)| (name(layout), name(reference)))
                 .collect(),
         }
     }

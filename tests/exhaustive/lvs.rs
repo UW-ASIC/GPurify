@@ -1004,6 +1004,12 @@ struct Controls {
     /// `lvs topology relaxed`: parallel resistors and capacitors stating
     /// their value combine by its law.
     relaxed: bool,
+    /// `lvs max_res`: as the deck writes it, and in ohms.
+    max_res: Option<(&'static str, f64)>,
+    /// `lvs min_caps`: as the deck writes it, and in farads.
+    min_caps: Option<(&'static str, f64)>,
+    /// `lvs same_nets`: a layout label and a reference net name.
+    same_nets: Vec<(&'static str, &'static str)>,
 }
 
 impl Controls {
@@ -1057,15 +1063,37 @@ impl Controls {
     }
 
     /// `c` without the devices the controls leave out, as if never drawn
-    /// or written: every one of an ignored model, and each dummy (every pin
+    /// or written: every one of an ignored model, each dummy (every pin
     /// on one net, [`Dev::pins`] holding exactly the pins compared) of a
-    /// model ignored when shorted. Its nets stay, and [`reduce`] keeps only
-    /// those a device or a port holds.
-    fn kept(&self, c: &Circuit) -> Circuit {
+    /// model ignored when shorted, and, deck.md's `max_res` and `min_caps`,
+    /// each resistor above the one and capacitor below the other, its
+    /// value what was drawn ([`measured`]) or what the card writes. Its
+    /// nets stay, and [`reduce`] keeps only those a device or a port holds.
+    fn kept(&self, c: &Circuit, drawn: bool) -> Circuit {
         let mut out = c.clone();
         out.devs.retain(|d| {
             let dummy = d.pins.iter().all(|&p| p == d.pins[0]);
-            !(self.left_out.contains(&d.model) || dummy && self.dummies_out.contains(&d.model))
+            let value = |name| {
+                if drawn {
+                    measured(d.model, name)
+                } else {
+                    d.value
+                }
+            };
+            let open = match d.model {
+                Model::R => self
+                    .max_res
+                    .zip(value("r"))
+                    .is_some_and(|((_, limit), r)| r > limit),
+                Model::C => self
+                    .min_caps
+                    .zip(value("c"))
+                    .is_some_and(|((_, limit), c)| c < limit),
+                _ => false,
+            };
+            !(open
+                || self.left_out.contains(&d.model)
+                || dummy && self.dummies_out.contains(&d.model))
         });
         out
     }
@@ -1154,6 +1182,15 @@ impl Controls {
         }
         if self.relaxed {
             out.push_str("lvs topology relaxed\n");
+        }
+        if let Some((text, _)) = self.max_res {
+            let _ = writeln!(out, "lvs max_res {text}");
+        }
+        if let Some((text, _)) = self.min_caps {
+            let _ = writeln!(out, "lvs min_caps {text}");
+        }
+        for &(layout, reference) in &self.same_nets {
+            let _ = writeln!(out, "lvs same_nets \"{layout}\" \"{reference}\"");
         }
         for &(model, a, b) in &self.permuted {
             let names = pin_names(model);
@@ -1333,7 +1370,7 @@ fn equivalent(layout: &Circuit, reference: &Circuit) -> bool {
 fn equivalent_under(layout: &Circuit, reference: &Circuit, controls: &Controls) -> bool {
     let reference = controls.strip(reference);
     let declared = Declared::of(&reference);
-    let (layout, reference) = (controls.kept(layout), controls.kept(&reference));
+    let (layout, reference) = (controls.kept(layout, true), controls.kept(&reference, false));
     matches(
         &reduce(&layout, &declared, true, controls),
         &reduce(&reference, &declared, false, controls),
@@ -1354,15 +1391,34 @@ fn matches(a: &Reduction, b: &Reduction, controls: &Controls) -> bool {
     if controls.ports_by_name && (0..b.nets).any(|r| b.ports[r] && labelled(r).is_none()) {
         return false;
     }
+    // Under `lvs same_nets`, deck.md's: the layout net labelled with the
+    // row's first name pairs with the reference net of its second, and a
+    // row only one side has a net for is unpaired.
+    let rows: Vec<(Option<usize>, Option<usize>)> = controls
+        .same_nets
+        .iter()
+        .map(|&(la, rb)| {
+            let layout = a.live.iter().copied().find(|&k| a.ports[k] && a.names[k] == la);
+            let reference = b.live.iter().copied().find(|&r| b.names[r] == rb);
+            (layout, reference)
+        })
+        .collect();
+    if rows.iter().any(|row| row.0.is_some() != row.1.is_some()) {
+        return false;
+    }
     let mut map = vec![usize::MAX; a.nets];
     permutations(a.live.len()).iter().any(|perm| {
         for (i, &k) in a.live.iter().enumerate() {
             map[k] = b.live[perm[i]];
         }
-        let named = !controls.ports_by_name
-            || a.live
-                .iter()
-                .all(|&k| !a.ports[k] || port_of(&a.names[k]).is_none_or(|r| map[k] == r));
+        let same = rows
+            .iter()
+            .all(|&(k, r)| k.zip(r).is_none_or(|(k, r)| map[k] == r));
+        let named = same
+            && (!controls.ports_by_name
+                || a.live
+                    .iter()
+                    .all(|&k| !a.ports[k] || port_of(&a.names[k]).is_none_or(|r| map[k] == r)));
         let used = &mut vec![false; b.devs.len()];
         named && assign((&a.devs, &b.devs), (&map, controls), used, 0)
     })
@@ -2942,6 +2998,70 @@ fn controlled() -> Vec<Fixture> {
         .expect(Expect::Lvs(matched));
         fixture.reference = Some(written.clone());
         out.push(fixture);
+    }
+    // LVS-034: `max_res` and `min_caps` leave out a resistor above and a
+    // capacitor below the threshold, on either side, as opens. A drawn
+    // resistor of 200 ohm ([`measured`]) across a transistor's channel,
+    // against the transistor alone, matches under `max_res 100ohm` and not
+    // `300ohm`; a written 1 Mohm the layout does not draw matches under
+    // `100kohm` and not `2Mohm`; a drawn capacitor of 0.56 fF matches under
+    // `min_caps 1fF` and not `100aF`.
+    let alone = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2)]);
+    let with = |dev: Dev| Circuit::new(3, vec![Dev::mos(N, 0, 1, 2), dev]);
+    let drawn_r = with(Dev::pins(R, &[1, 2]));
+    let written_r = with(Dev::pins(R, &[1, 2]).value(1e6));
+    let drawn_c = with(Dev::pins(C, &[1, 2]));
+    let res = |text, ohm| Controls {
+        max_res: Some((text, ohm)),
+        ..Controls::default()
+    };
+    let caps = |text, farad| Controls {
+        min_caps: Some((text, farad)),
+        ..Controls::default()
+    };
+    let thresholds: [(&str, &Circuit, &Circuit, Controls); 7] = [
+        ("drawn_R_default", &drawn_r, &alone, Controls::default()),
+        ("drawn_R_max_100ohm", &drawn_r, &alone, res("100ohm", 100.0)),
+        ("drawn_R_max_300ohm", &drawn_r, &alone, res("300ohm", 300.0)),
+        ("written_R_max_100kohm", &alone, &written_r, res("100kohm", 1e5)),
+        ("written_R_max_2Mohm", &alone, &written_r, res("2Mohm", 2e6)),
+        ("drawn_C_min_1fF", &drawn_c, &alone, caps("1fF", 1e-15)),
+        ("drawn_C_min_100aF", &drawn_c, &alone, caps("100aF", 1e-16)),
+    ];
+    for (name, layout, reference, controls) in thresholds {
+        out.push(compared_under(
+            &format!("thresholds/{name}"),
+            &["LVS-034"],
+            (layout, reference),
+            &controls,
+        ));
+    }
+    // LVS-032: `same_nets`. Two transistors, each its own gate and drain,
+    // against a reference naming the drains the other way round: one
+    // circuit up to renaming. Holding layout `n0` to reference `n0` and
+    // `n2` to `n2` contradicts that reference's wiring, a mismatch; `n2` to
+    // `n3` follows it, a match; a row naming no net changes nothing, and a
+    // row with a layout label and no reference net is unpaired.
+    let pair = Circuit::new(5, vec![Dev::mos(N, 0, 4, 2), Dev::mos(N, 1, 4, 3)]);
+    let mut crossed = pair.clone();
+    crossed.names.swap(2, 3);
+    let same = |rows: &[(&'static str, &'static str)]| Controls {
+        same_nets: rows.to_vec(),
+        ..Controls::default()
+    };
+    for (name, controls) in [
+        ("none", Controls::default()),
+        ("against_wiring", same(&[("n0", "n0"), ("n2", "n2")])),
+        ("with_wiring", same(&[("n0", "n0"), ("n2", "n3")])),
+        ("no_such_nets", same(&[("q", "q")])),
+        ("no_reference_net", same(&[("n0", "q")])),
+    ] {
+        out.push(compared_under(
+            &format!("same_nets/{name}"),
+            &["LVS-032"],
+            (&pair, &crossed),
+            &controls,
+        ));
     }
     // A passive's value, drawn 200 ohm and 0.56 fF ([`measured`]), against
     // 210 ohm and 0.6 fF: 10 ohm and 40 aF apart, so within 15 ohm and

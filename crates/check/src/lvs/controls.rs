@@ -176,12 +176,45 @@ pub(crate) fn report_roles(found: &mut [Discrepancy], reference: &Graph, control
     }
 }
 
-/// Whether `lvs ignore` or `lvs ignore_shorted` leaves `device` out: its
-/// model is ignored, or ignored when shorted and every terminal it has is
-/// on one net.
-fn left_out(graph: &Graph, device: u32, controls: &LvsControls) -> bool {
+/// Whether `lvs ignore`, `lvs ignore_shorted`, `lvs max_res` or `lvs
+/// min_caps` leaves `device` out: its model is ignored, or ignored when
+/// shorted and every terminal it has is on one net, or it is a resistor
+/// stating an `r` above the deck's `max_res`, or a capacitor stating a `c`
+/// below its `min_caps` (`KLayout`'s `max_res` and `min_caps`, "the
+/// netlist compare will ignore" such devices). `values` names `r` and `c`;
+/// a device stating neither has no value to hold to a threshold and stays.
+fn left_out(
+    graph: &Graph,
+    device: u32,
+    controls: &LvsControls,
+    values: (Option<StrId>, Option<StrId>),
+) -> bool {
     let model = graph.device_model[device as usize];
     if controls.ignore.contains(&model) {
+        return true;
+    }
+    let stated = |name: Option<StrId>| {
+        name.and_then(|name| {
+            graph
+                .params_of(device)
+                .iter()
+                .find(|&&(stated, _)| stated == name)
+                .map(|&(_, value)| value)
+        })
+    };
+    let open = match graph.device_kind[device as usize] {
+        DeviceKind::Resistor => controls
+            .max_res
+            .zip(stated(values.0))
+            .is_some_and(|(limit, r)| r > limit),
+        // `min_caps` is in aF.
+        DeviceKind::Capacitor => controls
+            .min_caps
+            .zip(stated(values.1))
+            .is_some_and(|(limit, c)| c < limit * 1e-18),
+        _ => false,
+    };
+    if open {
         return true;
     }
     let nets = graph.terminals_of(device).0;
@@ -191,18 +224,26 @@ fn left_out(graph: &Graph, device: u32, controls: &LvsControls) -> bool {
             .is_some_and(|&first| first != u32::MAX && nets.iter().all(|&net| net == first))
 }
 
-/// Drops every device `lvs ignore` or `lvs ignore_shorted` leaves out
-/// ([`left_out`]), as if it were not drawn or written, and every net that
+/// Drops every device `lvs ignore`, `lvs ignore_shorted`, `lvs max_res` or
+/// `lvs min_caps` leaves out ([`left_out`]; `values` names `r` and `c`), as if it were not drawn or written, and every net that
 /// lost its last terminal with them and is no port: no netlist could state
 /// such a net, while a port must still pair. Surviving nets keep their
 /// order. Returns the rows of `graph` the kept devices were, ascending, or
 /// `None` when nothing was dropped.
-pub(crate) fn drop_ignored_devices(graph: &mut Graph, controls: &LvsControls) -> Option<Vec<u32>> {
-    if controls.ignore.is_empty() && controls.ignore_shorted.is_empty() {
+pub(crate) fn drop_ignored_devices(
+    graph: &mut Graph,
+    controls: &LvsControls,
+    values: (Option<StrId>, Option<StrId>),
+) -> Option<Vec<u32>> {
+    if controls.ignore.is_empty()
+        && controls.ignore_shorted.is_empty()
+        && controls.max_res.is_none()
+        && controls.min_caps.is_none()
+    {
         return None;
     }
     let kept: Vec<u32> = (0..narrow(graph.device_count()))
-        .filter(|&device| !left_out(graph, device, controls))
+        .filter(|&device| !left_out(graph, device, controls, values))
         .collect();
     if kept.len() == graph.device_count() {
         return None;
@@ -360,21 +401,39 @@ pub(crate) fn port_names(reference: &Graph) -> Vec<StrId> {
 /// nodes first, devices before nets on each side, as refinement numbers
 /// them: a layout net whose label is one of the port `names` and the
 /// reference port net of that name share the name's rank, so refinement
-/// starts them in a class of their own; every other node has none,
-/// `u32::MAX`.
-pub(crate) fn port_seeds((layout, reference): (&Graph, &Graph), names: &[StrId]) -> Vec<u32> {
+/// starts them in a class of their own; so do the layout net labelled and
+/// the reference net named by one `lvs same_nets` row, ranked after the
+/// ports (a port's own rank wins on a net both name). Every other node has
+/// none, `u32::MAX`.
+pub(crate) fn port_seeds(
+    (layout, reference): (&Graph, &Graph),
+    names: &[StrId],
+    same_nets: &[(StrId, StrId)],
+) -> Vec<u32> {
     let rank = |name: Option<StrId>| {
         name.and_then(|name| names.binary_search(&name).ok())
-            .map_or(u32::MAX, narrow)
+            .map(narrow)
+    };
+    let paired = |name: Option<StrId>, side: fn(&(StrId, StrId)) -> StrId| {
+        name.and_then(|name| same_nets.iter().position(|row| side(row) == name))
+            .map(|at| narrow(names.len() + at))
     };
     let split = layout.device_count() + layout.net_count();
     let mut seeds = vec![u32::MAX; split + reference.device_count() + reference.net_count()];
     for (net, &name) in layout.net_name.iter().enumerate() {
-        seeds[layout.device_count() + net] = rank(name);
+        seeds[layout.device_count() + net] = rank(name)
+            .or_else(|| paired(name, |row| row.0))
+            .unwrap_or(u32::MAX);
+    }
+    let base = split + reference.device_count();
+    for (net, &name) in reference.net_name.iter().enumerate() {
+        seeds[base + net] = paired(name, |row| row.1).unwrap_or(u32::MAX);
     }
     for &net in &reference.port_net {
         let net = net as usize;
-        seeds[split + reference.device_count() + net] = rank(reference.net_name[net]);
+        if let Some(rank) = rank(reference.net_name[net]) {
+            seeds[base + net] = rank;
+        }
     }
     seeds
 }

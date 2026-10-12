@@ -722,6 +722,9 @@ lvs range "nfet" w >= 420nm <= 100um
 lvs topology relaxed
 lvs connect_implicit "VDD*"
 lvs connect_explicit "VSS" "GND"
+lvs max_res 1Mohm
+lvs min_caps 10aF
+lvs same_nets "OUT_PAD" "OUT"
 ```
 
 An `lvs` statement changes how LVS compares the devices of one model, which
@@ -826,6 +829,26 @@ device whose every terminal is on one net, as Netgen's `ignore shorted`
 does. The terminals counted are those LVS compares, so where the deck
 extracts no bulk, a transistor with its gate, source and drain on one net
 is a dummy whatever its schematic bulk is.
+
+**`lvs max_res r`** and **`lvs min_caps c`** leave out of the comparison,
+on both sides, every resistor whose resistance is above `r` and every
+capacitor whose capacitance is below `c`, as KLayout's `max_res` and
+`min_caps` do: such a device is taken for an open, so a parasitic or
+bleeder element one side states and the other does not draw does not
+mismatch. The resistance is the schematic card's `r`, and the layout's the
+one its `sheet` gives (see [Devices](#devices)); the capacitance likewise
+`c` and `area_cap`/`fringe_cap`. A device with no value to read stays, as
+does a net it alone touched only if it is a schematic port or a labelled
+layout net, as under `lvs ignore`. Each is stated once, in a resistance
+(`ohm`, `kohm`, `Mohm`) or a capacitance (`aF`, `fF`, `pF`), positive.
+
+**`lvs same_nets "layout" "reference"`** pairs the layout net labelled
+`layout` with the schematic net named `reference`, which need not be a
+port, as KLayout's `same_nets!` does: the two pair with each other and
+with no other net, and if their wiring does not agree they are reported
+(`lvs.unpaired_net`) rather than paired elsewhere by structure. It is a
+seed, so it never turns a mismatch into a match. Each net is named by one
+row at most; under `lvs ports_by_name`, a port's own name wins.
 
 ## Parasitic stack
 

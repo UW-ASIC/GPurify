@@ -824,6 +824,35 @@ fn lvs_ignore_names_any_model_once() {
     );
 }
 
+/// Oracle: the language spec (deck.md, "LVS controls"). `lvs max_res` reads
+/// a resistance in ohms and `lvs min_caps` a capacitance in aF, each stated
+/// once and positive, and either interns the value name LVS computes it
+/// under; `lvs same_nets` keeps its two names in order, each net named by
+/// one row. Breaks if a unit is mis-scaled, a duplicate or a zero
+/// threshold is accepted, or a net is paired twice.
+#[test]
+fn lvs_thresholds_and_same_nets_lower_as_stated() {
+    let devices = "device mos poly model \"nfet\" terminals [poly, diff, diff]\n";
+    let (deck, strings) = ok(&format!(
+        "{devices}lvs max_res 2kohm\nlvs min_caps 1.5fF\nlvs same_nets \"A\" \"a\"\nlvs same_nets \"B\" \"b\"\n"
+    ));
+    assert_eq!(deck.lvs.max_res, Some(2000.0));
+    assert_eq!(deck.lvs.min_caps, Some(1500.0));
+    assert!(strings.get("r").is_some() && strings.get("c").is_some());
+    let id = |name: &str| strings.get(name).expect("interned");
+    assert_eq!(deck.lvs.same_nets, [(id("A"), id("a")), (id("B"), id("b"))]);
+    one_error(
+        &format!("{devices}lvs max_res 1kohm\nlvs max_res 2kohm\n"),
+        "already stated",
+    );
+    one_error(&format!("{devices}lvs min_caps 0aF\n"), "must be positive");
+    one_error(&format!("{devices}lvs max_res 1fF\n"), "resistance");
+    one_error(
+        &format!("{devices}lvs same_nets \"A\" \"a\"\nlvs same_nets \"A\" \"b\"\n"),
+        "one same_nets statement",
+    );
+}
+
 /// Oracle: the language spec (deck.md, "LVS controls"). `lvs ports_by_name`
 /// sets the flag, which is off without it; stated twice it is refused. `lvs
 /// topology` is strict unless it says relaxed, takes one of the two words,

@@ -122,6 +122,14 @@
 //! - `lvs ignore_shorted "model"`: the same for each device of the model
 //!   whose every terminal is on one net, a dummy (catalog LVS-035; Netgen's
 //!   `ignore shorted`).
+//! - `lvs max_res r` and `lvs min_caps c`: the same for each resistor
+//!   stating an `r` above `r` and each capacitor stating a `c` below `c`,
+//!   taken for opens (catalog LVS-034; `KLayout`'s `max_res` and
+//!   `min_caps`).
+//! - `lvs same_nets "layout" "reference"`: the layout net the first name
+//!   labels and the reference net the second names start refinement in a
+//!   class of their own, so they pair with each other or are reported
+//!   (catalog LVS-032; `KLayout`'s `same_nets!`).
 //!
 //! # Against Netgen
 //!
