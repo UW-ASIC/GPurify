@@ -175,14 +175,15 @@ fn facing_gap(e: Seg, f: Seg, inside: bool) -> Option<Dbu> {
 /// Two parallel edges of `layer` whose shapes lie between them (`inside`, a
 /// width: sky130 poly.1b and difftap.2 on a gate's sides) or away from each
 /// other (`!inside`, a spacing: ASAP7 M4.S.2 on vertical edges), overlapping
-/// in projection, closer than `limit`, measured straight across. Every pair
-/// counts; nothing between them shields it. `examined` counts the parallel
-/// pairs within reach.
+/// in projection by more than `prl` (`LEF58_SPACING ... WRONGDIRECTION PRL`),
+/// closer than `limit`, measured straight across. Every pair counts; nothing
+/// between them shields it. `examined` counts the parallel pairs within reach
+/// that overlap by more than `prl`.
 pub(crate) fn facing(
     store: &GeometryStore,
     rule: StrId,
     layer: LayerId,
-    limit: Dbu,
+    (limit, prl): (Dbu, Dbu),
     inside: bool,
     out: &mut Violations,
 ) -> Verdict {
@@ -192,7 +193,10 @@ pub(crate) fn facing(
     }
     let horizontal = |e: Seg| e.a.y == e.b.y;
     let mut pairs = near_pairs(edges, edges, true, limit);
-    pairs.retain(|&(i, j)| horizontal(edges[i]) == horizontal(edges[j]));
+    pairs.retain(|&(i, j)| {
+        horizontal(edges[i]) == horizontal(edges[j])
+            && (prl.raw() == 0 || run(edges[i], edges[j]) > prl.raw())
+    });
     for &(i, j) in &pairs {
         let Some(gap) = facing_gap(edges[i], edges[j], inside) else {
             continue;
@@ -210,6 +214,17 @@ pub(crate) fn facing(
         }
     }
     (Outcome::Ran, pairs.len() as u64)
+}
+
+/// How far two parallel axis-aligned edges overlap along their line;
+/// negative when they do not.
+fn run(e: Seg, f: Seg) -> i64 {
+    let (be, bf) = (seg_bbox(e), seg_bbox(f));
+    if e.a.y == e.b.y {
+        (be.xhi.min(bf.xhi) - be.xlo.max(bf.xlo)).raw()
+    } else {
+        (be.yhi.min(bf.yhi) - be.ylo.max(bf.ylo)).raw()
+    }
 }
 
 /// The strip `depth` deep on the outer side of an axis-aligned edge (its

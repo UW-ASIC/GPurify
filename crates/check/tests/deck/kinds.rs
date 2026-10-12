@@ -37,6 +37,7 @@ rule ta total_area(m) <= 1000000nm2
 rule cc size(v; allowed: [150nm x 150nm, 230nm x 150nm])
 rule ew width(m.edges().horizontal()) >= 40nm
 rule fs facing_space(m.edges().vertical()) >= 30nm
+rule fs.prl facing_space(m.edges().vertical(); prl: 50nm) >= 30nm
 rule rd.min region_density(m, r) >= 0.1
 rule rd.max region_density(m, r) <= 0.5
 rule aw width(m; allowed: [350nm, 690nm])
@@ -118,6 +119,10 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     );
     d.rule("ew", edge_width(m.edges().horizontal(), nm(40)));
     d.rule("fs", edge_facing_space(m.edges().vertical(), nm(30)));
+    d.rule(
+        "fs.prl",
+        edge_facing_space(m.edges().vertical(), nm(30)).prl(nm(50)),
+    );
     d.rule("rd.min", region_density(m, r, 0.1, false));
     d.rule("rd.max", region_density(m, r, 0.5, true));
     d.rule("aw", allowed_width(m, &[nm(350), nm(690)]));

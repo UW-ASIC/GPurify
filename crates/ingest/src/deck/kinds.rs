@@ -977,6 +977,16 @@ pub(crate) const KINDS: &[Kind] = &[
         LIMIT,
         &[],
     ),
+    // The same for pairs running alongside each other longer than `prl`
+    // (`LEF58_SPACING ... WRONGDIRECTION PRL`).
+    drc(
+        "facing_space",
+        Cmp::Ge,
+        "edge_facing_space",
+        &[0],
+        LIMIT,
+        &[p("prl", "prl", Dim::Length)],
+    ),
     // ERC.
     erc(
         "antenna",

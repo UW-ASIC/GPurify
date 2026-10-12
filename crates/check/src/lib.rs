@@ -92,7 +92,7 @@
 //! | `valid([L])` | `polygon_validity` | [`drc::Rule::PolygonValidity`] | a drawn polygon that crosses itself or encloses no area | DRC-004 |
 //! | `width(L; allowed: [w, ..])`, `.., open_last: true)` | `allowed_width` | [`drc::Rule::AllowedWidth`] | a shape whose width is none of the listed widths (or, open, under the last) | DRC-015, DRC-090 |
 //! | `width(E) >= len` | `edge_width` | [`drc::Rule::EdgeWidth`] | two edges facing each other across their shapes closer than the limit: a channel length or width, a width in one direction | DRC-011, DRC-016, DRC-090 |
-//! | `facing_space(E) >= len` | `edge_facing_space` | [`drc::Rule::EdgeFacingSpace`] | two edges whose outer sides face each other closer than the limit: a spacing in one direction | DRC-016 |
+//! | `facing_space(E[; prl: len]) >= len` | `edge_facing_space` | [`drc::Rule::EdgeFacingSpace`] | two edges whose outer sides face each other closer than the limit: a spacing in one direction | DRC-016 |
 //! | `region_density(L, R) >= frac`, `<= frac` | `region_density` | [`drc::Rule::RegionDensity`] | a shape of `R` inside which `L` covers too little or too much | DRC-072, DRC-075 |
 //! | `total_area(L) <= area` | `total_area` | [`drc::Rule::TotalArea`] | more area on `L` in the whole layout than the limit | DRC-091 |
 //! | `aspect_ratio(L) <= r` | `aspect_ratio` | [`drc::Rule::AspectRatio`] | a shape whose bounding box is longer than `r` times its width | DRC-022 |
