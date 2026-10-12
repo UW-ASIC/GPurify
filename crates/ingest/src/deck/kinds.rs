@@ -286,6 +286,7 @@ const ESD_PATH: &[Param] = &[
     opt("max_current_per_cut", "max_current_per_cut", Dim::Current),
     opt("max_voltage", "max_voltage", Dim::Voltage),
     opt("min_width", "min_width", Dim::Length),
+    opt("clamp_voltage", "clamp_voltage", Dim::Voltage),
 ];
 /// An enclosure's wire band: the wire widths the rule holds.
 const WIRE_WIDTH: &[Param] = &[p("width", "wire_width", Dim::Length)];

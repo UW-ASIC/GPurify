@@ -337,6 +337,7 @@ fn every_kind() -> RuleSet {
             max_current_per_cut: vec![None],
             max_voltage: vec![None],
             min_width: vec![None],
+            clamp_voltage: vec![None],
         },
         esd_pin_pair: esd::EsdPinPairTable {
             head: head(id_of("esd_pin_pair")),

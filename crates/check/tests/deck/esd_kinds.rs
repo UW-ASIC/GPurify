@@ -24,10 +24,10 @@ connect conductors [pad, diff, ring]
 device diode mk model \"dio\" terminals [diff, pad]
 rule ep esd_path(pad; clamps: [\"dio\"], current: 1330mA, clamp_resistance: 1ohm, \
 max_resistance: 2ohm, clamp_it2: 9.25mA/um, max_density: none, max_current_per_cut: 10mA, \
-max_voltage: 5V, min_width: none)
+max_voltage: 5V, min_width: none, clamp_voltage: 700mV)
 rule ep.ring esd_path(pad, ring; clamps: none, current: 100mA, clamp_resistance: 1ohm, \
 max_resistance: 1ohm, clamp_it2: none, max_density: 1mA/um, max_current_per_cut: none, \
-max_voltage: none, min_width: none)
+max_voltage: none, min_width: none, clamp_voltage: none)
 rule gc esd_ground_coupling(; diodes: [\"dio\"])
 rule xd esd_cross_domain(; diodes: [\"dio\"], local: none, resistors: none, \
 min_series: none, max_ground_resistance: none, coupling_resistance: none)
@@ -81,6 +81,7 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
             Some(10_000.0),
             Some(5000.0),
             None,
+            Some(700.0),
         ),
     );
     d.rule(
@@ -94,6 +95,7 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
             Some(1.0),
             None,
             Some(1000.0),
+            None,
             None,
             None,
             None,

@@ -5188,13 +5188,14 @@ fn esd_wiring() -> Vec<Fixture> {
 }
 
 /// The limits an `esd_path` row states, each `none` unless a fixture sets it.
-const ESD_LIMITS: [&str; 6] = [
+const ESD_LIMITS: [&str; 7] = [
     "max_resistance",
     "clamp_it2",
     "max_density",
     "max_current_per_cut",
     "max_voltage",
     "min_width",
+    "clamp_voltage",
 ];
 
 /// A deck of [`ESD_PROCESS`] with one `esd_path` row `ep`, 1.33 A forced, each
@@ -5655,6 +5656,68 @@ fn esd_window() -> Vec<Fixture> {
     .expect(Expect::rule("ep", vec![Finding::any().at(0, 0)]));
     f.intent = Some(esd_intent());
     out.push(f);
+    out.extend(esd_turn_on());
+    out
+}
+
+/// `esd_path`'s `clamp_voltage` (ERC-C8): each conducting clamp holds
+/// 700 mV besides its 1 Ω, White Paper 2's `Vpad = Vdiode_on + Rdiode_on
+/// I + Rbus I + Vclamp_on + Rclamp_on I`, hand-derived on [`esd_layout`]:
+///
+/// - the down diode alone: 1.33 A over 2.5 Ω plus one turn-on, 4025 mV;
+/// - an up diode at 18 µm and a rail clamp at 10 µm, no down diode: to VDD
+///   the pad strip 0.5 Ω, the up diode, VDD back to its centre 0.5 Ω and
+///   one turn-on, 3360 mV; to VSS also the rail clamp and a second
+///   turn-on, 3 Ω and 1400 mV, 5390 mV.
+///
+/// Each limit is a part in a thousand either side of a value.
+fn esd_turn_on() -> Vec<Fixture> {
+    let w = [1000; 3];
+    let mut out = Vec::new();
+    let deck = |limit: f64| {
+        esd_path_deck(&[
+            ("max_voltage", format!("{limit}mV")),
+            ("clamp_voltage", "700mV".to_owned()),
+        ])
+    };
+    let series = 1330.0 * 2.5 + 700.0;
+    for limit in [series * 0.999, series * 1.001] {
+        let mut f = Fixture::new(
+            &format!("erc/esd_path/clamp_voltage/series/{}", side(limit, series)),
+            &["ERC-C8"],
+            &deck(limit),
+            ERC,
+        )
+        .layout(esd_layout(w, &[(Diode::Down, 2000)]))
+        .expect(Expect::rule(
+            "ep",
+            if limit < series {
+                vec![millivolts(series)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(esd_intent());
+        out.extend(every_placement(&[f]));
+    }
+    let (to_vdd, to_vss) = (1330.0 * 2.0 + 700.0, 1330.0 * 3.0 + 1400.0);
+    for limit in [to_vdd * 0.999, to_vdd * 1.001, to_vss * 1.001] {
+        let findings = [to_vdd, to_vss]
+            .into_iter()
+            .filter(|&v| v > limit)
+            .map(millivolts)
+            .collect();
+        let mut f = Fixture::new(
+            &format!("erc/esd_path/clamp_voltage/rail/{limit}"),
+            &["ERC-C8"],
+            &deck(limit),
+            ERC,
+        )
+        .layout(esd_layout(w, &[(Diode::Up, 18_000), (Diode::Rail, 10_000)]))
+        .expect(Expect::rule("ep", findings));
+        f.intent = Some(esd_intent());
+        out.extend(every_placement(&[f]));
+    }
     out
 }
 
@@ -7115,7 +7178,7 @@ fn ring_injection() -> Vec<Fixture> {
         format!(
             "{ESD_PROCESS}rule ring esd_path(pad, met1; clamps: none, current: 100mA, \
              clamp_resistance: 1ohm, {limits}, clamp_it2: none, max_current_per_cut: none, \
-             max_voltage: none, min_width: none)\n"
+             max_voltage: none, min_width: none, clamp_voltage: none)\n"
         )
     };
     let pinned = {

@@ -749,6 +749,7 @@ kinds! {
         max_current_per_cut: Option<f64> = "max_current_per_cut",
         max_voltage: Option<f64> = "max_voltage",
         min_width: Option<Dbu> = "min_width",
+        clamp_voltage: Option<f64> = "clamp_voltage",
     }
     /// [`EsdPinPairTable`](crate::erc::rules::esd::EsdPinPairTable):
     /// `esd_pin_pair(pad; clamps, current, clamp_resistance,
