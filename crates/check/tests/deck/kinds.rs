@@ -9,9 +9,9 @@ use gpurify_check::deck::rules::{
     allowed_width, aspect_ratio, asymmetric_enclosure, convex_corner_spacing, count, cut_class,
     cut_class_spacing, cut_spacing, edge_facing_space, edge_width, eol_keep_out,
     eol_within_spacing, exact_pitch, forbidden, forbidden_spacing, full_width, gate_corner,
-    max_cut_spacing, max_enclosure, min_enclosure, min_interior_angle, min_step, min_step_adjacent,
-    minimum_cut, must_contain, noncoincident_enclosure, polygon_validity, projection_spacing,
-    region_density, span_length, stack_spacing, tip_spacing_table, total_area,
+    max_cut_spacing, max_enclosure, metal_width_via, min_enclosure, min_interior_angle, min_step,
+    min_step_adjacent, minimum_cut, must_contain, noncoincident_enclosure, polygon_validity,
+    projection_spacing, region_density, span_length, stack_spacing, tip_spacing_table, total_area,
     two_width_spacing_table, via_stack,
 };
 use gpurify_check::deck::{compile, Bound, CompiledDeck, DeckBuilder};
@@ -58,6 +58,7 @@ rule msa.between min_step(m; between_eol: 120nm) >= 50nm
 rule vs.single via_stack(m, v, m2, v2, r, single) <= 2
 rule ss stack_space(v2, v, m2; same_net: true) >= 200nm
 rule ss.all stack_space(v2, v, m2) >= 200nm
+rule vm via_map(v, m, m2; below_min: 40nm, below_max: 60nm, above_min: 80nm, above_max: 80nm, cut: 30nm x 40nm)
 rule mcs max_space(v) <= 2000nm
 rule mcs.cls max_space(thin, v) <= 2000nm
 rule odd.none forbidden(odd)
@@ -176,6 +177,10 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     d.rule("vs.single", via_stack(&[m, v, m2, v2, r], 2).single_cut());
     d.rule("ss", stack_spacing(v2, v, m2, true, nm(200)));
     d.rule("ss.all", stack_spacing(v2, v, m2, false, nm(200)));
+    d.rule(
+        "vm",
+        metal_width_via(v, m, m2, nm(40), nm(60), nm(80), nm(80), nm(30), nm(40)),
+    );
     d.rule("mcs", max_cut_spacing(v, None, nm(2000)));
     d.rule("mcs.cls", max_cut_spacing(thin, Some(v.into()), nm(2000)));
     d.rule("odd.none", forbidden(odd));

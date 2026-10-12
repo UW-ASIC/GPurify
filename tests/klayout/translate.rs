@@ -398,6 +398,20 @@ end
 # With `metals` (the merged metal below and above each cut layer, one more
 # than the cut layers), a cut of a via of two or more cuts (cuts joining the
 # same two metal figures) stacks with nothing.
+# Each cut on a `below` wire and an `above` wire whose widths lie in their
+# bands (`[t_from, t_over]`, sizing amounts at x2: covered by the part
+# sizing by `t_from` leaves, and not by the part sizing by `t_over` leaves)
+# that is not a `w` x `h` box either way round.
+def metal_width_via(rule, cuts, below, above, bb, ab, w, h)
+  part = lambda { |m, t| t.nil? ? nil : m.data.merged.sized(-t).sized(t) }
+  covered = lambda { |p, c| !p.nil? && (RBA::Region.new(c.bbox) - p).is_empty? }
+  bands = [[part.(below, bb[0]), part.(below, bb[1])], [part.(above, ab[0]), part.(above, ab[1])]]
+  cuts.data.each do |c|
+    held = bands.all? { |from, over| covered.(from, c) && !covered.(over, c) }
+    b = c.bbox
+    put({ rule: rule }.merge(poly(c))) if held && ![[w, h], [h, w]].include?([b.width, b.height])
+  end
+end
 def via_stack(rule, layers, max, metals = nil)
   cuts = layers.map { |l| l.data.each.to_a }
   unless metals.nil?
@@ -1775,6 +1789,40 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 Value::Ignore,
                 vec![],
             ),
+            Rule::MetalWidthVia {
+                cut,
+                below,
+                above,
+                below_band,
+                above_band,
+                width,
+                height,
+            } => {
+                for layer in [cut, below, above] {
+                    layers.reads(layer, &mut reads);
+                }
+                // A part at least w wide is sizing by w - 1 at x2; a band's
+                // upper part is its `below`.
+                let t = |w: gpurify::geom::Dbu| w.raw() - 1;
+                let over = |band: gpurify::check::drc::WireBand| {
+                    band.below.map_or("nil".to_owned(), |b| t(b).to_string())
+                };
+                writeln!(
+                    body,
+                    "metal_width_via({q}, {}.dup.raw, {}, {}, [{}, {}], [{}, {}], {}, {})",
+                    var(cut),
+                    var(below),
+                    var(above),
+                    t(below_band.from),
+                    over(below_band),
+                    t(above_band.from),
+                    over(above_band),
+                    lim(width),
+                    lim(height)
+                )
+                .expect("a String");
+                exact("metal_width_via", Key::Row(None), Value::Ignore)
+            }
             Rule::StackSpacing { .. } => (
                 "stack_spacing",
                 Verdict::None("the stacked exemption needs each cut's net, which the mirror does not extract"),

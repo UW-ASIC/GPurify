@@ -55,6 +55,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         via_stack(),
         via_stack_single(),
         stack_spacing(),
+        metal_width_via(),
         max_cut_spacing(),
         via_array_spacing(depth),
         center_spacing(),
@@ -2125,6 +2126,89 @@ fn via_stack() -> Vec<Fixture> {
             .rect("v3", 0, 0, 100, 100)
             .rect("v3", 200, 0, 300, 100),
         vec![count(3), count(3)],
+    ));
+    every_placement(cases)
+}
+
+/// `LEF58_METALWIDTHVIAMAP` (`metal_width_via`, DRC-067), as `OpenROAD`
+/// parses it (`VIA cutLayer w1 w2 viaName`: the via where the metal below is
+/// w1 wide and above w2; four numbers, two ranges): `vm`, exact widths 50
+/// and 80 with a 30 x 30 cut (`OpenROAD`'s own test entry `VIA via1 0.5 0.8
+/// M2_M1_via` scaled by a tenth); `vr`, ranges 40..60 and 70..90 with a 30
+/// x 40 cut, either way round.
+///
+/// Oracle: the parser's grammar, wires drawn to a width: an `m1` bar `w1`
+/// high crossing an `m2` bar `w2` wide, a cut where they cross. The mapped
+/// cut passes, a 40 x 40 cut fails both rows while both widths are in their
+/// bands: `w1` swept around 50 (only 50 is `vm`'s) and `w2` around 80 (only
+/// 80); a 40 x 30 cut is `vr`'s 30 x 40 turned; a cut off the bars is held
+/// by neither.
+fn metal_width_via() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["v1", "m1", "m2"],
+        "rule vm via_map(v1, m1, m2; below_min: 50nm, below_max: 50nm, above_min: 80nm, \
+         above_max: 80nm, cut: 30nm x 30nm)\n\
+         rule vr via_map(v1, m1, m2; below_min: 40nm, below_max: 60nm, above_min: 70nm, \
+         above_max: 90nm, cut: 30nm x 40nm)\n",
+    );
+    let case = |name: &str, w1: i64, w2: i64, cut: (i64, i64), vm: bool, vr: bool| {
+        let (cw, ch) = cut;
+        let layout = Layout::default()
+            .rect("m1", 0, 0, 1000, w1)
+            .rect("m2", 460, -500, 460 + w2, 500)
+            .rect("v1", 480, 5, 480 + cw, 5 + ch);
+        let found = |wrong: bool| {
+            if wrong {
+                vec![Finding {
+                    measured: Some(Measurement::Count(0)),
+                    at: None,
+                }]
+            } else {
+                vec![]
+            }
+        };
+        fixture(
+            &format!("metal_width_via/{name}"),
+            &["DRC-067"],
+            &deck,
+            layout,
+            &[("vm", found(vm)), ("vr", found(vr))],
+        )
+    };
+    let mut cases = vec![
+        case("mapped", 50, 80, (30, 30), false, true),
+        case("range_mapped", 50, 80, (30, 40), true, false),
+        case("range_turned", 50, 80, (40, 30), true, false),
+    ];
+    for (w1, side) in sweep(50) {
+        cases.push(case(
+            &format!("below/{side}"),
+            w1,
+            80,
+            (40, 40),
+            w1 == 50,
+            true,
+        ));
+    }
+    for (w2, side) in sweep(80) {
+        cases.push(case(
+            &format!("above/{side}"),
+            50,
+            w2,
+            (40, 40),
+            w2 == 80,
+            true,
+        ));
+    }
+    cases.push(fixture(
+        "metal_width_via/off_the_wires",
+        &["DRC-067"],
+        &deck,
+        Layout::default()
+            .rect("m1", 0, 0, 1000, 50)
+            .rect("m2", 460, -500, 540, 500)
+            .rect("v1", 2000, 2000, 2040, 2040),
+        &[("vm", vec![]), ("vr", vec![])],
     ));
     every_placement(cases)
 }

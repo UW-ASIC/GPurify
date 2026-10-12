@@ -314,8 +314,9 @@ explains (kind 30).
 | 68 | min_step_adjacent | `min_step(L; adjacent \| between_eol ..) >= l` | — | NONE | reported as not mirrored | — |
 | 69 | max_cut_spacing | `max_space(C[, A]) <= l` | ROW | EXACT (scripted) | exact | — |
 | 70 | stack_spacing | `stack_space(A, B, M[; same_net]) >= l` | — | NONE | reported as not mirrored | — |
+| 71 | metal_width_via | `via_map(C, B, A; ..)` | ROW | EXACT (scripted) | exact | — |
 
-44 kinds are EXACT (six scripted over KLayout's polygons), 16 APPROX and ten NONE; `convex_corner_spacing` is NONE on a deck with
+45 kinds are EXACT (seven scripted over KLayout's polygons), 16 APPROX and ten NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`, and between two layers (`space(A, B; nets: ..)`), which is not mirrored. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1385,6 +1386,21 @@ max_cut_spacing(id, C.dup.raw, A.dup.raw, LIM)
 
 - The prelude's `max_cut_spacing` sums each box's sides (twice the centre) and compares squared
   distances against `(2·LIM)²`, exactly. Key ROW, the cut's box; the measurement is not compared.
+
+### 71. metal_width_via — EXACT (scripted)
+
+**GPurify** (`overlay.rs` `metal_width_via`): each drawn cut covered by the part of each metal at
+least the band's lower width wide and not by the part wider than its upper width, whose box is
+not the mapped cut size either way round.
+
+**KLayout**
+
+```ruby
+metal_width_via(id, C.dup.raw, B, A, [t, t], [t, t], W, H)
+```
+
+- A part at least `w` wide is `sized(-(w - 1)).sized(w - 1)` at the doubled scale (kind 57's
+  reading); coverage is `(cut box - part).is_empty?`. Key ROW, the cut's box.
 
 ### 70. stack_spacing — NONE: the exemption needs each cut's net
 

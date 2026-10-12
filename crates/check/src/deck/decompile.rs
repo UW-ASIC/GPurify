@@ -2,11 +2,11 @@
 //! would read it into, so the deck can be printed or overridden.
 
 use super::CompiledDeck;
-use crate::drc::{Rule, StepKind, StepNeighbour};
+use crate::drc::{Rule, StepKind, StepNeighbour, WireBand};
 use crate::erc::rules::antenna::AntennaMeasure;
 use crate::report::LimitSense;
 use crate::report::Severity;
-use gpurify_geom::{LayerId, Qty, StrId, StrTable};
+use gpurify_geom::{Dbu, LayerId, Qty, StrId, StrTable};
 use gpurify_ingest::deck::{CornerSource, DeckSource, LvsSrc, ParamSource, ParamValue, RuleSource};
 use std::collections::HashMap;
 
@@ -331,6 +331,28 @@ impl CompiledDeck {
                     row = row.length("within", within);
                 }
                 row.value("min_count", ParamValue::Count(min_count.into()))
+            }
+            Rule::MetalWidthVia {
+                cut,
+                below,
+                above,
+                below_band,
+                above_band,
+                width,
+                height,
+            } => {
+                // A band's upper bound is one past the widest width it holds.
+                let max = |band: WireBand| {
+                    band.below
+                        .map_or(band.from, |below| below - Dbu::new_unchecked(1))
+                };
+                Row::new(rule.kind(), &[cut, below, above])
+                    .length("below_min", below_band.from)
+                    .length("below_max", max(below_band))
+                    .length("above_min", above_band.from)
+                    .length("above_max", max(above_band))
+                    .length("cut_width", width)
+                    .length("cut_height", height)
             }
             Rule::StackSpacing {
                 a,

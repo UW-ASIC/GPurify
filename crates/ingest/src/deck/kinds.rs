@@ -754,6 +754,24 @@ pub(crate) const KINDS: &[Kind] = &[
             p("distance", "distance", Dim::Length),
         ],
     ),
+    // One `LEF58_METALWIDTHVIAMAP` entry: a cut between a `below` wire and an
+    // `above` wire of the given widths must be the mapped via's cut,
+    // `via_map(via1, met1, met2; below_min: .., below_max: .., above_min: ..,
+    // above_max: .., cut: 50nm x 50nm)`.
+    drc(
+        "via_map",
+        Cmp::Absent,
+        "metal_width_via",
+        &[0, 1, 2],
+        None,
+        &[
+            p("below_min", "below_min", Dim::Length),
+            p("below_max", "below_max", Dim::Length),
+            p("above_min", "above_min", Dim::Length),
+            p("above_max", "above_max", Dim::Length),
+            p("cut", "cut_width", Dim::LengthPair("cut_height")),
+        ],
+    ),
     // LEF `SPACING cutSpacing [SAMENET] LAYER second STACK`: cuts on two
     // layers spaced unless one net's cuts are stacked (one covering the
     // other), the cuts' nets read off the metal both land on:

@@ -552,6 +552,17 @@ kinds! {
     /// [`Rule::ViaStack`](crate::drc::Rule::ViaStack):
     /// `via_stack(cuts..) <= max_height`, the cut layers bottom to top.
     via_stack(cuts: many) [] { max_height: u32 = "max_height" }
+    /// [`Rule::MetalWidthVia`](crate::drc::Rule::MetalWidthVia):
+    /// `via_map(cut, below, above; below_min, below_max, above_min, above_max,
+    /// cut: width x height)`.
+    metal_width_via(cut: one, below: one, above: one) [] {
+        below_min: Dbu = "below_min",
+        below_max: Dbu = "below_max",
+        above_min: Dbu = "above_min",
+        above_max: Dbu = "above_max",
+        width: Dbu = "cut_width",
+        height: Dbu = "cut_height",
+    }
     /// [`Rule::StackSpacing`](crate::drc::Rule::StackSpacing):
     /// `stack_space(a, b, metal; same_net) >= limit`.
     stack_spacing(a: one, b: one, metal: one) [] { same_net: bool = "same_net", limit: Dbu = "limit" }
