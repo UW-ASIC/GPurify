@@ -8,7 +8,8 @@ use gpurify_check::deck::rules::{
     net_spacing,
 };
 use gpurify_check::deck::{
-    compile, Bound, BuildError, CompileError, CompiledDeck, DeckBuilder, LayerRef, Origin,
+    compile, Bound, BuildError, CompileError, CompiledDeck, DeckBuilder, LayerExpr, LayerRef,
+    Origin,
 };
 use gpurify_check::drc::DrcError;
 use gpurify_geom::{Dbu, DbuArea, StrId, StrTable};
@@ -468,4 +469,84 @@ fn layers_devices_and_pex_rows_are_overridden_too() {
         &built,
         &strings,
     );
+}
+
+/// H4's layer operations built in Rust equal the same deck written as text:
+/// `.covering()`, `.not_covering()`, `.overlapping()`, per-axis
+/// `.sized(dx, dy)` and an edge layer's `.extended(..)`, each used as a
+/// derived layer and inline in a rule, so a Rust-built deck reaches the
+/// language's parity.
+/// Oracle: construct-from-answer, the parser's reading of the text twin.
+#[test]
+fn h4_layer_operations_build_as_their_text() {
+    let text = "grid 1nm
+layer m = gds(1, 0)
+layer n = gds(2, 0)
+layer holders = m.covering(n)
+layer empty = m.not_covering(n)
+layer crossing = m.overlapping(n)
+layer wide = m.sized(20nm, 0nm)
+layer thin = m.sized(-10nm, -5nm)
+layer boxes = m.edges().extended(begin: 5nm, end: 0nm, out: 10nm, in: 0nm)
+rule a forbidden(holders)
+rule b forbidden(n.overlapping(m.sized(30nm, 10nm)))
+rule c forbidden(n.edges().extended(begin: 0nm, end: 0nm, out: 0nm, in: 15nm) and m)
+";
+    let mut strings = StrTable::default();
+    let parsed = compile(text, grid(), &mut strings).expect("the text twin compiles");
+    let mut d = DeckBuilder::new(grid(), &mut strings);
+    let m = d.layer("m", (1, 0));
+    let n = d.layer("n", (2, 0));
+    let holders = d.derived("holders", m.covering(n));
+    d.derived("empty", m.not_covering(n));
+    d.derived("crossing", m.overlapping(n));
+    d.derived("wide", m.sized_xy(nm(20), nm(0)));
+    d.derived("thin", m.sized_xy(nm(-10), nm(-5)));
+    d.derived("boxes", m.edges().extended(nm(5), nm(0), nm(10), nm(0)));
+    d.rule("a", forbidden(holders));
+    d.rule("b", forbidden(n.overlapping(m.sized_xy(nm(30), nm(10)))));
+    d.rule(
+        "c",
+        forbidden(n.edges().extended(nm(0), nm(0), nm(0), nm(15)).and(m)),
+    );
+    let built = d.finish().expect("the builder twin builds");
+    assert_same("H4 layer operations", &parsed, &built, &strings);
+}
+
+/// The refusals of H4's operations have builder twins in the parser's words,
+/// at the line of the call: a `sized(dx, dy)` growing one axis and shrinking
+/// the other, an `extended` length below 0, and an `extended` box with no
+/// width.
+/// Oracle: differential, the parser's message for the text twin, and the
+/// line of each call, counted with `line!()`.
+#[test]
+fn h4_layer_operation_refusals_have_builder_twins() {
+    type Build = fn(LayerRef) -> (LayerExpr, u32);
+    const HEADER: &str = "grid 1nm\nlayer m = gds(1, 0)\nlayer n = gds(2, 0)\n";
+    let cases: [(&str, Build); 3] = [
+        ("layer x = m.sized(10nm, -10nm)\n", |m| {
+            (m.sized_xy(nm(10), nm(-10)), line!())
+        }),
+        (
+            "layer x = m.edges().extended(begin: 0nm, end: -5nm, out: 10nm, in: 0nm)\n",
+            |m| (m.edges().extended(nm(0), nm(-5), nm(10), nm(0)), line!()),
+        ),
+        (
+            "layer x = m.edges().extended(begin: 5nm, end: 5nm, out: 0nm, in: 0nm)\n",
+            |m| (m.edges().extended(nm(5), nm(5), nm(0), nm(0)), line!()),
+        ),
+    ];
+    for (text, build) in cases {
+        let parsed = parser_refusal(&format!("{HEADER}{text}"));
+        let mut strings = StrTable::default();
+        let (mut d, m, _) = start(&mut strings);
+        let (expr, line) = build(m);
+        d.derived("x", expr);
+        let (built, at) = builder_refusal(d.finish().unwrap_err());
+        assert!(
+            parsed.contains(&built),
+            "the builder refuses {built:?} where the parser refuses {parsed:?}"
+        );
+        assert_eq!(at, Some(line), "{built}: reported at the wrong call");
+    }
 }

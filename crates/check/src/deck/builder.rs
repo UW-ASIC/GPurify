@@ -224,6 +224,73 @@ impl LayerExpr {
         self.call(DerivedOp::Sized(by, by), None, Vec::new())
     }
 
+    /// `.sized(dx, dy)`: every shape grown by `dx` left and right and by
+    /// `dy` above and below, both shrinking when negative. One growing and
+    /// the other shrinking is refused, as the parser refuses it: chain two
+    /// [`sized`](Self::sized) for that.
+    #[must_use]
+    #[track_caller]
+    pub fn sized_xy(self, dx: Dbu, dy: Dbu) -> Self {
+        let at = Location::caller();
+        let fault = (dx.raw().signum() * dy.raw().signum() < 0).then(|| BuildDiagnostic {
+            at,
+            message:
+                "`sized(dx, dy)` grows or shrinks both axes; chain two `sized` for one of each"
+                    .to_owned(),
+        });
+        self.ranged(DerivedOp::Sized(dx, dy), fault)
+    }
+
+    /// `.overlapping(other)`: the shapes sharing area with `other`; touching
+    /// is not overlapping.
+    #[must_use]
+    pub fn overlapping(self, other: impl Into<LayerExpr>) -> Self {
+        self.call(DerivedOp::Overlapping, Some(other.into()), Vec::new())
+    }
+
+    /// `.covering(other)`: the shapes that hold a whole shape of `other`.
+    #[must_use]
+    pub fn covering(self, other: impl Into<LayerExpr>) -> Self {
+        self.call(DerivedOp::Covering(true), Some(other.into()), Vec::new())
+    }
+
+    /// `.not_covering(other)`: the shapes that hold no whole shape of `other`.
+    #[must_use]
+    pub fn not_covering(self, other: impl Into<LayerExpr>) -> Self {
+        self.call(DerivedOp::Covering(false), Some(other.into()), Vec::new())
+    }
+
+    /// `.extended(begin:, end:, out:, in:)`, on edges: one box per edge, the
+    /// edge lengthened by `begin` before its start and `end` past its end and
+    /// widened by `out` away from its shape and `inside` into it. A negative
+    /// length, or `out` and `inside` both 0, is refused as the parser
+    /// refuses it.
+    #[must_use]
+    #[track_caller]
+    pub fn extended(self, begin: Dbu, end: Dbu, out: Dbu, inside: Dbu) -> Self {
+        let at = Location::caller();
+        let fault = if [begin, end, out, inside].iter().any(|l| l.raw() < 0) {
+            Some("`extended` takes lengths of 0 or more")
+        } else if out.raw() == 0 && inside.raw() == 0 {
+            Some("`extended` needs `out` or `in` above 0: a box needs a width")
+        } else {
+            None
+        };
+        let op = DerivedOp::Extended {
+            begin,
+            end,
+            outside: out,
+            inside,
+        };
+        self.ranged(
+            op,
+            fault.map(|message| BuildDiagnostic {
+                at,
+                message: message.to_owned(),
+            }),
+        )
+    }
+
     /// `.interacting(other)`.
     #[must_use]
     pub fn interacting(self, other: impl Into<LayerExpr>) -> Self {
@@ -498,6 +565,16 @@ forward! {
     not(other: impl Into<LayerExpr>);
     /// [`LayerExpr::sized`].
     sized(by: Dbu);
+    /// [`LayerExpr::sized_xy`].
+    sized_xy(dx: Dbu, dy: Dbu);
+    /// [`LayerExpr::overlapping`].
+    overlapping(other: impl Into<LayerExpr>);
+    /// [`LayerExpr::covering`].
+    covering(other: impl Into<LayerExpr>);
+    /// [`LayerExpr::not_covering`].
+    not_covering(other: impl Into<LayerExpr>);
+    /// [`LayerExpr::extended`].
+    extended(begin: Dbu, end: Dbu, out: Dbu, inside: Dbu);
     /// [`LayerExpr::interacting`].
     interacting(other: impl Into<LayerExpr>);
     /// [`LayerExpr::not_interacting`].
