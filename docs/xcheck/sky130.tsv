@@ -47,6 +47,7 @@ licon.11	licon.11	MR_licon.SP.8	agrees
 licon.13	licon.13	licon.13 licon.13_a	agrees	
 licon.17	licon.17	licon.17	agrees	
 li.1	li.1	li.1	agrees	
+li.1a	li.1a	-	theirs_missing	sky130A_mr.drc has no check for it
 li.3 li.3.notch	li.3	li.3	agrees	
 li.5	li.5	li.5	agrees	
 li.6	li.6	li.6	agrees	
@@ -160,8 +161,7 @@ x.3a	x.3a	dnwell_angle nwell_angle pwbm_angle pwde_angle hvtp_angle hvtr_angle l
 -	ct.ring	MR_mcon.WID.2	ours_missing	ring-shaped mcon (seal ring): left out
 -	ct.ring	MR_mcon.WID.3	ours_missing	ring-shaped mcon (seal ring): left out
 -	ct.ring	MR_mcon.CON.1	ours_missing	ring-shaped mcon (seal ring): left out
--	m1.4a	m1.4a	ours_missing	enclosure for specific cells: the cell list is not public
--	m1.4a	m1.4a_a	ours_missing	enclosure for specific cells: the cell list is not public
+m1.4a	m1.4a	m1.4a m1.4a_a	agrees	both decks scope it to the six cells m1.4a names, sky130A_mr.drc with `select`; m1.4a_a (an mcon not enclosed at all) is caught by our 5nm minimum
 -	via.3	via.3	ours_missing	ring-shaped via (seal ring): left out
 -	via.3	via.3_a	ours_missing	ring-shaped via (seal ring): left out
 -	via.3	via.3_b	ours_missing	ring-shaped via (seal ring): left out
@@ -264,6 +264,7 @@ ar.met4.1	ar.met4.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc ha
 ar.via4.1	ar.via4.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
 ar.met5.1	ar.met5.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
 x.22	x.22	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+x.25	x.25	-	theirs_missing	sky130A_mr.drc has no check for it
 nwell.4	nwell.4	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
 supply_short	supply_short	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
 soft_connection	soft_connection	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check

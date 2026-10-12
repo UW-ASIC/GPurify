@@ -487,12 +487,11 @@ fn compare(
     }
 }
 
-/// Runs both tools on every layout of a deck and holds the ledger to them.
-fn cross_check(deck_path: &str, ledger_path: &str, layouts: &[Layout]) {
+/// The ways `ledger_path` fails to give every rule of `deck_path` exactly one
+/// row, or names a rule the deck lacks; empty when it covers the deck.
+fn ledger_gaps(deck_path: &str, ledger_path: &str) -> Vec<String> {
     let deck = std::fs::read_to_string(repo().join(deck_path)).expect("the shipped deck");
     let rows = ledger(ledger_path);
-
-    // Every rule of the deck has exactly one row.
     let mut strings = StrTable::default();
     let parsed = parse_deck(&deck, Grid::new(1000).expect("1 nm"), &mut strings).expect("parses");
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
@@ -514,6 +513,16 @@ fn cross_check(deck_path: &str, ledger_path: &str, layouts: &[Layout]) {
         seen.keys()
             .map(|id| format!("ledger names {id}, which the deck lacks")),
     );
+    problems
+}
+
+/// Runs both tools on every layout of a deck and holds the ledger to them.
+fn cross_check(deck_path: &str, ledger_path: &str, layouts: &[Layout]) {
+    let deck = std::fs::read_to_string(repo().join(deck_path)).expect("the shipped deck");
+    let rows = ledger(ledger_path);
+
+    // Every rule of the deck has exactly one row.
+    let mut problems = ledger_gaps(deck_path, ledger_path);
 
     let mut tallies: Vec<Tally> = rows.iter().map(|_| Tally::default()).collect();
     let mut categories = BTreeSet::new();
@@ -830,6 +839,25 @@ fn foundry_deck_sky130() {
         },
     ];
     cross_check("pdks/sky130.deck", "docs/xcheck/sky130.tsv", &layouts);
+}
+
+/// Every rule of each shipped deck has exactly one ledger row, and no row
+/// names a rule the deck lacks, so a deck change that skips its ledger fails
+/// here rather than only in the release tier (a rule added after F2 once
+/// reached the base with no row).
+///
+/// Oracle: the ledgers' own contract (`docs/xcheck/*.tsv`, header), checked
+/// against the parsed decks.
+#[test]
+fn every_deck_rule_has_one_ledger_row() {
+    for (deck, ledger) in [
+        ("pdks/sky130.deck", "docs/xcheck/sky130.tsv"),
+        ("pdks/gf180mcu.deck", "docs/xcheck/gf180mcu.tsv"),
+        ("pdks/ihp_sg13g2.deck", "docs/xcheck/ihp_sg13g2.tsv"),
+    ] {
+        let gaps = ledger_gaps(deck, ledger);
+        assert!(gaps.is_empty(), "{ledger}:\n{}", gaps.join("\n"));
+    }
 }
 
 /// Oracle: the texts as IHP's unit cells draw them on 63/0 (`activ.gds`
