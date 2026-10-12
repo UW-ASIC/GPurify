@@ -55,6 +55,7 @@ rule odd.none forbidden(odd)
 rule tip tip_space_table(m; length: [0nm, 100nm], space: [[60nm, 70nm], [70nm, 80nm]])
 rule tw two_width_table(m; width: [0nm, 200nm], prl: [none, 300nm], space: [[50nm, 60nm], [60nm, 90nm]])
 rule sl span_length(m; x: [100nm, 200nm], y: [150nm])
+rule sl.except span_length(m; x: [100nm, 200nm], y: [150nm], x_except: 300nm, y_except: none)
 rule fsp forbidden_space(m; min: 40nm, max: 50nm, prl: 0nm)
 rule eol.w eol_space(m; eol_width: 60nm, within: 20nm, parallel: none, end_to_end: none) >= 80nm
 rule eol.p eol_space(m; eol_width: 60nm, within: 20nm, parallel: (space: 120nm, within: 50nm, two_edges: true), end_to_end: 70nm) >= 80nm
@@ -190,6 +191,10 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
         ),
     );
     d.rule("sl", span_length(m, &[nm(100), nm(200)], &[nm(150)]));
+    d.rule(
+        "sl.except",
+        span_length(m, &[nm(100), nm(200)], &[nm(150)]).except_other(Some(nm(300)), None),
+    );
     d.rule("fsp", forbidden_spacing(m, nm(40), nm(50), nm(0)));
     d.rule(
         "eol.w",

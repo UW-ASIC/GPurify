@@ -80,6 +80,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         tip_spacing_table(depth),
         forbidden_spacing(depth),
         span_length(depth),
+        span_length_except(depth),
         exact_pitch(depth),
         min_area(depth),
         min_enclosed_area(depth),
@@ -3837,6 +3838,52 @@ fn exact_pitch(depth: Depth) -> Vec<Fixture> {
 /// spans, parallel to the layer's direction, on the wrong-direction one.
 const SPANS: &str =
     "rule s span_length(met1; x: [60nm, 80nm, 120nm, 160nm, 200nm], y: [120nm, 160nm, 200nm])";
+
+/// `span_length(met1; x: [100nm, 300nm], y: [100nm, 300nm], x_except:
+/// 200nm, y_except: none)` (DRC-036): LEF58 `SPANLENGTHTABLE 0.1 0.3
+/// EXCEPTOTHERSPAN 0.2`, "the span length rule only applies if the span
+/// length on the perpendicular direction is greater than the specified
+/// otherSpanlength", on the `x` list only.
+///
+/// Oracle: the LEF text, rectangles by construction: a 150 wide rectangle,
+/// its height swept around 200: its 150 horizontal span is held (against
+/// 300) only above 200, its vertical span (199 to 201, illegal on `y`)
+/// always. An L, which LEF leaves undefined, is held with no exception: its
+/// 150 x 100 foot reports 150. Placed under the symmetries that keep the
+/// axes.
+fn span_length_except(depth: Depth) -> Vec<Fixture> {
+    let deck = one_layer_deck(
+        "rule s span_length(met1; x: [100nm, 300nm], y: [100nm, 300nm], x_except: 200nm, \
+         y_except: none)",
+    );
+    let mut cases = Vec::new();
+    let mut case = |shape: String, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("span_length_except/{shape}"),
+            &["DRC-036"],
+            &deck,
+            layout,
+            vec![("s", findings)],
+        ));
+    };
+    for h in sweep(depth, 200) {
+        let mut findings = vec![pin(Finding::length(h), 150, h)];
+        if h > 200 {
+            findings.push(pin(Finding::length(150), 150, h));
+        }
+        case(
+            format!("rectangle/{}", side(h, 200)),
+            met1(&[[0, 0, 150, h]]),
+            findings,
+        );
+    }
+    case(
+        "l_shape".into(),
+        met1(&[[0, 0, 150, 100], [0, 100, 100, 1000]]),
+        vec![Finding::length(150).at(75, 50)],
+    );
+    every_axis_placement(&cases)
+}
 
 /// `span_length` (`span_length`, DRC-036): every chord a horizontal or
 /// vertical line cuts from a merged figure is one of its axis's lengths, or

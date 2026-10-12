@@ -451,6 +451,26 @@ pub(crate) fn span_length(
     for group in edges.chunk_by(|e, f| (e.figure, e.vertical) == (f.figure, f.vertical)) {
         let (figure, across_x) = (group[0].figure, group[0].vertical);
         let legal = if across_x { &spans.x } else { &spans.y };
+        // EXCEPTOTHERSPAN: a rectangle's span is held only when its span the
+        // other way exceeds the list's exception.
+        let poly = s.layer_out.get(figure);
+        let rectangle = poly.outer().coords().0.len() == 4 && poly.holes().next().is_none();
+        let (box_, except) = (
+            poly.bbox(),
+            if across_x {
+                spans.x_except
+            } else {
+                spans.y_except
+            },
+        );
+        let other = if across_x {
+            box_.height()
+        } else {
+            box_.width()
+        };
+        if rectangle && except.is_some_and(|except| other <= except) {
+            continue;
+        }
         for (lo, hi, from, to) in chords(group) {
             examined += 1;
             let Some(next) = SpanTable::next_legal(legal, hi - lo) else {

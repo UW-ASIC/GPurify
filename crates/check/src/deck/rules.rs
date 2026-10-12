@@ -131,6 +131,26 @@ impl RuleRow {
         self
     }
 
+    /// A [`span_length`] row with `EXCEPTOTHERSPAN` per list: a rectangle's
+    /// horizontal span held only when its height exceeds `x`, its vertical
+    /// span only when its width exceeds `y` (the deck's `x_except:` and
+    /// `y_except:`).
+    ///
+    /// # Panics
+    ///
+    /// On a row of any other kind.
+    #[must_use]
+    pub fn except_other(mut self, x: Option<Dbu>, y: Option<Dbu>) -> Self {
+        assert_eq!(
+            self.kind, "span_length",
+            "{} has no span exception",
+            self.kind
+        );
+        x.put("x_except", &mut self.params);
+        y.put("y_except", &mut self.params);
+        self
+    }
+
     /// An [`edge_facing_space`] row that judges only pairs running alongside
     /// each other longer than `prl` (the deck's `prl:`, `LEF58_SPACING ...
     /// WRONGDIRECTION PRL`); 0 is the plain form.

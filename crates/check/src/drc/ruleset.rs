@@ -2642,8 +2642,19 @@ pub enum Rule {
     /// (LEF/DEF 5.8 Language Reference, "Span Length Table Rule" and Figure
     /// 1-31).
     ///
-    /// Limits: `ORTHOGONAL` (a length between two inside facing corners) and
-    /// `EXCEPTOTHERSPAN` are missing.
+    /// `span_length(L; x: [..], y: [..], x_except: len | none, y_except: len
+    /// | none)` adds `EXCEPTOTHERSPAN otherSpanlength` per list: "the span
+    /// length rule only applies if the span length on the perpendicular
+    /// direction is greater than the specified otherSpanlength. This
+    /// construct must be defined on a layer with RECTONLY". A rectangle's
+    /// horizontal span is checked on `x` only when its height exceeds
+    /// `x_except`, and its vertical span on `y` only when its width exceeds
+    /// `y_except`. Any other figure, which LEF leaves undefined ("the span
+    /// length in the orthogonal direction could be ambiguous in a polygon
+    /// shape"), is checked with no exception (fails closed).
+    ///
+    /// Limits: `ORTHOGONAL` (a length between two inside facing corners) is
+    /// missing.
     SpanLength {
         /// The layer measured, drawn or derived.
         layer: LayerId,
@@ -2908,6 +2919,12 @@ pub struct SpanTable {
     /// The legal lengths of vertical spans, in grid units: positive and
     /// rising strictly.
     pub y: Vec<Dbu>,
+    /// `EXCEPTOTHERSPAN` of the `x` list: a rectangle's horizontal span is
+    /// checked only when its height is greater, in grid units; positive.
+    /// `None` checks every one.
+    pub x_except: Option<Dbu>,
+    /// `EXCEPTOTHERSPAN` of the `y` list, against a rectangle's width.
+    pub y_except: Option<Dbu>,
 }
 
 impl SpanTable {
@@ -4388,9 +4405,15 @@ impl RuleSet {
                 }
                 "span_length" => {
                     let layer = one(spec)?;
+                    let except = |param| match optional(spec, param) {
+                        Some(_) => length(spec, param).map(Some),
+                        None => Ok(None),
+                    };
                     let table = SpanTable {
                         x: lengths(spec, "x_spans")?,
                         y: lengths(spec, "y_spans")?,
+                        x_except: except("x_except")?,
+                        y_except: except("y_except")?,
                     };
                     if !table.is_valid() {
                         return Err(DrcError::BadTable(name_of(spec.id)));
