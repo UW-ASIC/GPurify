@@ -282,7 +282,7 @@ explains (kind 30).
 | 66 | density_balance | `density_balance(A, B[, d]; window, step) >= f` | POINT | EXACT | exact | — |
 | 67 | critical_area | `critical_area(L; radius) <= a` | POINT | EXACT | exact | — |
 
-41 kinds are EXACT (five scripted over KLayout's polygons), 16 APPROX and seven NONE; `convex_corner_spacing` is NONE on a deck with
+43 kinds are EXACT (five scripted over KLayout's polygons), 16 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`, and between two layers (`space(A, B; nets: ..)`), which is not mirrored. `examined` is GPurify-only; KLayout has no equivalent.
 
