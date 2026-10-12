@@ -1,4 +1,4 @@
-//! The forty-six tables, the deck parser that fills them, and the dispatcher.
+//! The forty-seven tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
@@ -59,6 +59,8 @@ pub struct RuleSet {
     pub supply_path: topology::SupplyPathTable,
     /// `gate_path` rows: [`topology::GatePathTable`].
     pub gate_path: topology::GatePathTable,
+    /// `combinational_loop` rows: [`topology::CombinationalLoopTable`].
+    pub combinational_loop: topology::CombinationalLoopTable,
 
     /// `supply_short` rows: [`supply::SupplyShortTable`].
     pub supply_short: supply::SupplyShortTable,
@@ -994,6 +996,10 @@ impl RuleSet {
                     row.head(&mut table.head)?;
                     table.both.push(both);
                 }
+                "combinational_loop" => {
+                    row.layers(0)?;
+                    row.head(&mut set.combinational_loop.head)?;
+                }
                 "gate_path" => {
                     row.layers(0)?;
                     let ground = row.flag("ground", true)?;
@@ -1247,6 +1253,7 @@ impl RuleSet {
             "fanout" => &self.fanout.head,
             "supply_path" => &self.supply_path.head,
             "gate_path" => &self.gate_path.head,
+            "combinational_loop" => &self.combinational_loop.head,
             "undriven_gate" => &self.undriven_gate.head,
             "missing_isolation" => &self.missing_isolation.head,
             other => unreachable!("{other} is not an ERC kind"),
@@ -1564,6 +1571,7 @@ impl RuleSet {
             &self.fanout.head,
             &self.supply_path.head,
             &self.gate_path.head,
+            &self.combinational_loop.head,
             &self.supply_short.head,
             &self.soft_connection.head,
             &self.missing_tie.head,
@@ -1658,6 +1666,7 @@ impl RuleSet {
         topology::check_fanout(design, &self.fanout, out, runs);
         topology::check_supply_path(design, facts, intent, &self.supply_path, out, runs);
         topology::check_gate_path(design, intent, &self.gate_path, out, runs);
+        topology::check_combinational_loop(design, intent, &self.combinational_loop, out, runs);
 
         supply::check_supply_short(design, &self.supply_short, scratch, out, runs);
         supply::check_soft_connection(design, &self.soft_connection, scratch, out, runs);

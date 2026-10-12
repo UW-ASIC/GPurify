@@ -1085,6 +1085,13 @@ impl CompiledDeck {
             let row = Row::new("supply_path", &[]).value("both", ParamValue::Flag(t.both[r]));
             file(&t.head, r, row);
         }
+        for r in 0..erc.combinational_loop.head.len() {
+            file(
+                &erc.combinational_loop.head,
+                r,
+                Row::new("combinational_loop", &[]),
+            );
+        }
         let t = &erc.gate_path;
         for r in 0..t.head.len() {
             let row = Row::new("gate_path", &[])

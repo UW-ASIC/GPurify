@@ -44,7 +44,8 @@ fn id_of(kind: &str) -> StrId {
 }
 
 /// The kinds that cannot answer their question without design intent.
-const INTENT_GATED: [&str; 29] = [
+const INTENT_GATED: [&str; 30] = [
+    "combinational_loop",
     "dielectric_field",
     "domain_crossing",
     "drain_source",
@@ -125,6 +126,9 @@ fn every_kind() -> RuleSet {
         supply_path: topology::SupplyPathTable {
             head: head(id_of("supply_path")),
             both: vec![true],
+        },
+        combinational_loop: topology::CombinationalLoopTable {
+            head: head(id_of("combinational_loop")),
         },
         gate_path: topology::GatePathTable {
             head: head(id_of("gate_path")),

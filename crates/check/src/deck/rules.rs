@@ -733,6 +733,9 @@ kinds! {
     /// [`ForwardDiodeTable`](crate::erc::rules::latchup::ForwardDiodeTable):
     /// `forward_diode(marker; models)`.
     forward_diode(marker: one) [] { models: &[&str] = "model" }
+    /// [`CombinationalLoopTable`](crate::erc::rules::topology::CombinationalLoopTable):
+    /// `combinational_loop()`.
+    combinational_loop() [] {}
     /// [`ModelLimitTable`](crate::erc::rules::domain::ModelLimitTable):
     /// `gate_oxide(; models, max)`, `max_voltage` in mV.
     gate_oxide() [] { models: &[&str] = "model", max_voltage: f64 = "max_voltage" }

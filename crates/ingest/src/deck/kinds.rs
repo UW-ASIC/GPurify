@@ -1120,6 +1120,7 @@ pub(crate) const KINDS: &[Kind] = &[
         ],
     ),
     erc("supply_path", &[], false, &[p("both", "both", Dim::Bool)]),
+    erc("combinational_loop", &[], false, &[]),
     erc(
         "forward_diode",
         &[0],
