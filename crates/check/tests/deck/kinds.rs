@@ -40,6 +40,7 @@ rule fs facing_space(m.edges().vertical()) >= 30nm
 rule rd.min region_density(m, r) >= 0.1
 rule rd.max region_density(m, r) <= 0.5
 rule aw width(m; allowed: [350nm, 690nm])
+rule aw.open width(thin; allowed: [100nm, 150nm], open_last: true)
 rule ia.m interior_angle(m) >= 87deg
 rule ia interior_angle() >= 90deg
 rule vd.m valid(m)
@@ -102,7 +103,7 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     d.derived("squares", m.squares());
     let odd = d.derived("odd", m.non_rectangles());
     d.derived("long", m.with_bbox_max(&[Bound::Above(nm(1000))]));
-    d.derived(
+    let thin = d.derived(
         "thin",
         v.non_squares()
             .with_bbox_min(&[Bound::AtLeast(nm(100)), Bound::Below(nm(200))]),
@@ -120,6 +121,10 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     d.rule("rd.min", region_density(m, r, 0.1, false));
     d.rule("rd.max", region_density(m, r, 0.5, true));
     d.rule("aw", allowed_width(m, &[nm(350), nm(690)]));
+    d.rule(
+        "aw.open",
+        allowed_width(thin, &[nm(100), nm(150)]).open_last(),
+    );
     d.rule("ia.m", min_interior_angle(Some(m.into()), 87.0));
     d.rule("ia", min_interior_angle(None, 90.0));
     d.rule("vd.m", polygon_validity(Some(m.into())));
@@ -258,6 +263,8 @@ fn the_new_queries_read_what_the_deck_states() {
     assert_eq!(deck.max_total_area(m), Some(DbuArea::new(1_000_000)));
     assert_eq!(deck.min_step(m), Some(nm(60)));
     assert_eq!(deck.allowed_widths(v), None);
+    assert_eq!(deck.allowed_widths_from(m), None);
+    assert_eq!(deck.allowed_widths_from(layer("thin")), Some(nm(150)));
 }
 
 /// The queries for the cut and enclosure kinds answer what the deck states.

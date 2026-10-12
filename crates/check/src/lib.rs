@@ -90,7 +90,7 @@
 //! | `min_step(L; max_edges: n \| corner: .., length_sum: ..) >= len` | `min_step` | [`drc::Rule::MinStep`] | a run of short edges LEF `MINSTEP` rejects: too many in a row, or at a corner or step | DRC-020 |
 //! | `interior_angle([L]) >= deg` | `min_interior_angle` | [`drc::Rule::MinInteriorAngle`] | a drawn corner whose angle inside its shape is under the limit: an acute angle | DRC-003 |
 //! | `valid([L])` | `polygon_validity` | [`drc::Rule::PolygonValidity`] | a drawn polygon that crosses itself or encloses no area | DRC-004 |
-//! | `width(L; allowed: [w, ..])` | `allowed_width` | [`drc::Rule::AllowedWidth`] | a shape whose width is none of the listed widths | DRC-015, DRC-090 |
+//! | `width(L; allowed: [w, ..])`, `.., open_last: true)` | `allowed_width` | [`drc::Rule::AllowedWidth`] | a shape whose width is none of the listed widths (or, open, under the last) | DRC-015, DRC-090 |
 //! | `width(E) >= len` | `edge_width` | [`drc::Rule::EdgeWidth`] | two edges facing each other across their shapes closer than the limit: a channel length or width, a width in one direction | DRC-011, DRC-016, DRC-090 |
 //! | `facing_space(E) >= len` | `edge_facing_space` | [`drc::Rule::EdgeFacingSpace`] | two edges whose outer sides face each other closer than the limit: a spacing in one direction | DRC-016 |
 //! | `region_density(L, R) >= frac`, `<= frac` | `region_density` | [`drc::Rule::RegionDensity`] | a shape of `R` inside which `L` covers too little or too much | DRC-072, DRC-075 |

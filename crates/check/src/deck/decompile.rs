@@ -500,10 +500,17 @@ impl CompiledDeck {
             } => two(layer, region)
                 .number("limit", limit)
                 .value("maximum", ParamValue::Flag(sense == LimitSense::Maximum)),
-            Rule::AllowedWidth { layer, widths } => {
+            Rule::AllowedWidth {
+                layer,
+                widths,
+                open_last,
+            } => {
                 let mut row = one(layer);
                 for &width in self.drc.widths.get(widths as usize).into_iter().flatten() {
                     row = row.length("width", width);
+                }
+                if open_last {
+                    row = row.value("open_last", ParamValue::Flag(true));
                 }
                 row
             }
