@@ -253,7 +253,6 @@ says which foundry manual, standard or tool defines each one.
 | DRC-126 | Cut keep-out zone by cut class (end, side and spiral extensions) | partial | keep_out_zone(L; class, to, end_side, end_forward, side_side, side_forward): another cut, of class `to` when given, overlapping the side or end zone of a cut of `class`, the zones as OpenROAD's detailed router bloats a via (checKeepOutZone_main; strict overlap). Missing: the EXTENSION form without ENDEXTENSION, SPIRALEXTENSION and EXCEPTEXACTALIGNED, which OpenROAD parses but never checks and no public text defines; a square class (the router skips square vias) is refused |
 | DRC-127 | Cell edge-type spacing between placed cells | missing | Spacing by the edge types of neighbouring standard cells (EXCEPTNONFILLERINBETWEEN and other options); needs cell placement, which a flattened layout loses |
 | DRC-128 | Self-aligned multiple patterning (SADP/SAQP mandrel, spacer, cut) legality | missing | Distinct from LELE colouring (DRC-100): legality is a mandrel/non-mandrel assignment plus cut-mask rules |
-| DRC-129 | Inter-die alignment and overlap (bump and pad alignment, rotation, cross-die spacing) | missing | Companion to LVS-073; needs a stack description placing each die |
 
 ### Layout against schematic (LVS)
 

@@ -37,13 +37,13 @@ use gpurify_check::lvs::graph::{from_layout, from_reference, Graph};
 use gpurify_check::lvs::{compare_logged, record_discrepancies, CompareOptions, Verdict};
 use gpurify_check::report::{Outcome, RuleRun, SkipReason, Violations};
 use gpurify_check::system::{
-    assemble, bumps_into, check_bonds, check_pins, esd_pads_into, Bump, Pin, Placement, GROUND,
-    NOWHERE, POWER,
+    assemble, bumps_into, check_alignment, check_bonds, check_pins, esd_pads_into, Bump, Pin,
+    Placement, GROUND, NOWHERE, POWER,
 };
 use gpurify_check::topology::NetId;
 use gpurify_check::Design;
 use gpurify_geom::ops::Point;
-use gpurify_geom::{prefix, Grid, Length, Qty};
+use gpurify_geom::{prefix, Dbu, Grid, Length, Qty};
 use gpurify_ingest::deck::DeviceRecognition;
 use gpurify_ingest::intent::SupplyRole;
 use gpurify_ingest::netlist::{Netlist, SubcktId};
@@ -230,6 +230,35 @@ pub fn check(
     let mut out = Outputs::default();
     let bonds: Vec<[&[Bump]; 2]> = faces.iter().map(|[a, b]| [&a[..], &b[..]]).collect();
     let pairs = check_bonds(&bonds, strings, &mut out.violations, &mut out.runs);
+    let on_grid = |nm: Option<f64>, what: &str| -> Result<Option<Dbu>, SystemError> {
+        nm.map(|nm| {
+            grid.to_dbu(Qty::<Length, { prefix::NANO }>::new(nm))
+                .map_err(|_| {
+                    SystemError::Assembly(format!(
+                        "a bond's {what} {nm} is not a whole number of grid units"
+                    ))
+                })
+        })
+        .transpose()
+    };
+    let limits = spec
+        .bond_limits
+        .iter()
+        .map(|l| {
+            Ok((
+                on_grid(l.max_offset_nm, "max_offset_nm")?,
+                on_grid(l.min_space_nm, "min_space_nm")?,
+            ))
+        })
+        .collect::<Result<Vec<_>, SystemError>>()?;
+    check_alignment(
+        &bonds,
+        &pairs,
+        &limits,
+        strings,
+        &mut out.violations,
+        &mut out.runs,
+    );
     let mut offset = Vec::with_capacity(placed.len());
     let mut nets = 0u32;
     for die in &placed {

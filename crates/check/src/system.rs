@@ -85,8 +85,8 @@ use crate::lvs::graph::{narrow, transpose_into, Graph};
 use crate::report::{record_run, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use crate::topology::NetId;
 use crate::Design;
-use gpurify_geom::ops::{area2, Point};
-use gpurify_geom::{Bbox, Dbu, LayerId, PolyId};
+use gpurify_geom::ops::{area2, isqrt, Point};
+use gpurify_geom::{Bbox, Dbu, DbuArea, LayerId, PolyId};
 use gpurify_ingest::{StrId, StrTable};
 use std::collections::HashMap;
 
@@ -94,8 +94,10 @@ use std::collections::HashMap;
 /// flat comparison ([`crate::lvs::RULE_IDS`]). Not deck rule kinds: the
 /// catalog names them by the feature tags `lvs:system` (LVS-073) and
 /// `erc:system` (ERC-C12, ERC-C13).
-pub const RULE_IDS: [&str; 6] = [
+pub const RULE_IDS: [&str; 8] = [
     "system.unbonded_bump",
+    "system.bump_offset",
+    "system.bump_space",
     "system.open",
     "system.short",
     "system.esd_d2d",
@@ -314,6 +316,140 @@ pub fn check_bonds(
     }
     record_run(runs, out, before, rule, Outcome::Ran, examined);
     all
+}
+
+/// Holds each bond's bumps to its limits, `(max offset, min space)` in grid
+/// units, `None` where the bond states none (catalog DRC-129, Calibre
+/// 3DSTACK's alignment and spacing between dies): `system.bump_offset` for
+/// two bonded bumps whose centres are more than the offset apart, at the
+/// middle of the two centres (floored), measuring their distance (floored);
+/// `system.bump_space` for a bump closer than the space to a bump of the
+/// facing die it does not bond, at the middle of their gap, measuring it.
+/// A row is recorded only when some bond states its limit, examining the
+/// bonded pairs (offset) or the facing bumps (space) of those bonds.
+///
+/// # Panics
+///
+/// When `pairs` or `limits` is not one entry per bond.
+// ponytail: every facing pair of bumps, O(a·b) per bond; file the far face in
+// a hash grid as `bonded_pairs` does if packages of 10^5 bumps make it slow.
+pub fn check_alignment(
+    bonds: &[[&[Bump]; 2]],
+    pairs: &[Vec<(u32, u32)>],
+    limits: &[(Option<Dbu>, Option<Dbu>)],
+    strings: &StrTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    assert!(
+        bonds.len() == pairs.len() && bonds.len() == limits.len(),
+        "one entry per bond"
+    );
+    let twice = |b: Bbox| {
+        (
+            i128::from(b.xlo.raw()) + i128::from(b.xhi.raw()),
+            i128::from(b.ylo.raw()) + i128::from(b.yhi.raw()),
+        )
+    };
+    if limits.iter().any(|l| l.0.is_some()) {
+        let rule = rule_id(strings, "system.bump_offset");
+        let before = out.len();
+        let mut examined = 0u64;
+        for (([a, b], pairs), &(max, _)) in bonds.iter().zip(pairs).zip(limits) {
+            let Some(max) = max else {
+                continue;
+            };
+            for &(i, j) in pairs {
+                examined += 1;
+                let (p, q) = (twice(a[i as usize].at), twice(b[j as usize].at));
+                let (dx, dy) = (p.0 - q.0, p.1 - q.1);
+                // At twice the scale: 4 d² against (2 max)².
+                let d4 = DbuArea::new(dx * dx + dy * dy);
+                if d4.raw() > 4 * max.mul_wide(max).raw() {
+                    let mid = |u: i128, v: i128| {
+                        Dbu::new_unchecked(
+                            i64::try_from((u + v).div_euclid(4)).expect("on the grid"),
+                        )
+                    };
+                    out.push(Violation {
+                        rule,
+                        layer: NO_LAYER,
+                        severity: Severity::Error,
+                        at: Point {
+                            x: mid(p.0, q.0),
+                            y: mid(p.1, q.1),
+                        },
+                        measured: Measurement::Length(Dbu::new_unchecked(isqrt(d4).raw() / 2)),
+                        limit: Measurement::Length(max),
+                        shapes: (a[i as usize].poly, Some(b[j as usize].poly)),
+                    });
+                }
+            }
+        }
+        record_run(runs, out, before, rule, Outcome::Ran, examined);
+    }
+    if limits.iter().any(|l| l.1.is_some()) {
+        let rule = rule_id(strings, "system.bump_space");
+        let before = out.len();
+        let mut examined = 0u64;
+        for (([a, b], pairs), &(_, min)) in bonds.iter().zip(pairs).zip(limits) {
+            let Some(min) = min else {
+                continue;
+            };
+            examined += (a.len() + b.len()) as u64;
+            for (i, bump) in a.iter().enumerate() {
+                for (j, other) in b.iter().enumerate() {
+                    if pairs.binary_search(&(narrow(i), narrow(j))).is_ok() {
+                        continue;
+                    }
+                    let gap2 = gap2(bump.at, other.at);
+                    if gap2.raw() < min.mul_wide(min).raw() {
+                        out.push(Violation {
+                            rule,
+                            layer: NO_LAYER,
+                            severity: Severity::Error,
+                            at: gap_middle(bump.at, other.at),
+                            measured: Measurement::Length(isqrt(gap2)),
+                            limit: Measurement::Length(min),
+                            shapes: (bump.poly, Some(other.poly)),
+                        });
+                    }
+                }
+            }
+        }
+        record_run(runs, out, before, rule, Outcome::Ran, examined);
+    }
+}
+
+/// The squared gap between two boxes; 0 when they touch or overlap.
+fn gap2(a: Bbox, b: Bbox) -> DbuArea {
+    let axis = |lo: Dbu, hi: Dbu, olo: Dbu, ohi: Dbu| {
+        i128::from((olo.raw() - hi.raw()).max(lo.raw() - ohi.raw()).max(0))
+    };
+    let (dx, dy) = (
+        axis(a.xlo, a.xhi, b.xlo, b.xhi),
+        axis(a.ylo, a.yhi, b.ylo, b.yhi),
+    );
+    DbuArea::new(dx * dx + dy * dy)
+}
+
+/// The middle of the gap between two boxes, per axis the middle of the gap
+/// or of the overlap, floored.
+fn gap_middle(a: Bbox, b: Bbox) -> Point {
+    let mid = |lo: Dbu, hi: Dbu, olo: Dbu, ohi: Dbu| {
+        let (from, to) = if ohi < lo {
+            (ohi, lo)
+        } else if hi < olo {
+            (hi, olo)
+        } else {
+            (lo.max(olo), hi.min(ohi))
+        };
+        Dbu::new_unchecked((from.raw() + to.raw()).div_euclid(2))
+    };
+    Point {
+        x: mid(a.xlo, a.xhi, b.xlo, b.xhi),
+        y: mid(a.ylo, a.yhi, b.ylo, b.yhi),
+    }
 }
 
 /// One flat graph of every die's, the nets of each `joins` pair merged.
