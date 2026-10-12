@@ -327,7 +327,7 @@ says which foundry manual, standard or tool defines each one.
 | PEX-013 | Substrate network extraction (substrate and well resistance and coupling) | missing | — |
 | PEX-014 | Route-level (gate-level) extraction from LEF/DEF | missing | Needs a DEF reader |
 | PEX-015 | 3D-IC extraction (TSV, micro-bump, interposer, TSV-TSV coupling) | missing | — |
-| PEX-016 | Point-to-point resistance and net-to-net coupling report between arbitrary points | missing | ERC-C6 measures P2P on an ESD path only |
+| PEX-016 | Point-to-point resistance and net-to-net coupling report between arbitrary points | partial | `pex --p2p NET:X,Y:X,Y…` reports the effective resistance between every two points on a net (gpurify::engine::p2p over erc::power::extract_points_into: each conducting shape a chain along its long axis, sheet × squares, each cut its layer's resistance, Kron reduction to the points), and `--coupling A:B` the total coupling between two nets. Not done: current spreading across a wide shape (the chain model's), and coupling between points rather than nets |
 
 ### Flow
 

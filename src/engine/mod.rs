@@ -6,6 +6,7 @@
 //! either fails [`Summary::passed`].
 
 pub mod integration;
+pub mod p2p;
 pub mod pipeline;
 pub mod run;
 pub mod system;

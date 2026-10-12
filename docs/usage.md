@@ -32,6 +32,8 @@ standard output.
 | `--format text\|json\|spef\|dspf` | Report format. `spef` and `dspf` need a `pex` run. Default `text`. |
 | `--quasistatic <net>` | Field-solve this net's capacitance and inductance instead of using the closed-form estimate. Repeat for more nets. |
 | `--lef <file>` | A LEF a DEF layout reads (technology first, then cells). Repeat for more. Only with a `.def` layout. |
+| `--p2p <net>:<x>,<y>:<x>,<y>…` | `pex`, text report: the resistance between every two of these points (µm) on the net, see [below](#point-to-point-and-net-to-net). Repeat for more nets. |
+| `--coupling <net>:<net>` | `pex`, text report: the total coupling capacitance between two nets. Repeat for more pairs. |
 
 A shape on a GDS layer the deck neither declares nor ignores refuses the
 layout, naming the layer. A layout whose database unit is not a whole fraction
@@ -456,6 +458,18 @@ parasitics, not zero ones, so PEX is refused and names the layer. Layers in
 `connect global` (the substrate) carry no parasitics and need no line.
 
 The same inputs always give a byte-identical report.
+
+### Point to point and net to net
+
+`pex --p2p VDD:10,20:150,20:150,90` adds a line per pair of points to the
+text report: the effective resistance of the net between them, each
+conducting shape a chain of resistors along its long axis (sheet
+resistance times squares), each via cut its layer's resistance, the
+points tapped where they lie; the same model as ERC's `p2p_resistance`.
+A point must lie on a conducting shape of the net. A parallel strap can
+only lower it; current spreading across a wide shape is not modelled.
+`--coupling a:b` adds the total coupling capacitance between two nets in
+the extracted network.
 
 ### Comparing two parasitic netlists
 
