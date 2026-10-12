@@ -114,9 +114,9 @@ impl RuleRow {
         self
     }
 
-    /// An ERC rule reported as a warning, not an error: the deck's
-    /// `rule <id> warning ...`. A DRC rule refuses it when the deck is built,
-    /// as the parser does.
+    /// A rule reported as a warning, not an error: the deck's
+    /// `rule <id> warning ...`, as a foundry's recommended design rule is
+    /// carried (catalog DRC-110).
     #[must_use]
     pub fn warning(mut self) -> Self {
         self.warning = true;
@@ -384,6 +384,17 @@ kinds! {
     /// [`Rule::GlobalDensity`](crate::drc::Rule::GlobalDensity):
     /// `global_density(layer[, boundary]) >= limit`, or `<=` when `maximum`.
     global_density(layer: one, boundary: opt) [] { limit: f64 = "limit", maximum: bool = "maximum" }
+    /// [`Rule::CriticalArea`](crate::drc::Rule::CriticalArea):
+    /// `critical_area(layer; radius: radius) <= limit`.
+    critical_area(layer: one) [] { radius: Dbu = "radius", limit: DbuArea = "limit" }
+    /// [`Rule::DensityBalance`](crate::drc::Rule::DensityBalance):
+    /// `density_balance(a, b[, boundary]; window: window, step: step) >= limit`;
+    /// `limit` a fraction.
+    density_balance(a: one, b: one, boundary: opt) [] {
+        window: Dbu = "window",
+        step: Dbu = "step",
+        limit: f64 = "limit",
+    }
     /// [`Rule::MinEnclosure`](crate::drc::Rule::MinEnclosure): `enclosure(inner, outer) >= limit`.
     /// A wire band is [`RuleRow::wire`].
     min_enclosure(inner: one, outer: one) [1, 0] { limit: Dbu = "limit" }
@@ -454,6 +465,10 @@ kinds! {
     /// [`Rule::MultiPatterning`](crate::drc::Rule::MultiPatterning):
     /// `patterning(layer; colors: colors) >= color_spacing`.
     multi_patterning(layer: one) [] { colors: u32 = "colors", color_spacing: Dbu = "color_spacing" }
+    /// [`Rule::AnchoredPatterning`](crate::drc::Rule::AnchoredPatterning):
+    /// `patterning(layer, anchors..; colors: colors) >= color_spacing`, the
+    /// anchor of mask `i + 1` at `anchors[i]`.
+    anchored_patterning(layer: one, anchors: many) [] { colors: u32 = "colors", color_spacing: Dbu = "color_spacing" }
     /// [`Rule::Forbidden`](crate::drc::Rule::Forbidden): `forbidden(layer)`.
     forbidden(layer: one) [] {}
     /// [`Rule::MustContain`](crate::drc::Rule::MustContain): `contains(outer, inner) >= min_count`;

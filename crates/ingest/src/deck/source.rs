@@ -325,12 +325,19 @@ fn check_operands(
         {
             return wrong("cannot combine an edge layer with a polygon layer");
         }
-        DerivedOp::Part(_) | DerivedOp::WithLength(..) | DerivedOp::Oriented(_) if !edges => {
+        DerivedOp::Part(_)
+        | DerivedOp::WithLength(..)
+        | DerivedOp::Oriented(_)
+        | DerivedOp::Extended { .. }
+            if !edges =>
+        {
             return wrong("the operation needs an edge layer, not polygons");
         }
-        DerivedOp::Sized(_)
+        DerivedOp::Sized(..)
         | DerivedOp::Inside
         | DerivedOp::Outside
+        | DerivedOp::Overlapping
+        | DerivedOp::Covering(_)
         | DerivedOp::Holes
         | DerivedOp::Extents
         | DerivedOp::Rectangles { .. }

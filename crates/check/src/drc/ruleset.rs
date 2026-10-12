@@ -3113,7 +3113,7 @@ impl RuleSet {
                 }
                 "anchored_patterning" => {
                     let all = rules.layers_of(spec);
-                    let colors = positive(spec, count(spec, "colors", u8::MAX.into())?)?;
+                    let colors = count(spec, "colors", u8::MAX.into())?;
                     let most = colors.min(4);
                     if all.len() < 2 || all.len() > 1 + most as usize {
                         return Err(DrcError::WrongLayerCount {
@@ -4204,6 +4204,12 @@ impl Rule {
                 step,
                 limit,
                 ..
+            }
+            | Rule::DensityBalance {
+                window,
+                step,
+                limit,
+                ..
             } => length(window).and(length(step)).and(fraction(limit)),
             Rule::GlobalDensity { limit, .. }
             | Rule::AspectRatio { limit, .. }
@@ -4226,7 +4232,13 @@ impl Rule {
                 colors,
                 color_spacing,
                 ..
+            }
+            | Rule::AnchoredPatterning {
+                colors,
+                color_spacing,
+                ..
             } => count(colors.into()).and(length(color_spacing)),
+            Rule::CriticalArea { radius, limit, .. } => length(radius).and(area(limit)),
             Rule::MinimumCut {
                 width,
                 within,
@@ -4413,6 +4425,9 @@ impl Rule {
             Rule::CutSpacing { .. } => "cut_spacing",
             Rule::CutClassSpacing { .. } => "cut_class_spacing",
             Rule::MultiPatterning { .. } => "multi_patterning",
+            Rule::AnchoredPatterning { .. } => "anchored_patterning",
+            Rule::CriticalArea { .. } => "critical_area",
+            Rule::DensityBalance { .. } => "density_balance",
             Rule::Forbidden { .. } => "forbidden",
             Rule::MustContain { .. } => "must_contain",
             Rule::MustBeInside { .. } => "must_be_inside",
