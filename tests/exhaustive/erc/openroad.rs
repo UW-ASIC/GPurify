@@ -335,7 +335,7 @@ struct Tally {
 fn gpurify(seed: u64) -> BTreeMap<String, Findings> {
     let fixture = super::klayout::board_fixture(seed);
     let ran = harness::run(&fixture).unwrap_or_else(|why| panic!("{}: {why}", fixture.name));
-    for (id, outcome) in &ran.rows {
+    for (id, outcome, _) in &ran.rows {
         assert_eq!(
             *outcome,
             gpurify::check::report::Outcome::Ran,

@@ -391,7 +391,7 @@ fn job(fixture: &Fixture, dir: &Path, i: usize) -> Job {
     let mut gpurify: BTreeMap<String, (Outcome, Findings)> = ran
         .rows
         .iter()
-        .map(|(id, outcome)| (id.clone(), (*outcome, Vec::new())))
+        .map(|(id, outcome, _)| (id.clone(), (*outcome, Vec::new())))
         .collect();
     for (id, measured, at) in &ran.findings {
         if let (Some(entry), Measurement::Ratio(r)) = (gpurify.get_mut(id), measured) {
