@@ -15,7 +15,16 @@
 //!   ([`topology_rules_agree_with_a_search_of_the_extracted_graph`]);
 //! - a brute-force sweep of the voltage propagation rules, gate conditions
 //!   included, against `erc::voltage` on the same generated circuits
-//!   ([`voltage_propagation_agrees_with_a_naive_sweep_of_the_extracted_graph`]).
+//!   ([`voltage_propagation_agrees_with_a_naive_sweep_of_the_extracted_graph`]);
+//! - a naive closure over the grounds of generated circuits, merging any two
+//!   groups an anti-parallel diode pair joins, against `esd_ground_coupling`
+//!   ([`ground_coupling_agrees_with_a_closure_over_the_extracted_graph`]),
+//!   and with a fixpoint of the supplies' reach over device channels, against
+//!   `esd_cross_domain` ([`cross_domain_agrees_with_a_reach_fixpoint`]);
+//! - the same dense nodal solve over the stress network `esd_path`'s
+//!   definition draws from a generated pad, its supplies and the diode
+//!   clamps between them, against the path resistances a real run reports
+//!   ([`esd_paths_solve_as_a_dense_nodal_solve_does`]).
 //!
 //! The boards of `erc.rs` already judge the topology rules against a graph
 //! oracle on every small circuit, drawn and extracted, and `supply_short` on
@@ -30,9 +39,14 @@
     reason = "test sizes: counts far below 2^31"
 )]
 
+use crate::erc::{esd_intent, esd_layout, esd_path_deck, Diode, STRIP};
+use crate::harness::{Fixture, NONE};
 use gpurify::check::erc::facts::{classify_nets_into, IntentMap, NetFacts};
 use gpurify::check::erc::power::{self, EdgeKind, PowerGrid, PowerSolution, Solved};
 use gpurify::check::erc::rules::electrical::{check_ir_drop, IrDropTable};
+use gpurify::check::erc::rules::esd::{
+    check_esd_cross_domain, check_esd_ground_coupling, EsdCrossDomainTable, EsdGroundCouplingTable,
+};
 use gpurify::check::erc::rules::supply::{
     check_esd_topological, check_tie_high_low, EsdTopologicalTable, TieHighLowTable,
 };
@@ -45,6 +59,7 @@ use gpurify::check::erc::voltage::{propagate_into, NetVoltage};
 use gpurify::check::erc::{Design, Scratch};
 use gpurify::check::report::{Measurement, RuleRun, Severity, Violations};
 use gpurify::check::topology::{DeviceId, DeviceTable, NetId, NetTable, PortTable, TerminalRole};
+use gpurify::engine::run::Checks;
 use gpurify::geom::ops::Point;
 use gpurify::geom::{Dbu, LayerId, PolyId, Qty};
 use gpurify::ingest::deck::{DeviceKind, DeviceRecognition, DeviceValue};
@@ -572,6 +587,17 @@ fn random_circuit(rng: &mut Rng, strings: &mut StrTable) -> Circuit {
             }
         })
         .collect();
+    built(nets, devices, supplies, strings)
+}
+
+/// A netlist laid out, extracted and recognised: each device takes its
+/// spec's kind and model back, whatever recogniser bound it.
+fn built(
+    nets: u32,
+    devices: Vec<DeviceSpec>,
+    supplies: Vec<(u32, SupplyRole)>,
+    strings: &mut StrTable,
+) -> Circuit {
     let case = layout_from_netlist(
         &NetlistSpec { nets, devices },
         Floorplan::default(),
@@ -667,7 +693,31 @@ fn search(c: &Circuit, intent: &IntentMap, clamp: StrId) -> Expected {
         .collect();
 
     // esd_topological, every net a pad: from the pad, through any terminal of
-    // a clamp; onward only from a supply.
+    // a clamp; onward only from a supply. A diode clamp (pins 0 and 1, anode
+    // and cathode) between a supply and another net counts only when
+    // operation cannot forward-bias it: a ground at 0 mV, a power supply at
+    // 1800 mV, the other net strictly between. Between two supplies, or two
+    // other nets, it is taken as wired.
+    let level = |n: NetId| match role_of(n) {
+        Some(SupplyRole::Power) => Some(1800.0),
+        Some(SupplyRole::Ground) => Some(0.0),
+        None => None,
+    };
+    let forward = |d: &(StrId, Vec<(NetId, TerminalRole)>)| {
+        let pin = |k| {
+            d.1.iter()
+                .find(|t| t.1 == TerminalRole::Pin(k))
+                .map(|t| t.0)
+        };
+        let (Some(anode), Some(cathode)) = (pin(0), pin(1)) else {
+            return false;
+        };
+        match (level(anode), level(cathode)) {
+            (Some(_), Some(_)) | (None, None) => false,
+            (Some(a), None) => a > 0.0,
+            (None, Some(c)) => c <= 0.0,
+        }
+    };
     let esd = all()
         .filter_map(|pad| {
             let mut seen = vec![false; nets];
@@ -681,7 +731,7 @@ fn search(c: &Circuit, intent: &IntentMap, clamp: StrId) -> Expected {
                     None if net != pad => continue,
                     None => {}
                 }
-                for d in devices.iter().filter(|d| d.0 == clamp) {
+                for d in devices.iter().filter(|d| d.0 == clamp && !forward(d)) {
                     if !d.1.iter().any(|t| t.0 == net) {
                         continue;
                     }
@@ -1424,5 +1474,558 @@ fn voltage_propagation_agrees_with_a_naive_sweep_of_the_extracted_graph() {
     assert!(
         conditioned >= 20,
         "only {conditioned} circuits where a gate condition changed a reach"
+    );
+}
+
+// ------------------------------------------------------ ground coupling
+
+/// Two to five grounds and a power supply on eight to twelve nets, and
+/// diodes of model `clamp`: between two random grounds, an anti-parallel
+/// pair one time in two and a single diode otherwise, and a few more on
+/// random nets.
+fn coupling_circuit(rng: &mut Rng, strings: &mut StrTable) -> Circuit {
+    let nets = 8 + rng.below(5) as u32;
+    let grounds = 2 + rng.below(4) as u32;
+    let mut supplies: Vec<(u32, SupplyRole)> =
+        (0..grounds).map(|n| (n, SupplyRole::Ground)).collect();
+    supplies.push((grounds, SupplyRole::Power));
+    let diode = |a: u32, c: u32| DeviceSpec {
+        kind: DeviceKind::Diode,
+        model: "clamp".to_owned(),
+        terminals: vec![(TerminalRole::Pin(0), a), (TerminalRole::Pin(1), c)],
+    };
+    let mut devices = Vec::new();
+    for _ in 0..rng.below(u64::from(grounds) + 1) {
+        let (a, c) = (
+            rng.below(u64::from(grounds)) as u32,
+            rng.below(u64::from(grounds)) as u32,
+        );
+        devices.push(diode(a, c));
+        if rng.below(2) == 0 {
+            devices.push(diode(c, a));
+        }
+    }
+    for _ in 0..rng.below(4) {
+        let (a, c) = (
+            rng.below(u64::from(nets)) as u32,
+            rng.below(u64::from(nets)) as u32,
+        );
+        devices.push(diode(a, c));
+    }
+    if devices.is_empty() {
+        devices.push(diode(nets - 1, nets - 2));
+    }
+    built(nets, devices, supplies, strings)
+}
+
+/// Oracle: a naive closure over the extracted net graph. On three hundred
+/// generated circuits, the declared grounds start as groups of one, and any
+/// two groups merge while an anti-parallel pair of `clamp` diodes (anode on
+/// one ground and cathode on the other, and another the other way round, as
+/// extraction bound them) joins a member of each. `esd_ground_coupling`
+/// flags exactly each group but the one holding the lowest-numbered ground,
+/// at its lowest-numbered ground.
+#[test]
+fn ground_coupling_agrees_with_a_closure_over_the_extracted_graph() {
+    let mut rng = Rng::new(0xc6_0004);
+    let (mut flagged, mut coupled) = (0, 0);
+    for case in 0..300 {
+        let mut strings = StrTable::default();
+        let c = coupling_circuit(&mut rng, &mut strings);
+        let net = |n: u32| c.nets.net_of(c.case.expected_net_polys[n as usize][0]);
+        let supplies: Vec<(NetId, SupplyRole)> =
+            c.supplies.iter().map(|&(n, role)| (net(n), role)).collect();
+        let intent = intent_of(&supplies, &[]);
+        let clamp = strings.intern("clamp");
+        let id = strings.intern("rule");
+
+        let mut grounds: Vec<NetId> = supplies
+            .iter()
+            .filter(|s| s.1 == SupplyRole::Ground)
+            .map(|s| s.0)
+            .collect();
+        grounds.sort_unstable();
+        let diodes: Vec<(NetId, NetId)> = (0..c.devices.len())
+            .filter(|&d| c.devices.model[d] == clamp && c.devices.kind[d] == DeviceKind::Diode)
+            .map(|d| {
+                let (on, roles) = c.devices.terminals_of(DeviceId(d as u32));
+                let pin = |k| {
+                    on[roles
+                        .iter()
+                        .position(|&r| r == TerminalRole::Pin(k))
+                        .expect("a pin")]
+                };
+                (pin(0), pin(1))
+            })
+            .collect();
+        let group = ground_groups(&grounds, &diodes);
+        let (mut seen, mut want) = (Vec::new(), Vec::new());
+        for (i, &g) in group.iter().enumerate() {
+            if !seen.contains(&g) {
+                if !seen.is_empty() {
+                    want.push(grounds[i]);
+                }
+                seen.push(g);
+            }
+        }
+
+        let design = Design {
+            store: &c.case.store,
+            nets: &c.nets,
+            devices: &c.devices,
+        };
+        let (mut out, mut runs) = (Violations::default(), Vec::new());
+        check_esd_ground_coupling(
+            design,
+            &intent,
+            &EsdGroundCouplingTable {
+                head: head(id),
+                diode_start: vec![0, 1],
+                diode: vec![clamp],
+            },
+            &mut out,
+            &mut runs,
+        );
+        let mut got: Vec<NetId> = (0..out.len())
+            .map(|row| c.nets.net_of(out.get(row).shapes.0))
+            .collect();
+        got.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(
+            got, want,
+            "case {case}: grounds {grounds:?}, diodes {diodes:?}"
+        );
+        flagged += usize::from(!want.is_empty());
+        coupled += usize::from(seen.len() < grounds.len());
+    }
+    assert!(
+        flagged >= 20 && coupled >= 20,
+        "too few circuits with an uncoupled ground ({flagged}) or a coupled pair ({coupled})"
+    );
+}
+
+/// Ground groups of `grounds` (ascending): two merge while an anti-parallel
+/// pair of `diodes` `(anode, cathode)` joins a member of each. One label per
+/// ground, the lowest index of its group.
+fn ground_groups(grounds: &[NetId], diodes: &[(NetId, NetId)]) -> Vec<usize> {
+    let mut group: Vec<usize> = (0..grounds.len()).collect();
+    loop {
+        let mut merged = false;
+        for i in 0..grounds.len() {
+            for j in 0..grounds.len() {
+                let pair = diodes.contains(&(grounds[i], grounds[j]))
+                    && diodes.contains(&(grounds[j], grounds[i]));
+                if pair && group[i] != group[j] {
+                    let (old, new) = (group[i].max(group[j]), group[i].min(group[j]));
+                    for g in &mut group {
+                        if *g == old {
+                            *g = new;
+                        }
+                    }
+                    merged = true;
+                }
+            }
+        }
+        if !merged {
+            return group;
+        }
+    }
+}
+
+/// Two or three domains, each a power and a ground supply, on ten to
+/// fourteen nets; six to nineteen transistors with every terminal on any
+/// net; anti-parallel pairs and single diodes (`clamp`) between the grounds.
+fn domain_circuit(rng: &mut Rng, strings: &mut StrTable) -> (Circuit, Vec<u32>) {
+    let domains = 2 + rng.below(2) as u32;
+    let nets = 10 + rng.below(5) as u32;
+    let mut supplies = Vec::new();
+    let mut domain_of = Vec::new();
+    for d in 0..domains {
+        supplies.push((2 * d, SupplyRole::Power));
+        supplies.push((2 * d + 1, SupplyRole::Ground));
+        domain_of.extend([d, d]);
+    }
+    let on = |rng: &mut Rng| rng.below(u64::from(nets)) as u32;
+    let mut devices: Vec<DeviceSpec> = (0..6 + rng.below(14))
+        .map(|_| DeviceSpec {
+            kind: DeviceKind::Mos,
+            model: "mos".to_owned(),
+            terminals: vec![
+                (TerminalRole::Gate, on(rng)),
+                (TerminalRole::Source, on(rng)),
+                (TerminalRole::Drain, on(rng)),
+                (TerminalRole::Bulk, on(rng)),
+            ],
+        })
+        .collect();
+    let diode = |a: u32, c: u32| DeviceSpec {
+        kind: DeviceKind::Diode,
+        model: "clamp".to_owned(),
+        terminals: vec![(TerminalRole::Pin(0), a), (TerminalRole::Pin(1), c)],
+    };
+    // Each pair of grounds: an anti-parallel pair one time in two, a single
+    // diode one time in four, nothing otherwise.
+    for a in 0..domains {
+        for c in a + 1..domains {
+            let (ga, gc) = (2 * a + 1, 2 * c + 1);
+            match rng.below(4) {
+                0 => {}
+                1 => devices.push(diode(ga, gc)),
+                _ => {
+                    devices.push(diode(ga, gc));
+                    devices.push(diode(gc, ga));
+                }
+            }
+        }
+    }
+    (built(nets, devices, supplies, strings), domain_of)
+}
+
+/// Oracle: a fixpoint of the supplies' reach and a naive closure over the
+/// grounds. On six hundred generated multi-domain circuits, each net's
+/// power and ground domains are found from the rustdoc of `erc::voltage`
+/// (non-supply nets on one device's channel, a MOS source and drain or a
+/// diode's pins, share their reach, relabelled to a fixpoint; a supply on a
+/// channel reaches the other channel nets), and a receiver is a MOS whose
+/// gate sees a power domain its channel does not. `esd_cross_domain` flags
+/// exactly the receivers with a driver ground and a receiver ground of
+/// different domains in different groups.
+#[test]
+fn cross_domain_agrees_with_a_reach_fixpoint() {
+    let mut rng = Rng::new(0xc6_0005);
+    let (mut flagged, mut protected) = (0, 0);
+    for case in 0..600 {
+        let mut strings = StrTable::default();
+        let (c, domain_of) = domain_circuit(&mut rng, &mut strings);
+        let net = |n: u32| c.nets.net_of(c.case.expected_net_polys[n as usize][0]);
+        let mut rows: Vec<(NetId, SupplyRole, u32)> = c
+            .supplies
+            .iter()
+            .zip(&domain_of)
+            .map(|(&(n, role), &d)| (net(n), role, d))
+            .collect();
+        rows.sort_by_key(|r| r.0);
+        let intent = IntentMap {
+            declared: true,
+            supply_net: rows.iter().map(|r| r.0).collect(),
+            supply_role: rows.iter().map(|r| r.1).collect(),
+            supply_domain: rows.iter().map(|r| DomainId(r.2)).collect(),
+            supply_voltage: vec![Qty::new(1800.0); rows.len()],
+            limit_net: Vec::new(),
+            limit: Vec::new(),
+        };
+        let clamp = strings.intern("clamp");
+        let id = strings.intern("rule");
+
+        // Reach, from the definition.
+        let count = c.nets.net_count();
+        let supply = |n: NetId| rows.iter().find(|r| r.0 == n);
+        let terminals: Vec<(DeviceKind, Vec<(NetId, TerminalRole)>)> = (0..c.devices.len())
+            .map(|d| {
+                let (on, roles) = c.devices.terminals_of(DeviceId(d as u32));
+                (
+                    c.devices.kind[d],
+                    on.iter().copied().zip(roles.iter().copied()).collect(),
+                )
+            })
+            .collect();
+        let channel = |t: &[(NetId, TerminalRole)]| -> Vec<NetId> {
+            t.iter()
+                .filter(|x| !matches!(x.1, TerminalRole::Gate | TerminalRole::Bulk))
+                .map(|x| x.0)
+                .collect()
+        };
+        let mut comp: Vec<usize> = (0..count).collect();
+        loop {
+            let mut changed = false;
+            for (_, t) in &terminals {
+                let free: Vec<usize> = channel(t.as_slice())
+                    .into_iter()
+                    .filter(|&n| supply(n).is_none())
+                    .map(|n| n.0 as usize)
+                    .collect();
+                let low = free.iter().map(|&n| comp[n]).min();
+                for &n in &free {
+                    if let Some(low) = low.filter(|&low| low < comp[n]) {
+                        comp[n] = low;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut reach = vec![(0u64, 0u64); count];
+        for (_, t) in &terminals {
+            let nets = channel(t.as_slice());
+            for s in nets.iter().filter_map(|&n| supply(n)) {
+                let bit = 1u64 << s.2;
+                for &n in nets.iter().filter(|&&n| supply(n).is_none()) {
+                    let at = comp[n.0 as usize];
+                    match s.1 {
+                        SupplyRole::Power => reach[at].0 |= bit,
+                        SupplyRole::Ground => reach[at].1 |= bit,
+                    }
+                }
+            }
+        }
+        let masks = |n: NetId| match supply(n) {
+            Some(&(_, SupplyRole::Power, d)) => (1u64 << d, 0),
+            Some(&(_, SupplyRole::Ground, d)) => (0, 1u64 << d),
+            None => reach[comp[n.0 as usize]],
+        };
+        // Ground groups, then domains coupled when a ground of each shares one.
+        let grounds: Vec<NetId> = rows
+            .iter()
+            .filter(|r| r.1 == SupplyRole::Ground)
+            .map(|r| r.0)
+            .collect();
+        let diodes: Vec<(NetId, NetId)> = terminals
+            .iter()
+            .enumerate()
+            .filter(|(d, t)| t.0 == DeviceKind::Diode && c.devices.model[*d] == clamp)
+            .map(|(_, t)| {
+                let pin = |k| {
+                    t.1.iter()
+                        .find(|x| x.1 == TerminalRole::Pin(k))
+                        .expect("a pin")
+                        .0
+                };
+                (pin(0), pin(1))
+            })
+            .collect();
+        let group = ground_groups(&grounds, &diodes);
+        let ground_domain = |g: usize| supply(grounds[g]).expect("a ground").2;
+        let coupled = |a: u32, b: u32| {
+            a == b
+                || (0..grounds.len()).any(|i| {
+                    (0..grounds.len()).any(|j| {
+                        ground_domain(i) == a && ground_domain(j) == b && group[i] == group[j]
+                    })
+                })
+        };
+        let bits = |m: u64| (0..64u32).filter(move |&d| (m >> d) & 1 == 1);
+        let mut want: Vec<PolyId> = Vec::new();
+        for (d, t) in terminals.iter().enumerate() {
+            if t.0 != DeviceKind::Mos {
+                continue;
+            }
+            let at = |role| t.1.iter().find(|x| x.1 == role).map(|x| x.0);
+            let (Some(g), Some(s), Some(dr)) = (
+                at(TerminalRole::Gate),
+                at(TerminalRole::Source),
+                at(TerminalRole::Drain),
+            ) else {
+                continue;
+            };
+            let (gp, gg) = masks(g);
+            let (cp, cg) = (masks(s).0 | masks(dr).0, masks(s).1 | masks(dr).1);
+            if gp == 0 || cp == 0 || gp & !cp == 0 || gg == 0 || cg == 0 {
+                continue;
+            }
+            if bits(gg).all(|a| bits(cg).all(|b| coupled(a, b))) {
+                protected += 1;
+            } else {
+                want.push(c.devices.marker[d]);
+            }
+        }
+
+        let design = Design {
+            store: &c.case.store,
+            nets: &c.nets,
+            devices: &c.devices,
+        };
+        let mut voltage = NetVoltage::default();
+        propagate_into(&c.nets, &c.devices, &intent, &mut voltage);
+        let (mut out, mut runs) = (Violations::default(), Vec::new());
+        check_esd_cross_domain(
+            design,
+            &intent,
+            &voltage,
+            &EsdCrossDomainTable {
+                head: head(id),
+                diode_start: vec![0, 1],
+                diode: vec![clamp],
+                local_start: vec![0, 0],
+                local: Vec::new(),
+            },
+            &mut out,
+            &mut runs,
+        );
+        let mut got: Vec<PolyId> = (0..out.len()).map(|row| out.get(row).shapes.0).collect();
+        got.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(got, want, "case {case}");
+        flagged += usize::from(!want.is_empty());
+    }
+    assert!(
+        flagged >= 20 && protected >= 20,
+        "too few circuits with an unprotected receiver ({flagged}) or protected ones ({protected})"
+    );
+}
+
+// ------------------------------------------------------ ESD stress networks
+
+/// Sheet resistance of the ESD process's strips, Ω per square (pad, VSS,
+/// VDD), as `erc::ESD_PROCESS` states them.
+const ESD_SHEET: [f64; 3] = [0.0625, 0.125, 0.0625];
+/// The stress current `erc::esd_path_deck` forces, µA.
+const ESD_CURRENT: f64 = 1_330_000.0;
+
+/// The pad's path resistance to supply strip `target`, and the tolerance the
+/// engine's answer is held to, from the definition of `esd_path`: each
+/// reached strip a chain of resistors between its taps (its centre and every
+/// diode marker's centre on it), `sheet * Δx / w`; each diode 1 Ω between
+/// its two strips' taps; the current forced in at the pad's centre and out
+/// at the target's centre, held at 0 mV. The resistance is the pad's voltage
+/// over the current, from [`dense_nodal_solve`], whose tolerance follows the
+/// engine's stopping rule (every node starts at its nominal, 0 mV).
+fn esd_reference(
+    w: [i64; 3],
+    diodes: &[(Diode, i64)],
+    reached: [bool; 3],
+    target: usize,
+) -> (f64, f64) {
+    let mut taps: Vec<Vec<i64>> = (0..3).map(|_| vec![STRIP / 2]).collect();
+    for &(diode, x) in diodes {
+        let (_, a, b) = diode.marker();
+        taps[a].push(x);
+        taps[b].push(x);
+    }
+    for t in &mut taps {
+        t.sort_unstable();
+        t.dedup();
+    }
+    let mut grid = PowerGrid::default();
+    let mut first = [0u32; 3];
+    let edge = |grid: &mut PowerGrid, a: u32, b: u32, ohms: f64| {
+        grid.edge_from.push(a);
+        grid.edge_to.push(b);
+        grid.edge_resistance.push(Qty::new(ohms));
+        grid.edge_width.push(Dbu::new_unchecked(1));
+        grid.edge_length.push(Dbu::new_unchecked(1));
+        grid.edge_layer.push(LayerId(0));
+        grid.edge_kind.push(EdgeKind::Metal);
+    };
+    for k in (0..3).filter(|&k| reached[k]) {
+        first[k] = grid.node_count() as u32;
+        for &x in &taps[k] {
+            grid.node_net.push(NetId(k as u32));
+            grid.node_at.push(Point {
+                x: Dbu::new_unchecked(x),
+                y: Dbu::new_unchecked(0),
+            });
+            grid.node_poly.push(PolyId(0));
+            grid.node_layer.push(LayerId(0));
+            grid.node_nominal.push(Qty::new(0.0));
+            grid.node_load.push(Qty::new(0.0));
+        }
+        for (i, pair) in taps[k].windows(2).enumerate() {
+            let at = first[k] + i as u32;
+            let squares = (pair[1] - pair[0]) as f64 / w[k] as f64;
+            edge(&mut grid, at, at + 1, ESD_SHEET[k] * squares);
+        }
+    }
+    let node = |k: usize, x: i64| {
+        first[k] + taps[k].binary_search(&x).expect("every tap is listed") as u32
+    };
+    for &(diode, x) in diodes {
+        let (_, a, b) = diode.marker();
+        if reached[a] && reached[b] {
+            edge(&mut grid, node(a, x), node(b, x), 1.0);
+        }
+    }
+    let entry = node(0, STRIP / 2) as usize;
+    grid.node_load[entry] = Qty::new(-ESD_CURRENT);
+    grid.source_node.push(node(target, STRIP / 2));
+    grid.source_voltage.push(Qty::new(0.0));
+    let (v, tolerance) = dense_nodal_solve(&grid);
+    let ohms = v[entry] * 1000.0 / ESD_CURRENT;
+    (
+        ohms,
+        tolerance * 1000.0 / ESD_CURRENT + 4.0 * f64::EPSILON * ohms,
+    )
+}
+
+/// Oracle: a dense nodal solve. On forty generated layouts of `erc.rs`'s ESD
+/// process (strips 0.5 to 2 µm wide, one to five down, up and rail diodes at
+/// distinct places), `esd_path` reports one finding per supply the pad
+/// reaches through the diodes, and their resistances are those
+/// [`esd_reference`] derives, within its tolerance. The run is the real one:
+/// the layout written, read, extracted and checked.
+#[test]
+fn esd_paths_solve_as_a_dense_nodal_solve_does() {
+    let mut rng = Rng::new(0xc6_0003);
+    let mut pairs = 0;
+    let mut parallel = 0;
+    for case in 0..40 {
+        let w: [i64; 3] = std::array::from_fn(|_| [500, 1000, 2000][rng.below(3) as usize]);
+        let mut slots: Vec<i64> = (1..=19).map(|k| k * 1000).collect();
+        let mut diodes = Vec::new();
+        for _ in 0..=rng.below(5) {
+            let at = slots.swap_remove(rng.below(slots.len() as u64) as usize);
+            let kind = [Diode::Down, Diode::Up, Diode::Rail][rng.below(3) as usize];
+            diodes.push((kind, at));
+        }
+        // The pad, then every strip a diode joins to one already reached.
+        let mut reached = [true, false, false];
+        loop {
+            let mut grew = false;
+            for &(diode, _) in &diodes {
+                let (_, a, b) = diode.marker();
+                if reached[a] != reached[b] {
+                    reached[a] = true;
+                    reached[b] = true;
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+        let mut want: Vec<(f64, f64)> = (1..3)
+            .filter(|&k| reached[k])
+            .map(|k| esd_reference(w, &diodes, reached, k))
+            .collect();
+        want.sort_by(|a, b| a.0.total_cmp(&b.0));
+        parallel += usize::from(diodes.len() > 2 && want.len() == 2);
+
+        let mut fixture = Fixture::new(
+            &format!("esd_path/{case}"),
+            &["ERC-C6"],
+            &esd_path_deck(&[("max_resistance", "0.001ohm".to_owned())]),
+            Checks { erc: true, ..NONE },
+        )
+        .layout(esd_layout(w, &diodes));
+        fixture.intent = Some(esd_intent());
+        let ran = crate::harness::run(&fixture).unwrap_or_else(|why| panic!("case {case}: {why}"));
+        let mut got: Vec<f64> = ran
+            .findings
+            .iter()
+            .filter(|finding| finding.0 == "ep")
+            .map(|finding| match finding.1 {
+                Measurement::Resistance(ohms) => ohms.raw(),
+                other => panic!("case {case}: a path is a resistance, not {other:?}"),
+            })
+            .collect();
+        got.sort_by(f64::total_cmp);
+        assert_eq!(
+            got.len(),
+            want.len(),
+            "case {case}: {diodes:?} reaches {reached:?}; esd_path found {got:?}"
+        );
+        for (engine, (reference, tolerance)) in got.iter().zip(&want) {
+            assert!(
+                (engine - reference).abs() <= *tolerance,
+                "case {case}: {diodes:?}, widths {w:?}: esd_path measures {engine} Ω, the \
+                 dense solve {reference} Ω, more than {tolerance:e} Ω apart"
+            );
+        }
+        pairs += want.len();
+    }
+    assert!(
+        pairs >= 40 && parallel >= 5,
+        "too few pairs ({pairs}) or networks with parallel paths ({parallel})"
     );
 }

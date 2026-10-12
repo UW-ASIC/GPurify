@@ -1,4 +1,4 @@
-//! Electrical rules: all twenty-six ERC kinds, each against an oracle written
+//! Electrical rules: all thirty-seven ERC kinds, each against an oracle written
 //! here from its definition, never from a run.
 //!
 //! - Electrical kinds against closed forms worked out in this file: Ohm's law
@@ -10,8 +10,9 @@
 //!   self-heating and a lognormal wire (`em_thermal`), the inverse power law
 //!   times Arrhenius
 //!   (`reliability`), the antenna ratios of LEF/DEF 5.8 Appendix C and IHP
-//!   SG13G2 §7.1 (`antenna`, `antenna_electrical`), and window densities
-//!   (`density_cmp`). Each is swept below, at and above its limit.
+//!   SG13G2 §7.1 (`antenna`, `antenna_electrical`), window densities
+//!   (`density_cmp`), and series and parallel stress paths from a pad through
+//!   diode clamps (`esd_path`). Each is swept below, at and above its limit.
 //! - Topological and voltage kinds against a naive graph oracle ([`Board`]):
 //!   transistors are drawn as diffusion, poly and a channel marker, wired by
 //!   met1 risers to one met2 track per net, and every assignment of terminals
@@ -86,6 +87,22 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(topology_enumerations(depth));
     out.extend(topology_cases());
     out.extend(esd(depth));
+    out.extend(esd_wiring());
+    out.extend(esd_path());
+    out.extend(esd_clamp_size());
+    out.extend(esd_interconnect());
+    out.extend(esd_window());
+    out.extend(ring_injection());
+    out.extend(ground_coupling());
+    out.extend(cross_domain());
+    out.extend(guard_ring_bias());
+    out.extend(tie_area());
+    out.extend(guard_ring());
+    out.extend(forward_diode());
+    out.extend(conditional_tie());
+    out.extend(latchup_victim());
+    out.extend(esd_parasitic());
+    out.extend(esd_exposed());
     out.extend(supply_short(depth));
     out.extend(soft_connection());
     out.extend(floating_well(depth));
@@ -4541,6 +4558,1440 @@ fn esd(depth: Depth) -> Vec<Fixture> {
         &[],
         &[r#"{"net":"SIG","max_drop_mv":1}"#.to_owned()],
     ));
+    out.push(f);
+    out
+}
+
+// ---------------------------------------------------------------- ESD paths
+
+/// A pad and its two supplies as three strips on three conductors, joined only
+/// by diode clamps whose markers span two of them: the pad on `pad` (0.0625
+/// Ω/sq), the ground rail VSS on `met1` (0.125 Ω/sq), the power rail VDD on
+/// `met2` (0.0625 Ω/sq). Each recogniser fixes a diode's anode and cathode by
+/// layer: `mkd` a down diode (anode on the ground rail, cathode on the pad),
+/// `mku` an up diode (pad to power rail), `mkr` a rail diode (ground to
+/// power), and `mkx`, `mky` the up and rail diodes reversed. `padv` joins a
+/// supply's own pad pin to its rail.
+pub(crate) const ESD_PROCESS: &str = "grid 1nm
+layer pad = gds(1, 0)
+layer met1 = gds(2, 0)
+layer met2 = gds(3, 0)
+layer padv = gds(4, 0)
+layer padtxt = gds(1, 1)
+layer m1txt = gds(2, 1)
+layer m2txt = gds(3, 1)
+layer mkd = gds(10, 0)
+layer mku = gds(11, 0)
+layer mkr = gds(12, 0)
+layer mkx = gds(13, 0)
+layer mky = gds(14, 0)
+connect conductors [pad, met1, met2]
+connect touch_within_layer
+connect via padv [met1, pad]
+connect label padtxt names pad
+connect label m1txt names met1
+connect label m2txt names met2
+device diode mkd model \"down\" terminals [met1, pad]
+device diode mku model \"up\" terminals [pad, met2]
+device diode mkr model \"rail\" terminals [met1, met2]
+device diode mkx model \"up_rev\" terminals [met2, pad]
+device diode mky model \"rail_rev\" terminals [met2, met1]
+pex pad thickness 100nm height 500nm sheet 0.0625ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
+pex met1 thickness 100nm height 100nm sheet 0.125ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
+pex met2 thickness 100nm height 300nm sheet 0.0625ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
+pex padv thickness 100nm height 400nm sheet 0.25ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
+";
+
+/// Every diode model of [`ESD_PROCESS`], as a deck's `clamps` list.
+pub(crate) const ESD_CLAMPS: &str = "[\"down\", \"up\", \"rail\", \"up_rev\", \"rail_rev\"]";
+
+/// Every strip's length: x from 0 to 20 µm, tapped at its centre, 10 µm.
+pub(crate) const STRIP: i64 = 20_000;
+
+/// Where each strip's lower edge sits: the pad at 0, VSS 3 µm below, VDD 3 µm
+/// above.
+pub(crate) const STRIP_Y: [i64; 3] = [0, -3000, 3000];
+
+/// One diode clamp of [`ESD_PROCESS`] by its recogniser, which fixes the two
+/// strips it joins (anode first).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Diode {
+    /// `mkd`: VSS to the pad.
+    Down,
+    /// `mku`: the pad to VDD.
+    Up,
+    /// `mkr`: VSS to VDD.
+    Rail,
+    /// `mkx`: VDD to the pad, forward-biased in operation.
+    UpReversed,
+    /// `mky`: VDD to VSS, drawn the other way round; between two supplies, it
+    /// is taken as wired.
+    RailReversed,
+}
+
+impl Diode {
+    /// The marker layer, and the strips (0 pad, 1 VSS, 2 VDD) the marker spans.
+    pub(crate) fn marker(self) -> (&'static str, usize, usize) {
+        match self {
+            Diode::Down => ("mkd", 1, 0),
+            Diode::Up => ("mku", 0, 2),
+            Diode::Rail => ("mkr", 1, 2),
+            Diode::UpReversed => ("mkx", 0, 2),
+            Diode::RailReversed => ("mky", 1, 2),
+        }
+    }
+}
+
+/// The three strips, widths `w` (pad, VSS, VDD), labelled PAD, VSS and VDD,
+/// with a 200 nm diode marker centred on `x` for each `(diode, x)`, reaching
+/// 100 nm into both strips it spans.
+pub(crate) fn esd_layout(w: [i64; 3], diodes: &[(Diode, i64)]) -> Layout {
+    let mut l = Layout::default();
+    for (k, (layer, text, name)) in [
+        ("pad", "padtxt", "PAD"),
+        ("met1", "m1txt", "VSS"),
+        ("met2", "m2txt", "VDD"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        rect(&mut l, layer, (0, STRIP_Y[k], STRIP, STRIP_Y[k] + w[k]));
+        l = l.label(text, 100, STRIP_Y[k] + w[k] / 2, name);
+    }
+    for &(diode, x) in diodes {
+        let (layer, a, b) = diode.marker();
+        let (lo, hi) = if STRIP_Y[a] < STRIP_Y[b] {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        rect(
+            &mut l,
+            layer,
+            (
+                x - 100,
+                STRIP_Y[lo] + w[lo] - 100,
+                x + 100,
+                STRIP_Y[hi] + 100,
+            ),
+        );
+    }
+    l
+}
+
+/// VDD a 1.8 V power supply and VSS its ground.
+pub(crate) fn esd_intent() -> String {
+    intent(
+        &[("a", 1800.0)],
+        &[("VDD", "a", "power"), ("VSS", "a", "ground")],
+        &[],
+    )
+}
+
+/// `esd_topological` (ERC-C1) over diode clamps: a diode between the pad and
+/// a supply counts only wired reverse-biased in operation, the pad sitting
+/// between ground and power. An up diode drawn reversed (anode on VDD,
+/// cathode on the pad) conducts in operation, so it is no clamp: the pad
+/// reaches only what the rest reaches. A diode between two supplies is taken
+/// as wired either way round (a deck may model a rail clamp as one), so a
+/// reversed rail diode still completes the path.
+fn esd_wiring() -> Vec<Fixture> {
+    let deck = format!("{ESD_PROCESS}rule esd esd_topological(pad; clamps: {ESD_CLAMPS})\n");
+    let w = [1000; 3];
+    let mut out = Vec::new();
+    for (name, diodes, rails) in [
+        ("down_up", vec![(Diode::Down, 4000), (Diode::Up, 8000)], 2),
+        (
+            "down_up_reversed",
+            vec![(Diode::Down, 4000), (Diode::UpReversed, 8000)],
+            1,
+        ),
+        (
+            "down_up_reversed_rail",
+            vec![
+                (Diode::Down, 4000),
+                (Diode::UpReversed, 8000),
+                (Diode::Rail, 12_000),
+            ],
+            2,
+        ),
+        (
+            "down_up_reversed_rail_reversed",
+            vec![
+                (Diode::Down, 4000),
+                (Diode::UpReversed, 8000),
+                (Diode::RailReversed, 12_000),
+            ],
+            2,
+        ),
+        ("up_reversed", vec![(Diode::UpReversed, 8000)], 0),
+    ] {
+        let mut f = Fixture::new(&format!("erc/esd/wiring/{name}"), &["ERC-C1"], &deck, ERC)
+            .layout(esd_layout(w, &diodes))
+            .expect(Expect::rule(
+                "esd",
+                if rails < 2 {
+                    vec![count(rails)]
+                } else {
+                    Vec::new()
+                },
+            ));
+        f.intent = Some(esd_intent());
+        out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// The limits an `esd_path` row states, each `none` unless a fixture sets it.
+const ESD_LIMITS: [&str; 5] = [
+    "max_resistance",
+    "clamp_it2",
+    "max_density",
+    "max_current_per_cut",
+    "max_voltage",
+];
+
+/// A deck of [`ESD_PROCESS`] with one `esd_path` row `ep`, 1.33 A forced, each
+/// clamp 1 Ω, the limits in `limits` as `(name, value)` and every other one
+/// `none`.
+pub(crate) fn esd_path_deck(limits: &[(&str, String)]) -> String {
+    let stated: Vec<String> = ESD_LIMITS
+        .iter()
+        .map(|&name| {
+            let value = limits
+                .iter()
+                .find(|limit| limit.0 == name)
+                .map_or("none", |limit| limit.1.as_str());
+            format!("{name}: {value}")
+        })
+        .collect();
+    format!(
+        "{ESD_PROCESS}rule ep esd_path(pad; clamps: {ESD_CLAMPS}, current: 1330mA, \
+         clamp_resistance: 1ohm, {})\n",
+        stated.join(", ")
+    )
+}
+
+/// `esd_path` (ERC-C6) on closed forms. Each strip is tapped at its centre
+/// (10 µm, the entry on the pad and the feed point of a supply with no pin)
+/// and under each diode marker's centre; a strip of width `w` costs
+/// `sheet * Δx / w` between taps, a diode 1 Ω.
+///
+/// - One down diode at 2 µm, every strip 1 µm wide: the pad's 8 squares
+///   (0.5 Ω), the diode (1 Ω) and VSS's 8 squares (1 Ω) in series, 2.5 Ω
+///   from the pad to VSS. VDD is not reached, so it is no pair.
+/// - With an up diode drawn reversed beside it the answer is the same: a
+///   forward-biased diode carries nothing.
+/// - VSS given its own pin, a `pad` square centred at 18 µm joined to the
+///   rail by one `padv` cut (0.25 Ω) under its centre: VSS's run is now 16
+///   squares (2 Ω), 3.75 Ω in all. The pin is a pin of VSS too, stressed
+///   against VSS itself: 0 Ω.
+/// - A down diode at 2 µm, an up diode at 18 µm and a rail diode at 10 µm:
+///   to VSS, the 2.5 Ω path in parallel with the pad's other 0.5 Ω, the up
+///   diode, VDD's 8 squares (0.5 Ω) and the rail diode, 3 Ω: 15/11 Ω. To
+///   VDD, the 2 Ω path through the up diode in parallel with 3.5 Ω through
+///   the down and rail diodes: 14/11 Ω. The network has a loop, so its solve
+///   is iterative: the sweep (a part in a thousand) bounds the value, and
+///   the dense nodal oracle of `erc_reference` measures it.
+///
+/// The tree cases are exact in binary and swept below, at and above; a
+/// finding sits at the pad's first vertex, and is placed under every symmetry.
+fn esd_path() -> Vec<Fixture> {
+    let mut out = Vec::new();
+    let w = [1000; 3];
+    let pinned = {
+        let mut l = esd_layout(w, &[(Diode::Down, 2000)]);
+        rect(&mut l, "pad", (17_500, -3000, 18_500, -2000));
+        rect(&mut l, "padv", (17_900, -2600, 18_100, -2400));
+        l
+    };
+    let cases = [
+        ("series", esd_layout(w, &[(Diode::Down, 2000)]), vec![2.5]),
+        (
+            "reversed_up",
+            esd_layout(w, &[(Diode::Down, 2000), (Diode::UpReversed, 6000)]),
+            vec![2.5],
+        ),
+        ("pinned", pinned, vec![3.75]),
+        (
+            "parallel",
+            esd_layout(
+                w,
+                &[
+                    (Diode::Down, 2000),
+                    (Diode::Up, 18_000),
+                    (Diode::Rail, 10_000),
+                ],
+            ),
+            vec![15.0 / 11.0, 14.0 / 11.0],
+        ),
+    ];
+    let mut placed = Vec::new();
+    for (name, layout, values) in cases {
+        let exact = values.len() == 1;
+        for (k, &value) in values.iter().enumerate() {
+            let limits: Vec<f64> = if exact {
+                sweep(value).to_vec()
+            } else {
+                vec![value * 0.999, value * 1.001]
+            };
+            for limit in limits {
+                let flagged = values.iter().filter(|&&v| v > limit);
+                let findings: Vec<Finding> = if exact {
+                    flagged.map(|&v| ohms(v).at(0, 0)).collect()
+                } else {
+                    flagged.map(|_| Finding::any().at(0, 0)).collect()
+                };
+                let mut f = Fixture::new(
+                    &format!("erc/esd_path/{name}/{k}/{}", side(limit, value)),
+                    &["ERC-C6"],
+                    &esd_path_deck(&[("max_resistance", format!("{limit}ohm"))]),
+                    ERC,
+                )
+                .layout(layout.clone())
+                .expect(Expect::rule("ep", findings.clone()));
+                f.intent = Some(esd_intent());
+                if exact && !findings.is_empty() {
+                    let mut g = f.clone();
+                    g.name = format!("{}/placed", f.name);
+                    g.expect = vec![Expect::rule("ep", vec![ohms(value)])];
+                    placed.push(g);
+                }
+                out.push(f);
+            }
+        }
+    }
+    out.extend(every_placement(&placed));
+    // Without intent nothing names the rails.
+    out.push(
+        Fixture::new(
+            "erc/esd_path/no_intent",
+            &["ERC-C6"],
+            &esd_path_deck(&[("max_resistance", "1ohm".to_owned())]),
+            ERC,
+        )
+        .layout(esd_layout(w, &[(Diode::Down, 2000)]))
+        .expect(Expect::outcome("ep", Want::Skipped)),
+    );
+    out
+}
+
+/// `esd_path`'s clamp sizing (ERC-C2): a clamp carries its share of the
+/// 1.33 A and may carry `clamp_it2` times its size, a diode's perimeter. Each
+/// diode marker here is 200 nm by 2.2 µm, 4.8 µm round.
+///
+/// - One down diode carries all of it: rated below 1.33 A / 4.8 µm it is
+///   flagged, measuring 1.33 A at its marker's corner.
+/// - Two down diodes placed symmetrically about the pad's centre and VSS's
+///   feed point carry half each: flagged only below 0.665 A / 4.8 µm. Their
+///   network is a loop, so only the sweep (a part in a thousand) bounds the
+///   share.
+fn esd_clamp_size() -> Vec<Fixture> {
+    let mut out = Vec::new();
+    let w = [1000; 3];
+    let perimeter_m = 4.8e-6;
+    let mut placed = Vec::new();
+    for (name, diodes, share) in [
+        ("whole", vec![(Diode::Down, 2000)], 1.33),
+        (
+            "shared",
+            vec![(Diode::Down, 6000), (Diode::Down, 14_000)],
+            0.665,
+        ),
+    ] {
+        let rated = share / perimeter_m;
+        for it2 in [rated * 0.999, rated * 1.001] {
+            let flagged = it2 < rated;
+            let findings: Vec<Finding> = if !flagged {
+                Vec::new()
+            } else if diodes.len() == 1 {
+                vec![microamps(share * 1e6).at(1900, -2100)]
+            } else {
+                diodes.iter().map(|_| Finding::any()).collect()
+            };
+            let mut f = Fixture::new(
+                &format!("erc/esd_path/clamp_it2/{name}/{}", side(it2, rated)),
+                &["ERC-C2"],
+                &esd_path_deck(&[("clamp_it2", format!("{it2}A/m"))]),
+                ERC,
+            )
+            .layout(esd_layout(w, &diodes))
+            .expect(Expect::rule("ep", findings.clone()));
+            f.intent = Some(esd_intent());
+            if flagged && diodes.len() == 1 {
+                let mut g = f.clone();
+                g.name = format!("{}/placed", f.name);
+                g.expect = vec![Expect::rule("ep", vec![microamps(share * 1e6)])];
+                placed.push(g);
+            }
+            out.push(f);
+        }
+    }
+    out.extend(every_placement(&placed));
+    out
+}
+
+/// `esd_path`'s pulse rating of the path's wires and cuts (ERC-C7): the
+/// whole 1.33 A runs through the series path of one down diode, so each
+/// segment carries it. The pad strip is 1 µm wide (1.33 A/µm), VSS 2 µm
+/// (0.665 A/µm): a `max_density` swept around each flags the pad's segment
+/// below 1.33 A/µm and VSS's too below 0.665 A/µm, each at its segment's
+/// first tap (the diode's, at 2 µm, on the strip's centre line). VSS given a
+/// pin through one `padv` cut: the cut carries all of it, flagged below
+/// 1.33 A per cut.
+fn esd_interconnect() -> Vec<Fixture> {
+    let mut out = Vec::new();
+    let layout = esd_layout([1000, 2000, 1000], &[(Diode::Down, 2000)]);
+    let pad = microamps(1.33e6).at(2000, 500);
+    let vss = microamps(1.33e6).at(2000, -2000);
+    let mut placed = Vec::new();
+    for (k, (per_um, flagged)) in [(1.33e6, vec![pad]), (0.665e6, vec![pad, vss])]
+        .into_iter()
+        .enumerate()
+    {
+        for density in [per_um * 0.999, per_um * 1.001] {
+            let findings: Vec<Finding> = if density < per_um {
+                flagged.clone()
+            } else {
+                flagged[..k].to_vec()
+            };
+            let mut f = Fixture::new(
+                &format!("erc/esd_path/max_density/{k}/{}", side(density, per_um)),
+                &["ERC-C7"],
+                &esd_path_deck(&[("max_density", format!("{density}A/m"))]),
+                ERC,
+            )
+            .layout(layout.clone())
+            .expect(Expect::rule("ep", findings.clone()));
+            f.intent = Some(esd_intent());
+            let mut g = f.clone();
+            g.name = format!("{}/placed", f.name);
+            g.expect = vec![Expect::rule(
+                "ep",
+                findings.iter().map(|_| microamps(1.33e6)).collect(),
+            )];
+            placed.push(g);
+            out.push(f);
+        }
+    }
+    out.extend(every_placement(&placed));
+    let pinned = {
+        let mut l = esd_layout([1000; 3], &[(Diode::Down, 2000)]);
+        rect(&mut l, "pad", (17_500, -3000, 18_500, -2000));
+        rect(&mut l, "padv", (17_900, -2600, 18_100, -2400));
+        l
+    };
+    for per_cut in [1.33e6 * 0.999, 1.33e6 * 1.001] {
+        let mut f = Fixture::new(
+            &format!("erc/esd_path/per_cut/{}", side(per_cut, 1.33e6)),
+            &["ERC-C7"],
+            &esd_path_deck(&[("max_current_per_cut", format!("{per_cut}uA"))]),
+            ERC,
+        )
+        .layout(pinned.clone())
+        .expect(Expect::rule(
+            "ep",
+            if per_cut < 1.33e6 {
+                vec![microamps(1.33e6)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(esd_intent());
+        out.push(f);
+    }
+    out
+}
+
+/// `esd_path`'s voltage window (ERC-C8): the pin's rise under the forced
+/// current, its path resistance times the current. One down diode in series,
+/// 2.5 Ω, so 1.33 A raises the pad to 3325 mV exactly (binary-exact on the
+/// tree), swept below, at and above, at the pad's first vertex and placed.
+/// With the up diode, rail diode and a second supply the pin rises to
+/// 1.33 A times 15/11 Ω toward VSS and 14/11 Ω toward VDD: a limit between
+/// the two flags only the VSS pair.
+fn esd_window() -> Vec<Fixture> {
+    let mut out = Vec::new();
+    let w = [1000; 3];
+    let rise = 3325.0;
+    let mut placed = Vec::new();
+    for limit in sweep(rise) {
+        let mut f = Fixture::new(
+            &format!("erc/esd_path/max_voltage/series/{}", side(limit, rise)),
+            &["ERC-C8"],
+            &esd_path_deck(&[("max_voltage", format!("{limit}mV"))]),
+            ERC,
+        )
+        .layout(esd_layout(w, &[(Diode::Down, 2000)]))
+        .expect(Expect::rule(
+            "ep",
+            if limit < rise {
+                vec![millivolts(rise).at(0, 0)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(esd_intent());
+        if limit < rise {
+            let mut g = f.clone();
+            g.name = format!("{}/placed", f.name);
+            g.expect = vec![Expect::rule("ep", vec![millivolts(rise)])];
+            placed.push(g);
+        }
+        out.push(f);
+    }
+    out.extend(every_placement(&placed));
+    let (to_vss, to_vdd) = (1330.0 * 15.0 / 11.0, 1330.0 * 14.0 / 11.0);
+    let mut f = Fixture::new(
+        "erc/esd_path/max_voltage/parallel",
+        &["ERC-C8"],
+        &esd_path_deck(&[(
+            "max_voltage",
+            format!("{}mV", f64::midpoint(to_vss, to_vdd)),
+        )]),
+        ERC,
+    )
+    .layout(esd_layout(
+        w,
+        &[
+            (Diode::Down, 2000),
+            (Diode::Up, 18_000),
+            (Diode::Rail, 10_000),
+        ],
+    ))
+    .expect(Expect::rule("ep", vec![Finding::any().at(0, 0)]));
+    f.intent = Some(esd_intent());
+    out.push(f);
+    out
+}
+
+/// [`TOPO_PROCESS`] with a diode recogniser `mkdi` (model `dio`): its anode
+/// the first diffusion under the marker, its cathode the second; and a
+/// resistor recogniser `mkres` (model `rs`) drawn the same way.
+fn diode_process() -> String {
+    format!(
+        "{TOPO_PROCESS}layer mkdi = gds(27, 0)\n\
+         layer mkres = gds(28, 0)\n\
+         device diode mkdi model \"dio\" terminals [diff, diff]\n\
+         device resistor mkres model \"rs\" terminals [diff, diff]\n"
+    )
+}
+
+/// Transistors and diodes on any number of nets, drawn as [`Board`] draws its
+/// transistors: one met2 track per net, labelled `labels[net]`, from x -1 µm
+/// to past the last column (20 µm at least). A diode
+/// `(anode, cathode)` is two diffusion boxes, the anode's drawn first, under
+/// one `mkdi` marker, each wired to its net's track by a riser.
+fn circuit(labels: &[&str], devs: &[Dev], diodes: &[(usize, usize)]) -> Layout {
+    let pins: Vec<(&str, usize, usize)> = diodes.iter().map(|&(a, c)| ("mkdi", a, c)).collect();
+    circuit_pins(labels, devs, &pins)
+}
+
+/// [`circuit`] with two-pin devices of any recogniser: `(marker, first pin's
+/// net, second pin's net)`, the first pin's diffusion drawn first.
+fn circuit_pins(labels: &[&str], devs: &[Dev], pins: &[(&str, usize, usize)]) -> Layout {
+    let mut l = Layout::default();
+    for (i, dv) in devs.iter().enumerate() {
+        let x0 = i as i64 * PITCH;
+        rect(&mut l, "diff", (x0, 0, x0 + 1000, 1000));
+        rect(&mut l, "diff", (x0 + 1200, 0, x0 + 2200, 1000));
+        rect(&mut l, "poly", (x0 + 1000, 0, x0 + 1200, 1600));
+        rect(&mut l, dv.model.marker(), (x0 + 1000, 0, x0 + 1200, 1000));
+        riser(&mut l, x0 + 400, 400, dv.s);
+        riser(&mut l, x0 + 1600, 400, dv.d);
+        riser(&mut l, x0 + 1000, 1400, dv.g);
+    }
+    for (j, &(marker, anode, cathode)) in pins.iter().enumerate() {
+        let x0 = (devs.len() + j) as i64 * PITCH;
+        rect(&mut l, "diff", (x0, 0, x0 + 1000, 1000));
+        rect(&mut l, "diff", (x0 + 1200, 0, x0 + 2200, 1000));
+        rect(&mut l, marker, (x0 + 900, 400, x0 + 1300, 600));
+        riser(&mut l, x0 + 400, 400, anode);
+        riser(&mut l, x0 + 1600, 400, cathode);
+    }
+    // At least 20 µm, so a riser beside the columns still lands on its track.
+    let right = ((devs.len() + pins.len()) as i64 * PITCH + 1000).max(20_000);
+    for (net, name) in labels.iter().enumerate() {
+        let ty = track_y(net);
+        rect(&mut l, "met2", (-1000, ty, right, ty + TRACK_H));
+        l = l.label("m2txt", -900, ty + 200, name);
+    }
+    l
+}
+
+/// Nets of the domain fixtures: two 1.8 V domains and a third ground.
+const DOMAIN_NETS: [&str; 7] = ["VDD1", "VSS1", "VDD2", "VSS2", "VSS3", "SIG", "OUT"];
+
+/// VDD1 and VSS1 are domain `d1`, VDD2 and VSS2 domain `d2`, VSS3 the only
+/// supply of `d3`, each at 1.8 V.
+fn domain_intent() -> String {
+    intent(
+        &[("d1", 1800.0), ("d2", 1800.0), ("d3", 1800.0)],
+        &[
+            ("VDD1", "d1", "power"),
+            ("VSS1", "d1", "ground"),
+            ("VDD2", "d2", "power"),
+            ("VSS2", "d2", "ground"),
+            ("VSS3", "d3", "ground"),
+        ],
+        &[],
+    )
+}
+
+/// `esd_ground_coupling` (ERC-C5) over the three grounds VSS1, VSS2, VSS3:
+/// the groups an anti-parallel pair of `dio` diodes (one each way) joins,
+/// and one finding per group but one. A single diode couples nothing, a
+/// chain of pairs couples all three, and a pair between a ground and a power
+/// supply couples no ground.
+fn ground_coupling() -> Vec<Fixture> {
+    let (vdd2, vss1, vss2, vss3) = (2, 1, 3, 4);
+    let deck = format!(
+        "{}rule gc esd_ground_coupling(; diodes: [\"dio\"])\n",
+        diode_process()
+    );
+    let mut out = Vec::new();
+    for (name, diodes, findings) in [
+        ("none", vec![], 2),
+        ("one_way", vec![(vss1, vss2)], 2),
+        ("pair", vec![(vss1, vss2), (vss2, vss1)], 1),
+        (
+            "chain",
+            vec![(vss1, vss2), (vss2, vss1), (vss3, vss2), (vss2, vss3)],
+            0,
+        ),
+        (
+            "pair_to_power",
+            vec![(vss1, vss2), (vss2, vss1), (vss3, vdd2), (vdd2, vss3)],
+            1,
+        ),
+    ] {
+        let mut f = Fixture::new(
+            &format!("erc/esd_ground_coupling/{name}"),
+            &["ERC-C5"],
+            &deck,
+            ERC,
+        )
+        .layout(circuit(&DOMAIN_NETS, &[], &diodes))
+        .expect(Expect::rule(
+            "gc",
+            (0..findings).map(|_| count(0)).collect(),
+        ));
+        f.intent = Some(domain_intent());
+        out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// `esd_cross_domain` (ERC-C4), the pseudocode of Hogan 2012 §II: an
+/// inverter in domain `d1` (VDD1, VSS1) drives SIG, the gate of an inverter
+/// in `d2` (VDD2, VSS2) whose output is OUT. Both receiver transistors see
+/// `d1` at the gate and `d2` on the channel: "IF different power domains
+/// THEN check for anti-parallel diodes", between VSS1 and VSS2. Unprotected,
+/// both are flagged; with the pair, neither; with one diode, both. An
+/// inverter whose gate SIG is reached by its own domain is no receiver.
+fn cross_domain() -> Vec<Fixture> {
+    let (vdd1, vss1, vdd2, vss2, sig, out_net, vss3) = (0, 1, 2, 3, 5, 6, 4);
+    let deck = format!(
+        "{}rule xd esd_cross_domain(; diodes: [\"dio\"], local: none)\n",
+        diode_process()
+    );
+    // The driver's input sits on VSS3, a supply of its own domain, so only
+    // SIG and OUT cross.
+    let devs = [
+        dev(Model::Pfet, vss3, vdd1, sig),
+        dev(Model::Nfet, vss3, vss1, sig),
+        dev(Model::Pfet, sig, vdd2, out_net),
+        dev(Model::Nfet, sig, vss2, out_net),
+    ];
+    let mut out = Vec::new();
+    for (name, diodes, findings) in [
+        ("unprotected", vec![], 2),
+        ("one_diode", vec![(vss1, vss2)], 2),
+        ("pair", vec![(vss1, vss2), (vss2, vss1)], 0),
+        (
+            "pair_through_vss3",
+            vec![(vss1, vss3), (vss3, vss1), (vss3, vss2), (vss2, vss3)],
+            0,
+        ),
+    ] {
+        let mut f = Fixture::new(
+            &format!("erc/esd_cross_domain/{name}"),
+            &["ERC-C4"],
+            &deck,
+            ERC,
+        )
+        .layout(circuit(&DOMAIN_NETS, &devs, &diodes))
+        .expect(Expect::rule(
+            "xd",
+            (0..findings).map(|_| count(0)).collect(),
+        ));
+        f.intent = Some(domain_intent());
+        out.extend(every_placement(&[f]));
+    }
+    // Both inverters in one domain: no receiver crosses.
+    let same = [
+        dev(Model::Pfet, vss3, vdd1, sig),
+        dev(Model::Nfet, vss3, vss1, sig),
+        dev(Model::Pfet, sig, vdd1, out_net),
+        dev(Model::Nfet, sig, vss1, out_net),
+    ];
+    let mut f = Fixture::new("erc/esd_cross_domain/one_domain", &["ERC-C4"], &deck, ERC)
+        .layout(circuit(&DOMAIN_NETS, &same, &[]))
+        .expect(Expect::clean("xd"));
+    f.intent = Some(domain_intent());
+    out.push(f);
+    out.extend(local_clamp());
+    out
+}
+
+/// `esd_cross_domain`'s local clamp (ERC-C9): Hogan's crossing with its
+/// grounds coupled, and `local: ["dio"]`. With no diode at SIG, both receiver
+/// transistors lack one; a `dio` from VSS2 (the receivers' own ground) to SIG
+/// clamps both; one from VSS1 (the driver's ground) clamps neither.
+fn local_clamp() -> Vec<Fixture> {
+    let (vdd1, vss1, vdd2, vss2, vss3, sig, out_net) = (0, 1, 2, 3, 4, 5, 6);
+    let deck = format!(
+        "{}rule xd esd_cross_domain(; diodes: [\"dio\"], local: [\"dio\"])\n",
+        diode_process()
+    );
+    let devs = [
+        dev(Model::Pfet, vss3, vdd1, sig),
+        dev(Model::Nfet, vss3, vss1, sig),
+        dev(Model::Pfet, sig, vdd2, out_net),
+        dev(Model::Nfet, sig, vss2, out_net),
+    ];
+    let pair = [(vss1, vss2), (vss2, vss1)];
+    let mut out = Vec::new();
+    for (name, local, findings) in [
+        ("none", None, 2),
+        ("own_ground", Some((vss2, sig)), 0),
+        ("driver_ground", Some((vss1, sig)), 2),
+    ] {
+        let mut diodes = pair.to_vec();
+        diodes.extend(local);
+        let mut f = Fixture::new(
+            &format!("erc/esd_cross_domain/local/{name}"),
+            &["ERC-C9"],
+            &deck,
+            ERC,
+        )
+        .layout(circuit(&DOMAIN_NETS, &devs, &diodes))
+        .expect(Expect::rule(
+            "xd",
+            (0..findings).map(|_| count(0)).collect(),
+        ));
+        f.intent = Some(domain_intent());
+        out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// `guard_ring_bias` (ERC-D3): a guard ring drawn on `layer` as four
+/// abutting bars round a 1.2 µm hole (one net), tied by one riser to the
+/// track of `net`, beside the domain nets' tracks.
+fn ring_on(layer: &str, net: usize) -> Layout {
+    let mut l = circuit(&DOMAIN_NETS, &[], &[]);
+    for bar in [
+        (-1000, 0, 1000, 400),
+        (-1000, 1600, 1000, 2000),
+        (-1000, 400, -600, 1600),
+        (600, 400, 1000, 1600),
+    ] {
+        rect(&mut l, layer, bar);
+    }
+    riser(&mut l, -200, 1600, net);
+    l
+}
+
+/// `guard_ring_bias` (ERC-D3, GF180MCU LU.9, LU.10, IO.1 (a2), IO.3 (a2)):
+/// an n-tap ring must sit on the most positive supply, a p-tap ring on a
+/// ground. Each ring is four polygons, so a ring on the wrong net is four
+/// findings: on a supply, its voltage against the one it needs; off every
+/// supply, a count of 0. With domain `d2` at 3.3 V, VDD1 (1.8 V) is no longer
+/// the most positive supply.
+fn guard_ring_bias() -> Vec<Fixture> {
+    let (vdd1, vss1, vdd2, vss2, sig) = (0, 1, 2, 3, 5);
+    let deck = format!(
+        "{}rule gn guard_ring_bias(ntap; power: true)\n\
+         rule gp guard_ring_bias(ptap; power: false)\n",
+        diode_process()
+    );
+    let high = intent(
+        &[("d1", 1800.0), ("d2", 3300.0), ("d3", 1800.0)],
+        &[
+            ("VDD1", "d1", "power"),
+            ("VSS1", "d1", "ground"),
+            ("VDD2", "d2", "power"),
+            ("VSS2", "d2", "ground"),
+            ("VSS3", "d3", "ground"),
+        ],
+        &[],
+    );
+    let four = |f: Finding| vec![f; 4];
+    let cases = [
+        ("n_on_vdd1", "ntap", vdd1, domain_intent(), "gn", Vec::new()),
+        (
+            "n_on_vss1",
+            "ntap",
+            vss1,
+            domain_intent(),
+            "gn",
+            four(millivolts(0.0)),
+        ),
+        (
+            "n_on_sig",
+            "ntap",
+            sig,
+            domain_intent(),
+            "gn",
+            four(count(0)),
+        ),
+        (
+            "n_on_vdd1_low",
+            "ntap",
+            vdd1,
+            high.clone(),
+            "gn",
+            four(millivolts(1800.0)),
+        ),
+        ("n_on_vdd2_high", "ntap", vdd2, high, "gn", Vec::new()),
+        ("p_on_vss2", "ptap", vss2, domain_intent(), "gp", Vec::new()),
+        (
+            "p_on_vdd2",
+            "ptap",
+            vdd2,
+            domain_intent(),
+            "gp",
+            four(millivolts(1800.0)),
+        ),
+        (
+            "p_on_sig",
+            "ptap",
+            sig,
+            domain_intent(),
+            "gp",
+            four(count(0)),
+        ),
+    ];
+    let mut out = Vec::new();
+    for (name, layer, net, intent_text, rule, findings) in cases {
+        let other = if rule == "gn" { "gp" } else { "gn" };
+        let mut f = Fixture::new(
+            &format!("erc/guard_ring_bias/{name}"),
+            &["ERC-D3"],
+            &deck,
+            ERC,
+        )
+        .layout(ring_on(layer, net))
+        .expect(Expect::rule(rule, findings))
+        .expect(Expect::clean(other));
+        f.intent = Some(intent_text);
+        out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// `tie_area` (ERC-D1b, GF180MCU LU.7 and IO.2/IO.4) on marker layers: a
+/// 10 µm well holds two 1 × 2 µm gates (4 µm² of channel) and three 200 nm
+/// contacts (0.12 µm²); a fourth contact half outside the well adds only its
+/// inside half (0.02 µm²), and two overlapping contacts their union (0.06
+/// µm²): 0.2 µm², a ratio of 5% exactly, swept below, at and above. A second well holds a gate and no contact (ratio 0), a third a
+/// contact and no gate (not examined). A guard ring 1 µm wide round a 4 µm
+/// hole (20 µm² of ring) with ten 200 nm contacts on it: 2%, against IO.2's
+/// 5%.
+fn tie_area() -> Vec<Fixture> {
+    let deck = |min: f64| {
+        format!(
+            "grid 1nm\nlayer well = gds(1, 0)\nlayer cont = gds(2, 0)\nlayer gate = gds(3, 0)\n\
+             layer ring = gds(4, 0)\n\
+             rule ta tie_area(well, cont, gate; min_ratio: {min})\n\
+             rule tr tie_area(ring, cont, ring; min_ratio: 5%)\n"
+        )
+    };
+    let mut l = Layout::default();
+    rect(&mut l, "well", (0, 0, 10_000, 10_000));
+    rect(&mut l, "gate", (1000, 1000, 2000, 3000));
+    rect(&mut l, "gate", (4000, 1000, 5000, 3000));
+    for x in [6000, 7000, 8000] {
+        rect(&mut l, "cont", (x, 6000, x + 200, 6200));
+    }
+    // Half outside the well, and an overlapping pair whose union is 300 x 200.
+    rect(&mut l, "cont", (9900, 8000, 10_100, 8200));
+    rect(&mut l, "cont", (2000, 8000, 2200, 8200));
+    rect(&mut l, "cont", (2100, 8000, 2300, 8200));
+    // 0.12 + 0.02 + 0.06 = 0.2 µm² against 4 µm²: 5%.
+    let value = 0.05;
+    rect(&mut l, "well", (20_000, 0, 30_000, 10_000));
+    rect(&mut l, "gate", (21_000, 1000, 22_000, 3000));
+    rect(&mut l, "well", (40_000, 0, 50_000, 10_000));
+    rect(&mut l, "cont", (41_000, 1000, 41_200, 1200));
+    for bar in [
+        (60_000, 0, 66_000, 1000),
+        (60_000, 5000, 66_000, 6000),
+        (60_000, 1000, 61_000, 5000),
+        (65_000, 1000, 66_000, 5000),
+    ] {
+        rect(&mut l, "ring", bar);
+    }
+    for k in 0..10 {
+        let x = 60_100 + 500 * k;
+        rect(&mut l, "cont", (x, 200, x + 200, 400));
+    }
+    let mut out = Vec::new();
+    for min_ratio in sweep(value) {
+        let mut findings = vec![ratio(0.0)];
+        if min_ratio > value {
+            findings.push(ratio(value));
+        }
+        let f = Fixture::new(
+            &format!("erc/tie_area/{}", side(min_ratio, value)),
+            &["ERC-D1b"],
+            &deck(min_ratio),
+            ERC,
+        )
+        .layout(l.clone())
+        .expect(Expect::rule("ta", findings))
+        .expect(Expect::rule("tr", vec![ratio(0.02)]));
+        out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// A closed ring of band `band` on layer `layer` round the box `hole`: four
+/// bars that merge into one figure with that hole.
+fn ring_round(l: &mut Layout, layer: &str, hole: Rect, band: i64) {
+    let (x0, y0, x1, y1) = hole;
+    for bar in [
+        (x0 - band, y0 - band, x1 + band, y0),
+        (x0 - band, y1, x1 + band, y1 + band),
+        (x0 - band, y0, x0, y1),
+        (x1, y0, x1 + band, y1),
+    ] {
+        rect(l, layer, bar);
+    }
+}
+
+/// `guard_ring` (ERC-D2, GF180MCU IO.1 (a2) and IO.2): a 2 × 1 µm diffusion
+/// wired by a riser to a net carrying a pad must sit in a closed `ring` no
+/// more than 15 µm from it on any side and at least 2 µm wide. The ring's
+/// hole is the diffusion grown by `gap` on every side, so the space is `gap`;
+/// both swept a nanometre either side. A ring with one bar missing (a C)
+/// surrounds nothing; a diffusion on a net with no pad is not selected.
+fn guard_ring() -> Vec<Fixture> {
+    let (pad_net, other) = (5, 6);
+    let deck = format!(
+        "{}rule gr guard_ring(diff, ring; max_space: 15um, min_width: 2um, pad: pad, \
+         near: none, within: none)\n",
+        diode_process()
+    );
+    let target: Rect = (0, -6000, 2000, -5000);
+    let board = |net: usize, gap: i64, band: i64, closed: bool| {
+        let mut l = circuit(&DOMAIN_NETS, &[], &[]);
+        rect(&mut l, "diff", target);
+        riser(&mut l, 900, -5900, net);
+        let ty = track_y(pad_net);
+        rect(&mut l, "pad", (-1000, ty, -400, ty + TRACK_H));
+        rect(&mut l, "padv", (-800, ty + 150, -600, ty + 250));
+        let (x0, y0, x1, y1) = target;
+        let hole = (x0 - gap, y0 - gap, x1 + gap, y1 + gap);
+        if closed {
+            ring_round(&mut l, "ring", hole, band);
+        } else {
+            // The right bar left out: a C open on one side.
+            let (hx0, hy0, hx1, hy1) = hole;
+            rect(&mut l, "ring", (hx0 - band, hy0 - band, hx1 + band, hy0));
+            rect(&mut l, "ring", (hx0 - band, hy1, hx1 + band, hy1 + band));
+            rect(&mut l, "ring", (hx0 - band, hy0, hx0, hy1));
+        }
+        l
+    };
+    let mut cases: Vec<(String, Layout, Vec<Finding>)> = Vec::new();
+    for gap in [14_999, 15_000, 15_001] {
+        cases.push((
+            format!("space/{}", side(15_000.0, gap as f64)),
+            board(pad_net, gap, 2000, true),
+            if gap > 15_000 {
+                vec![length(gap)]
+            } else {
+                Vec::new()
+            },
+        ));
+    }
+    for band in [1999, 2000, 2001] {
+        cases.push((
+            format!("width/{}", side(2000.0, band as f64)),
+            board(pad_net, 10_000, band, true),
+            if band < 2000 {
+                vec![length(band)]
+            } else {
+                Vec::new()
+            },
+        ));
+    }
+    cases.push((
+        "open_ring".to_owned(),
+        board(pad_net, 10_000, 2000, false),
+        vec![count(0)],
+    ));
+    cases.push((
+        "no_pad".to_owned(),
+        board(other, 10_000, 2000, false),
+        Vec::new(),
+    ));
+    let mut out = Vec::new();
+    for (name, layout, findings) in cases {
+        let f = Fixture::new(&format!("erc/guard_ring/{name}"), &["ERC-D2"], &deck, ERC)
+            .layout(layout)
+            .expect(Expect::rule("gr", findings));
+        out.extend(every_placement(&[f]));
+    }
+    out.extend(native_ring());
+    out.extend(double_ring());
+    out
+}
+
+/// `guard_ring` for GF180MCU §14.3.4 (ERC-D6): a high-voltage device `hv`
+/// inside an n-well ring inside a p-substrate ring, two rows. Both rings
+/// drawn: clean; the outer one left out: the p-ring row finds the device
+/// unsurrounded.
+fn double_ring() -> Vec<Fixture> {
+    let deck = "grid 1nm\nlayer hv = gds(1, 0)\nlayer nring = gds(2, 0)\nlayer pring = gds(3, 0)\n\
+                rule dn guard_ring(hv, nring; max_space: none, min_width: none, pad: none, \
+                near: none, within: none)\n\
+                rule dp guard_ring(hv, pring; max_space: none, min_width: none, pad: none, \
+                near: none, within: none)\n";
+    let mut out = Vec::new();
+    for outer in [true, false] {
+        let mut l = Layout::default();
+        rect(&mut l, "hv", (0, 0, 4000, 4000));
+        ring_round(&mut l, "nring", (-1000, -1000, 5000, 5000), 1000);
+        if outer {
+            ring_round(&mut l, "pring", (-3000, -3000, 7000, 7000), 1000);
+        }
+        let f = Fixture::new(
+            &format!("erc/guard_ring/double/{outer}"),
+            &["ERC-D6"],
+            deck,
+            ERC,
+        )
+        .layout(l)
+        .expect(Expect::clean("dn"))
+        .expect(Expect::rule(
+            "dp",
+            if outer { Vec::new() } else { vec![count(0)] },
+        ));
+        out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// `guard_ring` for GF180MCU LU.5 (ERC-D7): a native device (`nat`) with an
+/// n-well within 50 µm must sit in a closed p-substrate ring. The well is
+/// `gap` to the right of the device, swept about 50 µm; with a ring the
+/// device is clean whatever the well.
+fn native_ring() -> Vec<Fixture> {
+    let deck = "grid 1nm\nlayer nat = gds(1, 0)\nlayer well = gds(2, 0)\nlayer ring = gds(3, 0)\n\
+                rule lu5 guard_ring(nat, ring; max_space: none, min_width: none, pad: none, \
+                near: well, within: 50um)\n";
+    let mut out = Vec::new();
+    for (gap, ringed) in [
+        (49_999, false),
+        (50_000, false),
+        (50_001, false),
+        (1000, true),
+    ] {
+        let mut l = Layout::default();
+        rect(&mut l, "nat", (0, 0, 2000, 2000));
+        rect(&mut l, "well", (2000 + gap, 0, 6000 + gap, 4000));
+        if ringed {
+            ring_round(&mut l, "ring", (-200, -200, 2200, 2200), 300);
+        }
+        let findings = if gap <= 50_000 && !ringed {
+            vec![count(0)]
+        } else {
+            Vec::new()
+        };
+        let f = Fixture::new(
+            &format!("erc/guard_ring/native/{gap}_{ringed}"),
+            &["ERC-D7"],
+            deck,
+            ERC,
+        )
+        .layout(l)
+        .expect(Expect::rule("lu5", findings));
+        out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// `forward_diode` (ERC-D8, GF180MCU §14.3.3) with the `iso` layer as
+/// `Latchup_MK`: a `dio` diode is forward-biased when its anode can sit above
+/// its cathode. Anode on VDD1 (1.8 V), cathode on VSS1: 1800 mV forward,
+/// flagged unless `iso` covers it. Drawn the other way round it is reverse
+/// biased (-1.8 V), clean. Anode on SIG, which a PMOS joins to VDD1 and the
+/// diode itself to VSS1 (0 to 1.8 V), cathode on VSS1: 1800 mV. A diode with
+/// its anode on OUT, which only its own cathode's ground reaches, sits at
+/// 0 mV forward and is never forward-biased.
+fn forward_diode() -> Vec<Fixture> {
+    let (vdd1, vss1, vss3, sig, out_net) = (0, 1, 4, 5, 6);
+    let deck = format!(
+        "{}rule fd forward_diode(iso; models: [\"dio\"])\n",
+        diode_process()
+    );
+    let pmos = [dev(Model::Pfet, vss3, vdd1, sig)];
+    let mut out = Vec::new();
+    for (name, diode, marked, findings) in [
+        ("vdd_to_vss", (vdd1, vss1), false, vec![millivolts(1800.0)]),
+        ("vdd_to_vss_marked", (vdd1, vss1), true, Vec::new()),
+        ("vss_to_vdd", (vss1, vdd1), false, Vec::new()),
+        (
+            "signal_to_vss",
+            (sig, vss1),
+            false,
+            vec![millivolts(1800.0)],
+        ),
+        ("grounded_anode", (out_net, vss1), false, Vec::new()),
+    ] {
+        let mut l = circuit(&DOMAIN_NETS, &pmos, &[diode]);
+        if marked {
+            // The diode column follows the one transistor's.
+            let x0 = PITCH;
+            rect(&mut l, "iso", (x0 + 800, 300, x0 + 1400, 700));
+        }
+        let mut f = Fixture::new(
+            &format!("erc/forward_diode/{name}"),
+            &["ERC-D8"],
+            &deck,
+            ERC,
+        )
+        .layout(l)
+        .expect(Expect::rule("fd", findings));
+        f.intent = Some(domain_intent());
+        out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// `conditional_tie` (ERC-D1a) as GF180MCU LU.4 for LV devices: a PCOMP
+/// strip `pc` from x 0 to `reach`, tapped only at its left end, so its
+/// furthest point is exactly `reach` from the tap; an n-well round it with
+/// its top edge at y 3 µm; an NCOMP `nc` (outside the well) `y` above that
+/// edge, 2 µm + `y` from the strip, within 50 µm. Bands: `y` below 1 µm
+/// allows 15 µm, from 1 µm to below 2 µm 30 µm, from 2 µm 50 µm. Each band's
+/// limit is swept a nanometre either side, the thresholds are tested on the
+/// band edge (y = 1 µm and 2 µm exactly), and an NCOMP beyond 50 µm leaves
+/// the loosest band.
+fn conditional_tie() -> Vec<Fixture> {
+    let deck = "grid 1nm\nlayer pc = gds(1, 0)\nlayer tap = gds(2, 0)\nlayer nw = gds(3, 0)\n\
+                layer nc = gds(4, 0)\n\
+                rule lu4 conditional_tie(pc, tap, nw, nc; within: 50um, spacing: [1um, 2um], \
+                max_distance: [15um, 30um, 50um])\n";
+    let board = |reach: i64, y: i64, far: bool| {
+        let mut l = Layout::default();
+        rect(&mut l, "tap", (-1000, 0, 0, 1000));
+        rect(&mut l, "pc", (0, 0, reach, 1000));
+        rect(&mut l, "nw", (-2000, -2000, reach + 2000, 3000));
+        let x0 = if far { reach + 60_000 } else { 0 };
+        rect(&mut l, "nc", (x0, 3000 + y, x0 + 1000, 4000 + y));
+        l
+    };
+    let mut cases: Vec<(String, Layout, i64, i64)> = Vec::new();
+    for (y, limit) in [(500, 15_000), (1500, 30_000), (2500, 50_000)] {
+        for reach in [limit - 1, limit, limit + 1] {
+            cases.push((
+                format!("y{y}/{reach}"),
+                board(reach, y, false),
+                reach,
+                limit,
+            ));
+        }
+    }
+    cases.push((
+        "edge_1um".to_owned(),
+        board(30_001, 1000, false),
+        30_001,
+        30_000,
+    ));
+    cases.push((
+        "edge_2um".to_owned(),
+        board(30_001, 2000, false),
+        30_001,
+        50_000,
+    ));
+    cases.push(("far".to_owned(), board(30_001, 500, true), 30_001, 50_000));
+    let mut out = Vec::new();
+    for (name, layout, reach, limit) in cases {
+        let findings = if reach > limit {
+            vec![length(reach)]
+        } else {
+            Vec::new()
+        };
+        let f = Fixture::new(
+            &format!("erc/conditional_tie/{name}"),
+            &["ERC-D1a"],
+            deck,
+            ERC,
+        )
+        .layout(layout)
+        .expect(Expect::rule("lu4", findings));
+        out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// `latchup_victim` (ERC-D5) as GF180MCU IO.1 (b): a PCOMP strip `pv` of
+/// length `reach`, tapped only at its far end, `gap` from an aggressor
+/// NCOMP `agg`. Within 15 µm (inclusive) it is a victim held to 2 µm, swept
+/// a nanometre either side; 15 µm + 1 nm away it is not examined. With `pad`,
+/// the same diffusion is an aggressor only on a net that carries a pad.
+fn latchup_victim() -> Vec<Fixture> {
+    let deck = "grid 1nm\nlayer agg = gds(1, 0)\nlayer pv = gds(2, 0)\nlayer tap = gds(3, 0)\n\
+                rule io1 latchup_victim(agg, pv, tap; within: 15um, max_distance: 2um, pad: none)\n";
+    let board = |gap: i64, reach: i64| {
+        let mut l = Layout::default();
+        rect(&mut l, "agg", (0, 0, 1000, 1000));
+        let x0 = 1000 + gap;
+        rect(&mut l, "pv", (x0, 0, x0 + reach, 1000));
+        rect(&mut l, "tap", (x0 + reach, 0, x0 + reach + 500, 1000));
+        l
+    };
+    let mut out = Vec::new();
+    for (gap, reach, flagged) in [
+        (15_000, 1999, false),
+        (15_000, 2000, false),
+        (15_000, 2001, true),
+        (15_001, 2001, false),
+    ] {
+        let findings = if flagged {
+            vec![length(reach)]
+        } else {
+            Vec::new()
+        };
+        let f = Fixture::new(
+            &format!("erc/latchup_victim/{gap}/{reach}"),
+            &["ERC-D5"],
+            deck,
+            ERC,
+        )
+        .layout(board(gap, reach))
+        .expect(Expect::rule("io1", findings));
+        out.extend(every_placement(&[f]));
+    }
+    // With pad selection, on the domain fixtures' tracks: a diffusion on a
+    // net with a pad is an aggressor, the same on another net is not.
+    let pad_deck = format!(
+        "{}rule io1 latchup_victim(diff, nwpm, ntap; within: 15um, max_distance: 2um, pad: pad)\n",
+        diode_process()
+    );
+    let (pad_net, other) = (5, 6);
+    for (name, net, flagged) in [("pad", pad_net, true), ("no_pad", other, false)] {
+        let mut l = circuit(&DOMAIN_NETS, &[], &[]);
+        rect(&mut l, "diff", (0, -6000, 2000, -5000));
+        riser(&mut l, 900, -5900, net);
+        let ty = track_y(pad_net);
+        rect(&mut l, "pad", (-1000, ty, -400, ty + TRACK_H));
+        rect(&mut l, "padv", (-800, ty + 150, -600, ty + 250));
+        rect(&mut l, "nwpm", (7000, -6000, 10_000, -5000));
+        rect(&mut l, "ntap", (10_000, -6000, 10_500, -5000));
+        let f = Fixture::new(
+            &format!("erc/latchup_victim/{name}"),
+            &["ERC-D5"],
+            &pad_deck,
+            ERC,
+        )
+        .layout(l)
+        .expect(Expect::rule(
+            "io1",
+            if flagged {
+                vec![length(3000)]
+            } else {
+                Vec::new()
+            },
+        ));
+        out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// `esd_parasitic` (ERC-C10) on the domain fixtures' tracks with a pad on
+/// SIG: a 1 µm diffusion riser-wired to SIG and another `gap` to its right
+/// wired to `net`. Against a 5 µm spacing the pair is flagged when the gap is
+/// below it and the nets differ: on OUT at 4 999 nm, not at 5 000; on SIG
+/// itself never; two diffusions on OUT and VSS1, no pad between them, never.
+fn esd_parasitic() -> Vec<Fixture> {
+    let (vss1, sig, out_net) = (1, 5, 6);
+    let deck = format!(
+        "{}rule par esd_parasitic(pad, diff; min_spacing: 5um)\n",
+        diode_process()
+    );
+    let board = |first: usize, gap: i64, net: usize| {
+        let mut l = circuit(&DOMAIN_NETS, &[], &[]);
+        rect(&mut l, "diff", (0, -6000, 1000, -5000));
+        riser(&mut l, 400, -5900, first);
+        let x0 = 1000 + gap;
+        rect(&mut l, "diff", (x0, -6000, x0 + 1000, -5000));
+        riser(&mut l, x0 + 400, -5900, net);
+        let ty = track_y(sig);
+        rect(&mut l, "pad", (-1000, ty, -400, ty + TRACK_H));
+        rect(&mut l, "padv", (-800, ty + 150, -600, ty + 250));
+        l
+    };
+    let mut out = Vec::new();
+    for (name, first, gap, net, findings) in [
+        ("other_net/4999", sig, 4999, out_net, vec![length(4999)]),
+        ("other_net/5000", sig, 5000, out_net, Vec::new()),
+        ("same_net", sig, 1000, sig, Vec::new()),
+        ("no_pad", vss1, 1000, out_net, Vec::new()),
+    ] {
+        let f = Fixture::new(
+            &format!("erc/esd_parasitic/{name}"),
+            &["ERC-C10"],
+            &deck,
+            ERC,
+        )
+        .layout(board(first, gap, net))
+        .expect(Expect::rule("par", findings));
+        out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// `esd_exposed` (ERC-C3, Khazhinsky 2012's "input buffer gates and output
+/// buffer drains") with a pad on SIG, `dio` clamps and an `rs` series
+/// resistor from SIG to OUT. An input gate on SIG is protected by the
+/// primary diodes (VSS1 to SIG, SIG to VDD1) and flagged without them
+/// (rails 0) or with only the down one (rails 1); a gate on OUT behind the
+/// resistor needs local diodes on OUT. An NMOS with its drain on SIG is an
+/// output driver: flagged as `nfet`, protected as the ESD-rated `clamp`.
+fn esd_exposed() -> Vec<Fixture> {
+    type Case<'a> = (
+        &'a str,
+        Vec<Dev>,
+        Vec<(&'a str, usize, usize)>,
+        Vec<Finding>,
+    );
+    let (vdd1, vss1, vss3, sig, out_net) = (0, 1, 4, 5, 6);
+    let deck = format!(
+        "{}rule exp esd_exposed(pad; clamps: [\"dio\"], resistors: [\"rs\"], \
+         rated: [\"clamp\"])\n",
+        diode_process()
+    );
+    let down = ("mkdi", vss1, sig);
+    let up = ("mkdi", sig, vdd1);
+    let series = ("mkres", sig, out_net);
+    let local = [("mkdi", vss1, out_net), ("mkdi", out_net, vdd1)];
+    let input = dev(Model::Nfet, sig, vss1, vss3);
+    let behind = dev(Model::Nfet, out_net, vss1, vss3);
+    let mut cases: Vec<Case> = vec![
+        ("input_primary", vec![input], vec![down, up], Vec::new()),
+        ("input_bare", vec![input], Vec::new(), vec![count(0)]),
+        ("input_down_only", vec![input], vec![down], vec![count(1)]),
+        (
+            "behind_bare",
+            vec![behind],
+            vec![down, up, series],
+            vec![count(0)],
+        ),
+        (
+            "output_unrated",
+            vec![dev(Model::Nfet, vss3, vss1, sig)],
+            vec![down, up],
+            vec![count(0)],
+        ),
+        (
+            "output_rated",
+            vec![dev(Model::Clamp, vss3, vss1, sig)],
+            vec![down, up],
+            Vec::new(),
+        ),
+    ];
+    let mut behind_local = vec![down, up, series];
+    behind_local.extend(local);
+    cases.push(("behind_local", vec![behind], behind_local, Vec::new()));
+    let mut out = Vec::new();
+    for (name, devs, pins, findings) in cases {
+        let mut l = circuit_pins(&DOMAIN_NETS, &devs, &pins);
+        let ty = track_y(sig);
+        rect(&mut l, "pad", (-1000, ty, -400, ty + TRACK_H));
+        rect(&mut l, "padv", (-800, ty + 150, -600, ty + 250));
+        let mut f = Fixture::new(&format!("erc/esd_exposed/{name}"), &["ERC-C3"], &deck, ERC)
+            .layout(l)
+            .expect(Expect::rule("exp", findings));
+        f.intent = Some(domain_intent());
+        out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// `esd_path` with a source layer (ERC-D4, JESD78's injection into a guard
+/// ring): `met1` as the ring layer, so VSS's strip is the ring; 100 mA forced
+/// in at its centre and out at VSS's own pin, a `pad` square at 18 µm joined
+/// by one 0.25 Ω cut, with no clamps. Its path is 8 squares of met1 (1 Ω)
+/// and the cut: 1.25 Ω exactly, swept below, at and above; the 1 µm strip
+/// carries the whole 100 mA, flagged below 0.1 A/µm. With no pin VSS is fed
+/// at the strip's centre, where the current enters: 0 Ω.
+fn ring_injection() -> Vec<Fixture> {
+    let deck = |limits: &str| {
+        format!(
+            "{ESD_PROCESS}rule ring esd_path(pad, met1; clamps: none, current: 100mA, \
+             clamp_resistance: 1ohm, {limits}, clamp_it2: none, max_current_per_cut: none, \
+             max_voltage: none)\n"
+        )
+    };
+    let pinned = {
+        let mut l = esd_layout([1000; 3], &[]);
+        rect(&mut l, "pad", (17_500, -3000, 18_500, -2000));
+        rect(&mut l, "padv", (17_900, -2600, 18_100, -2400));
+        l
+    };
+    let mut out = Vec::new();
+    for limit in sweep(1.25) {
+        let mut f = Fixture::new(
+            &format!("erc/esd_path/ring/{}", side(limit, 1.25)),
+            &["ERC-D4"],
+            &deck(&format!("max_resistance: {limit}ohm, max_density: none")),
+            ERC,
+        )
+        .layout(pinned.clone())
+        .expect(Expect::rule(
+            "ring",
+            if limit < 1.25 {
+                vec![ohms(1.25).at(0, -3000)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(esd_intent());
+        out.push(f);
+    }
+    for density in [1e5 * 0.999, 1e5 * 1.001] {
+        let mut f = Fixture::new(
+            &format!("erc/esd_path/ring/density/{}", side(density, 1e5)),
+            &["ERC-D4"],
+            &deck(&format!("max_resistance: none, max_density: {density}A/m")),
+            ERC,
+        )
+        .layout(pinned.clone())
+        .expect(Expect::rule(
+            "ring",
+            if density < 1e5 {
+                vec![microamps(1e5)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(esd_intent());
+        out.extend(every_placement(&[f]));
+    }
+    let mut f = Fixture::new(
+        "erc/esd_path/ring/unpinned",
+        &["ERC-D4"],
+        &deck("max_resistance: 0.001ohm, max_density: none"),
+        ERC,
+    )
+    .layout(esd_layout([1000; 3], &[]))
+    .expect(Expect::clean("ring"));
+    f.intent = Some(esd_intent());
     out.push(f);
     out
 }
