@@ -19,7 +19,7 @@ pub use power::{PowerError, Process};
 pub use ruleset::{RuleSet, KINDS};
 
 use crate::report::{Outcome, RuleRun, Violations};
-use crate::topology::PortTable;
+use crate::topology::{NetId, PortTable};
 use facts::{classify_nets_into, resolve_intent_into, IntentMap, NetFacts};
 use gpurify_geom::ops::Point;
 use gpurify_geom::{prefix, Dbu, DbuArea, Qty, Resistance, Temperature};
@@ -85,7 +85,14 @@ pub fn check(
     voltage::propagate_into(design.nets, design.devices, &intent_map, &mut voltage);
     // One propagation per declared power state, its supplies off and its
     // inputs held.
-    let state_voltage: Vec<voltage::NetVoltage> = facts::resolve_states(intent, ports, design.nets)
+    let resolved = facts::resolve_states(intent, ports, design.nets);
+    let mut switched: Vec<NetId> = resolved
+        .iter()
+        .flat_map(|state| state.off.iter().copied())
+        .collect();
+    switched.sort_unstable();
+    switched.dedup();
+    let state_voltage: Vec<voltage::NetVoltage> = resolved
         .iter()
         .map(|state| {
             let mut reach = voltage::NetVoltage::default();
@@ -177,6 +184,7 @@ pub fn check(
             intent: &intent_map,
             voltage: &voltage,
             states: &state_voltage,
+            switched: &switched,
             networks: built.map(|()| &networks),
             power,
             rms: (&ac_intent[0], ac[0]),

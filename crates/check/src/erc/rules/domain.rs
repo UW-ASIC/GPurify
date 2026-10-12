@@ -1065,3 +1065,143 @@ pub fn check_voltage_spacing(
         record_run(runs, out, before, rule, outcome, examined);
     }
 }
+
+/// A power switch wired against the power intent: deck kind `power_switch`,
+/// written `power_switch(; models: models)`.
+///
+/// A power switch joins an always-on supply to the supply it gates: IEEE
+/// 1801's `create_power_switch` names an `-input_supply_port` and an
+/// `-output_supply_port` (ISLPED 2014 UPF tutorial: `-input_supply_port {
+/// in_vdd VDDB } -output_supply_port { out_vdd VDD }`, the output the
+/// switched domain's primary power), and Liu et al. (Samsung and Synopsys,
+/// `DVCon`) require "The PG connection of power switch cells should respect
+/// the UPF specification" and "Power switch control signal should come from
+/// always on path". Here the power intent is the design intent: a supply
+/// some declared power state turns off is switched, every other declared
+/// supply is always on. A transistor of a listed model is a switch, and a
+/// row flags:
+///
+/// - a switch whose channel does not join an always-on supply to a
+///   switched supply of the same role (a header between powers, a footer
+///   between grounds);
+/// - a switch whose gate floats in a declared power state: no supply
+///   reaches its control net there, as [`UndrivenGateTable`] reads a state,
+///   so its control does not come from an always-on path.
+///
+/// Needs design intent that declares power states.
+///
+/// # Limits
+///
+/// Retention cells (their save and restore controls, their retention
+/// supply), always-on cells inside a switched domain, and standard cells on
+/// the real rather than the switched net are not checked: the intent does
+/// not say which cells are which. IEEE 1801 itself was not read; the rules
+/// are the cited papers'.
+///
+/// Catalog: ERC-F14 (partial) in the [check catalog]. Defined by [IEEE
+/// 1801] `create_power_switch` (cited for scope, not read); [Liu] (`DVCon`,
+/// the power-switch and PG-connectivity checks); the [ISLPED 2014] UPF
+/// tutorial (the switch's supply ports). Source tags are in
+/// [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [IEEE 1801]: https://standards.ieee.org/ieee/1801/11890/
+/// [Liu]: https://dvcon-proceedings.org/wp-content/uploads/low-power-verification-with-upf-principle-and-practice.pdf
+/// [ISLPED 2014]: https://islped.org/2014/files/Failing%20to%20fail%20UPF%20tutorial%20.pdf
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct PowerSwitchTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// Switch models per row, CSR.
+    pub model_start: Vec<u32>,
+    /// Switch models, CSR by `model_start`; at least one per row.
+    pub model: Vec<StrId>,
+}
+
+/// Runs every [`PowerSwitchTable`] row over every transistor of its models.
+///
+/// `examined` counts the switches. A wiring violation sits at the first
+/// vertex of the switch's marker, on its layer, measuring the joined
+/// always-on and switched pair it lacks, 0, against 1; a control violation
+/// there too, measuring the states its gate floats in against 0. Every row
+/// is skipped without usable intent, or when the intent declares no power
+/// state.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables),
+/// or `states` holds a propagation over other nets.
+pub fn check_power_switch(
+    design: Design<'_>,
+    intent: &IntentMap,
+    switched: &[NetId],
+    states: &[NetVoltage],
+    table: &PowerSwitchTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if !intent.is_usable() || states.is_empty() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
+    let devices = design.devices;
+    let role = |net: NetId| intent.supply(net).map(|(role, _)| role);
+    let on = |net: NetId| switched.binary_search(&net).is_err();
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let models =
+            &table.model[table.model_start[row] as usize..table.model_start[row + 1] as usize];
+        let mut examined = 0u64;
+        for device in 0..devices.len() {
+            if devices.kind[device] != DeviceKind::Mos || !models.contains(&devices.model[device]) {
+                continue;
+            }
+            examined += 1;
+            let (nets, roles) = devices.terminals_of(device_id(device));
+            let (s, d) = (
+                terminal(nets, roles, TerminalRole::Source),
+                terminal(nets, roles, TerminalRole::Drain),
+            );
+            let gate = terminal(nets, roles, TerminalRole::Gate);
+            let wired = match (role(s), role(d)) {
+                (Some(a), Some(b)) if a == b => on(s) != on(d),
+                _ => false,
+            };
+            if !wired {
+                push_device(
+                    design,
+                    device,
+                    table.head.rule[row],
+                    table.head.severity[row],
+                    Measurement::Count(0),
+                    Measurement::Count(1),
+                    out,
+                );
+            }
+            let floats = states
+                .iter()
+                .filter(|state| gate == NetId::NONE || !state.known(gate))
+                .count();
+            if floats > 0 {
+                push_device(
+                    design,
+                    device,
+                    table.head.rule[row],
+                    table.head.severity[row],
+                    Measurement::Count(u32::try_from(floats).expect("a state count fits a u32")),
+                    Measurement::Count(0),
+                    out,
+                );
+            }
+        }
+        record_run(
+            runs,
+            out,
+            before,
+            table.head.rule[row],
+            Outcome::Ran,
+            examined,
+        );
+    }
+}

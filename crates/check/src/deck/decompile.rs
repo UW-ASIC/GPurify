@@ -1113,6 +1113,14 @@ impl CompiledDeck {
             let row = Row::new("supply_path", &[]).value("both", ParamValue::Flag(t.both[r]));
             file(&t.head, r, row);
         }
+        let t = &erc.power_switch;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("power_switch", &[]);
+            for &id in &t.model[span(&t.model_start, r)] {
+                row.params.push(("model", model(id)));
+            }
+            file(&t.head, r, row);
+        }
         let t = &erc.matching;
         for r in 0..t.head.len() {
             let row = Row::new("matching", &[t.group[r]]).length("tolerance", t.tolerance[r]);

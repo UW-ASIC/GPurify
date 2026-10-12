@@ -148,6 +148,8 @@ plus the dialect real PDK netlists use.
 | `Bryant1991` | R. E. Bryant, "Extraction of Gate Level Models from Transistor Circuits by Four-Valued Symbolic Analysis", ICCAD '91: channel-connected components ("a set of storage nodes connected by the source-drain terminals of transistors") and their rank order | 1991 | Open (author's copy) | https://www.cs.cmu.edu/~bryant/pubdir/iccad91.pdf |
 | `Karmokar2022` | Karmokar, Madhusudan, Sharma, Harjani, Lin, Sapatnekar, "Common-Centroid Layout for Active and Passive Devices: A Review and the Road Ahead", ASP-DAC 2022: the centroids of each device's units coincide (Eq. 2-3) | 2022 | Open (author's copy) | http://people.ece.umn.edu/~sachin/conf/aspdac22.pdf |
 | `Sarhan2019` | Sarhan, Arriordaz (Siemens), "Automated Analog Design Constraint Checking", Semiconductor Engineering: common centroid, orientation, symmetry, dummies, WPE and STI checks on designer-declared groups | 2019-02-14 | Open | https://semiengineering.com/automated-analog-design-constraint-checking/ |
+| `Liu-DVCon` | Liu, Hong, Lee, Choi, Won, Choi (Samsung), Vardhan, Kher (Synopsys), "Low Power Verification with UPF: Principle and Practice", DVCon: power-switch, retention and PG-connectivity checks ("Power switch control signal should come from always on path") | — | Open | https://dvcon-proceedings.org/wp-content/uploads/low-power-verification-with-upf-principle-and-practice.pdf |
+| `ISLPED2014` | "Failing to Fail" UPF tutorial, ISLPED 2014: `create_power_switch` with its `-input_supply_port` and `-output_supply_port` | 2014 | Open | https://islped.org/2014/files/Failing%20to%20fail%20UPF%20tutorial%20.pdf |
 | `JESD78` | JEDEC JESD78F.02, IC latch-up test | Nov 2023 | Free with JEDEC registration. Table 1 was read from a third-party copy, so **obtain the JEDEC original** before citing numbers. | https://www.jedec.org/standards-documents/docs/jesd-78b |
 | `JS001`, `JS002` | ANSI/ESDA/JEDEC JS-001-2024 (HBM), JS-002-2025 (CDM); JTR001-01-12 user guide | 2024 / 2025 | Registration or purchase; bodies not read. JS-001's pin-combination tables set which pin pairs a P2P check must cover. | https://www.jedec.org/sites/default/files/JTR001-01-12%20Final.pdf |
 | `JEP122` | JEDEC JEP122H, failure mechanisms and models (EM, TDDB, HCI, NBTI) | Sep 2016 | Registration; abstract only | https://www.jedec.org/standards-documents/docs/jep-122e |
@@ -367,6 +369,7 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-F11 | Voltage-dependent spacing | implemented | (see DRC-082) | SY; MR |
 | ERC-F12 | Well / body bias | implemented | GF:LU.9,LU.10 | SY; NV |
 | ERC-F13 | Inter-metal dielectric breakdown | implemented | ICV; JEP159A | CF; SY; MR |
+| ERC-F14 | Power-intent supply connectivity (power switches, always-on and retention cells on the supplies the UPF declares) | partial | IEEE1801; Liu-DVCon; ISLPED2014 | SY; MR |
 | ERC-G2 | Floating well | implemented | SKY:nwell.4 | FR; SY; MR |
 | ERC-G4 | Supply short (n-tie + p-tie, VDD-GND) | implemented | CAL | SY; MR |
 | ERC-G7 | Gate tied directly to a rail | implemented | CAL (weak sourcing) | SY; NV; MR |

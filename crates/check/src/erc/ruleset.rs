@@ -1,4 +1,4 @@
-//! The fifty-two tables, the deck parser that fills them, and the dispatcher.
+//! The fifty-three tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
@@ -11,7 +11,7 @@ use crate::erc::rules::{
 use crate::erc::voltage::NetVoltage;
 use crate::erc::{Design, ErcError, Scratch};
 use crate::report::{RuleRun, Severity, Violations};
-use crate::topology::PortTable;
+use crate::topology::{NetId, PortTable};
 use gpurify_geom::{prefix, Dbu, DbuArea, Qty, Temperature, Voltage};
 use gpurify_geom::{Bbox, LayerId};
 use gpurify_ingest::deck::{Deck, DeviceKind, ParamValue, ProcessStack, RuleSpec, RuleTable};
@@ -156,6 +156,8 @@ pub struct RuleSet {
     pub voltage_spacing: domain::VoltageSpacingTable,
     /// `hv_tag` rows: [`domain::HvTagTable`].
     pub hv_tag: domain::HvTagTable,
+    /// `power_switch` rows: [`domain::PowerSwitchTable`].
+    pub power_switch: domain::PowerSwitchTable,
     /// `undriven_gate` rows: [`domain::UndrivenGateTable`].
     pub undriven_gate: domain::UndrivenGateTable,
     /// `missing_isolation` rows: [`domain::MissingIsolationTable`].
@@ -184,6 +186,8 @@ pub struct RunInputs<'a> {
     /// order: that state's supplies off and inputs held
     /// ([`IntentMap::in_state`]). Empty when the intent declares no state.
     pub states: &'a [NetVoltage],
+    /// The declared supplies some power state switches off, ascending.
+    pub switched: &'a [NetId],
     /// The per-net networks, or why they could not be built.
     pub networks: Result<&'a NetNetworks, PowerError>,
     /// The solved supply grid, or `None` when intent declared no supplies.
@@ -1070,6 +1074,14 @@ impl RuleSet {
                     row.head(&mut table.head)?;
                     table.both.push(both);
                 }
+                "power_switch" => {
+                    row.layers(0)?;
+                    let models = row.models("model")?;
+                    let table = &mut set.power_switch;
+                    row.head(&mut table.head)?;
+                    table.model.extend(models);
+                    close_csr(&mut table.model_start, table.model.len());
+                }
                 "matching" => {
                     let layers = row.layers(1)?;
                     let tolerance = row.length("tolerance")?;
@@ -1321,6 +1333,7 @@ impl RuleSet {
             "conditional_tie" => &self.conditional_tie.head,
             "latchup_victim" => &self.latchup_victim.head,
             "matching" => &self.matching.head,
+            "power_switch" => &self.power_switch.head,
             "floating_gate" => &self.floating_gate.head,
             "floating_well" => &self.floating_well.head,
             "gate_oxide" => &self.gate_oxide.head,
@@ -1524,6 +1537,9 @@ impl RuleSet {
                     return Err(c.missing("clamp"));
                 }
             }
+            "power_switch" if span(&self.power_switch.model_start).is_empty() => {
+                return Err(c.missing("model"));
+            }
             "esd_clamp_resistance" => {
                 let t = &self.esd_clamp_resistance;
                 if span(&t.clamp_start).is_empty() {
@@ -1724,6 +1740,7 @@ impl RuleSet {
             &self.mixed_tag.head,
             &self.floating_supply.head,
             &self.matching.head,
+            &self.power_switch.head,
             &self.antenna.head,
             &self.antenna_electrical.head,
             &self.density_cmp.head,
@@ -1793,6 +1810,7 @@ impl RuleSet {
             intent,
             voltage,
             states,
+            switched,
             networks,
             power,
             rms,
@@ -1819,6 +1837,15 @@ impl RuleSet {
         topology::check_gate_path(design, intent, &self.gate_path, out, runs);
         topology::check_combinational_loop(design, intent, &self.combinational_loop, out, runs);
         matching::check_matching(design, &self.matching, out, runs);
+        domain::check_power_switch(
+            design,
+            intent,
+            switched,
+            states,
+            &self.power_switch,
+            out,
+            runs,
+        );
 
         supply::check_supply_short(design, &self.supply_short, scratch, out, runs);
         supply::check_soft_connection(design, &self.soft_connection, scratch, out, runs);

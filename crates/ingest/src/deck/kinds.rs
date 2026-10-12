@@ -1144,6 +1144,12 @@ pub(crate) const KINDS: &[Kind] = &[
     erc("combinational_loop", &[], false, &[]),
     erc("floating_supply", &[], false, &[]),
     erc(
+        "power_switch",
+        &[],
+        false,
+        &[p("models", "model", Dim::Models)],
+    ),
+    erc(
         "matching",
         &[0],
         false,

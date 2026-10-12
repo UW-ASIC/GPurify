@@ -1,5 +1,5 @@
-//! The path, loop, supply-piece, matching, clamp-resistance and AC
-//! current-density kinds in the deck library: each constructor states what its deck
+//! The path, loop, supply-piece, matching, power-switch, clamp-resistance
+//! and AC current-density kinds in the deck library: each constructor states what its deck
 //! spelling does, and each survives the printer.
 
 use super::builder::assert_same;
@@ -7,7 +7,7 @@ use super::grid;
 use super::printer::assert_round_trip;
 use gpurify_check::deck::rules::{
     combinational_loop, em_peak, em_rms, esd_clamp_resistance, floating_supply, gate_path,
-    matching, supply_path,
+    matching, power_switch, supply_path,
 };
 use gpurify_check::deck::{compile, CompiledDeck, DeckBuilder};
 use gpurify_geom::{Dbu, StrTable};
@@ -25,6 +25,7 @@ rule gp gate_path(; ground: false, max_devices: 3)
 rule cl combinational_loop()
 rule fs floating_supply()
 rule mt matching(mk; tolerance: 50nm)
+rule ps power_switch(; models: [\"dio\"])
 rule cr esd_clamp_resistance(pad; clamps: [\"dio\"], max_resistance: 1ohm)
 rule rms em_rms(met1, via1; frequency: [100MHz, 300MHz], width: [500nm, 1500nm], \
 density: [[1mA/um, 2mA/um], [3mA/um, 4mA/um]], max_current_per_cut: 1mA)
@@ -52,6 +53,7 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     d.rule("cl", combinational_loop());
     d.rule("fs", floating_supply());
     d.rule("mt", matching(mk, Dbu::new_unchecked(50)));
+    d.rule("ps", power_switch(&["dio"]));
     d.rule("cr", esd_clamp_resistance(pad, &["dio"], 1.0));
     d.rule(
         "rms",

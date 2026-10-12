@@ -755,6 +755,9 @@ kinds! {
     floating_gate() [] { labels_are_ports: bool = "labels_are_ports" }
     /// [`FloatingWellTable`](crate::erc::rules::topology::FloatingWellTable): `floating_well(well, tap)`.
     floating_well(well: one, tap: one) [] {}
+    /// [`PowerSwitchTable`](crate::erc::rules::domain::PowerSwitchTable):
+    /// `power_switch(; models)`.
+    power_switch() [] { models: &[&str] = "model" }
     /// [`MatchingTable`](crate::erc::rules::matching::MatchingTable):
     /// `matching(group; tolerance)`.
     matching(group: one) [] { tolerance: Dbu = "tolerance" }
