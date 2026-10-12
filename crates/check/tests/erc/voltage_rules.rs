@@ -799,17 +799,29 @@ fn run_crossing(circuit: &Circuit, id: StrId) -> (Violations, Vec<RuleRun>) {
         (3, SupplyRole::Ground, CORE, 1_800.0),
     ]);
     let (mut violations, mut runs) = report();
+    // No series or ground limit: the process is never read.
     check_esd_cross_domain(
         circuit.design(),
         &intent,
         &circuit.voltage(&intent),
+        gpurify_check::erc::Process {
+            grid: crate::common::manufacturing_grid(),
+            stack: &gpurify_ingest::deck::ProcessStack::default(),
+            connectivity: &gpurify_ingest::deck::Connectivity::default(),
+        },
         &EsdCrossDomainTable {
             head: head(id),
             diode_start: vec![0, 1],
             diode: circuit.models(&["dio"]),
             local_start: vec![0, 0],
             local: Vec::new(),
+            resistor_start: vec![0, 0],
+            resistor: Vec::new(),
+            min_series: vec![None],
+            max_ground_resistance: vec![None],
+            coupling_resistance: vec![None],
         },
+        &mut gpurify_check::erc::Scratch::default(),
         &mut violations,
         &mut runs,
     );

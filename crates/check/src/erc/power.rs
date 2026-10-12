@@ -1001,6 +1001,10 @@ pub struct Stress<'a> {
     /// The polygon the current enters at; its net is one of `nets`. It taps
     /// its net's conducting shape nearest its box centre, at that centre.
     pub source: PolyId,
+    /// The net `source` taps when `source` is on no path net itself (a
+    /// device's marker, tapped where the device attaches); `None` taps the
+    /// source's own net.
+    pub source_net: Option<NetId>,
     /// The current forced in at `source`, µA.
     pub current: Qty<Current, { prefix::MICRO }>,
     /// The net the current leaves by, one of `nets`.
@@ -1136,7 +1140,10 @@ pub fn extract_stress_into(
         tap_nearest(store, &shape[from..to], from, at, &mut index, taps)
     };
     let source = store.poly_bbox(stress.source);
-    let entry_req = tap_at(nets.net_of(stress.source), centre(source), &mut taps)
+    let entry_net = stress
+        .source_net
+        .unwrap_or_else(|| nets.net_of(stress.source));
+    let entry_req = tap_at(entry_net, centre(source), &mut taps)
         .expect("the source net has a conducting shape");
     let mut held_req: Vec<u32> = Vec::new();
     for &pin in stress.pins {

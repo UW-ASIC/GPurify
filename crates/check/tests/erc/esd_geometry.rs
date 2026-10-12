@@ -276,6 +276,7 @@ fn a_supply_with_no_pin_is_held_at_its_widest_shape() {
         Stress {
             nets: &nets,
             source: cell.poly(pad),
+            source_net: None,
             current: microamps(1.33e6),
             sink: cell.net(vss),
             pins: &[],

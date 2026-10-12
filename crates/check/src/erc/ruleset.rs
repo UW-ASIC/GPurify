@@ -801,6 +801,17 @@ impl RuleSet {
                     close_csr(&mut table.diode_start, table.diode.len());
                     table.local.extend(local);
                     close_csr(&mut table.local_start, table.local.len());
+                    table.resistor.extend(row.models("resistor")?);
+                    close_csr(&mut table.resistor_start, table.resistor.len());
+                    table
+                        .min_series
+                        .push(row.opt_number("min_series")?.map(Qty::new));
+                    table
+                        .max_ground_resistance
+                        .push(row.opt_number("max_ground_resistance")?.map(Qty::new));
+                    table
+                        .coupling_resistance
+                        .push(row.opt_number("coupling_resistance")?.map(Qty::new));
                 }
                 "esd_exposed" => {
                     let layers = row.layers(1)?;
@@ -1539,6 +1550,30 @@ impl RuleSet {
                     return Err(c.missing("clamp"));
                 }
             }
+            "esd_cross_domain" => {
+                let t = &self.esd_cross_domain;
+                if span(&t.diode_start).is_empty() {
+                    return Err(c.missing("diode"));
+                }
+                for (param, value) in [
+                    ("min_series", t.min_series[r]),
+                    ("max_ground_resistance", t.max_ground_resistance[r]),
+                    ("coupling_resistance", t.coupling_resistance[r]),
+                ] {
+                    if let Some(value) = value {
+                        c.positive(param, value.raw())?;
+                    }
+                }
+                if t.min_series[r].is_some() && span(&t.resistor_start).is_empty() {
+                    return Err(c.missing("resistor"));
+                }
+                // The ground resistance and the coupling's are one statement.
+                match (t.max_ground_resistance[r], t.coupling_resistance[r]) {
+                    (Some(_), None) => return Err(c.missing("coupling_resistance")),
+                    (None, Some(_)) => return Err(c.missing("max_ground_resistance")),
+                    _ => {}
+                }
+            }
             "power_switch" if span(&self.power_switch.model_start).is_empty() => {
                 return Err(c.missing("model"));
             }
@@ -1580,9 +1615,6 @@ impl RuleSet {
                 }
             }
             "esd_ground_coupling" if span(&self.esd_ground_coupling.diode_start).is_empty() => {
-                return Err(c.missing("diode"));
-            }
-            "esd_cross_domain" if span(&self.esd_cross_domain.diode_start).is_empty() => {
                 return Err(c.missing("diode"));
             }
             "esd_exposed" if span(&self.esd_exposed.clamp_start).is_empty() => {
@@ -1936,7 +1968,16 @@ impl RuleSet {
             runs,
         );
         esd::check_esd_ground_coupling(design, intent, &self.esd_ground_coupling, out, runs);
-        esd::check_esd_cross_domain(design, intent, voltage, &self.esd_cross_domain, out, runs);
+        esd::check_esd_cross_domain(
+            design,
+            intent,
+            voltage,
+            process,
+            &self.esd_cross_domain,
+            scratch,
+            out,
+            runs,
+        );
         esd::check_esd_parasitic(design, &self.esd_parasitic, out, runs);
         esd::check_esd_exposed(design, intent, &self.esd_exposed, out, runs);
 

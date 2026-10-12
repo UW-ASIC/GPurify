@@ -150,6 +150,7 @@ plus the dialect real PDK netlists use.
 | `Sarhan2019` | Sarhan, Arriordaz (Siemens), "Automated Analog Design Constraint Checking", Semiconductor Engineering: common centroid, orientation, symmetry, dummies, WPE and STI checks on designer-declared groups | 2019-02-14 | Open | https://semiengineering.com/automated-analog-design-constraint-checking/ |
 | `Liu-DVCon` | Liu, Hong, Lee, Choi, Won, Choi (Samsung), Vardhan, Kher (Synopsys), "Low Power Verification with UPF: Principle and Practice", DVCon: power-switch, retention and PG-connectivity checks ("Power switch control signal should come from always on path") | — | Open | https://dvcon-proceedings.org/wp-content/uploads/low-power-verification-with-upf-principle-and-practice.pdf |
 | `ISLPED2014` | "Failing to Fail" UPF tutorial, ISLPED 2014: `create_power_switch` with its `-input_supply_port` and `-output_supply_port` | 2014 | Open | https://islped.org/2014/files/Failing%20to%20fail%20UPF%20tutorial%20.pdf |
+| `Etherton2015` | Etherton et al. (Freescale, Silicon Frontline, Apache-ANSYS), "A New Full-Chip Verification Methodology to Prevent CDM Oxide Failures", EOS/ESD Symposium, hosted by Synopsys: the driver/receiver ground resistance check ("The user defines the maximum resistance (Rmax) allowed between D/R ground pins") | 2015 | Open | https://www.synopsys.com/content/dam/synopsys/implementation&signoff/electrical-layout-verification-documents/cdm-esd-paper.pdf |
 | `JESD78` | JEDEC JESD78F.02, IC latch-up test | Nov 2023 | Free with JEDEC registration. Table 1 was read from a third-party copy, so **obtain the JEDEC original** before citing numbers. | https://www.jedec.org/standards-documents/docs/jesd-78b |
 | `JS001`, `JS002` | ANSI/ESDA/JEDEC JS-001-2024 (HBM), JS-002-2025 (CDM); JTR001-01-12 user guide | 2024 / 2025 | Registration or purchase; bodies not read. JS-001's pin-combination tables set which pin pairs a P2P check must cover. | https://www.jedec.org/sites/default/files/JTR001-01-12%20Final.pdf |
 | `JEP122` | JEDEC JEP122H, failure mechanisms and models (EM, TDDB, HCI, NBTI) | Sep 2016 | Registration; abstract only | https://www.jedec.org/standards-documents/docs/jep-122e |
@@ -222,6 +223,8 @@ The key patents cited in the catalog:
 | P12 | US20100306720A1 (abandoned) | Programmable electrical rule checking |
 | P13 | US11714117B2 (Synopsys) | ESD path resistance as the pin voltage over a unit forced current |
 | P14 | US10216888B2 (Cadence) | Constraint validation: matched devices of one model, finger count, width and length |
+| P15 | US12021077B2 | Local CDM protection: a series resistor between a block's output and the input it drives, with clamps |
+| P16 | US9035393B2 (TSMC) | A cross-domain CDM cell: series resistor (50, 100 or 200 Ω) and ggNMOS |
 
 **What was not used:** customer-only manuals and packaged rule sets: the SVRF,
 TVF and PERC references; PERC packaged-check XML; the full LVS discrepancy
@@ -331,11 +334,11 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-C1 | Pad ESD path to power and ground | implemented | TR18-01:4.5.2-4.5.4; Khazhinsky2012 | SY; NV; MR |
 | ERC-C2 | ESD device sizing (perimeter, clamp width) | implemented | TR18-01:Fig23,Fig24; Hogan2012:III; GF:14.5 | CF; SY; MR |
 | ERC-C3 | Protected device (pad-exposed gates and drains) | implemented | TR18-01:4.5.1,6.1.11; Khazhinsky2012; GF:14.4; WP2:2.3 | SY; MR |
-| ERC-C4 | Cross-domain signal ESD protection | partial | TR18-01(2011):5.1.3; TR18-01:5.6.2; Hogan2012; Khazhinsky2012:Fig5 | SE:Part II pseudocode; SY; NV; MR |
+| ERC-C4 | Cross-domain signal ESD protection | implemented | TR18-01(2011):5.1.3; TR18-01:5.6.2; Hogan2012; Khazhinsky2012:Fig5; P15; P16 | SE:Part II pseudocode; SY; NV; MR |
 | ERC-C5 | Ground-domain coupling (anti-parallel diodes) | implemented | TR18-01:Fig5; Hogan2012:Fig1,IV; Khazhinsky2012:Fig2 | SY; NV; MR |
 | ERC-C7 | ESD-pulse current density | implemented | TR18-01:Fig58; TR22:4.4; Khazhinsky2012; CAL; ICV; PF | CF; MR; SY |
 | ERC-C8 | Path voltage vs device failure (ESD window) | partial | TR18-01:2.1; TR22:4.1,8; Khazhinsky2012:Fig4; GF:14.4 | CF; SY; MR; NV |
-| ERC-C9 | CDM checks (bus inductance, local clamps, driver/receiver ground R) | partial | TR18-01:5.6.3,6.6; JEP157A; Khazhinsky2012; PF | SY; MR |
+| ERC-C9 | CDM checks (bus inductance, local clamps, driver/receiver ground R) | partial | TR18-01:5.6.3,6.6; JEP157A; Khazhinsky2012; PF; Etherton2015 | SY; MR |
 | ERC-C10 | Layout parasitic ESD paths | implemented | TR18-01:5.6.1; Khazhinsky2012; GF:14.4 | SY; MR |
 | ERC-C11 | ESD device geometry (DCGS, SCGS, fingers) | expressible | GF:LVESD.1-13; IHP:6.8 | FR; MR; SY |
 | ERC-C12 | Package / 2.5D / 3D ESD | partial | TR18-01:6.3-6.7; JEP196; CAL:3DPERC | SY; NV |

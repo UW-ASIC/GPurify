@@ -1839,17 +1839,29 @@ fn cross_domain_agrees_with_a_reach_fixpoint() {
         let mut voltage = NetVoltage::default();
         propagate_into(&c.nets, &c.devices, &intent, &mut voltage);
         let (mut out, mut runs) = (Violations::default(), Vec::new());
+        // No series or ground limit: the process is never read.
         check_esd_cross_domain(
             design,
             &intent,
             &voltage,
+            power::Process {
+                grid: gpurify::geom::Grid::new(1000).expect("1 nm"),
+                stack: &gpurify::ingest::deck::ProcessStack::default(),
+                connectivity: &gpurify::ingest::deck::Connectivity::default(),
+            },
             &EsdCrossDomainTable {
                 head: head(id),
                 diode_start: vec![0, 1],
                 diode: vec![clamp],
                 local_start: vec![0, 0],
                 local: Vec::new(),
+                resistor_start: vec![0, 0],
+                resistor: Vec::new(),
+                min_series: vec![None],
+                max_ground_resistance: vec![None],
+                coupling_resistance: vec![None],
             },
+            &mut Scratch::default(),
             &mut out,
             &mut runs,
         );
