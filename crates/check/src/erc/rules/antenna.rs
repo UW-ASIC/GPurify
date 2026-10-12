@@ -173,7 +173,7 @@ pub struct CmpModel {
 ///   derived `diode.with_area(>= 0.16um2)` named as the `diode`, and the
 ///   size itself a DRC `area` rule.
 /// - A MIM victim works as a gate layer. On gf180's topology (ANT.14 and
-///   ANT.15) the FuseTop top plate is written as a conductor joined to
+///   ANT.15) the `FuseTop` top plate is written as a conductor joined to
 ///   Metal(n+1) by Via(n), so it is not on its Metal(n) bottom plate's net;
 ///   the shipped gf180 deck does not carry those rows yet (ERC-A11). A cut
 ///   area factor (LEF's `ANTENNAAREAFACTOR` on a cut
