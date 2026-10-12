@@ -88,6 +88,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         dfm_score(),
         via_redundancy(),
         critical_area(),
+        mean_critical_area(),
         stitch(),
         trim_cut(),
         booleans(),
@@ -4685,6 +4686,47 @@ fn trim_cut() -> Vec<Fixture> {
         }
     }
     out
+}
+
+/// The mean critical area over a deck-sampled defect-size distribution
+/// (`mean_critical_area`, DRC-112): radii 50, 150, 250 nm weighted 1/2, 1/4,
+/// 1/4, limits 144999, 145000, 145001 nm².
+///
+/// Oracle: the closed form per radius (two lines 1000 long, 200 apart:
+/// `(1000 + 2r)(2r - 200)`, 0 below r = 100): 0, 130000 and 450000, so the
+/// mean is 32500 + 112500 = 145000, found only against 144999, at the centre
+/// of the largest radius's region, (500, 200). Lines 600 apart are out of
+/// reach of every radius: nothing. Taking one radius's area, or summing
+/// without the weights, breaks the limits.
+fn mean_critical_area() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["met1"],
+        "rule below critical_area(met1; radii: [50nm, 150nm, 250nm], weights: [0.5, 0.25, 0.25]) <= 144999nm2\n\
+         rule at critical_area(met1; radii: [50nm, 150nm, 250nm], weights: [0.5, 0.25, 0.25]) <= 145000nm2\n\
+         rule above critical_area(met1; radii: [50nm, 150nm, 250nm], weights: [0.5, 0.25, 0.25]) <= 145001nm2\n",
+    );
+    let lines = |gap: i64| {
+        Layout::default()
+            .rect("met1", 0, 0, 1000, 100)
+            .rect("met1", 0, 100 + gap, 1000, 200 + gap)
+    };
+    let case = |name: &str, layout: Layout, below: Vec<Finding>| {
+        fixture(
+            &format!("mean_critical_area/{name}"),
+            &["DRC-112"],
+            &deck,
+            layout,
+            &[("below", below), ("at", vec![]), ("above", vec![])],
+        )
+    };
+    every_placement(vec![
+        case(
+            "two_lines",
+            lines(200),
+            vec![Finding::area(145_000).at(500, 200)],
+        ),
+        case("out_of_reach", lines(600), vec![]),
+    ])
 }
 
 /// `critical_area(met1; radius: r) <= a` (`critical_area`, DRC-112): the

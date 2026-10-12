@@ -180,6 +180,20 @@ def region_density(rule, layer, region, limit, maximum)
     put({ rule: rule }.merge(poly(p)).merge({ v: r })) if (maximum ? r > limit : r < limit)
   end
 end
+# The mean over the deck's radii (x2) and weights of the critical area above.
+def mean_critical_area(rule, layer, radii, weights, limit4)
+  total = 0.0
+  box = RBA::Box.new
+  radii.zip(weights).each do |r, w|
+    g = layer.data.merged.each.map { |p| RBA::Region.new(p).sized(r) }
+    c = RBA::Region.new
+    g.each_with_index { |a, i| g.each_with_index { |b, j| c += (a & b) if j > i } }
+    c = c.merged
+    total += w * c.area
+    box += c.bbox
+  end
+  put({ rule: rule, pt: [box.center.x, box.center.y] }) if total > limit4
+end
 def critical_area(rule, layer, r, limit4)
   g = layer.data.merged.each.map { |p| RBA::Region.new(p).sized(r) }
   c = RBA::Region.new
@@ -1075,6 +1089,26 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 )
                 .expect("a String");
                 exact("density", Key::Point, Value::Ratio)
+            }
+            Rule::MeanCriticalArea {
+                layer,
+                sizes,
+                limit,
+            } => {
+                layers.reads(layer, &mut reads);
+                let sizes = &set.defect_sizes[sizes as usize];
+                let radii: Vec<String> = sizes.radius.iter().map(|&r| lim(r).to_string()).collect();
+                let weights: Vec<String> = sizes.weight.iter().map(|w| format!("{w:?}")).collect();
+                writeln!(
+                    body,
+                    "mean_critical_area({q}, {}, [{}], [{}], {})",
+                    var(layer),
+                    radii.join(", "),
+                    weights.join(", "),
+                    4 * limit.raw()
+                )
+                .expect("a String");
+                exact("mean_critical_area", Key::Point, Value::Ignore)
             }
             Rule::CriticalArea {
                 layer,

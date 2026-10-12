@@ -9,10 +9,10 @@ use gpurify_check::deck::rules::{
     allowed_width, aspect_ratio, asymmetric_enclosure, convex_corner_spacing, count, cover_density,
     cut_area_change, cut_class, cut_class_spacing, cut_spacing, dfm_score, edge_facing_space,
     edge_width, eol_keep_out, eol_within_spacing, exact_pitch, forbidden, forbidden_spacing,
-    full_width, gate_corner, keep_out_zone, max_enclosure, min_enclosure, min_interior_angle,
-    min_step, minimum_cut, must_contain, noncoincident_enclosure, origin, pattern_match,
-    polygon_validity, projection_spacing, protrusion_width, region_density, span_length,
-    tip_spacing_table, total_area, two_width_spacing_table, via_redundancy, via_stack,
+    full_width, gate_corner, keep_out_zone, max_enclosure, mean_critical_area, min_enclosure,
+    min_interior_angle, min_step, minimum_cut, must_contain, noncoincident_enclosure, origin,
+    pattern_match, polygon_validity, projection_spacing, protrusion_width, region_density,
+    span_length, tip_spacing_table, total_area, two_width_spacing_table, via_redundancy, via_stack,
 };
 use gpurify_check::deck::{compile, Bound, CompiledDeck, DeckBuilder};
 use gpurify_check::drc::ruleset::{DfmCheck, EolParallel};
@@ -59,6 +59,7 @@ rule eol.w eol_space(m; eol_width: 60nm, within: 20nm, parallel: none, end_to_en
 rule eol.p eol_space(m; eol_width: 60nm, within: 20nm, parallel: (space: 120nm, within: 50nm, two_edges: true), end_to_end: 70nm) >= 80nm
 rule ko eol_keep_out(m; eol_width: 60nm, backward: 0nm, side: 30nm, forward: 90nm)
 rule or origin(r)
+rule mca critical_area(m; radii: [50nm, 100nm, 200nm], weights: [0.6, 0.3, 0.1]) <= 1um2
 rule vr via_redundancy(v, m, m2; pitch: 300nm, space: 100nm) >= 0.9
 rule dfm dfm_score(m; check: space, required: 180nm, recommended: 220nm, rate: 0.01) >= 0.99
 rule dfm.enc dfm_score(v, m; check: enclosure, required: 10nm, recommended: 40nm, rate: 0.5) >= 0.9
@@ -177,6 +178,15 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     );
     d.rule("ko", eol_keep_out(m, nm(60), nm(0), nm(30), nm(90)));
     d.rule("or", origin(r));
+    d.rule(
+        "mca",
+        mean_critical_area(
+            m,
+            &[nm(50), nm(100), nm(200)],
+            &[0.6, 0.3, 0.1],
+            DbuArea::new(1_000_000),
+        ),
+    );
     d.rule("vr", via_redundancy(v, m, m2, nm(300), nm(100), 0.9));
     d.rule(
         "dfm",
