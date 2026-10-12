@@ -72,7 +72,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     let mut spec: Option<&str> = None;
     let mut accuracy: Option<&str> = None;
     let mut output_dir: Option<&str> = None;
-    let mut lef: Option<&str> = None;
+    let mut lef: Vec<&str> = Vec::new();
 
     let mut tokens = rest.iter().map(String::as_str);
     while let Some(token) = tokens.next() {
@@ -90,7 +90,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
             "--spec" => spec = Some(value()?),
             "--accuracy" => accuracy = Some(value()?),
             "--output-dir" => output_dir = Some(value()?),
-            "--lef" => lef = Some(value()?),
+            "--lef" => lef.push(value()?),
             "--format" => {
                 format = match value()? {
                     "text" => Format::Text,
@@ -155,11 +155,23 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         ("--spec", spec.is_some()),
         ("--accuracy", accuracy.is_some()),
         ("--output-dir", output_dir.is_some()),
-        ("--lef", lef.is_some()),
     ] {
         if given && !is_lib {
             return usage(format!("{subcommand} takes no {flag}"));
         }
+    }
+    // `lib` compares one macro LEF's pins; any other command reads a DEF
+    // layout's LEFs, and only a DEF layout's.
+    let def_layout = layouts
+        .first()
+        .is_some_and(|l| crate::engine::pipeline::is_def(std::path::Path::new(l)));
+    if is_lib && (def_layout || lef.len() > 1) {
+        return usage("lib reads a GDS layout and at most one macro --lef".to_string());
+    }
+    if !is_lib && !lef.is_empty() && !def_layout {
+        return usage(format!(
+            "{subcommand} takes --lef only with a DEF layout (*.def)"
+        ));
     }
     if is_lib && format != Format::Text {
         return usage("lib writes its files under --output-dir and takes no --format".to_string());
@@ -187,7 +199,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
             spec: PathBuf::from(spec),
             accuracy,
             output_dir: PathBuf::from(output_dir),
-            lef: lef.map(PathBuf::from),
+            lef: lef.first().map(PathBuf::from),
         })
     } else {
         None
@@ -258,6 +270,11 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     Ok(Cli {
         inputs: Inputs {
             layout: PathBuf::from(layout),
+            lef: if is_lib {
+                Vec::new()
+            } else {
+                lef.iter().map(PathBuf::from).collect()
+            },
             deck: PathBuf::from(deck),
             reference: reference.map(PathBuf::from),
             intent: intent.map(PathBuf::from),
@@ -368,6 +385,15 @@ mod tests {
             .is_none());
     }
 
+    /// Oracle: construct-from-answer, against `docs/usage.md`: a DEF layout
+    /// reads every `--lef`, in the order given.
+    #[test]
+    fn a_def_layout_takes_its_lefs_in_order() {
+        let cli = parse_str("pex top.def --deck d --lef tech.lef --lef cells.lef").expect("legal");
+        let lefs: Vec<_> = cli.inputs.lef.iter().filter_map(|p| p.to_str()).collect();
+        assert_eq!(lefs, ["tech.lef", "cells.lef"]);
+    }
+
     /// Oracle: `docs/usage.md`: `--format` defaults to `text`, and `all` is all
     /// four checks.
     #[test]
@@ -443,6 +469,18 @@ mod tests {
             ),
             ("lib t --deck d --spec s", "lib requires --output-dir"),
             ("drc t --deck d --spec s", "drc takes no --spec"),
+            (
+                "drc t.gds --deck d --lef t.lef",
+                "drc takes --lef only with a DEF layout (*.def)",
+            ),
+            (
+                "lib t.def --deck d --spec s --output-dir o",
+                "lib reads a GDS layout and at most one macro --lef",
+            ),
+            (
+                "lib t --deck d --spec s --output-dir o --lef a --lef b",
+                "lib reads a GDS layout and at most one macro --lef",
+            ),
             (
                 "lib t --deck d --spec s --output-dir o --accuracy 9",
                 "unknown --accuracy 9; expected interface, analytical, field, spice, \

@@ -786,6 +786,95 @@ pub fn liberty_spec(data: &[u8]) {
     }
 }
 
+// ---------------------------------------------------------------- lefdef ---
+
+/// A LEF and a DEF, split at the input's first `END LIBRARY` (the LEF's last
+/// statement; the DEF is the whole input when there is none), read at
+/// the DEF's units, flattened, written as GDSII on a deck that declares
+/// every LEF layer, and read back.
+///
+/// Oracle: a typed error, never a panic, at each step; a stream
+/// [`lefdef::to_gds`](gpurify_ingest::lefdef::to_gds) writes is one the
+/// GDS reader parses, on the DEF's grid, and its flattening holds every
+/// shape the design drew (round trip).
+pub fn lefdef(data: &[u8]) {
+    use gpurify_ingest::lefdef;
+    let Ok(text) = std::str::from_utf8(data) else {
+        return;
+    };
+    let (lef_text, def_text) = text.split_once("END LIBRARY").unwrap_or(("", text));
+    let Ok(dbu) = lefdef::def_units(def_text) else {
+        return;
+    };
+    let mut lef = lefdef::Lef::default();
+    if lefdef::read_lef_into(lef_text, dbu, &mut lef).is_err() {
+        return;
+    }
+    let Ok(def) = lefdef::read_def(def_text, &lef) else {
+        return;
+    };
+    let Ok(flat) = lefdef::flatten(&def, &lef) else {
+        return;
+    };
+    // A deck of every layer name the design draws on that is a deck name.
+    let mut names: Vec<&str> = flat.iter().map(|s| s.shape.layer.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+    let named = |n: &str| {
+        n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && n.starts_with(|c: char| c.is_ascii_alphabetic())
+    };
+    if names.is_empty() || !names.iter().all(|n| named(n)) || names.len() > 1000 {
+        return;
+    }
+    let source: String = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| format!("layer {name} = gds({}, 0)\n", i + 1))
+        .collect();
+    let Ok(grid) = Grid::new(dbu) else { return };
+    let mut strings = StrTable::default();
+    let Ok(deck) = parse_deck(&source, grid, &mut strings) else {
+        return;
+    };
+    let Ok(bytes) = lefdef::to_gds(
+        &flat,
+        dbu,
+        &def.design,
+        &deck.layers,
+        &deck.connectivity,
+        &strings,
+    ) else {
+        return;
+    };
+    let library = gds::Library::parse(&bytes, &mut strings)
+        .expect("to_gds writes a stream the reader parses");
+    assert_eq!(
+        library.grid().map(Grid::dbu_per_um).ok(),
+        Some(dbu),
+        "the DEF's grid"
+    );
+    if let Ok((store, _)) = library.flatten(&deck, &strings, UnknownLayers::Reject) {
+        let rects = flat
+            .iter()
+            .filter(|s| {
+                let (x0, y0, x1, y1) = s.shape.bbox();
+                s.shape.ring.len() == 4
+                    && x0 < x1
+                    && y0 < y1
+                    && s.shape
+                        .ring
+                        .iter()
+                        .all(|&(x, y)| (x == x0 || x == x1) && (y == y0 || y == y1))
+            })
+            .count();
+        assert!(
+            store.poly_count() >= rects,
+            "every drawn rectangle is read back"
+        );
+    }
+}
+
 // --------------------------------------------------------------- drc_e2e ---
 
 /// The farthest a bitmap case is moved: its cells span at most 500 nm, so

@@ -8,6 +8,7 @@ use gpurify_check::deck::{BuildError, CompileError, CompiledDeck, DeckFn};
 use gpurify_check::topology::{DeviceTable, Extraction, NetTable, PortTable};
 use gpurify_geom::{GeometryStore, Grid};
 use gpurify_ingest::layout::UnknownLayers;
+use gpurify_ingest::lefdef::{self, LefDefError};
 use gpurify_ingest::netlist::Netlist;
 use gpurify_ingest::{DesignIntent, Provenance, StrTable};
 use std::path::{Path, PathBuf};
@@ -17,8 +18,13 @@ use std::path::{Path, PathBuf};
 /// nor ignores refuses the layout.
 #[derive(Debug, Clone, Default)]
 pub struct Inputs {
-    /// The GDSII layout. Its `UNITS` record sets the grid of the whole run.
+    /// The layout: GDSII, whose `UNITS` record sets the grid of the whole
+    /// run, or a DEF (`*.def`), whose `UNITS DISTANCE MICRONS` does, drawn
+    /// with [`Self::lef`] on the deck's layers of the LEF's layer names
+    /// ([`gpurify_ingest::lefdef`]).
     pub layout: PathBuf,
+    /// The LEF files a DEF layout reads, technology first; empty for GDSII.
+    pub lef: Vec<PathBuf>,
     /// The process deck, see
     /// [deck.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/deck.md);
     /// or, for [`load_with`], the name of a deck the binary carries.
@@ -126,17 +132,57 @@ pub fn load_with(inputs: &Inputs, decks: &[(&str, DeckFn)]) -> Result<Loaded, Lo
             )))
         })?,
     };
-    let bytes = gpurify_ingest::layout::read_gds_bytes(&inputs.layout)?;
-
-    // Layout strings are interned before the deck's, which fixes every StrId.
     let mut strings = StrTable::default();
-    let library = gpurify_ingest::layout::gds::Library::parse(&bytes, &mut strings)?;
-    // The deck's lengths are converted on the layout's grid, so the layout states it.
-    let grid = library.grid()?;
-    let deck = match builtin {
-        Some(build) => build(grid, &mut strings)?,
-        None => gpurify_check::deck::compile(&source, grid, &mut strings)
-            .map_err(|why| why.in_file(&inputs.deck.display().to_string()))?,
+    let compile = |grid, strings: &mut StrTable| -> Result<CompiledDeck, LoadError> {
+        Ok(match builtin {
+            Some(build) => build(grid, strings)?,
+            None => gpurify_check::deck::compile(&source, grid, strings)
+                .map_err(|why| why.in_file(&inputs.deck.display().to_string()))?,
+        })
+    };
+    let (library, grid, deck) = if is_def(&inputs.layout) {
+        // A DEF states its grid in its UNITS; its LEFs are read on it, and
+        // the deck too, whose layers the design is then drawn on.
+        let read = |path: &std::path::Path, file| {
+            std::fs::read_to_string(path).map_err(|why| LefDefError {
+                file,
+                line: 0,
+                message: format!("{}: {why}", path.display()),
+            })
+        };
+        let text = read(&inputs.layout, "DEF")?;
+        let dbu = lefdef::def_units(&text)?;
+        let mut lef = lefdef::Lef::default();
+        for path in &inputs.lef {
+            lefdef::read_lef_into(&read(path, "LEF")?, dbu, &mut lef)
+                .map_err(|why| in_file(why, path))?;
+        }
+        let def = lefdef::read_def(&text, &lef).map_err(|why| in_file(why, &inputs.layout))?;
+        let grid = Grid::new(dbu).map_err(|_| LefDefError {
+            file: "DEF",
+            line: 0,
+            message: format!("UNITS DISTANCE MICRONS {dbu} is not a grid"),
+        })?;
+        let deck = compile(grid, &mut strings)?;
+        let flat = lefdef::flatten(&def, &lef)?;
+        let bytes = lefdef::to_gds(
+            &flat,
+            dbu,
+            &def.design,
+            &deck.layers,
+            &deck.connectivity,
+            &strings,
+        )?;
+        let library = gpurify_ingest::layout::gds::Library::parse(&bytes, &mut strings)?;
+        (library, grid, deck)
+    } else {
+        let bytes = gpurify_ingest::layout::read_gds_bytes(&inputs.layout)?;
+        // Layout strings are interned before the deck's, which fixes every StrId.
+        let library = gpurify_ingest::layout::gds::Library::parse(&bytes, &mut strings)?;
+        // The deck's lengths are converted on the layout's grid, so the layout states it.
+        let grid = library.grid()?;
+        let deck = compile(grid, &mut strings)?;
+        (library, grid, deck)
     };
     let (store, mut provenance) = library.flatten(&deck, &strings, UnknownLayers::Reject)?;
     provenance.resolve_labels(&store, &deck.connectivity)?;
@@ -232,6 +278,19 @@ pub fn read_die(
         store,
         provenance,
     })
+}
+
+/// Is this layout a DEF (named `*.def`), read with [`Inputs::lef`]?
+pub fn is_def(layout: &std::path::Path) -> bool {
+    layout
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("def"))
+}
+
+/// The error with the file it is in named in its message.
+fn in_file(mut why: LefDefError, path: &std::path::Path) -> LefDefError {
+    why.message = format!("{}: {}", path.display(), why.message);
+    why
 }
 
 /// Intern every LVS report rule id, so `run_checks` (which borrows `Loaded`
@@ -365,6 +424,10 @@ pub enum LoadError {
     /// A deck the binary carries by name did not build.
     #[error(transparent)]
     Built(#[from] BuildError),
+    /// A DEF layout or one of its LEFs: unreadable, malformed, or a
+    /// design that cannot be drawn on the deck's layers.
+    #[error(transparent)]
+    LefDef(#[from] LefDefError),
 }
 
 /// Why [`extract`] refused the layout.

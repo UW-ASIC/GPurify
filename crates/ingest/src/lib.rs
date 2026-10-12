@@ -52,6 +52,7 @@
 pub mod deck;
 pub mod intent;
 pub mod layout;
+pub mod lefdef;
 pub mod netlist;
 pub mod provenance;
 pub mod system;

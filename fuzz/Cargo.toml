@@ -76,3 +76,10 @@ path = "fuzz_targets/drc_e2e.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "lefdef"
+path = "fuzz_targets/lefdef.rs"
+test = false
+doc = false
+bench = false

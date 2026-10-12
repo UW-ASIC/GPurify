@@ -22,7 +22,7 @@ mod oracles;
 use std::path::{Path, PathBuf};
 
 /// The targets, as `fuzz/Cargo.toml` names them.
-const TARGETS: [&str; 8] = [
+const TARGETS: [&str; 9] = [
     "gds",
     "gds_structured",
     "deck",
@@ -31,6 +31,7 @@ const TARGETS: [&str; 8] = [
     "intent",
     "liberty_spec",
     "drc_e2e",
+    "lefdef",
 ];
 
 fn repo() -> &'static Path {
@@ -154,6 +155,13 @@ fn liberty_spec() {
         oracles::liberty_spec,
         &["fuzz/seeds/liberty_spec"],
     );
+}
+
+/// Oracle: `oracles::lefdef`: a typed error, never a panic, and the GDSII
+/// the reader writes round-trips through the GDS reader on the DEF's grid.
+#[test]
+fn lefdef() {
+    replay("lefdef", oracles::lefdef, &["fuzz/seeds/lefdef"]);
 }
 
 /// The target has no seed directory, so its regressions directory is the

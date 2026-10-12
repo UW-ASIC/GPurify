@@ -30,10 +30,26 @@ standard output.
 | `--intent <file>` | Design intent: supply voltages and per-net limits. See below. |
 | `--format text\|json\|spef\|dspf` | Report format. `spef` and `dspf` need a `pex` run. Default `text`. |
 | `--quasistatic <net>` | Field-solve this net's capacitance and inductance instead of using the closed-form estimate. Repeat for more nets. |
+| `--lef <file>` | A LEF a DEF layout reads (technology first, then cells). Repeat for more. Only with a `.def` layout. |
 
 A shape on a GDS layer the deck neither declares nor ignores refuses the
 layout, naming the layer. A layout whose database unit is not a whole fraction
 of a micrometre is refused too.
+
+### A DEF layout
+
+A layout named `*.def` is a placed-and-routed design: its routing (wires,
+vias, special nets), its pins, its fill and every placed component's LEF
+abstract (pin and obstruction shapes) are drawn on the deck's layers and
+checked as a GDS would be. The grid is the DEF's `UNITS DISTANCE MICRONS`.
+Each LEF layer is the deck layer of the same name, so name the deck's
+layers as the LEF names them; a LEF layer the deck does not have refuses
+the layout. Every routed shape carries its DEF net's name, through the
+deck's `connect label` rows, so a net DEF draws in two pieces is an open
+and two nets whose shapes touch are a short, as for labelled GDS. The
+reader is LEF/DEF 5.8's subset that draws geometry; what it does not read
+is refused with its line, never skipped
+([`gpurify_ingest::lefdef`](../crates/ingest/src/lefdef/mod.rs)).
 
 ## Reading the report
 

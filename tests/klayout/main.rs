@@ -131,6 +131,7 @@ fn corpus_jobs() -> Vec<Job> {
                 deck: deck_path.clone(),
                 reference: None,
                 intent: None,
+                lef: Vec::new(),
             };
             // A cell the reader refuses has no DRC report to compare.
             let loaded = load(&inputs).ok()?;
