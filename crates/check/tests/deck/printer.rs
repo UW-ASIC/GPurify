@@ -152,3 +152,51 @@ lvs connect_explicit \"VSS\" \"GND\"
         assert!(printed.contains(line), "{line} not in\n{printed}");
     }
 }
+
+/// A deck with process corners, an extraction type, stages and waivers
+/// (PEX-006, PEX-008, FLOW-001, FLOW-002) survives printing: each statement
+/// is written back as stated, a corner's sheet at the nominal temperature
+/// with its own coefficients, the coupling threshold in attofarads, each
+/// stage ahead of its rules.
+/// Oracle: round trip.
+#[test]
+fn a_deck_with_corners_stages_and_waivers_survives_printing() {
+    let text = "grid 1nm
+layer met1 = gds(68, 20)
+layer met2 = gds(69, 20)
+layer waiver = gds(200, 0)
+stage gross
+rule m1.w width(met1) >= 140nm
+stage fine
+rule m1.s space(met1) >= 140nm
+rule m2.w width(met2) >= 140nm
+stage last
+temperature 358.15K nominal 303.15K
+pex met1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9 area_cap 25.8aF/um2 fringe_cap 40.5aF/um tc1 3.179e-3/K tc2 3.094e-7/K2
+pex met2 thickness 360nm height 2006nm sheet 0.125ohm area_cap 17.5aF/um2 fringe_cap 37.6aF/um tc1 3.161e-3/K tc2 -7.272e-7/K2
+corner cmax met1 thickness 396nm sheet 0.11ohm
+corner cmax met2 sheet 0.2ohm tc1 0/K tc2 0/K2
+corner cmin met1 fringe_cap 36aF/um
+waive m1.s waiver
+waive m2.w waiver
+extraction rcc coupling_threshold 0.1fF
+";
+    let mut strings = StrTable::default();
+    let deck = compile(text, grid(), &mut strings).expect("the deck compiles");
+    assert_eq!(deck.corners.len(), 2);
+    assert_eq!(deck.stages.name.len(), 3);
+    assert_eq!(deck.waivers.len(), 2);
+    assert_round_trip("corners, stages and waivers", &deck, &mut strings);
+    let printed = print(&deck, &strings).expect("the deck prints");
+    for line in [
+        "stage gross\nrule m1.w",
+        "stage fine\nrule m1.s",
+        "stage last\n",
+        "corner cmax met1 thickness 3.96e2nm sheet 1.1e-1ohm",
+        "corner cmax met2 sheet 2e-1ohm tc1 0e0/K tc2 0e0/K2",
+        "waive m1.s waiver",
+        "extraction rcc coupling_threshold 1e2aF",
+    ] {
+        assert!(printed.contains(line), "{line} not in\n{printed}");
+    }
+}

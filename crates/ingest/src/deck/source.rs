@@ -819,7 +819,7 @@ fn build_corners(
     layers: &LayerTable,
     strings: &mut StrTable,
 ) -> Result<Vec<ProcessCorner>, DeckError> {
-    let mut corners: Vec<(String, ProcessStack, Vec<(LayerId, CornerValues)>)> = Vec::new();
+    let mut corners: Vec<ProcessCorner> = Vec::new();
     for line in declared {
         let name = format!("corner {} {}", line.corner, line.layer);
         let Some((_, base)) = pex.iter().find(|(layer, _)| *layer == line.layer) else {
@@ -833,15 +833,19 @@ fn build_corners(
         }
         let at = if let Some(at) = corners
             .iter()
-            .position(|(corner, ..)| *corner == line.corner)
+            .position(|corner| strings.resolve(corner.name) == line.corner)
         {
             at
         } else {
-            corners.push((line.corner.clone(), nominal.clone(), Vec::new()));
+            corners.push(ProcessCorner {
+                name: strings.intern(&line.corner),
+                stack: nominal.clone(),
+                stated: Vec::new(),
+            });
             corners.len() - 1
         };
         let layer = layer_of(layers, strings, &line.layer, &name)?;
-        let (_, stack, stated) = &mut corners[at];
+        let ProcessCorner { stack, stated, .. } = &mut corners[at];
         if stated.iter().any(|&(on, _)| on == layer) {
             return Err(DeckError::Malformed(format!(
                 "{name}: the layer is stated twice"
@@ -875,14 +879,7 @@ fn build_corners(
         stack.sheet_res_ohm_sq[row] =
             sheet.unwrap_or(base.sheet_res_ohm_sq) * temperature_factor(&name, temperature, tc)?;
     }
-    Ok(corners
-        .into_iter()
-        .map(|(name, stack, stated)| ProcessCorner {
-            name: strings.intern(&name),
-            stack,
-            stated,
-        })
-        .collect())
+    Ok(corners)
 }
 
 impl DeckSource {
