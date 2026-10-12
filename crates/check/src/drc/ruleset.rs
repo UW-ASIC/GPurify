@@ -1416,9 +1416,18 @@ pub enum Rule {
     /// between two layers, sky130 nwell.7 ("Min spacing between nwell and
     /// deep nwell on separate nets") and hvnwell.8, IHP NW.b1 and NBL.c.
     ///
-    /// Limits: a layer that is no conductor carries no nets, so a rule on a
-    /// derived or tag layer (sky130's deep n-well, its HV n-well under
-    /// `hvi`) cannot be written.
+    /// A derived layer's shape on no net of its own takes the net of the
+    /// conductor shapes it is computed from (the drawn layers in its
+    /// expression) that it overlaps with a positive area, when they are on
+    /// one net: so `hv_nwell = nwell.interacting(hvi)` carries its n-well's
+    /// net, and sky130 hvnwell.8 ("Min space between HV_nwell and any nwell
+    /// on different nets") is `space(hv_nwell, nwell; nets: different)`. A
+    /// shape over no such conductor, or over several nets, is on no net, and
+    /// the rule records `Refused`.
+    ///
+    /// Limits: a layer computed only from layers that are no conductor
+    /// (sky130's deep n-well, which its deck does not connect) carries no
+    /// nets.
     NetSpacing {
         /// The conductor layer measured, and the one findings are reported on.
         layer: LayerId,
@@ -3066,6 +3075,10 @@ pub struct RuleSet {
     pub cut_area_bands: Vec<CutAreaBands>,
     /// The patterns each [`Rule::PatternMatch`] names.
     pub patterns: Vec<Pattern>,
+    /// Per derived layer a [`Rule::NetSpacing`] reads, the drawn layers it is
+    /// computed from: a shape of it on no net of its own takes the one net of
+    /// the shapes of these it overlaps.
+    pub net_sources: Vec<(LayerId, Vec<LayerId>)>,
     /// The tables [`Rule::CutClassSpacing`] names.
     pub cut_tables: Vec<CutClassTable>,
     /// The cut layers, bottom to top, of each [`Rule::ViaStack`].
@@ -3791,6 +3804,23 @@ impl RuleSet {
                     // layers only different nets are spaced.
                     if same_net && other.is_some() {
                         return Err(wrong_type(spec, "same_net"));
+                    }
+                    for read in std::iter::once(layer).chain(other) {
+                        if deck.layers.is_derived(read)
+                            && !set.net_sources.iter().any(|&(at, _)| at == read)
+                        {
+                            let mut drawn = Vec::new();
+                            let mut todo = vec![read];
+                            while let Some(next) = todo.pop() {
+                                if deck.layers.is_derived(next) {
+                                    todo.extend_from_slice(deck.layers.operands(next));
+                                } else if !drawn.contains(&next) {
+                                    drawn.push(next);
+                                }
+                            }
+                            drawn.sort_unstable();
+                            set.net_sources.push((read, drawn));
+                        }
                     }
                     Rule::NetSpacing {
                         layer,
@@ -4653,16 +4683,25 @@ impl RuleSet {
                         same_net,
                         limit,
                     } => match nets {
-                        Some(nets) => spacing::net_spacing(
-                            store,
-                            nets,
-                            id,
-                            (layer, other),
-                            same_net,
-                            limit,
-                            s,
-                            out,
-                        ),
+                        Some(nets) => {
+                            let sources = |read: LayerId| {
+                                self.net_sources
+                                    .iter()
+                                    .find(|&&(at, _)| at == read)
+                                    .map_or(&[][..], |(_, drawn)| drawn.as_slice())
+                            };
+                            spacing::net_spacing(
+                                store,
+                                nets,
+                                id,
+                                (layer, other),
+                                (sources(layer), other.map_or(&[][..], sources)),
+                                same_net,
+                                limit,
+                                s,
+                                out,
+                            )
+                        }
                         None => (Outcome::Refused, 0),
                     },
                     Rule::SpacingTable { layer, table } => spacing::spacing_table(
