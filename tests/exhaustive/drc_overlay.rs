@@ -67,6 +67,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         tap_distance(),
         labelled_short(),
         exemption(),
+        rule_flags(),
         cell_selections(),
         chip_and_device(),
         device_family(),
@@ -3409,6 +3410,49 @@ fn labelled_short() -> Vec<Fixture> {
             ),
         ),
     ])
+}
+
+/// A rule flag (DRC-092: a deck switch, as sky130's deck switches and a
+/// Calibre deck's `#IFDEF`): `let strict = true | false`, then `if strict {
+/// rule w width(m) >= 200nm }` and `if not strict { rule w width(m) >=
+/// 100nm }`, the `not` block nesting a second switch that adds a rule only
+/// when both hold. One id, so which block was read shows in its limit.
+///
+/// Oracle: the switch's documented reading (the block is read when the name
+/// is true, its `not` form when false): a bar 199, 200, 201 wide is held to
+/// 200 when strict (a finding of 199) and to 100 when not (none); the nested
+/// rule runs only with `strict` false and `edges` true.
+fn rule_flags() -> Vec<Fixture> {
+    let deck = |strict: bool, edges: bool| {
+        new_deck(
+            &["m"],
+            &format!(
+                "let strict = {strict}\nlet edges = {edges}\n\
+                 if strict {{\n    rule w width(m) >= 200nm\n}}\n\
+                 if not strict {{\n    rule w width(m) >= 100nm\n    \
+                 if edges {{\n        rule e edge_length(m) >= 10um\n    }}\n}}\n"
+            ),
+        )
+    };
+    let mut cases = Vec::new();
+    for (w, side) in sweep(200) {
+        for (strict, edges) in [(true, true), (false, true), (false, false)] {
+            let bar = Layout::default().rect("m", 0, 0, w, 3000);
+            let mut fixture = fixture(
+                &format!("rule_flags/{strict}_{edges}/{side}"),
+                &["DRC-092"],
+                &deck(strict, edges),
+                bar,
+                &[("w", if strict { below(w, 200) } else { Vec::new() })],
+            );
+            if !strict && edges {
+                // Every edge of the bar is under 10 um.
+                fixture = fixture.expect(Expect::rule("e", vec![Finding::any(); 4]));
+            }
+            cases.push(fixture);
+        }
+    }
+    every_placement(cases)
 }
 
 /// An exemption region (DRC-092): `width(met1 not areaid) >= 100nm` flags a

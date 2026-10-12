@@ -261,6 +261,19 @@ for (m, w) in metals {
 A name can be bound once. Loops only run over lists written in the deck, so a
 deck always finishes loading.
 
+`if` reads a block only when a name is bound to `true`, and `if not` only
+when it is `false`: a deck switch, flipped where it is bound, as a Calibre
+deck's `#DEFINE` and `#IFDEF` or a foundry KLayout deck's run-time variables
+(sky130's floating-metal and seal-ring switches) turn rule groups on and off.
+A block switched off is not read.
+
+```
+let floating_labels = false
+if not floating_labels {
+    rule x.22 unconnected_pin(met1)
+}
+```
+
 ### Waivers
 
 ```
