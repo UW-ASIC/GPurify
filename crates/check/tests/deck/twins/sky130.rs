@@ -820,7 +820,16 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
         "licon.15",
         min_enclosure(l["poly_licon"], l["npc"], nm(100)),
     );
-    d.rule("li.1", min_width(l["li"], nm(170)));
+    l.insert(
+        "li_vpp",
+        d.derived("li_vpp", l["li"].in_cells(&["s8rf2_xcmvpp_hd5_*"])),
+    );
+    l.insert(
+        "li_not_vpp",
+        d.derived("li_not_vpp", l["li"].not_in_cells(&["s8rf2_xcmvpp_hd5_*"])),
+    );
+    d.rule("li.1", min_width(l["li_not_vpp"], nm(170)));
+    d.rule("li.1a", min_width(l["li_vpp"], nm(140)));
     d.rule("li.3", min_spacing(l["li"], nm(170)));
     d.rule("li.3.notch", notch(l["li"], nm(170)));
     d.rule("li.5", asymmetric_enclosure(l["licon"], l["li"], nm(80)));
@@ -882,7 +891,24 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     d.rule("m5.2", min_spacing(l["met5"], nm(1600)));
     d.rule("m5.2.notch", notch(l["met5"], nm(1600)));
     d.rule("m5.4", min_area(l["met5"], nm2(4000000)));
-    d.rule("m1.4", min_enclosure(l["mcon"], l["met1"], nm(30)));
+    let m1_4a = [
+        "s8cell_ee_plus_sseln_a",
+        "s8cell_ee_plus_sseln_b",
+        "s8cell_ee_plus_sselp_a",
+        "s8cell_ee_plus_sselp_b",
+        "s8fpls_pl8",
+        "s8fs_cmux4_fm",
+    ];
+    l.insert(
+        "mcon_m1_4a",
+        d.derived("mcon_m1_4a", l["mcon"].in_cells(&m1_4a)),
+    );
+    l.insert(
+        "mcon_m1_4",
+        d.derived("mcon_m1_4", l["mcon"].not_in_cells(&m1_4a)),
+    );
+    d.rule("m1.4", min_enclosure(l["mcon_m1_4"], l["met1"], nm(30)));
+    d.rule("m1.4a", min_enclosure(l["mcon_m1_4a"], l["met1"], nm(5)));
     d.rule("m1.5", asymmetric_enclosure(l["mcon"], l["met1"], nm(60)));
     d.rule("via.1a", cut_size(l["via"], nm(150), nm(150)));
     d.rule("via.2", min_spacing(l["via"], nm(170)));
@@ -2017,7 +2043,22 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     d.rule("ct.4", must_be_inside(l["mcon"], l["li"]));
     d.rule(
         "poly.12",
-        forbidden(l["poly"].not(l["nwell_lv"]).group().and(l["tap"])),
+        forbidden(
+            l["poly"]
+                .not_in_cells(&["s8fgvr_n_fg2"])
+                .not(l["nwell_lv"])
+                .group()
+                .and(l["tap"]),
+        ),
+    );
+    d.rule(
+        "x.25",
+        forbidden(l["pnp"].not_in_cells(&[
+            "s8rf_pnp",
+            "s8rf_pnp5x",
+            "s8tesd_iref_pnp",
+            "stk14ecx_*",
+        ])),
     );
     d.rule(
         "poly.14",

@@ -233,7 +233,11 @@ impl LayerExpr {
     /// `.not_interacting(other)`.
     #[must_use]
     pub fn not_interacting(self, other: impl Into<LayerExpr>) -> Self {
-        self.call(DerivedOp::Interacting(false), Some(other.into()), Vec::new())
+        self.call(
+            DerivedOp::Interacting(false),
+            Some(other.into()),
+            Vec::new(),
+        )
     }
 
     /// `.inside(other)`.
@@ -704,9 +708,12 @@ impl<'s> DeckBuilder<'s> {
             .into_iter()
             .map(|row| {
                 let pattern = match row.op {
-                    DerivedOp::WithText { text, .. } => {
-                        source.texts.get(text as usize).cloned().into_iter().collect()
-                    }
+                    DerivedOp::WithText { text, .. } => source
+                        .texts
+                        .get(text as usize)
+                        .cloned()
+                        .into_iter()
+                        .collect(),
                     DerivedOp::InCells { first, count, .. } => source
                         .texts
                         .get(first as usize..(first + count) as usize)

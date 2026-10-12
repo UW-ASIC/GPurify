@@ -1538,6 +1538,45 @@ fn a_text_selection_needs_a_drawn_layer_and_a_pattern() {
     );
 }
 
+/// A cell selection built in code meets the parser's refusals in `lower`:
+/// a derived receiver, a pattern range past the table, a refused glob
+/// character; the well-formed one lowers (DRC-092).
+///
+/// Oracle: `lower`'s contract, "a source built by anyone lowers to a deck the
+/// engines can trust as one parsed from text", against the parser's rules.
+#[test]
+fn a_cell_selection_built_in_code_is_held_to_the_parser_s_rules() {
+    use gpurify_ingest::deck::{lower, DeckSource, DerivedOp, DerivedSource};
+    let source = |receiver: &str, first: u32, count: u32, pattern: &str| {
+        let mut source = DeckSource::default();
+        source.layers.push(("met1".to_owned(), (68, 20)));
+        source.derived.push(DerivedSource {
+            name: "big".to_owned(),
+            op: DerivedOp::Sized(gpurify_geom::Dbu::new_unchecked(10)),
+            layers: vec!["met1".to_owned()],
+        });
+        source.derived.push(DerivedSource {
+            name: "pad".to_owned(),
+            op: DerivedOp::InCells {
+                keep: true,
+                first,
+                count,
+            },
+            layers: vec![receiver.to_owned()],
+        });
+        source.texts.push(pattern.to_owned());
+        lower(&source, &mut StrTable::default())
+    };
+    assert!(source("met1", 0, 1, "PAD*").is_ok());
+    assert!(source("big", 0, 1, "PAD*").is_err(), "a derived receiver");
+    assert!(
+        source("met1", 0, 2, "PAD*").is_err(),
+        "a range past the table"
+    );
+    assert!(source("met1", 0, 0, "PAD*").is_err(), "no pattern");
+    assert!(source("met1", 0, 1, "PAD[12]").is_err(), "a class");
+}
+
 /// `in_cells` / `not_in_cells` (DRC-092) select a drawn layer by one or more
 /// quoted cell-name patterns, `*` and `?` only, at most 64 in a deck.
 ///
