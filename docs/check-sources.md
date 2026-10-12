@@ -63,8 +63,8 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 | Domain | implemented | expressible | partial | missing | verify | out of scope |
 |---|---:|---:|---:|---:|---:|---:|
 | DRC | 43 | 6 | 43 | 14 | 0 | 0 |
-| LVS | 24 | 1 | 14 | 9 | 0 | 0 |
-| ERC | 53 | 4 | 11 | 13 | 0 | 0 |
+| LVS | 24 | 1 | 15 | 8 | 0 | 0 |
+| ERC | 53 | 4 | 13 | 11 | 0 | 0 |
 | PEX | 7 | 0 | 3 | 6 | 0 | 0 |
 | Flow | 2 | 0 | 2 | 6 | 0 | 0 |
 
@@ -329,6 +329,8 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-C9 | CDM checks (bus inductance, local clamps, driver/receiver ground R) | partial | TR18-01:5.6.3,6.6; JEP157A; Khazhinsky2012; PF | SY; MR |
 | ERC-C10 | Layout parasitic ESD paths | implemented | TR18-01:5.6.1; Khazhinsky2012; GF:14.4 | SY; MR |
 | ERC-C11 | ESD device geometry (DCGS, SCGS, fingers) | expressible | GF:LVESD.1-13; IHP:6.8 | FR; MR; SY |
+| ERC-C12 | Package / 2.5D / 3D ESD | partial | TR18-01:6.3-6.7; JEP196; CAL:3DPERC | SY; NV |
+| ERC-C13 | System-level ESD | partial | TR18-01:7; WP3 | SY; NV |
 | ERC-D1a | Tap distance conditional on neighbouring well spacing | implemented | GF:LU.1-4 | FR; CF; SY; MR |
 | ERC-D1b | Minimum well-tie area | implemented | TR18-02:Annex A; GF:LU.7,IO.2,IO.4 | FR; CF; SY; MR |
 | ERC-D2 | Pad-diffusion guard ring (spacing, width) | implemented | GF:IO.1-4; IHP:7.2.1; TR18-02:3.1.2 | FR; MR; SY |
