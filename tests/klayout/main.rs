@@ -483,6 +483,9 @@ rule ev enclosure(via1, met1) >= 30nm
 rule evn enclosure(via1, met1, noncoincident) >= 30nm
 rule eo enclosure(via1, met1, opposite) >= 30nm
 rule ea enclosure(via1, met1, adjacent) >= 30nm
+rule mi inside(met2, met1)
+rule miv inside(via1, met1)
+rule mc contains(met1, via1) >= 1
 ";
 
 /// The bounding box of a ring, `(xlo, ylo, xhi, yhi)`.

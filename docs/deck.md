@@ -202,8 +202,8 @@ Every result keeps its vertices on the grid and its edges at multiples of 45°:
 - `.with_width` measures a 45° shape as `width` does (below).
 
 Of the checks, `width`, `notch`, `space`, `area`, `hole_area`,
-`edge_length`, `forbidden` and `enclosure` (every side, `noncoincident`,
-`opposite`, `adjacent`) measure 45° shapes; every other check refuses a layer
+`edge_length`, `forbidden`, `inside`, `contains` and `enclosure` (every side,
+`noncoincident`, `opposite`, `adjacent`) measure 45° shapes; every other check refuses a layer
 with a 45° edge. `enclosure` is the Euclidean distance from the inner shape to
 its host's boundary, a 45° edge of either included. `noncoincident`,
 `opposite` and `adjacent` read the edge pairs the foundries' KLayout decks
@@ -211,7 +211,8 @@ check them by (`enclosing` without touching edges, `enclosed` and `enclosing`
 by projection), so an inner edge pairs with a host edge at 45° to it as well
 as a parallel one; `opposite` and `adjacent` take rectangular inner shapes
 (cuts) and refuse one with a 45° edge. `full_width` and an enclosure with
-`width:` or `below:` still refuse. `width` is the distance between facing edges, measured square to
+`width:` or `below:` still refuse. `inside` reports the area left outside
+rounded up, so half a unit outside reads 1. `width` is the distance between facing edges, measured square to
 them, a neck between two inside corners measured corner to corner, 0 at a
 corner sharper than 90°, and, for an axis edge and a 45° edge at 135° to each
 other (a chamfer and the side across from it), the distance between the parts

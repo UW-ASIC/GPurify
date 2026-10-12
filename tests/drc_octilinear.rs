@@ -587,3 +587,36 @@ fn straight_out_enclosures_read_a_chamfer_at_its_nearest_point() {
     assert_eq!(found.outcome("o21"), Outcome::Refused);
     assert_eq!(found.outcome("a21"), Outcome::Refused);
 }
+
+/// DRC-091 and DRC-092 on 45-degree shapes (H12b): `inside` and `contains`
+/// read 45-degree figures exactly.
+///
+/// Oracle: hand-derived, and the symmetry law. In [`octagon_host`] (met2): a
+/// diamond of radius 10 at (50, 50) lies inside; one at (15, 15) is cut in
+/// half by the chamfer `x + y = 30`, so `inside(met1, met2)` reports its
+/// outside half, `10² = 100`; a half-unit triangle (0, 0), (1, 0), (0, 1)
+/// past the host's corner is all outside, area 0.5, reported rounded up as
+/// 1. `contains(met2, met1) >= 2` counts the one diamond held: 1, short of 2.
+#[test]
+fn inside_and_contains_read_45_degree_figures() {
+    let rules = "rule i inside(met1, met2)\nrule c contains(met2, met1) >= 2";
+    let layout = [
+        octagon_host(),
+        ("met1", vec![(50, 40), (60, 50), (50, 60), (40, 50)]),
+        ("met1", vec![(15, 5), (25, 15), (15, 25), (5, 15)]),
+        ("met1", vec![(0, 0), (1, 0), (0, 1)]),
+    ];
+    let found = run_on(rules, &layout);
+    let mut inside = found.of("i");
+    inside.sort_by_key(|f| format!("{f:?}"));
+    assert_eq!(
+        inside,
+        [(area(1), area(0)), (area(100), area(0))],
+        "the triangle's half unit, the cut diamond's half"
+    );
+    assert_eq!(
+        found.of("c"),
+        [(Measurement::Count(1), Measurement::Count(2))]
+    );
+    holds_under_symmetries(rules, &layout);
+}

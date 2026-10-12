@@ -4,9 +4,14 @@
 //! except that `forbidden` reports shapes as drawn.
 //! Data out: one violation per offending shape, or per edge of an edge layer.
 
-use super::{centre, merged, mid, owners_of, seg_bbox, SortedRects, Verdict, REFUSED};
+use super::{
+    centre, figures_holding, merged, mid, owners_by_point, owners_of, seg_bbox, SortedRects,
+    Verdict, REFUSED,
+};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
+use gpurify_geom::boolean::{subtraction_into, union_into};
+use gpurify_geom::derive::{inside_flags, interior_point8};
 use gpurify_geom::ops::{isqrt, Point};
 use gpurify_geom::rects::{covered_area, decompose_into};
 use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer};
@@ -123,6 +128,39 @@ pub(crate) fn must_contain(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
+    if let Some(octilinear) = octilinear_pair(store, (outer, inner), s) {
+        let Some((outer_figures, inner_figures, owners)) = octilinear else {
+            return REFUSED;
+        };
+        // Held: an inner figure the outer covers, in the figure holding it.
+        let Ok(covered) = inside_flags(&inner_figures, &outer_figures) else {
+            return REFUSED;
+        };
+        let mut held = vec![0u32; outer_figures.len()];
+        for (inner, home) in figures_holding(&outer_figures, &inner_figures)
+            .into_iter()
+            .enumerate()
+        {
+            if let Some(host) = home.filter(|_| covered[inner]) {
+                held[host as usize] += 1;
+            }
+        }
+        for (figure, &count) in held.iter().enumerate() {
+            let Some(broken) = count_broken(count, (min_count, max_count)) else {
+                continue;
+            };
+            out.push(Violation {
+                rule,
+                layer: outer,
+                severity: Severity::Error,
+                at: point_in(&outer_figures, figure),
+                measured: Measurement::Count(count),
+                limit: Measurement::Count(broken),
+                shapes: (owners[figure], None),
+            });
+        }
+        return (Outcome::Ran, held.len() as u64);
+    }
     let (Some(inner_figures), Some(outer_figures)) =
         (merged(store, inner, s), merged(store, outer, s))
     else {
@@ -200,8 +238,63 @@ pub(crate) fn tagged_figures(
     )
 }
 
+/// The bound a count of held figures breaks, `None` when within both.
+fn count_broken(count: u32, (min_count, max_count): (u32, u32)) -> Option<u32> {
+    if count < min_count {
+        Some(min_count)
+    } else if count > max_count {
+        Some(max_count)
+    } else {
+        None
+    }
+}
+
+/// A point inside figure `figure` of `figures`, floored to the grid.
+fn point_in(figures: &ValidatedLayer, figure: usize) -> Point {
+    let (x8, y8) = interior_point8(figures.get(u32::try_from(figure).expect("a u32 index")));
+    Point {
+        x: Dbu::new_unchecked(x8.div_euclid(8)),
+        y: Dbu::new_unchecked(y8.div_euclid(8)),
+    }
+}
+
+/// Where either of two layers has a 45-degree edge (`Some`): both merged,
+/// with the lowest drawn row under each figure of the first, or `None`
+/// inside when either will not validate or merge (the rule is `Refused`).
+/// `None` when both are rectilinear, for the rectangle path.
+#[allow(clippy::type_complexity, reason = "two merged layers and owners, once")]
+fn octilinear_pair(
+    store: &GeometryStore,
+    (first, second): (LayerId, LayerId),
+    s: &mut Scratch,
+) -> Option<Option<(ValidatedLayer, ValidatedLayer, Vec<PolyId>)>> {
+    let Some((a, b)) = s.validated.pair_octilinear(store, first, second) else {
+        return Some(None);
+    };
+    if a.is_rectilinear() && b.is_rectilinear() {
+        return None;
+    }
+    let (mut fa, mut fb) = (ValidatedLayer::default(), ValidatedLayer::default());
+    let empty = ValidatedLayer::default();
+    if union_into(a, &empty, &mut fa).is_err() || union_into(b, &empty, &mut fb).is_err() {
+        return Some(None);
+    }
+    let owners = owners_by_point(&fa, a);
+    Some(Some((fa, fb, owners)))
+}
+
+/// Twice the area of a polygon, holes subtracted: whole on the octilinear grid.
+fn area2(poly: gpurify_geom::PolygonRef<'_>) -> i128 {
+    std::iter::once(poly.outer())
+        .chain(poly.holes())
+        .map(|ring| ring.area2().raw())
+        .sum()
+}
+
 /// [`must_be_inside`] for the merged `inner` figures `judge` takes, each by
-/// its lowest-numbered drawn polygon; `examined` counts those.
+/// its lowest-numbered drawn polygon; `examined` counts those. Where either
+/// layer has a 45-degree edge, the area left outside is exact and reported
+/// rounded up, so a half unit outside reads 1.
 pub(crate) fn inside_where(
     store: &GeometryStore,
     rule: StrId,
@@ -210,6 +303,44 @@ pub(crate) fn inside_where(
     out: &mut Violations,
     judge: impl Fn(PolyId) -> bool,
 ) -> Verdict {
+    if let Some(octilinear) = octilinear_pair(store, (inner, outer), s) {
+        let Some((inner_figures, outer_figures, owners)) = octilinear else {
+            return REFUSED;
+        };
+        // The parts outside, each inside exactly one inner figure.
+        let mut rest = ValidatedLayer::default();
+        if subtraction_into(&inner_figures, &outer_figures, &mut rest).is_err() {
+            return REFUSED;
+        }
+        let mut outside2 = vec![0i128; inner_figures.len()];
+        for (part, home) in figures_holding(&inner_figures, &rest)
+            .into_iter()
+            .enumerate()
+        {
+            let home = home.expect("a part of an inner figure lies in it");
+            outside2[home as usize] += area2(rest.get(u32::try_from(part).expect("a u32 index")));
+        }
+        let mut examined = 0u64;
+        for (figure, &twice) in outside2.iter().enumerate() {
+            if !judge(owners[figure]) {
+                continue;
+            }
+            examined += 1;
+            if twice == 0 {
+                continue;
+            }
+            out.push(Violation {
+                rule,
+                layer: inner,
+                severity: Severity::Error,
+                at: point_in(&inner_figures, figure),
+                measured: Measurement::Area(DbuArea::new((twice + 1) / 2)),
+                limit: Measurement::Area(DbuArea::new(0)),
+                shapes: (owners[figure], None),
+            });
+        }
+        return (Outcome::Ran, examined);
+    }
     let (Some(inner_figures), Some(outer_figures)) =
         (merged(store, inner, s), merged(store, outer, s))
     else {
