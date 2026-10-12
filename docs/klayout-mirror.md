@@ -243,7 +243,7 @@ explains (kind 30).
 | 27 | forbidden | `forbidden(L)` | ROW / EDGE | EXACT | exact | 3964 |
 | 28 | must_contain | `contains(o, i) >= n` (`<=`, `==`) | FIG by marker (outer) | EXACT | exact | 3236 |
 | 29 | must_be_inside | `inside(i, o)` | FIG by marker (inner) | EXACT | exact | 3107 |
-| 30 | net_spacing | `space(L; nets: same\|different)` | PAIR | EXACT with `touch_within_layer`, else NONE | exact | 1141 / 10 (F88) |
+| 30 | net_spacing | `space(L; nets: same\|different)` | PAIR | EXACT on one layer with `touch_within_layer`, else NONE | exact | 1141 / 10 (F88) |
 | 31 | spacing_table | `space_table(L; …)` | PAIR | APPROX | exact on R, else KLayout ⊆ GPurify | 1209 |
 | 32 | attached_wide_spacing | `wide_space(L; width, attached)` | PAIR | APPROX | KLayout ⊆ GPurify | 986 |
 | 33 | edge_min_length | `length(E) >= l` | EDGE | EXACT | exact | 2162 |
@@ -280,7 +280,7 @@ explains (kind 30).
 
 41 kinds are EXACT (five scripted over KLayout's polygons), 15 APPROX and seven NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
-`connect touch_within_layer`. `examined` is GPurify-only; KLayout has no equivalent.
+`connect touch_within_layer`, and between two layers (`space(A, B; nets: ..)`), which is not mirrored. `examined` is GPurify-only; KLayout has no equivalent.
 
 The counts were measured on 990376b (after B20 and B24), with the translator reconciled to B24.
 
@@ -780,7 +780,7 @@ emit(id, I.not_inside(O)) { |p| { v: (RBA::Region.new(p) - O.data).area } }
 
 (v t9 C4, T11.)
 
-### 30. net_spacing — EXACT with `touch_within_layer`, otherwise NONE
+### 30. net_spacing — EXACT on one layer with `touch_within_layer`, otherwise NONE
 
 **GPurify:** as `min_spacing` (rule 6), restricted to pairs on the same net, or on different
 nets. `Refused` when a shape has no net.

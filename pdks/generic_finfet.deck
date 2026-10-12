@@ -394,7 +394,8 @@ rule SDT.LISD.AUX.4 inside(SDT, LISD)
 # ACTIVE outside SRAMDRC that touches it.
 rule SRAM.ACTIVE.AUX.2 forbidden(ACTIVE.outside(SRAMDRC).interacting(SRAMDRC))
 #
-# needs: net spacing that is directional (S.2A) or between two layers:
+# needs: net spacing that is directional (S.2A), or on ACTIVE, LIG, LISD and
+# SDT, which are not conductors in this deck:
 #   rule ACTIVE.S.2A space(ACTIVE; different_net) >= 92nm   (horizontal only)
 #   rule LIG.LISD.S.6 space(LIG, LISD; different_net) >= 14nm
 #   rule LIG.LISD.S.7 corner_space(LIG, LISD; different_net) >= 15nm

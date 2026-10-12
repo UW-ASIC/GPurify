@@ -62,9 +62,9 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 
 | Domain | implemented | expressible | partial | missing | verify | out of scope |
 |---|---:|---:|---:|---:|---:|---:|
-| DRC | 37 | 4 | 43 | 22 | 0 | 0 |
+| DRC | 39 | 4 | 43 | 20 | 0 | 0 |
 | LVS | 24 | 1 | 14 | 9 | 0 | 0 |
-| ERC | 35 | 3 | 11 | 32 | 0 | 0 |
+| ERC | 43 | 3 | 9 | 26 | 0 | 0 |
 | PEX | 4 | 0 | 3 | 9 | 0 | 0 |
 | Flow | 0 | 0 | 2 | 8 | 0 | 0 |
 
@@ -296,7 +296,9 @@ single oracle is a named gap that ledger P1 closes.
 |---|---|---|---|---|
 | DRC-036 | Span-length table | partial | LEF58_SPANLENGTHTABLE | SE; MR; SY |
 | DRC-037 | Bent / 45-degree features | partial | IHP:M1.g,Mn.g,Gat.g; GF:PL.7,MT30.4; SKY:via.14a | FR; MR; SY |
-| DRC-083 | HV tag propagation (shorted to HV becomes HV) | partial | SKY:hv.X.1-hv.X.6 | FR; SY; MR |
+| DRC-081 | Net spacing between two layers / on wells | partial | SKY:nwell.7,hvnwell.8,hv.nwell.1,vhvi.8; IHP:NW.b1,NBL.c | SY; MR |
+| DRC-082 | Voltage-dependent spacing (VA-DRC) | implemented | SKY:hvnwell.8,hv.*; LEF58_VOLTAGESPACING; CAL; ICV; PEG; EMP | SY; MR |
+| DRC-083 | HV tag propagation (shorted to HV becomes HV) | implemented | SKY:hv.X.1-hv.X.6 | FR; SY; MR |
 | DRC-084 | Floating interconnect / must-join ports | partial | SKY:x.22; LEF58_MUSTJOINALLPORTS | SY; MR |
 | DRC-085 | Tap presence per well | implemented | SKY:nwell.4; GF:DN.3; IHP:nmosi.d | FR; SY; MR |
 | DRC-092 | Exemptions (areaid regions, cell-name, rule flags) | partial | SKY:flags,areaid.*,m1.4a,licon.11c; IHP:6.12 IND,8 DigiBnd | FR; MR; SY |
@@ -335,17 +337,23 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-E11 | Dynamic / vectorless IR | partial | RH; VOL; MP; TOT; Najm2003; WH | CF; NV; MR; SY |
 | ERC-E12 | Stress voiding / slotting | partial | JEP139; JESD214; GF:14.6,MSLOT.1-10; IHP:Slt.a-i | FR; MR; SY |
 | ERC-E13 | Thermal-aware / statistical EM, self-heating | implemented | RH; TOT; VOL; Banerjee1999; Black1969; JEP122; JESD63; Kitchin1995 | CF; SE; MR; SY |
-| ERC-F1 | Static voltage propagation, conditional on gate voltage | partial | CAL:WP 81822; SKY:hv.X.1; patents P5,P9 | SE:Siemens WP; SY |
+| ERC-F1 | Static voltage propagation, conditional on gate voltage | implemented | CAL:WP 81822; SKY:hv.X.1; patents P5,P9 | SE:Siemens WP; SY; NV |
 | ERC-F2 | Gate-oxide overstress | implemented | GF:14.1.4.2; SKY:hv; TR22:4.1; CAL | FR; CF; SY |
 | ERC-F3 | Junction / drain-source overstress | implemented | SKY:hv; IHP:process spec | FR; SY |
 | ERC-F5 | TDDB/BTI/HCI lifetime | implemented | JEP122; JESD263; JESD241; JESD28; JESD60 | CF; MR; SY |
 | ERC-F6 | Missing level shifter | implemented | CAL:WP 81822; IEEE1801 | SY; NV |
+| ERC-F7 | Missing isolation at switchable-domain outputs | implemented | IEEE1801; CPF | SY; NV |
+| ERC-F8 | Power-state-dependent undriven gates | implemented | CAL:WP 81822; IEEE1801; IA | SE:Siemens WP; SY; NV |
 | ERC-F9 | DC / sneak path between domains | implemented | CAL:datasheet; CAL:WP 81822 | SE:WP Fig2; SY |
-| ERC-F10 | HV tag consistency | partial | SKY:hv.X.1,hvnwell.9,hvnwell.10 | FR; SY; MR |
+| ERC-F10 | HV tag consistency | implemented | SKY:hv.X.1,hvnwell.9,hvnwell.10; GF:DV.9 | FR; SY; MR |
+| ERC-F11 | Voltage-dependent spacing | implemented | (see DRC-082) | SY; MR |
 | ERC-F12 | Well / body bias | implemented | GF:LU.9,LU.10 | SY; NV |
+| ERC-F13 | Inter-metal dielectric breakdown | implemented | ICV; JEP159A | CF; SY; MR |
 | ERC-G2 | Floating well | implemented | SKY:nwell.4 | FR; SY; MR |
 | ERC-G4 | Supply short (n-tie + p-tie, VDD-GND) | implemented | CAL | SY; MR |
 | ERC-G7 | Gate tied directly to a rail | implemented | CAL (weak sourcing) | SY; NV; MR |
+| ERC-H1 | Static leakage / HiZ / floating in power-down | implemented | IA | SY; NV |
+| ERC-H4 | Fanout limits | implemented | ICV; GF:14.1.4.1 | SY; NV |
 | PEX-010 | SPEF output | implemented | IEEE1481 | CF; SE; MR; golden |
 | FLOW-005 | In-design / live DRC | partial | CAL:RealTime; ICV:Live; PEG | FR; MR |
 

@@ -354,9 +354,10 @@ impl CompiledDeck {
             Rule::MustBeInside { inner, outer } => two(inner, outer),
             Rule::NetSpacing {
                 layer,
+                other,
                 same_net,
                 limit,
-            } => one(layer)
+            } => bounded(layer, other)
                 .value("same_net", ParamValue::Flag(same_net))
                 .length("limit", limit),
             Rule::SpacingTable { layer, table } => {
@@ -827,6 +828,52 @@ impl CompiledDeck {
         let t = &erc.unconnected_pin;
         for r in 0..t.head.len() {
             let row = Row::new("unconnected_pin", &t.layer[span(&t.layer_start, r)]);
+            file(&t.head, r, row);
+        }
+        let t = &erc.voltage_spacing;
+        for r in 0..t.head.len() {
+            let mut layers = vec![t.layer[r]];
+            layers.extend(t.other[r]);
+            let mut row = Row::new("voltage_spacing", &layers);
+            for at in span(&t.step_start, r) {
+                row = row.number("voltage", t.voltage[at].raw());
+            }
+            for at in span(&t.step_start, r) {
+                row = row.length("space", t.space[at]);
+            }
+            file(&t.head, r, row);
+        }
+        let t = &erc.dielectric_field;
+        for r in 0..t.head.len() {
+            let mut layers = vec![t.layer[r]];
+            layers.extend(t.other[r]);
+            let row = Row::new("dielectric_field", &layers).number("max_field", t.max_field[r]);
+            file(&t.head, r, row);
+        }
+        let t = &erc.hv_tag;
+        for r in 0..t.head.len() {
+            let row =
+                Row::new("hv_tag", &[t.layer[r], t.tag[r]]).number("voltage", t.voltage[r].raw());
+            file(&t.head, r, row);
+        }
+        let t = &erc.mixed_tag;
+        for r in 0..t.head.len() {
+            file(&t.head, r, Row::new("mixed_tag", &[t.layer[r], t.tag[r]]));
+        }
+        let t = &erc.fanout;
+        for r in 0..t.head.len() {
+            let row = Row::new("fanout", &[]).value("max_gates", ParamValue::Count(t.max_gates[r]));
+            file(&t.head, r, row);
+        }
+        for r in 0..erc.undriven_gate.head.len() {
+            file(&erc.undriven_gate.head, r, Row::new("undriven_gate", &[]));
+        }
+        let t = &erc.missing_isolation;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("missing_isolation", &[]);
+            for &id in &t.isolation[span(&t.isolation_start, r)] {
+                row.params.push(("isolation", model(id)));
+            }
             file(&t.head, r, row);
         }
         let t = &erc.well_bias;

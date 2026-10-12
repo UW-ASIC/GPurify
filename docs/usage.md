@@ -211,9 +211,10 @@ Some electrical rules need facts about the chip that no process deck can know:
 `ir_drop`, `dynamic_ir_drop`, `em_current_density`, `electromigration`,
 `em_thermal`, `reliability`, `hv_domain`, `esd_latchup`, `esd_topological`,
 `gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`,
-`domain_crossing`, and `multiple_drivers` and `tie_high_low`, which read the
-supplies as the rails that orient each transistor channel. Without
-`--intent` they report skipped.
+`domain_crossing`, `voltage_spacing`, `dielectric_field`, `hv_tag`,
+`undriven_gate` and `missing_isolation` (these two also need `states`), and
+`multiple_drivers` and `tie_high_low`, which read the supplies as the rails
+that orient each transistor channel. Without `--intent` they report skipped.
 
 ```json
 {
@@ -254,9 +255,27 @@ The supplies also set the voltages the overstress and domain rules check. A
 power net sits at its domain's voltage and a ground net at 0 V. Every other
 net can reach anything between the lowest and highest supply connected to it
 through transistor source and drain, resistors, diodes and bipolar
-transistors; gates and capacitors pass nothing. Each power net's domain is
+transistors; gates and capacitors pass nothing. A transistor whose deck row
+states a gate condition (`on_gate_min`, `on_gate_max`) passes voltage only
+while the range its gate can reach turns it on. Each power net's domain is
 the power domain of the signals it drives, so give every separately powered
 supply its own domain. A file may declare at most 64 domains.
+
+Power states, for `undriven_gate` and `missing_isolation`, list the supplies
+switched off and the inputs held at a voltage while each state lasts:
+
+```json
+"states": [
+  { "name": "sleep",   "off": ["VDD_SW"] },
+  { "name": "disable", "inputs": [{ "net": "EN", "voltage_mv": 0 }] }
+]
+```
+
+In a state, a switched-off supply holds no voltage, and a held input is a
+supply at its voltage (a ground at 0 V). Voltages are propagated again for
+each state, gate conditions included, so a disabled tristate driver leaves its
+output floating. A state may only turn off a declared supply, names are
+unique, and an input is held once per state.
 
 ## Parasitics
 

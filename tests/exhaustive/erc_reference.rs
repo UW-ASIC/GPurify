@@ -10,8 +10,12 @@
 //!   switching event, against the engine's transient
 //!   ([`switching_grids_step_as_a_dense_backward_euler_does`]);
 //! - a breadth-first search over the extracted net graph of generated
-//!   circuits, against `floating_gate`, `esd_topological`, `multiple_drivers`
-//!   and `tie_high_low` ([`topology_rules_agree_with_a_search_of_the_extracted_graph`]).
+//!   circuits, against `floating_gate`, `esd_topological`, `multiple_drivers`,
+//!   `tie_high_low` and `fanout`
+//!   ([`topology_rules_agree_with_a_search_of_the_extracted_graph`]);
+//! - a brute-force sweep of the voltage propagation rules, gate conditions
+//!   included, against `erc::voltage` on the same generated circuits
+//!   ([`voltage_propagation_agrees_with_a_naive_sweep_of_the_extracted_graph`]).
 //!
 //! The boards of `erc.rs` already judge the topology rules against a graph
 //! oracle on every small circuit, drawn and extracted, and `supply_short` on
@@ -33,15 +37,17 @@ use gpurify::check::erc::rules::supply::{
     check_esd_topological, check_tie_high_low, EsdTopologicalTable, TieHighLowTable,
 };
 use gpurify::check::erc::rules::topology::{
-    check_floating_gate, check_multiple_drivers, FloatingGateTable, MultipleDriversTable,
+    check_fanout, check_floating_gate, check_multiple_drivers, FanoutTable, FloatingGateTable,
+    MultipleDriversTable,
 };
 use gpurify::check::erc::ruleset::RuleHead;
+use gpurify::check::erc::voltage::{propagate_into, NetVoltage};
 use gpurify::check::erc::{Design, Scratch};
 use gpurify::check::report::{Measurement, RuleRun, Severity, Violations};
 use gpurify::check::topology::{DeviceId, DeviceTable, NetId, NetTable, PortTable, TerminalRole};
 use gpurify::geom::ops::Point;
 use gpurify::geom::{Dbu, LayerId, PolyId, Qty};
-use gpurify::ingest::deck::{DeviceKind, DeviceRecognition};
+use gpurify::ingest::deck::{DeviceKind, DeviceRecognition, DeviceValue};
 use gpurify::ingest::intent::{DomainId, NetLimits, SupplyRole};
 use gpurify::ingest::{StrId, StrTable};
 use gpurify_testgen::{layout_from_netlist, DeviceSpec, Floorplan, NetlistSpec, Rng};
@@ -626,9 +632,10 @@ struct Expected {
     esd: Vec<(NetId, u32)>,
     drivers: Vec<(NetId, u32)>,
     tied: Vec<(NetId, u32)>,
+    fanout: Vec<(NetId, u32)>,
 }
 
-/// The four rules re-derived from their rustdoc over the extracted net graph.
+/// The five rules re-derived from their rustdoc over the extracted net graph.
 fn search(c: &Circuit, intent: &IntentMap, clamp: StrId) -> Expected {
     let nets = c.nets.net_count();
     let devices: Vec<(StrId, Vec<(NetId, TerminalRole)>)> = (0..c.devices.len())
@@ -771,11 +778,24 @@ fn search(c: &Circuit, intent: &IntentMap, clamp: StrId) -> Expected {
         .map(|n| (n, 0))
         .collect();
 
+    // fanout, at most one gate: the transistor gate terminals on each net.
+    let fanout = all()
+        .filter_map(|n| {
+            let gates = devices
+                .iter()
+                .flat_map(|d| &d.1)
+                .filter(|t| **t == (n, TerminalRole::Gate))
+                .count() as u32;
+            (gates > 1).then_some((n, gates))
+        })
+        .collect();
+
     Expected {
         floating,
         esd,
         drivers,
         tied,
+        fanout,
     }
 }
 
@@ -803,7 +823,7 @@ fn findings(c: &Circuit, out: &Violations, runs: &[RuleRun]) -> Vec<(NetId, u32)
 #[test]
 fn topology_rules_agree_with_a_search_of_the_extracted_graph() {
     let mut rng = Rng::new(0xc6_0002);
-    let mut nonempty = [0u32; 4];
+    let mut nonempty = [0u32; 5];
     for case in 0..300 {
         let mut strings = StrTable::default();
         let c = random_circuit(&mut rng, &mut strings);
@@ -889,11 +909,23 @@ fn topology_rules_agree_with_a_search_of_the_extracted_graph() {
                 runs,
             );
         });
+        let fanout = runs_of(&mut |out, runs| {
+            check_fanout(
+                design,
+                &FanoutTable {
+                    head: head(id),
+                    max_gates: vec![1],
+                },
+                out,
+                runs,
+            );
+        });
         for (k, (rule, got, want)) in [
             ("floating_gate", floating, want.floating),
             ("esd_topological", esd, want.esd),
             ("multiple_drivers", drivers, want.drivers),
             ("tie_high_low", tied, want.tied),
+            ("fanout", fanout, want.fanout),
         ]
         .into_iter()
         .enumerate()
@@ -1177,5 +1209,220 @@ fn voltage_rules_agree_with_a_search_from_each_net() {
     assert!(
         nonempty.iter().all(|&n| n >= 10),
         "too few circuits with a finding per rule: {nonempty:?}"
+    );
+}
+
+// ---------------------------------------------- conditional propagation
+
+/// One net's reach: `(lo, hi, nominal_lo, nominal_hi, power)`, `None` when no
+/// supply reaches it.
+type Reach = Option<(f64, f64, f64, f64, u64)>;
+
+fn union(a: Reach, b: Reach) -> Reach {
+    match (a, b) {
+        (Some(a), Some(b)) => Some((
+            a.0.min(b.0),
+            a.1.max(b.1),
+            a.2.min(b.2),
+            a.3.max(b.3),
+            a.4 | b.4,
+        )),
+        (a, None) => a,
+        (None, b) => b,
+    }
+}
+
+/// The propagation of `erc::voltage`'s rustdoc by brute force, sharing no
+/// code with it: supplies fixed at their voltage (0 V for a ground); every
+/// conducting device widens each of its channel nets (every terminal but a
+/// gate or bulk; a capacitor has none) that is not a supply to the union of
+/// all of them, swept over every device until nothing changes. A MOS with a
+/// gate condition conducts when its gate's range reaches it, or when its
+/// gate is free: unreached even with every channel conducting, or still
+/// unreached after a sweep. Returns the reach with conditions and the reach
+/// with every channel conducting.
+fn naive_propagation(c: &Circuit, intent: &IntentMap) -> (Vec<Reach>, Vec<Reach>) {
+    let count = c.nets.net_count();
+    let supply = |n: usize| intent.supply_net.iter().position(|s| s.idx() == n);
+    let seed: Vec<Reach> = (0..count)
+        .map(|n| {
+            supply(n).map(|row| {
+                let nominal = intent.supply_voltage[row].raw();
+                match intent.supply_role[row] {
+                    SupplyRole::Power => (
+                        nominal,
+                        nominal,
+                        nominal,
+                        nominal,
+                        1u64 << intent.supply_domain[row].0,
+                    ),
+                    SupplyRole::Ground => (0.0, 0.0, nominal, nominal, 0),
+                }
+            })
+        })
+        .collect();
+    let devices = c.devices.len();
+    let terminals: Vec<Vec<(usize, TerminalRole)>> = (0..devices)
+        .map(|d| {
+            let (on, roles) = c.devices.terminals_of(DeviceId(d as u32));
+            on.iter()
+                .map(|n| n.idx())
+                .zip(roles.iter().copied())
+                .collect()
+        })
+        .collect();
+    let gate = |d: usize| {
+        terminals[d]
+            .iter()
+            .find(|t| t.1 == TerminalRole::Gate)
+            .map(|t| t.0)
+    };
+    let condition = |d: usize| {
+        let value = c.devices.value[d];
+        if c.devices.kind[d] != DeviceKind::Mos {
+            return None;
+        }
+        match (value.on_gate_min_mv, value.on_gate_max_mv) {
+            (Some(v), _) => Some((true, v)),
+            (None, Some(v)) => Some((false, v)),
+            (None, None) => None,
+        }
+    };
+    let sweep = |free: &[bool]| -> Vec<Reach> {
+        let mut r = seed.clone();
+        loop {
+            let mut changed = false;
+            for d in 0..devices {
+                let on = match condition(d) {
+                    None => true,
+                    Some(_) if free[d] => true,
+                    Some((at_least, v)) => gate(d).and_then(|g| r[g]).is_some_and(|g| {
+                        if at_least {
+                            g.1 >= v
+                        } else {
+                            g.0 <= v
+                        }
+                    }),
+                };
+                if !on {
+                    continue;
+                }
+                let kind = c.devices.kind[d];
+                let channel: Vec<usize> = terminals[d]
+                    .iter()
+                    .filter(|t| {
+                        !matches!(t.1, TerminalRole::Gate | TerminalRole::Bulk)
+                            && kind != DeviceKind::Capacitor
+                    })
+                    .map(|t| t.0)
+                    .collect();
+                let all = channel.iter().fold(None, |acc, &n| union(acc, r[n]));
+                for &n in &channel {
+                    let widened = union(r[n], all);
+                    if supply(n).is_none() && widened != r[n] {
+                        r[n] = widened;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                return r;
+            }
+        }
+    };
+    let everything = sweep(&vec![true; devices]);
+    let mut free: Vec<bool> = (0..devices)
+        .map(|d| gate(d).is_none_or(|g| everything[g].is_none()))
+        .collect();
+    loop {
+        let r = sweep(&free);
+        let floating: Vec<usize> = (0..devices)
+            .filter(|&d| condition(d).is_some() && !free[d])
+            .filter(|&d| gate(d).is_none_or(|g| r[g].is_none()))
+            .collect();
+        if floating.is_empty() {
+            return (r, everything);
+        }
+        for d in floating {
+            free[d] = true;
+        }
+    }
+}
+
+/// Oracle: a naive sweep of the propagation rules (NV, [`naive_propagation`]).
+/// On two hundred generated circuits, extracted, with a random gate
+/// condition (`on_gate_min`, `on_gate_max` or none, at 0, 0.9, 1.8 or 3.3 V)
+/// on each transistor and the supplies spread over three domains at 1.8,
+/// 3.3 and 0.9 V, every net's propagated range, domain nominals and power
+/// mask equal the sweep's. In at least twenty circuits the conditions change
+/// some net's reach, so a propagation that ignores them fails.
+#[test]
+fn voltage_propagation_agrees_with_a_naive_sweep_of_the_extracted_graph() {
+    let mut rng = Rng::new(0xf1_0001);
+    let volts = [1800.0, 3300.0, 900.0];
+    let mut conditioned = 0;
+    for case in 0..200 {
+        let mut strings = StrTable::default();
+        let mut c = random_circuit(&mut rng, &mut strings);
+        let devices = c.devices.len();
+        c.devices.value.resize(devices, DeviceValue::default());
+        for d in 0..devices {
+            if c.devices.kind[d] != DeviceKind::Mos {
+                continue;
+            }
+            let at = [0.0, 900.0, 1800.0, 3300.0][rng.below(4) as usize];
+            c.devices.value[d] = match rng.below(3) {
+                0 => DeviceValue::default(),
+                1 => DeviceValue {
+                    on_gate_min_mv: Some(at),
+                    ..DeviceValue::default()
+                },
+                _ => DeviceValue {
+                    on_gate_max_mv: Some(at),
+                    ..DeviceValue::default()
+                },
+            };
+        }
+        let mut rows: Vec<(NetId, SupplyRole, u32)> = c
+            .supplies
+            .iter()
+            .map(|&(n, role)| {
+                let net = c.nets.net_of(c.case.expected_net_polys[n as usize][0]);
+                (net, role, rng.below(3) as u32)
+            })
+            .collect();
+        rows.sort_by_key(|row| row.0);
+        let intent = IntentMap {
+            declared: true,
+            supply_net: rows.iter().map(|row| row.0).collect(),
+            supply_role: rows.iter().map(|row| row.1).collect(),
+            supply_domain: rows.iter().map(|row| DomainId(row.2)).collect(),
+            supply_voltage: rows
+                .iter()
+                .map(|row| Qty::new(volts[row.2 as usize]))
+                .collect(),
+            limit_net: Vec::new(),
+            limit: Vec::new(),
+        };
+        let mut got = NetVoltage::default();
+        propagate_into(&c.nets, &c.devices, &intent, &mut got);
+        let (want, everything) = naive_propagation(&c, &intent);
+        for (n, want) in want.iter().enumerate() {
+            let have = got.known(NetId(n as u32)).then(|| {
+                (
+                    got.lo[n],
+                    got.hi[n],
+                    got.nominal_lo[n],
+                    got.nominal_hi[n],
+                    got.power[n],
+                )
+            });
+            assert_eq!(have, *want, "case {case}: net {n}");
+        }
+        conditioned += u32::from(want != everything);
+    }
+    assert!(
+        conditioned >= 20,
+        "only {conditioned} circuits where a gate condition changed a reach"
     );
 }

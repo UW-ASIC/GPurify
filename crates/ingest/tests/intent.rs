@@ -101,6 +101,69 @@ fn a_supply_listed_twice_in_one_domain_is_named_as_a_repeat() {
     );
 }
 
+/// Oracle: construct-from-answer, on the schema in docs/usage.md (Power
+/// states). Two states read back in file order with their switched-off
+/// supplies and held inputs in mV; a file of states alone is not empty; a
+/// state repeated, one turning off a net no supply declares, and an input
+/// held twice are each refused by name.
+#[test]
+fn power_states_read_back_and_a_malformed_one_is_refused() {
+    let head = r#"{"domains":{"core":{"voltage_mv":1800},"sw":{"voltage_mv":1800}},
+        "supplies":[{"net":"VDD","domain":"core","role":"power"},
+                    {"net":"VDD_SW","domain":"sw","role":"power"},
+                    {"net":"VSS","domain":"core","role":"ground"}],"#;
+    let mut strings = StrTable::default();
+    let intent = gpurify_ingest::intent::parse_intent(
+        &format!(
+            r#"{head}"states":[{{"name":"sleep","off":["VDD_SW"]}},
+            {{"name":"disable","inputs":[{{"net":"EN","voltage_mv":0}},{{"net":"SEL","voltage_mv":1800}}]}}]}}"#
+        ),
+        &mut strings,
+    )
+    .expect("two well-formed states");
+    let states = intent.states();
+    assert_eq!(states.len(), 2);
+    assert_eq!(strings.resolve(states[0].name), "sleep");
+    assert_eq!(states[0].off, [strings.get("VDD_SW").expect("interned")]);
+    assert!(states[0].inputs.is_empty());
+    assert_eq!(strings.resolve(states[1].name), "disable");
+    let held: Vec<(&str, f64)> = states[1]
+        .inputs
+        .iter()
+        .map(|&(net, mv)| (strings.resolve(net), mv.raw()))
+        .collect();
+    assert_eq!(held, [("EN", 0.0), ("SEL", 1800.0)]);
+
+    let only_states = gpurify_ingest::intent::parse_intent(
+        r#"{"states":[{"name":"idle"}]}"#,
+        &mut StrTable::default(),
+    )
+    .expect("a state with nothing switched is legal");
+    assert!(!only_states.is_empty());
+
+    for (states, said) in [
+        (
+            r#"[{"name":"sleep"},{"name":"sleep"}]"#,
+            "power state sleep is declared twice",
+        ),
+        (
+            r#"[{"name":"sleep","off":["EN"]}]"#,
+            "power state sleep turns off EN, which no supply declares",
+        ),
+        (
+            r#"[{"name":"d","inputs":[{"net":"EN","voltage_mv":0},{"net":"EN","voltage_mv":1}]}]"#,
+            "power state d: input EN is held twice",
+        ),
+    ] {
+        let error = gpurify_ingest::intent::parse_intent(
+            &format!(r#"{head}"states":{states}}}"#),
+            &mut StrTable::default(),
+        )
+        .expect_err("a malformed state is refused");
+        assert_eq!(error.to_string(), format!("malformed intent file: {said}"));
+    }
+}
+
 /// The `dynamic` entry of the `docs/usage.md` example, on VDD, with `budget`
 /// beside it and `extra` spliced into it.
 fn dynamic_intent(budget: &str, extra: &str) -> String {

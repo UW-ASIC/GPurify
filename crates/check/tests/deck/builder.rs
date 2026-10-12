@@ -216,7 +216,7 @@ fn every_parser_refusal_has_a_builder_twin() {
     // Net spacing on a layer that carries no net.
     let mut strings = StrTable::default();
     let (mut d, m, _) = start(&mut strings);
-    d.rule("r", net_spacing(m, true, nm(10)));
+    d.rule("r", net_spacing(m, None, true, nm(10)));
     cases.push((
         parser_refusal(&text("rule r space(m; nets: same) >= 10nm\n")),
         builder_refusal(d.finish().unwrap_err()),

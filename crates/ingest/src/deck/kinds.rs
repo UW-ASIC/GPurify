@@ -26,6 +26,8 @@ pub(crate) enum Dim {
     ThermalConductivity,
     /// h.
     Time,
+    /// V/um, an electric field (numerically mV/nm).
+    Field,
     /// aF/um2 (PEX only).
     CapPerArea,
     /// aF/um (PEX only).
@@ -60,6 +62,8 @@ pub(crate) enum Dim {
     Nets,
     /// `[a, b, ..]`, lengths; one engine param per element.
     LengthList,
+    /// `[a, b, ..]`, voltages; one engine param per element, in mV.
+    VoltageList,
     /// `[[a, b, ..], ..]`, rows of lengths; one engine param per cell, row by row.
     LengthRows,
     /// `[a x b, ..]`, pairs of lengths; per pair, the first to the param's
@@ -102,6 +106,9 @@ pub(crate) const UNITS: &[(&str, Dim, i32)] = &[
     ("eV", Dim::Energy, 0),
     ("W/mK", Dim::ThermalConductivity, 0),
     ("h", Dim::Time, 0),
+    ("V/um", Dim::Field, 0),
+    ("V/nm", Dim::Field, 3),
+    ("MV/cm", Dim::Field, 2),
     ("aF/um2", Dim::CapPerArea, 0),
     ("fF/um2", Dim::CapPerArea, 3),
     ("aF/um", Dim::CapPerLength, 0),
@@ -233,6 +240,12 @@ const DENSITY_LIMIT: Option<Param> = Some(p("", "limit", Dim::Fraction));
 const COUNT: Option<Param> = Some(p("", "limit", Dim::Count));
 /// MINSTEP's corner kinds, in the order of the engine's index.
 const STEP_CORNERS: &[&str] = &["outside", "inside", "step"];
+/// A voltage-dependent spacing table: the step voltages and the spacing from
+/// each one up.
+const VOLTAGE_SPACE: &[Param] = &[
+    p("voltage", "voltage", Dim::VoltageList),
+    p("space", "space", Dim::LengthList),
+];
 /// A narrow-line current band: a metal line at most `width` wide may carry
 /// `current` (IHP SG13G2 §2.15's IMAX beside JMAX).
 const EM_NARROW: &[Param] = &[
@@ -751,12 +764,21 @@ pub(crate) const KINDS: &[Kind] = &[
     ),
     // Every inner shape lies entirely inside the outer layer: `inside(poly_licon, npc)`.
     drc("inside", Cmp::Absent, "must_be_inside", &[0, 1], None, &[]),
-    // Spacing between shapes on the same net, or on different nets (gf180 NW.2a/2b).
+    // Spacing between shapes on the same net, or on different nets (gf180 NW.2a/2b),
+    // on one layer or between two (sky130 nwell.7).
     drc(
         "space",
         Cmp::Ge,
         "net_spacing",
         &[0],
+        LIMIT,
+        &[p("nets", "same_net", Dim::Nets)],
+    ),
+    drc(
+        "space",
+        Cmp::Ge,
+        "net_spacing",
+        &[0, 1],
         LIMIT,
         &[p("nets", "same_net", Dim::Nets)],
     ),
@@ -988,6 +1010,7 @@ pub(crate) const KINDS: &[Kind] = &[
         &[p("labels_are_ports", "labels_are_ports", Dim::Bool)],
     ),
     erc("floating_well", &[0, 1], false, &[]),
+    erc("fanout", &[], false, &[p("max", "max_gates", Dim::Count)]),
     erc(
         "hv_domain",
         &[],
@@ -1101,6 +1124,49 @@ pub(crate) const KINDS: &[Kind] = &[
         &[opt("shifters", "shifter", Dim::Models)],
     ),
     erc("domain_crossing", &[], false, &[]),
+    // A high-voltage figure of a conductor lies inside its tag (sky130 hv.X.1,
+    // hv.X.4, hvnwell.11); a net holds no tagged and untagged figure at once
+    // (hvnwell.10).
+    erc(
+        "hv_tag",
+        &[0, 1],
+        false,
+        &[p("voltage", "voltage", Dim::Voltage)],
+    ),
+    erc("mixed_tag", &[0, 1], false, &[]),
+    // In the intent's power states: a gate left floating (ERC-F8), and a
+    // powered transistor with a floating gate, not an isolation cell (ERC-F7).
+    erc("undriven_gate", &[], false, &[]),
+    erc(
+        "missing_isolation",
+        &[],
+        false,
+        &[opt("isolation", "isolation", Dim::Models)],
+    ),
+    // The field across the dielectric between two nets' shapes (JEP159A,
+    // IC Validator): lateral on one layer, through the stack between two.
+    erc(
+        "dielectric_field",
+        &[0],
+        false,
+        &[p("max_field", "max_field", Dim::Field)],
+    ),
+    erc(
+        "dielectric_field",
+        &[0, 1],
+        false,
+        &[p("max_field", "max_field", Dim::Field)],
+    ),
+    // Spacing that grows with the worst-case voltage between two nets
+    // (LEF58_VOLTAGESPACING, sky130 hvnwell.8): one layer, or two.
+    Kind {
+        engine: "voltage_spacing",
+        ..erc("voltage_space", &[0], false, VOLTAGE_SPACE)
+    },
+    Kind {
+        engine: "voltage_spacing",
+        ..erc("voltage_space", &[0, 1], false, VOLTAGE_SPACE)
+    },
 ];
 
 /// The PEX keys, each given at most once per `pex` statement, and every one

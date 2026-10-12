@@ -922,6 +922,56 @@ lvs range \"nfet\" nf <= 4
     );
 }
 
+/// A `mos` row's gate condition, `on_gate_min` (an n-channel switch) or
+/// `on_gate_max` (a p-channel one), lowers to its `DeviceValue` in
+/// millivolts, negative included; it is a transistor's value, and a
+/// transistor takes one of the two.
+///
+/// Oracle: the device grammar of docs/deck.md (Devices) and the units by
+/// hand: 1 V is 1000 mV, -0.5 V is -500 mV.
+#[test]
+fn a_mos_gate_condition_lowers_in_millivolts_and_takes_one_polarity() {
+    use gpurify_ingest::deck::DeviceValue;
+    let (deck, _) = ok(
+        "device mos diff model \"nfet\" terminals [poly, diff, diff] on_gate_min 1V
+device mos li model \"pfet\" terminals [poly, li, li] on_gate_max -0.5V
+",
+    );
+    assert_eq!(
+        deck.devices.value,
+        [
+            DeviceValue {
+                on_gate_min_mv: Some(1000.0),
+                ..DeviceValue::default()
+            },
+            DeviceValue {
+                on_gate_max_mv: Some(-500.0),
+                ..DeviceValue::default()
+            },
+        ]
+    );
+    for (body, needle) in [
+        (
+            "device mos diff model \"n\" terminals [poly, diff, diff] on_gate_min 1V on_gate_max 0V\n",
+            "not both",
+        ),
+        (
+            "device resistor poly model \"r\" terminals [li, li] on_gate_min 1V\n",
+            "`on_gate_min` is a mos's value, not a resistor's",
+        ),
+        (
+            "device mos diff model \"n\" terminals [poly, diff, diff] on_gate_max 1nm\n",
+            "a voltage",
+        ),
+        (
+            "device mos diff model \"n\" terminals [poly, diff, diff] on_gate_min 1V on_gate_min 2V\n",
+            "`on_gate_min` is given twice",
+        ),
+    ] {
+        one_error(body, needle);
+    }
+}
+
 /// Oracle: spec example. The sky130 excerpt in `docs/deck.md` is the deck users
 /// copy; it holds ten rules, counted in the document: six written out, three
 /// from its `for` loop and the `em.li` row.

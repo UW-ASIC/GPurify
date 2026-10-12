@@ -670,36 +670,89 @@ fn wide_parts(
     (parts, part_start)
 }
 
-/// Same-net or different-net spacing (gf180 NW.2a/2b), nets as extracted.
-/// `Refused` when a shape on the layer carries no net. `examined` counts the
-/// separate pairs of the asked relation.
+/// Same-net or different-net spacing (gf180 NW.2a/2b), nets as extracted, on
+/// one layer or between two ([`net_pair_spacing`]). `Refused` when a shape on
+/// a layer carries no net. `examined` counts the pairs of the asked relation.
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn net_spacing(
     store: &GeometryStore,
     nets: &NetTable,
     rule: StrId,
-    layer: LayerId,
+    layers: (LayerId, Option<LayerId>),
     same_net: bool,
     limit: Dbu,
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let unnetted = store
-        .polys_on_layer(layer)
-        .any(|row| nets.net_of(PolyId(row)) == NetId::NONE);
-    if unnetted || !prepare(store, layer, limit, s) {
+    net_pair_spacing(store, nets, rule, layers, limit, s, out, |a, b| {
+        ((a == b) == same_net).then_some(Some(limit))
+    })
+}
+
+/// Spacing between shapes that their two nets decide. On one layer (`b` is
+/// `None`) the pairs are shapes in different merged figures, as for
+/// [`min_spacing`]; across two layers every pair, overlap included, as for
+/// [`min_spacing_diff`], reported on `a`. `need` takes the pair's nets and
+/// answers `None` for a pair the rule does not judge, `Some(None)` for one it
+/// judges and requires nothing of, and `Some(Some(limit))` for the spacing it
+/// requires, at most `widest`. One violation per pair closer than its limit,
+/// at the midpoint of its measured points. `examined` counts judged pairs.
+/// `Refused` when a layer will not validate or holds a shape on no net.
+#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
+pub(crate) fn net_pair_spacing(
+    store: &GeometryStore,
+    nets: &NetTable,
+    rule: StrId,
+    (a, b): (LayerId, Option<LayerId>),
+    widest: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+    need: impl Fn(NetId, NetId) -> Option<Option<Dbu>>,
+) -> Verdict {
+    let unnetted = std::iter::once(a).chain(b).any(|layer| {
+        store
+            .polys_on_layer(layer)
+            .any(|row| nets.net_of(PolyId(row)) == NetId::NONE)
+    });
+    if unnetted {
         return REFUSED;
     }
-    let examined = judged_pairs(
-        store,
-        rule,
-        layer,
-        limit,
-        s,
-        out,
-        |a, b, d2| (nets.same_net(a, b) == same_net).then_some(d2),
-        |a, b, d2| whole_at(store, (a, b), d2),
-    );
+    let one_layer = match b {
+        None => {
+            if !prepare(store, a, widest, s) {
+                return REFUSED;
+            }
+            true
+        }
+        Some(b) => {
+            if s.validated.get(store, a).is_none() || s.validated.get(store, b).is_none() {
+                return REFUSED;
+            }
+            SpatialIndex::build_into(store, a, &mut s.index_a);
+            SpatialIndex::build_into(store, b, &mut s.index_b);
+            cross_layer_pairs_into(store, &s.index_a, &s.index_b, widest, &mut s.pairs);
+            pair_distances_into(store, &s.pairs, widest, &mut s.dists);
+            s.holes.build(store, [a, b]);
+            join_nested(store, &s.holes, &s.pairs, &mut s.dists);
+            false
+        }
+    };
+    let first_row = store.polys_on_layer(a).start;
+    let label = |row: PolyId| s.labels[(row.0 - first_row) as usize];
+    let mut examined = 0u64;
+    for (&(p, q), &d2) in s.pairs.iter().zip(&s.dists) {
+        if one_layer && label(p) == label(q) {
+            continue;
+        }
+        let Some(limit) = need(nets.net_of(p), nets.net_of(q)) else {
+            continue;
+        };
+        examined += 1;
+        if let Some(limit) = limit.filter(|&limit| d2 < limit.mul_wide(limit)) {
+            let found = (d2, whole_at(store, (p, q), d2));
+            out.push(spacing_violation(rule, a, (p, q), found, limit));
+        }
+    }
     (Outcome::Ran, examined)
 }
 

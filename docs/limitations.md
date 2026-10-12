@@ -20,7 +20,10 @@ result from them is weaker than it looks.
 |---|---|
 | `enclosure(E, L)` on an edge layer | Measures straight out from each edge, so a gap in `L` diagonally off a corner of the shape is not seen. Pair it with the shape `enclosure` where the corner matters. |
 | `esd_topological`, `esd_latchup` | Only checks that a clamp path exists. The resistance and current capacity of the path are not checked, and a clamp is any device of a listed model, however it is wired. |
-| `gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`, `domain_crossing` | A net's voltage range is the span of every supply it connects to through a device channel, ignoring threshold drops, switching and power-down, so these rules can over-report. A net that reaches no supply that way, such as a primary input with no ESD diode, is not checked, and neither is a device whose terminals sit on such nets. |
+| `gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`, `domain_crossing` | A net's voltage range is the span of every supply it connects to through a device channel that can conduct. Only a transistor whose `device` row states `on_gate_min` or `on_gate_max` is switched by its gate; every other channel always conducts, and threshold drops and power-down are ignored, so these rules can over-report. No shipped deck states a gate condition. A net that reaches no supply that way, such as a primary input with no ESD diode, is not checked, and neither is a device whose terminals sit on such nets. |
+| `hv_tag`, `mixed_tag` | High voltage is decided by the intent's supplies (`hv_tag`) or by a tag layer (`mixed_tag`); sky130's text tags (`shv_nwell`, `hv_bb`, `hv_lv`, and the `lv_net` exemption of hvnwell.10) are not read. No shipped deck carries either yet: sky130's hvnwell.10 can be written `mixed_tag(nwell, hvi)`, but `hv_tag` needs a voltage the manual does not name for "high voltage". |
+| `dielectric_field` | A field limit, not a dielectric lifetime: JEP159A's time-dependent breakdown model is not evaluated. Voltages and unreached nets are as for `voltage_space`; the lateral limit is rounded up to the grid, so a corner-to-corner pair less than one grid unit inside it is flagged. |
+| `voltage_space` | A pair of shapes with a net no supply reaches is not checked, and ranges are as above, so two nets that always move together read their whole swing apart. Its layers must be conductors, so a rule on a tag layer (sky130's HV n-well, the n-well under `hvi`) cannot be written. No shipped deck carries it: no open manual states a voltage table. |
 
 ## Checks that do not exist yet
 
@@ -30,9 +33,9 @@ result from them is weaker than it looks.
   `.vertical()`) and bounding-box size (`.with_bbox_max()`) are selectable.
 - Edge layers cannot be extended, so sky130 difftap.6 "diff and tap are not
   allowed to extend beyond their abutting edge" cannot be written.
-- Spacing that depends on the voltage between two nets.
-- A way to state the voltage or domain of an input signal in the intent file,
-  and checks for inputs driven from a powered-down domain.
+- A way to state the voltage or domain of an input signal for the whole run:
+  an input is held only within a power state (`states`), and the power-state
+  rules examine only the declared states, never every combination.
 - Lithography hotspots (aerial-image or process-window simulation) and a full
   CMP topography simulation: both need a foundry's calibrated optical, resist
   or polish model, which no open PDK publishes. The CMP hotspots a public
@@ -79,8 +82,9 @@ numbers come from, pinned to a release or commit. Rule ids are the foundry's.
 None has been compared against foundry signoff results.
 
 - Rules that need a check the language does not have yet are written out,
-  commented, near the end of each deck with the reason: net spacing between
-  two layers or on wells (no deck connects wells as nets) and maximum
+  commented, near the end of each deck with the reason: net spacing on
+  layers that are not conductors (wells in every deck but sky130, and
+  sky130's deep n-well and HV n-well) and maximum
   areas. Each deck also lists the manual rules it leaves out, and why.
 - Only sky130 connects wells as nets: the p-substrate (`connect global
   psub`), each n-well through its n-taps, and each isolated p-well in deep
@@ -220,9 +224,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-068 | Cut-area conservation between two databases | partial | gpurify xor compares two layouts layer by layer, as KLayout's xor does: every region where a drawn layer differs, with its area, so a cut layer's lost or added area is found. Not checked, and not checkable from public sources: the irdrop tolerance per connector by cut count (ct.irdrop.1-3, via.irdrop.1-4 to via4.irdrop.1-4). Its flags are CU (Cu back end only, which sky130 does not offer) and IR (an Al layout against its slotted Cu twin); no public source defines a connector, and the unit (um) was added by a script (skywater-pdk 9039be3), not by SkyWater. No public deck implements it; see docs/limitations.md |
 | DRC-075 | Wide-metal slotting | partial | Slot required is a kind (cheesing); slot geometry uses the generic kinds; slit density over a plate is region_density (IHP Slt.i). Missing: a maximum slot spacing (GF180 MSLOT.4) and staggered slots (MSLOT.6) |
 | DRC-076 | Waffle-window density | missing | Not implemented, by decision: the rule text (SKY m1.- to m4.-, flag RC) gives a 700 um window and coverage bands but no window step, and no public deck codes it. Cadence's public SKY130 DRM (2025-07-22) lists it as obsolete and removed and cmm*/waffleDrop as unsupported; see docs/limitations.md |
-| DRC-081 | Net spacing between two layers / on wells | missing | Net spacing takes one layer; only sky130 connects wells as nets |
-| DRC-082 | Voltage-dependent spacing (VA-DRC) | missing | Top cross-source gap; needs ERC-F1 voltage propagation |
-| DRC-083 | HV tag propagation (shorted to HV becomes HV) | partial | hv_domain flags devices whose terminals span supply domains; layout shorted to an HV net is not tagged HV |
+| DRC-081 | Net spacing between two layers / on wells | partial | space(A, B; nets: different) spaces two conductor layers, overlap included; a derived or tag layer carries no nets, so sky130 nwell.7 (dnwell), hvnwell.8 and hv.nwell.1 (HV n-well by hvi or text tag) and vhvi.8 cannot be written, and no shipped deck carries one |
 | DRC-084 | Floating interconnect / must-join ports | partial | Flags conductor shapes that reach no device; LEF58 must-join-all-ports is not modelled |
 | DRC-086 | Shorts between labelled nets | partial | Reported in every run as lvs.net_seed_conflict, naming both labelled shapes, located at the first; no abort |
 | DRC-090 | Device-family rules (R, MIM, BJT, varactor, inductor, fuse, Schottky, LDMOS, photodiode, SRAM) | partial | Geometry is expressible through markers; exact resistor widths are width(L; allowed: [..]) (sky130 rpm.1b-1f) and channel length and width width(E) (DRC-011). Missing: licon counts per resistor terminal (rpm.1g-1k) and varactor taps (varac.2, varac.6) |
@@ -314,20 +316,12 @@ says which foundry manual, standard or tool defines each one.
 | ERC-E9 | PDN integrity (floating stripes, unconnected instances) | partial | Flags unconnected conductors; PDN-specific checks (floating stripes, instance supply terminals) are missing |
 | ERC-E11 | Dynamic / vectorless IR | partial | Vectorless worst cycle: every load on a net switches in phase once, a triangular pulse from its budget, toggle rate and rise time, against the net's decap; an RC grid with no package, bump or wire inductance (L di/dt), and one feed point per supply (limitations.md, "Power grid") |
 | ERC-E12 | Stress voiding / slotting | partial | cheesing requires a slot in wide shapes, and the slot geometry (IHP Slt.*, gf180 MSLOT.*) is DRC width, enclosure and spacing; JEP139 and JESD214 are stress-migration test methods that state no layout rule, so the stress-voiding rules beyond slotting (vias landing on wide metal) have no public limit |
-| ERC-F1 | Static voltage propagation, conditional on gate voltage | partial | Channels pass unconditionally |
 | ERC-F4 | HCI susceptibility flag | missing | — |
-| ERC-F7 | Missing isolation at switchable-domain outputs | missing | Needs power states |
-| ERC-F8 | Power-state-dependent undriven gates | missing | — |
-| ERC-F10 | HV tag consistency | partial | The domain span across a device is checked; tag consistency (LV and HV n-wells on one net) is not |
-| ERC-F11 | Voltage-dependent spacing | missing | Same row as DRC-082 |
-| ERC-F13 | Inter-metal dielectric breakdown | missing | — |
 | ERC-F14 | Power-intent supply connectivity (power switches, always-on and retention cells on the supplies the UPF declares) | missing | Needs UPF input; IEEE 1801 not read (check-sources.md §5) |
 | ERC-G8 | Combinational loops | missing | Digital only, optional |
 | ERC-G9 | Path check: nets with no path to power or ground | missing | — |
-| ERC-H1 | Static leakage / HiZ / floating in power-down | missing | — |
 | ERC-H2 | Analog constraints (symmetry, common centroid, matching, orientation, dummies, WPE, STI) | missing | Overlaps Philis's own properties |
 | ERC-H3 | Netlist path checks (gate to ground within N devices; net types) | missing | — |
-| ERC-H4 | Fanout limits | missing | — |
 
 ### Parasitic extraction (PEX)
 

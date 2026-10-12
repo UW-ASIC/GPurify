@@ -277,6 +277,138 @@ fn nets_marked(marks: &[u32], want: u32) -> Vec<u32> {
         .collect()
 }
 
+/// Low- and high-voltage features on one net: deck kind `mixed_tag`, written
+/// `mixed_tag(L, tag)`.
+///
+/// A merged figure of the conductor layer `L` is tagged when it shares area
+/// with `tag` (an n-well under sky130's `hvi`, a high-voltage n-well) and
+/// untagged otherwise. A row flags every untagged figure whose net also
+/// holds a tagged figure: a low-voltage well tied to a high-voltage one.
+/// Nets joined through a resistor count as one net, as hvnwell.10 asks ("for
+/// the purposes of this check, short the connectivity through resistors").
+/// A figure's net is its lowest-numbered drawn polygon's. Needs no design
+/// intent.
+///
+/// # Limits
+///
+/// The tag is a layer: sky130's exemption of a high-voltage n-well whose
+/// net carries the text tag `lv_net` is not read. A figure that touches the
+/// tag only along an edge or at a corner is untagged.
+///
+/// Catalog: ERC-F10 in the [check catalog]. Defined by [SKY130] hvnwell.10
+/// ("LVnwell and HnWell should not be on the same net"). Source tags are in
+/// [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct MixedTagTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// Per row: the conductor layer whose figures are classed.
+    pub layer: Vec<LayerId>,
+    /// Per row: the tag layer that marks a figure high-voltage.
+    pub tag: Vec<LayerId>,
+}
+
+/// Runs every [`MixedTagTable`] row.
+///
+/// `examined` counts the figures of `L` on a net. A violation sits at the
+/// first vertex of the untagged figure's lowest drawn polygon, on `L`,
+/// measuring the count of tagged figures on its net against 0, and names a
+/// tagged figure's polygon as its second shape. Every row runs; a row is
+/// refused when a layer will not validate or merge.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_mixed_tag(
+    design: Design<'_>,
+    table: &MixedTagTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    // Nets joined through a resistor are one group.
+    let devices = design.devices;
+    let mut edges: Vec<(u32, u32)> = Vec::new();
+    for device in 0..devices.len() {
+        if devices.kind[device] != gpurify_ingest::deck::DeviceKind::Resistor {
+            continue;
+        }
+        let id = crate::topology::DeviceId(u32::try_from(device).expect("a device id is a u32"));
+        let pins: Vec<u32> = devices
+            .terminals_of(id)
+            .0
+            .iter()
+            .filter(|&&net| net != NetId::NONE)
+            .map(|net| net.0)
+            .collect();
+        edges.extend(pins.windows(2).map(|pair| (pair[0], pair[1])));
+    }
+    let count = u32::try_from(design.nets.net_count()).expect("a NetId is a u32");
+    let mut group = Vec::new();
+    gpurify_geom::connectivity::components_into(count, &edges, &mut group);
+
+    // A figure on no net (none was extracted) has no group and is not judged.
+    let group_of = |poly: PolyId| {
+        if count == 0 {
+            return None;
+        }
+        let net = design.nets.net_of(poly);
+        (net != NetId::NONE).then(|| group[net.idx()].0)
+    };
+    let mut scratch = crate::drc::Scratch::default();
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let rule = table.head.rule[row];
+        let layer = table.layer[row];
+        let figures = crate::drc::rules::presence::tagged_figures(
+            design.store,
+            layer,
+            table.tag[row],
+            &mut scratch,
+        );
+        let Some(figures) = figures else {
+            record_run(runs, out, before, rule, Outcome::Refused, 0);
+            continue;
+        };
+        let mut tagged: Vec<(u32, PolyId)> = figures
+            .iter()
+            .filter(|figure| figure.1)
+            .filter_map(|&(poly, _)| Some((group_of(poly)?, poly)))
+            .collect();
+        tagged.sort_unstable();
+        let mut examined = 0u64;
+        for &(poly, is_tagged) in &figures {
+            let Some(mine) = group_of(poly) else {
+                continue;
+            };
+            examined += 1;
+            if is_tagged {
+                continue;
+            }
+            let on_net =
+                tagged.partition_point(|t| t.0 < mine)..tagged.partition_point(|t| t.0 <= mine);
+            if on_net.is_empty() {
+                continue;
+            }
+            out.push(Violation {
+                rule,
+                layer,
+                severity: table.head.severity[row],
+                at: first_vertex(design.store, poly),
+                measured: Measurement::Count(
+                    u32::try_from(on_net.len()).expect("a figure count fits a u32"),
+                ),
+                limit: Measurement::Count(0),
+                shapes: (poly, Some(tagged[on_net.start].1)),
+            });
+        }
+        record_run(runs, out, before, rule, Outcome::Ran, examined);
+    }
+}
+
 /// Runs every [`SupplyShortTable`] row.
 ///
 /// `examined` counts the polygons on `tap_a` and `tap_b`, all of them, inside

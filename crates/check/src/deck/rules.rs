@@ -181,6 +181,14 @@ impl Arg for &[u32] {
     }
 }
 
+impl Arg for &[f64] {
+    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
+        for &value in self {
+            value.put(name, params);
+        }
+    }
+}
+
 impl Arg for &[Dbu] {
     fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
         for &value in self {
@@ -453,8 +461,9 @@ kinds! {
     /// [`Rule::MustBeInside`](crate::drc::Rule::MustBeInside): `inside(inner, outer)`.
     must_be_inside(inner: one, outer: one) [] {}
     /// [`Rule::NetSpacing`](crate::drc::Rule::NetSpacing):
-    /// `space(layer; nets: same | different) >= limit`, `same_net` for `same`.
-    net_spacing(layer: one) [] { same_net: bool = "same_net", limit: Dbu = "limit" }
+    /// `space(layer[, other]; nets: same | different) >= limit`, `same_net`
+    /// for `same` (one layer only).
+    net_spacing(layer: one, other: opt) [] { same_net: bool = "same_net", limit: Dbu = "limit" }
     /// [`Rule::SpacingTable`](crate::drc::Rule::SpacingTable):
     /// `space_table(layer; prl: [..], width: [..], space: [[..], ..])`, `space`
     /// row by row.
@@ -599,6 +608,9 @@ kinds! {
         cmp_thickness_sensitivity: Option<Dbu> = "cmp_thickness_sensitivity",
         cmp_max_abs_thickness_delta: Option<Dbu> = "cmp_max_abs_thickness_delta",
     }
+    /// [`DielectricFieldTable`](crate::erc::rules::domain::DielectricFieldTable):
+    /// `dielectric_field(layer[, other]; max_field)`, in V/µm.
+    dielectric_field(layer: one, other: opt) [] { max_field: f64 = "max_field" }
     /// [`DomainCrossingTable`](crate::erc::rules::domain::DomainCrossingTable): `domain_crossing()`.
     domain_crossing() [] {}
     /// [`ModelLimitTable`](crate::erc::rules::domain::ModelLimitTable):
@@ -655,6 +667,8 @@ kinds! {
     /// [`EsdTopologicalTable`](crate::erc::rules::supply::EsdTopologicalTable):
     /// `esd_topological(pad; clamps)`.
     esd_topological(pad: one) [] { clamps: &[&str] = "clamp" }
+    /// [`FanoutTable`](crate::erc::rules::topology::FanoutTable): `fanout(; max)`.
+    fanout() [] { max_gates: u32 = "max_gates" }
     /// [`FloatingGateTable`](crate::erc::rules::topology::FloatingGateTable):
     /// `floating_gate(; labels_are_ports)`.
     floating_gate() [] { labels_are_ports: bool = "labels_are_ports" }
@@ -666,14 +680,22 @@ kinds! {
     /// [`HvDomainTable`](crate::erc::rules::reliability::HvDomainTable):
     /// `hv_domain(; max_delta, isolation: layer | none)`, in mV.
     hv_domain() [] { max_domain_delta: f64 = "max_domain_delta", isolation: Option<LayerRef> = "isolation" }
+    /// [`HvTagTable`](crate::erc::rules::domain::HvTagTable):
+    /// `hv_tag(layer, tag; voltage)`, in mV.
+    hv_tag(layer: one, tag: one) [] { voltage: f64 = "voltage" }
     /// [`IrDropTable`](crate::erc::rules::electrical::IrDropTable): `ir_drop()`.
     ir_drop() [] {}
+    /// [`MissingIsolationTable`](crate::erc::rules::domain::MissingIsolationTable):
+    /// `missing_isolation(; isolation: models | none)`.
+    missing_isolation() [] { isolation: &[&str] = "isolation" }
     /// [`MissingLevelShifterTable`](crate::erc::rules::domain::MissingLevelShifterTable):
     /// `missing_level_shifter(; shifters: models | none)`.
     missing_level_shifter() [] { shifters: &[&str] = "shifter" }
     /// [`MissingTieTable`](crate::erc::rules::supply::MissingTieTable):
     /// `missing_tie(region, tap; max_distance)`.
     missing_tie(region: one, tap: one) [] { max_distance: Dbu = "max_distance" }
+    /// [`MixedTagTable`](crate::erc::rules::supply::MixedTagTable): `mixed_tag(layer, tag)`.
+    mixed_tag(layer: one, tag: one) [] {}
     /// [`MultipleDriversTable`](crate::erc::rules::topology::MultipleDriversTable):
     /// `multiple_drivers(; max)`.
     multiple_drivers() [] { max_drivers: u32 = "max_drivers" }
@@ -704,6 +726,12 @@ kinds! {
     /// [`UnconnectedPinTable`](crate::erc::rules::topology::UnconnectedPinTable):
     /// `unconnected_pin(layers..)`.
     unconnected_pin(layers: many) [] {}
+    /// [`UndrivenGateTable`](crate::erc::rules::domain::UndrivenGateTable): `undriven_gate()`.
+    undriven_gate() [] {}
+    /// [`VoltageSpacingTable`](crate::erc::rules::domain::VoltageSpacingTable):
+    /// `voltage_space(layer[, other]; voltage: [..], space: [..])`, the
+    /// voltages in mV.
+    voltage_spacing(layer: one, other: opt) [] { voltage: &[f64] = "voltage", space: &[Dbu] = "space" }
     /// [`WellBiasTable`](crate::erc::rules::domain::WellBiasTable):
     /// `well_bias(; pmos: models | none, nmos: models | none)`.
     well_bias() [] { pmos: &[&str] = "pmos", nmos: &[&str] = "nmos" }

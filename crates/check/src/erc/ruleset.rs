@@ -1,4 +1,4 @@
-//! The twenty-six tables, the deck parser that fills them, and the dispatcher.
+//! The thirty-three tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
@@ -10,9 +10,9 @@ use crate::erc::voltage::NetVoltage;
 use crate::erc::{Design, ErcError, Scratch};
 use crate::report::{RuleRun, Severity, Violations};
 use crate::topology::PortTable;
-use gpurify_geom::{prefix, Dbu, DbuArea, Grid, Qty, Temperature};
+use gpurify_geom::{prefix, Dbu, DbuArea, Grid, Qty, Temperature, Voltage};
 use gpurify_geom::{Bbox, LayerId};
-use gpurify_ingest::deck::{Deck, DeviceKind, ParamValue, RuleSpec, RuleTable};
+use gpurify_ingest::deck::{Deck, DeviceKind, ParamValue, ProcessStack, RuleSpec, RuleTable};
 use gpurify_ingest::{StrId, StrTable};
 
 pub use crate::deck::rules::ERC_KINDS as KINDS;
@@ -53,6 +53,8 @@ pub struct RuleSet {
     pub multiple_drivers: topology::MultipleDriversTable,
     /// `unconnected_pin` rows: [`topology::UnconnectedPinTable`].
     pub unconnected_pin: topology::UnconnectedPinTable,
+    /// `fanout` rows: [`topology::FanoutTable`].
+    pub fanout: topology::FanoutTable,
 
     /// `supply_short` rows: [`supply::SupplyShortTable`].
     pub supply_short: supply::SupplyShortTable,
@@ -64,6 +66,8 @@ pub struct RuleSet {
     pub tie_high_low: supply::TieHighLowTable,
     /// `esd_topological` rows: [`supply::EsdTopologicalTable`].
     pub esd_topological: supply::EsdTopologicalTable,
+    /// `mixed_tag` rows: [`supply::MixedTagTable`].
+    pub mixed_tag: supply::MixedTagTable,
 
     /// `antenna` rows: [`antenna::AntennaTable`].
     pub antenna: antenna::AntennaTable,
@@ -104,6 +108,16 @@ pub struct RuleSet {
     pub missing_level_shifter: domain::MissingLevelShifterTable,
     /// `domain_crossing` rows: [`domain::DomainCrossingTable`].
     pub domain_crossing: domain::DomainCrossingTable,
+    /// `voltage_spacing` rows: [`domain::VoltageSpacingTable`].
+    pub voltage_spacing: domain::VoltageSpacingTable,
+    /// `hv_tag` rows: [`domain::HvTagTable`].
+    pub hv_tag: domain::HvTagTable,
+    /// `undriven_gate` rows: [`domain::UndrivenGateTable`].
+    pub undriven_gate: domain::UndrivenGateTable,
+    /// `missing_isolation` rows: [`domain::MissingIsolationTable`].
+    pub missing_isolation: domain::MissingIsolationTable,
+    /// `dielectric_field` rows: [`domain::DielectricFieldTable`].
+    pub dielectric_field: domain::DielectricFieldTable,
 }
 
 /// Everything one run reads, borrowed.
@@ -122,6 +136,10 @@ pub struct RunInputs<'a> {
     pub intent: &'a IntentMap,
     /// What each net can reach from the declared supplies.
     pub voltage: &'a NetVoltage,
+    /// What each net can reach in each declared power state, in the intent's
+    /// order: that state's supplies off and inputs held
+    /// ([`IntentMap::in_state`]). Empty when the intent declares no state.
+    pub states: &'a [NetVoltage],
     /// The per-net networks, or why they could not be built.
     pub networks: Result<&'a NetNetworks, PowerError>,
     /// The solved supply grid, or `None` when intent declared no supplies.
@@ -135,6 +153,23 @@ pub struct RunInputs<'a> {
     /// The applied sign-off temperature, absolute; distinct from each row's
     /// characterisation temperature.
     pub operating_temperature: Qty<Temperature, { prefix::BASE }>,
+}
+
+/// The dielectric between two layers of the `pex` stack, nm: the upper
+/// layer's height less the lower layer's height and thickness. `None` when
+/// the stack does not state both layers (no row, or a thickness of 0) or
+/// they overlap in height.
+fn vertical_gap(stack: &ProcessStack, a: LayerId, b: LayerId) -> Option<f64> {
+    let row = |layer: LayerId| {
+        let thickness = *stack.thickness_nm.get(layer.idx())?;
+        (thickness > 0.0).then(|| (stack.height_nm[layer.idx()], thickness))
+    };
+    let (mut lower, mut upper) = (row(a)?, row(b)?);
+    if upper.0 < lower.0 {
+        std::mem::swap(&mut lower, &mut upper);
+    }
+    let gap = upper.0 - (lower.0 + lower.1);
+    (gap > 0.0).then_some(gap)
 }
 
 fn narrow(len: usize) -> u32 {
@@ -313,6 +348,50 @@ impl Row<'_> {
             Some(ParamValue::Flag(value)) => Ok(value),
             Some(_) => Err(self.wrong_type(param)),
         }
+    }
+
+    /// A voltage-dependent spacing table: the repeated `voltage` (mV) and
+    /// `space` parameters, one step each, in deck order. The voltages are
+    /// zero or more and rise strictly; the spaces are positive and never
+    /// fall; there is one space per voltage.
+    #[allow(
+        clippy::type_complexity,
+        reason = "the two columns of one table, returned together"
+    )]
+    fn voltage_table(&self) -> Result<(Vec<Qty<Voltage, { prefix::MILLI }>>, Vec<Dbu>), ErcError> {
+        let (voltage_key, space_key) = (self.strings.get("voltage"), self.strings.get("space"));
+        let (mut voltage, mut space) = (Vec::new(), Vec::new());
+        for &(key, value) in self.rules.params_of(self.spec) {
+            if Some(key) == voltage_key {
+                match value {
+                    ParamValue::Ratio(millivolts) if millivolts.is_finite() => {
+                        voltage.push(millivolts);
+                    }
+                    _ => return Err(self.wrong_type("voltage")),
+                }
+            } else if Some(key) == space_key {
+                match value {
+                    ParamValue::Length(length) => space.push(length),
+                    _ => return Err(self.wrong_type("space")),
+                }
+            }
+        }
+        for (empty, param) in [(voltage.is_empty(), "voltage"), (space.is_empty(), "space")] {
+            if empty {
+                return Err(ErcError::MissingParam {
+                    rule: self.name(),
+                    param,
+                });
+            }
+        }
+        let bad = |why| ErcError::BadTable {
+            rule: self.name(),
+            why,
+        };
+        if voltage.len() != space.len() {
+            return Err(bad("a voltage table needs one space per voltage"));
+        }
+        Ok((voltage.into_iter().map(Qty::new).collect(), space))
     }
 
     /// Push the row's head; `warning = true` demotes it from `Error`. Parsed
@@ -627,11 +706,73 @@ impl RuleSet {
                     row.layers(0)?;
                     row.head(&mut set.domain_crossing.head)?;
                 }
+                "undriven_gate" => {
+                    row.layers(0)?;
+                    row.head(&mut set.undriven_gate.head)?;
+                }
+                "missing_isolation" => {
+                    row.layers(0)?;
+                    let isolation = row.models("isolation")?;
+                    let table = &mut set.missing_isolation;
+                    row.head(&mut table.head)?;
+                    table.isolation.extend(isolation);
+                    close_csr(&mut table.isolation_start, table.isolation.len());
+                }
+                "hv_tag" => {
+                    let layers = row.layers(2)?;
+                    let voltage = Qty::new(row.number("voltage")?);
+                    let table = &mut set.hv_tag;
+                    row.head(&mut table.head)?;
+                    table.layer.push(layers[0]);
+                    table.tag.push(layers[1]);
+                    table.voltage.push(voltage);
+                }
+                "mixed_tag" => {
+                    let layers = row.layers(2)?;
+                    let table = &mut set.mixed_tag;
+                    row.head(&mut table.head)?;
+                    table.layer.push(layers[0]);
+                    table.tag.push(layers[1]);
+                }
+                "dielectric_field" => {
+                    let count = narrow(row.rules.layers_of(row.spec).len());
+                    let layers = row.layers_where(2, (1..=2).contains(&count))?;
+                    let max_field = row.number("max_field")?;
+                    let vertical = match layers.get(1) {
+                        None => Some(0.0),
+                        Some(&b) => vertical_gap(&deck.stack, layers[0], b),
+                    };
+                    let table = &mut set.dielectric_field;
+                    row.head(&mut table.head)?;
+                    table.layer.push(layers[0]);
+                    table.other.push(layers.get(1).copied());
+                    table.max_field.push(max_field);
+                    table.vertical_nm.push(vertical);
+                }
+                "voltage_spacing" => {
+                    let count = narrow(row.rules.layers_of(row.spec).len());
+                    let layers = row.layers_where(2, (1..=2).contains(&count))?;
+                    let (voltage, space) = row.voltage_table()?;
+                    let table = &mut set.voltage_spacing;
+                    row.head(&mut table.head)?;
+                    table.layer.push(layers[0]);
+                    table.other.push(layers.get(1).copied());
+                    table.voltage.extend(voltage);
+                    table.space.extend(space);
+                    close_csr(&mut table.step_start, table.space.len());
+                }
                 "floating_gate" => {
                     row.layers(0)?;
                     let labels_are_ports = row.flag("labels_are_ports", false)?;
                     row.head(&mut set.floating_gate.head)?;
                     set.floating_gate.labels_are_ports.push(labels_are_ports);
+                }
+                "fanout" => {
+                    row.layers(0)?;
+                    let max_gates = row.count("max_gates")?;
+                    let table = &mut set.fanout;
+                    row.head(&mut table.head)?;
+                    table.max_gates.push(max_gates);
                 }
                 "floating_well" => {
                     let layers = row.layers(2)?;
@@ -859,6 +1000,13 @@ impl RuleSet {
             "tie_high_low" => &self.tie_high_low.head,
             "unconnected_pin" => &self.unconnected_pin.head,
             "well_bias" => &self.well_bias.head,
+            "voltage_spacing" => &self.voltage_spacing.head,
+            "dielectric_field" => &self.dielectric_field.head,
+            "hv_tag" => &self.hv_tag.head,
+            "mixed_tag" => &self.mixed_tag.head,
+            "fanout" => &self.fanout.head,
+            "undriven_gate" => &self.undriven_gate.head,
+            "missing_isolation" => &self.missing_isolation.head,
             other => unreachable!("{other} is not an ERC kind"),
         }
     }
@@ -1043,6 +1191,44 @@ impl RuleSet {
                     return Err(c.non_positive("duty_cycle"));
                 }
             }
+            "hv_tag" => c.positive("voltage", self.hv_tag.voltage[r].raw())?,
+            "dielectric_field" => c.positive("max_field", self.dielectric_field.max_field[r])?,
+            // Zero permitted gates flags every gate net.
+            "fanout" if self.fanout.max_gates[r] == 0 => {
+                return Err(c.non_positive("max_gates"));
+            }
+            "voltage_spacing" => {
+                let t = &self.voltage_spacing;
+                let steps = span(&t.step_start);
+                let (voltage, space) = (&t.voltage[steps.clone()], &t.space[steps]);
+                let bad = |why| ErcError::BadTable {
+                    rule: c.rule.to_owned(),
+                    why,
+                };
+                if voltage.is_empty() {
+                    return Err(c.missing("voltage"));
+                }
+                for step in voltage {
+                    c.finite("voltage", step.raw())?;
+                }
+                if voltage[0].raw() < 0.0
+                    || voltage
+                        .windows(2)
+                        .any(|pair| pair[0].raw() >= pair[1].raw())
+                {
+                    return Err(bad(
+                        "a voltage table's voltages start at 0 V or more and rise strictly",
+                    ));
+                }
+                for &step in space {
+                    c.length("space", step)?;
+                }
+                if space.windows(2).any(|pair| pair[1] < pair[0]) {
+                    return Err(bad(
+                        "a voltage table's spaces never fall as the voltage rises",
+                    ));
+                }
+            }
             // Nothing beyond the layers and models each row names.
             _ => {}
         }
@@ -1057,11 +1243,13 @@ impl RuleSet {
             &self.floating_well.head,
             &self.multiple_drivers.head,
             &self.unconnected_pin.head,
+            &self.fanout.head,
             &self.supply_short.head,
             &self.soft_connection.head,
             &self.missing_tie.head,
             &self.tie_high_low.head,
             &self.esd_topological.head,
+            &self.mixed_tag.head,
             &self.antenna.head,
             &self.antenna_electrical.head,
             &self.density_cmp.head,
@@ -1079,6 +1267,11 @@ impl RuleSet {
             &self.well_bias.head,
             &self.missing_level_shifter.head,
             &self.domain_crossing.head,
+            &self.voltage_spacing.head,
+            &self.hv_tag.head,
+            &self.undriven_gate.head,
+            &self.missing_isolation.head,
+            &self.dielectric_field.head,
         ]
         .iter()
         .map(|head| head.len())
@@ -1111,6 +1304,7 @@ impl RuleSet {
             ports,
             intent,
             voltage,
+            states,
             networks,
             power,
             die,
@@ -1129,12 +1323,14 @@ impl RuleSet {
             runs,
         );
         topology::check_unconnected_pin(design, facts, &self.unconnected_pin, out, runs);
+        topology::check_fanout(design, &self.fanout, out, runs);
 
         supply::check_supply_short(design, &self.supply_short, scratch, out, runs);
         supply::check_soft_connection(design, &self.soft_connection, scratch, out, runs);
         supply::check_missing_tie(design, &self.missing_tie, scratch, out, runs);
         supply::check_tie_high_low(design, facts, intent, &self.tie_high_low, out, runs);
         supply::check_esd_topological(design, intent, &self.esd_topological, out, runs);
+        supply::check_mixed_tag(design, &self.mixed_tag, out, runs);
 
         antenna::check_antenna(design, &self.antenna, scratch, out, runs);
         antenna::check_antenna_electrical(
@@ -1207,5 +1403,34 @@ impl RuleSet {
             runs,
         );
         domain::check_domain_crossing(design, intent, voltage, &self.domain_crossing, out, runs);
+        domain::check_voltage_spacing(design, intent, voltage, &self.voltage_spacing, out, runs);
+        domain::check_hv_tag(design, intent, voltage, &self.hv_tag, out, runs);
+        domain::check_dielectric_field(
+            design,
+            intent,
+            voltage,
+            grid,
+            &self.dielectric_field,
+            out,
+            runs,
+        );
+        domain::check_undriven_gate(
+            design,
+            intent,
+            voltage,
+            states,
+            &self.undriven_gate,
+            out,
+            runs,
+        );
+        domain::check_missing_isolation(
+            design,
+            intent,
+            voltage,
+            states,
+            &self.missing_isolation,
+            out,
+            runs,
+        );
     }
 }

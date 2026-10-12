@@ -17,7 +17,8 @@
 //!   met1 risers to one met2 track per net, and every assignment of terminals
 //!   to nets is enumerated (a seeded sample at merge depth). The oracle
 //!   re-derives each rule from its rustdoc: role masks per net, pull networks
-//!   to the declared rails per net, supply reach over transistor channels, the
+//!   to the declared rails per net, supply reach over the transistor channels
+//!   that can conduct (gate-conditioned switches swept to a fixed point), the
 //!   clamp path from a pad.
 //! - Geometric kinds (`floating_well`, `missing_tie`, `supply_short`,
 //!   `soft_connection`, the `esd_latchup` guard ring) on shapes whose answer is
@@ -90,6 +91,10 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(floating_well(depth));
     out.extend(missing_tie());
     out.extend(expressible());
+    out.extend(voltage_spacing());
+    out.extend(hv_tag());
+    out.extend(mixed_tag());
+    out.extend(dielectric_field());
     out
 }
 
@@ -3001,6 +3006,8 @@ layer mkpb = gds(24, 0)
 layer nwpm = gds(30, 0)
 layer ring = gds(31, 0)
 layer iso = gds(32, 0)
+layer mkcn = gds(25, 0)
+layer mkcp = gds(26, 0)
 connect conductors [diff, poly, well, ntap, ptap, met1, met2, pad]
 connect touch_within_layer
 connect via cont [diff, met1]
@@ -3016,6 +3023,8 @@ device mos mkp model \"pfet\" terminals [poly, diff, diff]
 device mos mkc model \"clamp\" terminals [poly, diff, diff]
 device mos mknb model \"nfet_b\" terminals [poly, diff, diff, well]
 device mos mkpb model \"pfet_b\" terminals [poly, diff, diff, well]
+device mos mkcn model \"nfet_c\" terminals [poly, diff, diff] on_gate_min 1V
+device mos mkcp model \"pfet_c\" terminals [poly, diff, diff] on_gate_max 2.5V
 pex well thickness 100nm height 5nm sheet 1000ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
 pex diff thickness 100nm height 10nm sheet 100ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
 pex ntap thickness 100nm height 10nm sheet 100ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
@@ -3030,7 +3039,7 @@ pex pad thickness 100nm height 500nm sheet 0.01ohm dielectric 3.9 area_cap 1aF/u
 ";
 
 /// Every rule a [`Board`] is checked against, and whether it needs intent.
-const TOPO_RULES: [(&str, &str, bool); 17] = [
+const TOPO_RULES: [(&str, &str, bool); 20] = [
     ("fg", "floating_gate(; labels_are_ports: false)", false),
     ("fgp", "floating_gate(; labels_are_ports: true)", false),
     ("md1", "multiple_drivers(; max: 1)", true),
@@ -3040,6 +3049,9 @@ const TOPO_RULES: [(&str, &str, bool); 17] = [
     ("ss", "supply_short(ntap, ptap)", false),
     ("ssw", "supply_short(ntap, ptap, nwpm)", false),
     ("soft", "soft_connection(well)", false),
+    ("fo", "fanout(; max: 1)", false),
+    ("ug", "undriven_gate()", true),
+    ("iso", "missing_isolation(; isolation: [\"pfet\"])", true),
     (
         "gox",
         "gate_oxide(; models: [\"nfet\", \"nfet_b\", \"pfet_b\"], max: {gox})",
@@ -3064,7 +3076,7 @@ const TOPO_RULES: [(&str, &str, bool); 17] = [
 
 /// The catalog rows every board proves: the intent-free connectivity kinds,
 /// which judge every net of every board.
-const TOPO_CATALOG: &[&str] = &["ERC-G1", "ERC-G6", "ERC-E9"];
+const TOPO_CATALOG: &[&str] = &["ERC-G1", "ERC-G6", "ERC-E9", "ERC-H4"];
 /// The rows a board with intent proves too: the kinds the rails orient,
 /// propagation and the voltage kinds.
 const VOLTAGE_CATALOG: &[&str] = &[
@@ -3134,6 +3146,10 @@ enum Model {
     Clamp,
     NfetB,
     PfetB,
+    /// `nfet_c`: conducts while its gate can reach 1 V or more.
+    NfetC,
+    /// `pfet_c`: conducts while its gate can fall to 2.5 V or less.
+    PfetC,
 }
 
 impl Model {
@@ -3144,6 +3160,18 @@ impl Model {
             Model::Clamp => "mkc",
             Model::NfetB => "mknb",
             Model::PfetB => "mkpb",
+            Model::NfetC => "mkcn",
+            Model::PfetC => "mkcp",
+        }
+    }
+
+    /// The deck row's gate condition: `(on at or above?, mV)`, as
+    /// `TOPO_PROCESS` states it.
+    fn condition(self) -> Option<(bool, f64)> {
+        match self {
+            Model::NfetC => Some((true, 1000.0)),
+            Model::PfetC => Some((false, 2500.0)),
+            _ => None,
         }
     }
 }
@@ -3181,7 +3209,7 @@ struct Supply {
 }
 
 /// What a net can reach from the supplies (`erc::voltage`'s model).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Reach {
     lo: f64,
     hi: f64,
@@ -3211,6 +3239,17 @@ struct Board {
     domains: Vec<(&'static str, f64)>,
     with_intent: bool,
     limits: Limits,
+    /// Power states the intent declares.
+    states: Vec<BoardState>,
+}
+
+/// A power state of a [`Board`]: the supply nets it switches off and the
+/// nets it holds, at mV.
+#[derive(Clone, Debug)]
+struct BoardState {
+    name: &'static str,
+    off: Vec<usize>,
+    inputs: Vec<(usize, f64)>,
 }
 
 impl Board {
@@ -3280,63 +3319,148 @@ impl Board {
                 )
             })
             .collect();
-        intent(&self.domains, &supplies, &[])
+        let base = intent(&self.domains, &supplies, &[]);
+        if self.states.is_empty() {
+            return base;
+        }
+        let name = |net: usize| self.labels[net].expect("a state names a labelled net");
+        let states: Vec<String> = self
+            .states
+            .iter()
+            .map(|st| {
+                let off: Vec<String> = st
+                    .off
+                    .iter()
+                    .map(|&n| format!(r#""{}""#, name(n)))
+                    .collect();
+                let inputs: Vec<String> = st
+                    .inputs
+                    .iter()
+                    .map(|&(n, mv)| format!(r#"{{"net":"{}","voltage_mv":{mv}}}"#, name(n)))
+                    .collect();
+                format!(
+                    r#"{{"name":"{}","off":[{}],"inputs":[{}]}}"#,
+                    st.name,
+                    off.join(","),
+                    inputs.join(",")
+                )
+            })
+            .collect();
+        format!(
+            "{},\"states\":[{}]}}",
+            &base[..base.len() - 1],
+            states.join(",")
+        )
+    }
+
+    /// The supplies of power state `st`, as `IntentMap::in_state` states
+    /// them: every supply it does not switch off and does not hold, and each
+    /// held net as a supply at its voltage (a ground at 0 V, otherwise power
+    /// of domain 0).
+    fn state_supplies(&self, st: &BoardState) -> Vec<Supply> {
+        let mut out: Vec<Supply> = self
+            .supplies
+            .iter()
+            .filter(|s| !st.off.contains(&s.net) && !st.inputs.iter().any(|i| i.0 == s.net))
+            .copied()
+            .collect();
+        out.extend(st.inputs.iter().map(|&(net, mv)| Supply {
+            net,
+            power: mv != 0.0,
+            domain: 0,
+            nominal: mv,
+        }));
+        out
     }
 
     fn supply(&self, net: usize) -> Option<&Supply> {
         self.supplies.iter().find(|s| s.net == net)
     }
 
-    /// The voltage model of `erc::voltage`: a supply net sits at its nominal
-    /// (power) or 0 V (ground); the source/drain nets of a transistor are one
-    /// component unless a supply, and a supply on a transistor's channel
-    /// reaches the components of that transistor's other channel nets. Gates
-    /// and bulks pass nothing.
+    /// The voltage model of `erc::voltage`, by brute force (NV): a supply net
+    /// sits at its nominal (power) or 0 V (ground) and never changes; every
+    /// conducting transistor widens each of its source and drain nets that is
+    /// not a supply to the union of both, swept over every transistor until
+    /// nothing changes. Gates and bulks pass nothing. A transistor of a
+    /// [`Model::condition`] conducts while its gate's range reaches the
+    /// condition (Siemens 81822, figure 1), or when its gate is free: no
+    /// supply reaches it even with every channel conducting, or, after a
+    /// sweep, still none does (it floats behind switches that never turn on).
     fn reach(&self) -> Vec<Option<Reach>> {
-        fn find(parent: &mut [usize], mut x: usize) -> usize {
-            while parent[x] != x {
-                x = parent[x];
-            }
-            x
-        }
-        let mut parent: Vec<usize> = (0..NETS).collect();
-        for dv in &self.devs {
-            if self.supply(dv.s).is_none() && self.supply(dv.d).is_none() {
-                let (a, b) = (find(&mut parent, dv.s), find(&mut parent, dv.d));
-                parent[a] = b;
-            }
-        }
-        let mut reached: Vec<Vec<Supply>> = vec![Vec::new(); NETS];
-        for dv in &self.devs {
-            for (sup, free) in [(dv.s, dv.d), (dv.d, dv.s)] {
-                if let (Some(&s), None) = (self.supply(sup), self.supply(free)) {
-                    let root = find(&mut parent, free);
-                    reached[root].push(s);
-                }
-            }
-        }
-        let own = |s: &Supply| Reach {
-            lo: if s.power { s.nominal } else { 0.0 },
-            hi: if s.power { s.nominal } else { 0.0 },
-            nominal_lo: s.nominal,
-            nominal_hi: s.nominal,
-            power: if s.power { 1 << s.domain } else { 0 },
-        };
-        (0..NETS)
-            .map(|net| {
-                if let Some(s) = self.supply(net) {
-                    return Some(own(s));
-                }
-                let root = find(&mut parent, net);
-                reached[root].iter().map(own).reduce(|a, b| Reach {
+        self.reach_with(&self.supplies)
+    }
+
+    /// [`Board::reach`] from `supplies` in place of the board's own.
+    fn reach_with(&self, supplies: &[Supply]) -> Vec<Option<Reach>> {
+        let supply = |net: usize| supplies.iter().find(|s| s.net == net);
+        let sweep = |free: &[bool]| -> Vec<Option<Reach>> {
+            let mut r: Vec<Option<Reach>> = (0..NETS)
+                .map(|net| {
+                    supply(net).map(|s| Reach {
+                        lo: if s.power { s.nominal } else { 0.0 },
+                        hi: if s.power { s.nominal } else { 0.0 },
+                        nominal_lo: s.nominal,
+                        nominal_hi: s.nominal,
+                        power: if s.power { 1 << s.domain } else { 0 },
+                    })
+                })
+                .collect();
+            let union = |a: Option<Reach>, b: Option<Reach>| match (a, b) {
+                (Some(a), Some(b)) => Some(Reach {
                     lo: a.lo.min(b.lo),
                     hi: a.hi.max(b.hi),
                     nominal_lo: a.nominal_lo.min(b.nominal_lo),
                     nominal_hi: a.nominal_hi.max(b.nominal_hi),
                     power: a.power | b.power,
-                })
-            })
-            .collect()
+                }),
+                (a, None) => a,
+                (None, b) => b,
+            };
+            loop {
+                let mut changed = false;
+                for (i, dv) in self.devs.iter().enumerate() {
+                    let on = match dv.model.condition() {
+                        None => true,
+                        Some(_) if free[i] => true,
+                        Some((at_least, v)) => {
+                            r[dv.g].is_some_and(|g| if at_least { g.hi >= v } else { g.lo <= v })
+                        }
+                    };
+                    if !on {
+                        continue;
+                    }
+                    let both = union(r[dv.s], r[dv.d]);
+                    for n in [dv.s, dv.d] {
+                        let widened = union(r[n], both);
+                        if supply(n).is_none() && widened != r[n] {
+                            r[n] = widened;
+                            changed = true;
+                        }
+                    }
+                }
+                if !changed {
+                    return r;
+                }
+            }
+        };
+        let everything = sweep(&vec![true; self.devs.len()]);
+        let mut free: Vec<bool> = self
+            .devs
+            .iter()
+            .map(|d| everything[d.g].is_none())
+            .collect();
+        loop {
+            let r = sweep(&free);
+            let floating: Vec<usize> = (0..self.devs.len())
+                .filter(|&i| !free[i] && r[self.devs[i].g].is_none())
+                .collect();
+            if floating.is_empty() {
+                return r;
+            }
+            for i in floating {
+                free[i] = true;
+            }
+        }
     }
 
     /// Every rule's expectation, from the definitions in each kind's rustdoc.
@@ -3396,6 +3520,17 @@ impl Board {
         // soft_connection: every well here hangs off a riser that also holds
         // the rest of its net.
         out.push(Expect::clean("soft"));
+        // fanout(; max: 1): a net with two or more transistor gates on it,
+        // measuring the count.
+        out.push(Expect::rule(
+            "fo",
+            (0..NETS)
+                .filter_map(|n| {
+                    let gates = self.devs.iter().filter(|d| d.g == n).count() as u32;
+                    (gates > 1).then(|| count(gates))
+                })
+                .collect(),
+        ));
         if !self.with_intent {
             for (id, _, needs) in TOPO_RULES {
                 if needs {
@@ -3404,6 +3539,7 @@ impl Board {
             }
             return out;
         }
+        out.extend(self.expect_states());
         // multiple_drivers: a transistor with either channel end on a net that
         // is not a rail pulls it when a walk from its other end, through every
         // transistor with a channel end on the nets reached, stopping at rails
@@ -3624,6 +3760,54 @@ impl Board {
         out
     }
 
+    /// `undriven_gate` and `missing_isolation(; isolation: ["pfet"])`, from
+    /// their rustdoc: per declared state, the board's reach from that
+    /// state's supplies ([`Board::state_supplies`]). A gate net reached with
+    /// every supply on that a state leaves unreached floats there; a
+    /// transistor (not a pfet) whose gate floats in a state while a power
+    /// supply reaches its source or drain there leaks. Each measures the
+    /// count of such states. Without states both are Skipped.
+    fn expect_states(&self) -> Vec<Expect> {
+        if self.states.is_empty() {
+            return vec![
+                Expect::outcome("ug", Want::Skipped),
+                Expect::outcome("iso", Want::Skipped),
+            ];
+        }
+        let base = self.reach();
+        let states: Vec<Vec<Option<Reach>>> = self
+            .states
+            .iter()
+            .map(|st| self.reach_with(&self.state_supplies(st)))
+            .collect();
+        let floats =
+            |reach: &[Option<Reach>], net: usize| base[net].is_some() && reach[net].is_none();
+        let undriven = (0..NETS)
+            .filter(|&n| self.devs.iter().any(|d| d.g == n))
+            .filter_map(|n| {
+                let off = states.iter().filter(|r| floats(r.as_slice(), n)).count() as u32;
+                (off > 0).then(|| count(off))
+            })
+            .collect();
+        let power = |reach: &[Option<Reach>], net: usize| reach[net].map_or(0, |r| r.power);
+        let leaking = self
+            .devs
+            .iter()
+            .filter(|d| d.model != Model::Pfet)
+            .filter_map(|d| {
+                let off = states
+                    .iter()
+                    .filter(|r| {
+                        floats(r.as_slice(), d.g)
+                            && (power(r.as_slice(), d.s) | power(r.as_slice(), d.d)) != 0
+                    })
+                    .count() as u32;
+                (off > 0).then(|| count(off))
+            })
+            .collect();
+        vec![Expect::rule("ug", undriven), Expect::rule("iso", leaking)]
+    }
+
     fn fixture(&self, name: &str) -> Fixture {
         // The rows this board's content exercises: taps for supply shorts, a
         // pad for the clamp path, a ring for its limits, a bulk for well bias.
@@ -3641,6 +3825,9 @@ impl Board {
             }
             if self.ring.is_some() {
                 catalog.push("ERC-D2");
+            }
+            if !self.states.is_empty() {
+                catalog.extend(["ERC-F7", "ERC-F8", "ERC-H1"]);
             }
         }
         let mut f =
@@ -3800,6 +3987,83 @@ fn topology_enumerations(depth: Depth) -> Vec<Fixture> {
             dev(Model::Nfet, a[6], a[7], a[8]),
         ];
         out.push(board.fixture(&format!("erc/topology/rails2/{}", assignment_name(&a))));
+    }
+    // Gate-conditioned switches (ERC-F1): an nfet_c (on at 1 V or more) and a
+    // pfet_c (on at 2.5 V or less), every 4^6 assignment against VDD, VSS and
+    // VDDH, so each gate sits on 0, 1.8 or 3.3 V, on the signal, or on a
+    // channel of its own; then with a plain nfet, sampled, against those
+    // rails and against VDD and VSS alone, so a gate can be driven through
+    // another switch or float behind one that never turns on.
+    for a in sample(&all_assignments(6), depth, 300, 0x7_0006) {
+        let mut board = three_rails(true);
+        board.devs = vec![
+            dev(Model::NfetC, a[0], a[1], a[2]),
+            dev(Model::PfetC, a[3], a[4], a[5]),
+        ];
+        out.push(board.fixture(&format!(
+            "erc/topology/conditional2/{}",
+            assignment_name(&a)
+        )));
+    }
+    for (seed, rails) in [(0x7_0007, 3), (0x7_0008, 2)] {
+        let mut rng = Rng::new(seed);
+        let mut seen = std::collections::BTreeSet::new();
+        while seen.len() < three {
+            let a: Vec<usize> = (0..9).map(|_| rng.below(NETS as u64) as usize).collect();
+            if !seen.insert(a.clone()) {
+                continue;
+            }
+            let mut board = if rails == 3 {
+                three_rails(true)
+            } else {
+                two_rails()
+            };
+            board.devs = vec![
+                dev(Model::NfetC, a[0], a[1], a[2]),
+                dev(Model::PfetC, a[3], a[4], a[5]),
+                dev(Model::Nfet, a[6], a[7], a[8]),
+            ];
+            out.push(board.fixture(&format!(
+                "erc/topology/conditional3/rails{rails}/{}",
+                assignment_name(&a)
+            )));
+        }
+    }
+    // Power states (ERC-F7, ERC-F8, ERC-H1): net 3 is the labelled input IN;
+    // VDDH switched off, IN held at 0 V, and IN held at 1.8 V, over the same
+    // two switches and a plain nfet, sampled.
+    let mut rng = Rng::new(0x7_0009);
+    let mut seen = std::collections::BTreeSet::new();
+    while seen.len() < three {
+        let a: Vec<usize> = (0..9).map(|_| rng.below(NETS as u64) as usize).collect();
+        if !seen.insert(a.clone()) {
+            continue;
+        }
+        let mut board = three_rails(true);
+        board.labels[3] = Some("IN");
+        board.states = vec![
+            BoardState {
+                name: "sleep",
+                off: vec![2],
+                inputs: Vec::new(),
+            },
+            BoardState {
+                name: "in_low",
+                off: Vec::new(),
+                inputs: vec![(3, 0.0)],
+            },
+            BoardState {
+                name: "in_high",
+                off: Vec::new(),
+                inputs: vec![(3, 1800.0)],
+            },
+        ];
+        board.devs = vec![
+            dev(Model::NfetC, a[0], a[1], a[2]),
+            dev(Model::PfetC, a[3], a[4], a[5]),
+            dev(Model::Nfet, a[6], a[7], a[8]),
+        ];
+        out.push(board.fixture(&format!("erc/topology/states/{}", assignment_name(&a))));
     }
     let bulk: Vec<(Model, Vec<usize>)> = [Model::NfetB, Model::PfetB]
         .into_iter()
@@ -3975,6 +4239,50 @@ fn topology_cases() -> Vec<Fixture> {
         dev(Model::Nfet, a, vss, b),
     ];
     out.push(ring.fixture("erc/topology/f28/tie_drawing_order"));
+
+    // Power states, hand-derived. The white paper's tristate (Siemens 81822,
+    // figure 3): an `on_gate_min 1V` switch from VDD to Y gated by the input
+    // EN, and a load nfet gated by Y between VSS and VDD. With EN held at
+    // 0 V the switch never turns on and Y "becomes floating. Subsequent
+    // gates connected to pin Y become un-driven": Y is undriven in one state,
+    // and the load, its channel on VDD, leaks in one. EN at 1.8 V drives Y.
+    let mut tristate = two_rails();
+    tristate.labels = [Some("VDD"), Some("VSS"), Some("EN"), Some("Y")];
+    tristate.devs = vec![dev(Model::NfetC, 2, vdd, 3), dev(Model::Nfet, 3, vss, vdd)];
+    tristate.states = vec![
+        BoardState {
+            name: "en_low",
+            off: Vec::new(),
+            inputs: vec![(2, 0.0)],
+        },
+        BoardState {
+            name: "en_high",
+            off: Vec::new(),
+            inputs: vec![(2, 1800.0)],
+        },
+    ];
+    // VDDH drives the signal through an always-on nfet; a pfet (the
+    // isolation model) and an nfet load it. Switching VDDH off floats the
+    // signal: undriven once, the nfet leaks once, the pfet is exempt.
+    let mut sleep = three_rails(true);
+    sleep.devs = vec![
+        dev(Model::Nfet, vss, vddh, sig),
+        dev(Model::Pfet, sig, vdd, vss),
+        dev(Model::Nfet, sig, vss, vdd),
+    ];
+    sleep.states = vec![BoardState {
+        name: "sleep",
+        off: vec![vddh],
+        inputs: Vec::new(),
+    }];
+    for (name, board) in [("tristate", tristate), ("sleep", sleep)] {
+        let mut f = board.fixture(&format!("erc/topology/states/{name}"));
+        f.expect
+            .retain(|e| !matches!(e, Expect::Rule { id, .. } if id == "ug" || id == "iso"));
+        f.expect.push(Expect::rule("ug", vec![count(1)]));
+        f.expect.push(Expect::rule("iso", vec![count(1)]));
+        out.push(f);
+    }
 
     // A layer listed twice is checked, and reported, twice.
     out.push(
@@ -4606,6 +4914,512 @@ fn expressible() -> Vec<Fixture> {
         );
     }
     out
+}
+
+// ---------------------------------------------------------- voltage_spacing
+
+/// Two labelled metals with a via between them, and two voltage tables:
+/// met1 to met1 needs 200 nm from 0 V, 400 nm from 1.5 V and 800 nm from 3 V;
+/// met1 to met2 needs 500 nm from 1 V.
+const VS_DECK: &str = "grid 1nm
+layer met1 = gds(1, 0)
+layer m1txt = gds(1, 1)
+layer met2 = gds(2, 0)
+layer m2txt = gds(2, 1)
+layer v1 = gds(3, 0)
+connect conductors [met1, met2]
+connect touch_within_layer
+connect via v1 [met1, met2]
+connect label m1txt names met1
+connect label m2txt names met2
+rule vs voltage_space(met1; voltage: [0V, 1.5V, 3V], space: [200nm, 400nm, 800nm])
+rule vs2 voltage_space(met1, met2; voltage: [1V], space: [500nm])
+";
+
+const VS_CATALOG: &[&str] = &["DRC-082", "ERC-F11"];
+
+/// The space `vs` needs between two nets `delta` mV apart, read off the
+/// table in its definition: the last step whose voltage `delta` reaches.
+fn vs_need(delta: i64) -> Option<i64> {
+    [(0, 200), (1500, 400), (3000, 800)]
+        .iter()
+        .rev()
+        .find(|&&(volts, _)| volts <= delta)
+        .map(|&(_, space)| space)
+}
+
+/// Intent putting net A at `1000 + delta` mV (domain `hi`) and net B at
+/// 1000 mV (domain `lo`), both power: `delta` apart at worst.
+fn vs_intent(delta: i64) -> String {
+    intent(
+        &[("hi", (1000 + delta) as f64), ("lo", 1000.0)],
+        &[("A", "hi", "power"), ("B", "lo", "power")],
+        &[],
+    )
+}
+
+/// `voltage_space` (DRC-082, ERC-F11) on two met1 bars `gap` apart, nets A
+/// and B `delta` mV apart, swept against both: every step's voltage a
+/// millivolt either side, every step's space and one nanometre under it.
+/// Oracle: the table by hand ([`vs_need`]); a pair is flagged, measuring its
+/// gap, exactly when the gap is below the space the voltage needs. The
+/// boundary of each delta's own step is placed under every symmetry and
+/// offset. Then: a net no supply reaches and two shapes of one net are not
+/// judged however close; a met1 shape on A and a met2 shape on B, 1 V apart
+/// or a millivolt less, overlapping or `499`/`500` nm apart (`vs2`); a ground
+/// at 0 V against 3 V; and no intent, Skipped.
+fn voltage_spacing() -> Vec<Fixture> {
+    let mut out = Vec::new();
+    for delta in [0, 1499, 1500, 1501, 2999, 3000, 3001, 5000] {
+        let need = vs_need(delta).expect("the first step is at 0 V");
+        for gap in [199, 200, 399, 400, 799, 800] {
+            let mut f = Fixture::new(
+                &format!("erc/voltage_spacing/{delta}mV/{gap}nm"),
+                VS_CATALOG,
+                VS_DECK,
+                ERC,
+            )
+            .layout(
+                Layout::default()
+                    .rect("met1", 0, 0, 1000, 500)
+                    .rect("met1", 1000 + gap, 0, 2000 + gap, 500)
+                    .label("m1txt", 500, 250, "A")
+                    .label("m1txt", 1500 + gap, 250, "B"),
+            )
+            .expect(Expect::rule(
+                "vs",
+                if gap < need {
+                    vec![length(gap)]
+                } else {
+                    Vec::new()
+                },
+            ))
+            .expect(Expect::clean("vs2"));
+            f.intent = Some(vs_intent(delta));
+            if gap == need || gap == need - 1 {
+                out.extend(every_placement(&[f]));
+            } else {
+                out.push(f);
+            }
+        }
+    }
+    // A, then 100 nm off it an unlabelled bar no supply reaches; B far away.
+    let mut f = Fixture::new("erc/voltage_spacing/unreached", VS_CATALOG, VS_DECK, ERC)
+        .layout(
+            Layout::default()
+                .rect("met1", 0, 0, 1000, 500)
+                .rect("met1", 1100, 0, 2100, 500)
+                .rect("met1", 20_000, 0, 21_000, 500)
+                .label("m1txt", 500, 250, "A")
+                .label("m1txt", 20_500, 250, "B"),
+        )
+        .expect(Expect::clean("vs"))
+        .expect(Expect::clean("vs2"));
+    f.intent = Some(vs_intent(5000));
+    out.extend(every_placement(&[f]));
+    // Two met1 bars of A 100 nm apart, bridged on met2 through vias: one
+    // net, at one voltage, so neither table judges them.
+    let mut f = Fixture::new("erc/voltage_spacing/same_net", VS_CATALOG, VS_DECK, ERC)
+        .layout(
+            Layout::default()
+                .rect("met1", 0, 0, 1000, 500)
+                .rect("met1", 1100, 0, 2100, 500)
+                .rect("met2", 0, 0, 2100, 500)
+                .rect("v1", 400, 200, 500, 300)
+                .rect("v1", 1600, 200, 1700, 300)
+                .rect("met1", 20_000, 0, 21_000, 500)
+                .label("m1txt", 200, 250, "A")
+                .label("m1txt", 20_500, 250, "B"),
+        )
+        .expect(Expect::clean("vs"))
+        .expect(Expect::clean("vs2"));
+    f.intent = Some(vs_intent(5000));
+    out.extend(every_placement(&[f]));
+    // met1 on A against met2 on B: a cross (overlap, distance 0), or a met2
+    // bar 499 or 500 nm off the met1 bar's end.
+    for delta in [999, 1000] {
+        for (name, met2, gap) in [
+            ("overlap", (400, -1000, 600, 1500), 0),
+            ("499nm", (1499, 0, 2499, 500), 499),
+            ("500nm", (1500, 0, 2500, 500), 500),
+        ] {
+            let mut layout = Layout::default()
+                .rect("met1", 0, 0, 1000, 500)
+                .label("m1txt", 200, 250, "A");
+            rect(&mut layout, "met2", met2);
+            let layout = layout.label("m2txt", met2.2 - 50, 250, "B");
+            let mut f = Fixture::new(
+                &format!("erc/voltage_spacing/two_layers/{delta}mV/{name}"),
+                VS_CATALOG,
+                VS_DECK,
+                ERC,
+            )
+            .layout(layout)
+            .expect(Expect::clean("vs"))
+            .expect(Expect::rule(
+                "vs2",
+                if delta >= 1000 && gap < 500 {
+                    vec![length(gap)]
+                } else {
+                    Vec::new()
+                },
+            ));
+            f.intent = Some(vs_intent(delta));
+            out.extend(every_placement(&[f]));
+        }
+    }
+    // A ground at 0 V against a 3 V power net: 3 V apart, 800 nm needed.
+    for gap in [799, 800] {
+        let mut f = Fixture::new(
+            &format!("erc/voltage_spacing/ground/{gap}nm"),
+            VS_CATALOG,
+            VS_DECK,
+            ERC,
+        )
+        .layout(
+            Layout::default()
+                .rect("met1", 0, 0, 1000, 500)
+                .rect("met1", 1000 + gap, 0, 2000 + gap, 500)
+                .label("m1txt", 500, 250, "A")
+                .label("m1txt", 1500 + gap, 250, "B"),
+        )
+        .expect(Expect::rule(
+            "vs",
+            if gap < 800 {
+                vec![length(gap)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(intent(
+            &[("hi", 3000.0), ("lo", 1800.0)],
+            &[("A", "hi", "power"), ("B", "lo", "ground")],
+            &[],
+        ));
+        out.push(f);
+    }
+    out.push(
+        Fixture::new("erc/voltage_spacing/no_intent", VS_CATALOG, VS_DECK, ERC)
+            .layout(
+                Layout::default()
+                    .rect("met1", 0, 0, 1000, 500)
+                    .rect("met1", 1100, 0, 2100, 500),
+            )
+            .expect(Expect::outcome("vs", Want::Skipped))
+            .expect(Expect::outcome("vs2", Want::Skipped)),
+    );
+    out
+}
+
+// ------------------------------------------------------- hv_tag, mixed_tag
+
+/// A transistor whose source and drain diffusions reach met1 through
+/// contacts, its poly through a poly contact; `hvi` tags; `sw` conducts
+/// only while its gate can reach 1 V.
+const TAG_DECK: &str = "grid 1nm
+layer diff = gds(1, 0)
+layer poly = gds(2, 0)
+layer mk = gds(3, 0)
+layer mks = gds(4, 0)
+layer cont = gds(5, 0)
+layer pcont = gds(6, 0)
+layer met1 = gds(7, 0)
+layer m1txt = gds(7, 1)
+layer met2 = gds(8, 0)
+layer v1 = gds(9, 0)
+layer res = gds(10, 0)
+layer hvi = gds(11, 0)
+connect conductors [diff, poly, met1, met2]
+connect touch_within_layer
+connect via cont [diff, met1]
+connect via pcont [poly, met1]
+connect via v1 [met1, met2]
+connect label m1txt names met1
+device mos mk model \"n\" terminals [poly, diff, diff]
+device mos mks model \"sw\" terminals [poly, diff, diff] on_gate_min 1V
+device resistor res model \"r\" terminals [met1, met1]
+rule hvt hv_tag(met1, hvi; voltage: 3V)
+rule mix mixed_tag(met1, hvi)
+";
+
+/// A transistor of marker `marker` at the origin: source diffusion on met1
+/// pad S (0..1000), drain on met1 pad D (1200..2200), the gate's poly out
+/// to a met1 pad G above, each pad 1000 × 500.
+fn tagged_transistor(marker: &str) -> Layout {
+    let mut l = Layout::default();
+    rect(&mut l, "diff", (0, 0, 1000, 1000));
+    rect(&mut l, "diff", (1200, 0, 2200, 1000));
+    rect(&mut l, "poly", (1000, 0, 1200, 2000));
+    rect(&mut l, marker, (1000, 0, 1200, 1000));
+    rect(&mut l, "cont", (400, 400, 600, 600));
+    rect(&mut l, "cont", (1600, 400, 1800, 600));
+    rect(&mut l, "pcont", (1050, 1700, 1150, 1800));
+    rect(&mut l, "met1", (0, 250, 1000, 750));
+    rect(&mut l, "met1", (1200, 250, 2200, 750));
+    rect(&mut l, "met1", (900, 1600, 1300, 2100));
+    l
+}
+
+/// `hv_tag(met1, hvi; voltage: 3V)` (DRC-083). Oracle: the definition by
+/// hand: a met1 figure whose net can reach 3 V or more lies inside `hvi`,
+/// or is reported with the area it leaves outside. A pad on a supply swept
+/// a millivolt either side of 3 V, uncovered and half covered; a pad joined
+/// to the 3.3 V supply through a transistor channel is high-voltage too
+/// (sky130 hv.X.4), unless the transistor is a switch whose gate, tied to
+/// ground, never turns it on (ERC-F1); a 1.8 V pad is never judged; no
+/// intent, Skipped. Every case under every symmetry and offset.
+fn hv_tag() -> Vec<Fixture> {
+    let mut cases = Vec::new();
+    let pad = Layout::default()
+        .rect("met1", 0, 0, 1000, 500)
+        .label("m1txt", 100, 250, "HV");
+    for mv in [2999.0, 3000.0, 3001.0] {
+        for (name, hvi, outside) in [
+            ("bare", None, 500_000),
+            ("half", Some((500, -100, 1100, 600)), 250_000),
+            ("covered", Some((-100, -100, 1100, 600)), 0),
+        ] {
+            let mut layout = pad.clone();
+            if let Some(hvi) = hvi {
+                rect(&mut layout, "hvi", hvi);
+            }
+            let findings = if mv >= 3000.0 && outside > 0 {
+                vec![Finding::area(outside)]
+            } else {
+                Vec::new()
+            };
+            let mut f = Fixture::new(
+                &format!("erc/hv_tag/pad/{}/{name}", side(3000.0, mv)),
+                &["DRC-083"],
+                TAG_DECK,
+                ERC,
+            )
+            .layout(layout)
+            .expect(Expect::rule("hvt", findings));
+            f.intent = Some(intent(&[("hv", mv)], &[("HV", "hv", "power")], &[]));
+            cases.push(f);
+        }
+    }
+    // HV on S, the 1.8 V core supply on G, VSS on nothing: D reaches 3.3 V
+    // through the channel. `hvi` covers S only, so D (500 000 nm²) is
+    // reported; with the switch and G on VSS the channel never conducts.
+    for (name, marker, gate_net, findings) in [
+        ("through_channel", "mk", "VDD", vec![Finding::area(500_000)]),
+        ("switch_on", "mks", "VDD", vec![Finding::area(500_000)]),
+        ("switch_off", "mks", "VSS", Vec::new()),
+    ] {
+        let mut layout = tagged_transistor(marker)
+            .label("m1txt", 100, 500, "HV")
+            .label("m1txt", 1000, 2000, gate_net);
+        rect(&mut layout, "hvi", (-100, 150, 1100, 850));
+        let mut f = Fixture::new(
+            &format!("erc/hv_tag/propagated/{name}"),
+            &["DRC-083"],
+            TAG_DECK,
+            ERC,
+        )
+        .layout(layout)
+        .expect(Expect::rule("hvt", findings));
+        f.intent = Some(intent(
+            &[("core", 1800.0), ("hv", 3300.0)],
+            &[
+                ("HV", "hv", "power"),
+                ("VDD", "core", "power"),
+                ("VSS", "core", "ground"),
+            ],
+            &[],
+        ));
+        cases.push(f);
+    }
+    let mut f = Fixture::new("erc/hv_tag/low_voltage", &["DRC-083"], TAG_DECK, ERC)
+        .layout(
+            Layout::default()
+                .rect("met1", 0, 0, 1000, 500)
+                .label("m1txt", 100, 250, "VDD"),
+        )
+        .expect(Expect::clean("hvt"));
+    f.intent = Some(intent(
+        &[("core", 1800.0)],
+        &[("VDD", "core", "power")],
+        &[],
+    ));
+    cases.push(f);
+    let mut out = every_placement(&cases);
+    out.push(
+        Fixture::new("erc/hv_tag/no_intent", &["DRC-083"], TAG_DECK, ERC)
+            .layout(pad)
+            .expect(Expect::outcome("hvt", Want::Skipped)),
+    );
+    out
+}
+
+/// `mixed_tag(met1, hvi)` (ERC-F10, sky130 hvnwell.10). Oracle: the
+/// definition by hand: a met1 figure sharing no area with `hvi`, on a net
+/// (nets joined through a resistor counted as one) that holds a figure
+/// sharing area with it, is reported with the count of such figures. Two
+/// pads, one under `hvi`, joined on met2 through vias, joined through a
+/// resistor, or apart; a pad that only abuts `hvi` is untagged; two tagged
+/// pads on one net; no `hvi` at all. Needs no intent. Every case under every
+/// symmetry and offset.
+fn mixed_tag() -> Vec<Fixture> {
+    let pads = |joined: &str| {
+        let mut l = Layout::default()
+            .rect("met1", 0, 0, 1000, 500)
+            .rect("met1", 3000, 0, 4000, 500);
+        match joined {
+            "strapped" => {
+                rect(&mut l, "met2", (0, 0, 4000, 500));
+                rect(&mut l, "v1", (400, 200, 500, 300));
+                rect(&mut l, "v1", (3400, 200, 3500, 300));
+            }
+            "resistor" => {
+                rect(&mut l, "met1", (1000, 0, 1500, 500));
+                rect(&mut l, "res", (1500, 0, 2500, 500));
+                rect(&mut l, "met1", (2500, 0, 3000, 500));
+            }
+            _ => {}
+        }
+        l
+    };
+    let mut cases = Vec::new();
+    for (joined, hvi, findings) in [
+        ("strapped", Some((-100, -100, 1100, 600)), vec![count(1)]),
+        ("resistor", Some((-100, -100, 1100, 600)), vec![count(1)]),
+        ("apart", Some((-100, -100, 1100, 600)), Vec::new()),
+        ("strapped", None, Vec::new()),
+        ("strapped", Some((-1000, -100, 0, 600)), Vec::new()),
+        ("strapped", Some((-100, -100, 4100, 600)), Vec::new()),
+    ] {
+        let mut layout = pads(joined);
+        let tag = match hvi {
+            None => "untagged".to_owned(),
+            Some(hvi) => {
+                rect(&mut layout, "hvi", hvi);
+                format!("{}_{}", hvi.0, hvi.2)
+            }
+        };
+        cases.push(
+            Fixture::new(
+                &format!("erc/mixed_tag/{joined}/{tag}"),
+                &["ERC-F10"],
+                TAG_DECK,
+                ERC,
+            )
+            .layout(layout)
+            .expect(Expect::rule("mix", findings)),
+        );
+    }
+    every_placement(&cases)
+}
+
+// ---------------------------------------------------------- dielectric_field
+
+/// Two labelled metals in a stack: met1 from 1000 to 1300 nm, met2 from
+/// 1700 nm, so 400 nm of dielectric between them; met3 states no stack row.
+/// Each table allows 10 V/µm (10 mV per nm).
+const FIELD_DECK: &str = "grid 1nm
+layer met1 = gds(1, 0)
+layer m1txt = gds(1, 1)
+layer met2 = gds(2, 0)
+layer m2txt = gds(2, 1)
+layer met3 = gds(3, 0)
+connect conductors [met1, met2, met3]
+connect touch_within_layer
+connect label m1txt names met1
+connect label m2txt names met2
+pex met1 thickness 300nm height 1000nm sheet 0.1ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
+pex met2 thickness 300nm height 1700nm sheet 0.1ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
+rule df dielectric_field(met1; max_field: 10V/um)
+rule df2 dielectric_field(met1, met2; max_field: 10V/um)
+rule df3 dielectric_field(met1, met3; max_field: 10V/um)
+";
+
+/// `dielectric_field` (ERC-F13). Oracle: the closed form, field = ΔV over
+/// the separation (CF), by hand: on met1, nets 3 V apart need
+/// 3000 mV / (10 mV/nm) = 300 nm, and 3.01 V apart 301 nm; between met1
+/// and met2, 400 nm of dielectric under nets 5 V apart needs a 500 nm
+/// separation, a lateral 300 nm (the 3-4-5 triangle), and 4 V is exactly
+/// held by the 400 nm alone, 4.001 V not (a lateral 9 nm: sqrt(400.1² -
+/// 400²) = 8.94, rounded up). A pair is flagged, measuring its lateral gap,
+/// below its limit. met3 has no stack row: refused. Every case under every
+/// symmetry and offset.
+fn dielectric_field() -> Vec<Fixture> {
+    let mut cases = Vec::new();
+    let bars = |layer_b: &str, text_b: &str, gap: i64| {
+        Layout::default()
+            .rect("met1", 0, 0, 1000, 500)
+            .rect(layer_b, 1000 + gap, 0, 2000 + gap, 500)
+            .label("m1txt", 500, 250, "A")
+            .label(text_b, 1500 + gap, 250, "B")
+    };
+    for (delta, gap, flagged) in [
+        (3000, 299, true),
+        (3000, 300, false),
+        (3010, 300, true),
+        (2990, 299, false),
+    ] {
+        let mut f = Fixture::new(
+            &format!("erc/dielectric_field/one_layer/{delta}mV/{gap}nm"),
+            &["ERC-F13"],
+            FIELD_DECK,
+            ERC,
+        )
+        .layout(bars("met1", "m1txt", gap))
+        .expect(Expect::rule(
+            "df",
+            if flagged {
+                vec![length(gap)]
+            } else {
+                Vec::new()
+            },
+        ))
+        .expect(Expect::clean("df2"))
+        .expect(Expect::outcome("df3", Want::Refused));
+        f.intent = Some(vs_intent(delta));
+        cases.push(f);
+    }
+    for (delta, gap, flagged) in [(5000, 299, true), (5000, 300, false)] {
+        let mut f = Fixture::new(
+            &format!("erc/dielectric_field/two_layers/{delta}mV/{gap}nm"),
+            &["ERC-F13"],
+            FIELD_DECK,
+            ERC,
+        )
+        .layout(bars("met2", "m2txt", gap))
+        .expect(Expect::clean("df"))
+        .expect(Expect::rule(
+            "df2",
+            if flagged {
+                vec![length(gap)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(vs_intent(delta));
+        cases.push(f);
+    }
+    for (delta, flagged) in [(4000, false), (4001, true)] {
+        let mut f = Fixture::new(
+            &format!("erc/dielectric_field/crossing/{delta}mV"),
+            &["ERC-F13"],
+            FIELD_DECK,
+            ERC,
+        )
+        .layout(
+            Layout::default()
+                .rect("met1", 0, 0, 1000, 500)
+                .rect("met2", 400, -1000, 600, 1500)
+                .label("m1txt", 100, 250, "A")
+                .label("m2txt", 500, 1400, "B"),
+        )
+        .expect(Expect::rule(
+            "df2",
+            if flagged { vec![length(0)] } else { Vec::new() },
+        ));
+        f.intent = Some(vs_intent(delta));
+        cases.push(f);
+    }
+    every_placement(&cases)
 }
 
 // ------------------------------------------------- dynamic drop, thermal EM

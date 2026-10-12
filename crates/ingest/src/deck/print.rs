@@ -318,6 +318,8 @@ impl Printer<'_> {
                 ("sheet", value.sheet_ohm_sq, "ohm"),
                 ("area_cap", value.area_cap_af_um2, "aF/um2"),
                 ("fringe_cap", value.fringe_cap_af_um, "aF/um"),
+                ("on_gate_min", value.on_gate_min_mv, "mV"),
+                ("on_gate_max", value.on_gate_max_mv, "mV"),
             ] {
                 if let Some(stated) = stated {
                     let _ = write!(out, " {key} {}{unit}", number(stated)?);
@@ -666,7 +668,8 @@ impl Printer<'_> {
                 }
                 (dim, ParamValue::Ratio(number_value)) => {
                     let unit = match dim {
-                        Dim::Voltage => "mV",
+                        Dim::Voltage | Dim::VoltageList => "mV",
+                        Dim::Field => "V/um",
                         Dim::Current => "uA",
                         Dim::CurrentPerWidth => "A/m",
                         Dim::Resistance => "ohm",
@@ -715,7 +718,7 @@ impl Printer<'_> {
                 let other = other.first().ok_or_else(missing)?;
                 Ok(format!("{} x {}", one(values[0])?, one(other)?))
             }
-            Dim::AngleList | Dim::LengthList | Dim::OptLengthList => {
+            Dim::AngleList | Dim::LengthList | Dim::VoltageList | Dim::OptLengthList => {
                 Ok(format!("[{}]", list(&values)?.join(", ")))
             }
             Dim::LengthPairList(second) => {

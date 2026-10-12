@@ -238,18 +238,23 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
     let connectivity = build_connectivity(&doc.connectivity, &layers, strings)?;
     // Only a conductor's shapes carry a net; any other layer would read as all
     // different nets, or none the same.
-    for rule in doc.rules.iter().filter(|rule| rule.kind == "net_spacing") {
-        let Some(layer) = rule.layers.first() else {
-            continue;
+    for rule in &doc.rules {
+        // Every layer of a spacing by net; the judged layer of a tag rule.
+        let judged: &[String] = match rule.kind {
+            "net_spacing" | "voltage_spacing" | "dielectric_field" => &rule.layers[..],
+            "hv_tag" | "mixed_tag" => &rule.layers[..rule.layers.len().min(1)],
+            _ => &[],
         };
-        if !connectivity
-            .conductors
-            .contains(&layer_of(&layers, strings, layer, &rule.id)?)
-        {
-            return malformed(format!(
-                "rule {}: net spacing on {layer}, which is not a conductor",
-                rule.id
-            ));
+        for layer in judged {
+            if !connectivity
+                .conductors
+                .contains(&layer_of(&layers, strings, layer, &rule.id)?)
+            {
+                return malformed(format!(
+                    "rule {}: judges nets on {layer}, which is not a conductor",
+                    rule.id
+                ));
+            }
         }
     }
     let devices = build_devices(&doc.devices, &layers, strings)?;

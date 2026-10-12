@@ -86,6 +86,7 @@ Numbers carry units. `140nm`, `0.14um` and `0.00014mm` are the same length.
 | energy | `eV` |
 | thermal conductivity | `W/mK` |
 | time | `h` |
+| electric field | `V/um`, `V/nm`, `MV/cm` |
 | fraction | `%`, or a bare number from 0 to 1 |
 | angle | `deg` |
 
@@ -240,6 +241,7 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `wide_space(L; width: len, attached: len) >= len` | The same, also from the rest of the shape within `attached` of its wide part, as sky130 m1.3a "features attached to or extending from huge_met1 for a distance of up to 0.28 µm". |
 | `space(L; nets: same) >= len` | Two shapes on the same net closer than the limit, as gf180 NW.2a. Nets are the extracted ones, joined through vias and other layers. `L` must be a conductor. |
 | `space(L; nets: different) >= len` | Two shapes on different nets closer than the limit, as gf180 NW.2b. |
+| `space(A, B; nets: different) >= len` | The same between a shape on `A` and one on `B`, overlap included, as sky130 nwell.7 "nwell and deep nwell on separate nets". Both layers must be conductors. `nets: same` is refused here: one net's shapes on two layers overlap wherever a cut joins them. |
 | `space_table(L; prl: [len, ..], width: [len, ..], space: [[len, ..], ..])` | Two shapes closer than their table cell (see below). |
 | `pitch(L, vertical) == len` | Two neighbouring rectangles, one above the other and overlapping across, whose centre lines are not exactly `len` apart, as ASAP7 FIN.S.1 "exact vertical FIN pitch". The neighbours of a rectangle are the nearest ones past it; a missing line between two is a pitch of twice `len`. Every shape on `L` must be a rectangle, or the rule is refused. `pitch(L, horizontal) == len` is the same side by side (GATE.S.1). |
 | `span_length(L; x: [len, ..], y: [len, ..])` | A span of a shape, the length of material a horizontal (`x`) or vertical (`y`) line cuts through it, that is not on its list: every length but the last is legal exactly, the last and longer are legal, as LEF58 `SPANLENGTHTABLE`. For a LEF layer with `DIRECTION HORIZONTAL`, `y` is its `SPANLENGTHTABLE` and `x` its `WRONGDIRECTION` one; the other way round for a vertical layer. Reported once per region of the shape where the span stays the same, with the shortest legal span above it as the limit. |
@@ -408,7 +410,9 @@ A name no device declares is an error.
 The voltage rules read what each net can reach from the supplies in the
 intent file (see [usage.md](usage.md#design-intent)). A device whose terminals
 no supply reaches through a transistor channel, resistor or diode is not
-checked.
+checked. A transistor whose `device` row states `on_gate_min` or
+`on_gate_max` (see [Devices](#devices)) passes voltage only while its gate
+can turn it on.
 
 ```
 let thin = ["sky130_fd_pr__nfet_01v8", "sky130_fd_pr__pfet_01v8"]
@@ -433,9 +437,14 @@ rule esd.pad  esd_topological(pad; clamps: ["esd_diode", "rail_clamp"])
 | `p2p_resistance(; max: resistance)` | Two points on one net further apart in resistance than the limit. |
 | `reliability(; required_lifetime: h, reference_lifetime: h, reference_stress: voltage, stress_exponent: n, reference_temperature: temp, activation_energy: eV, max_abs_voltage: voltage, duty_cycle: frac)` | A supply-grid node whose voltage stress predicts a lifetime below `required_lifetime` (inverse power law in voltage times Arrhenius in temperature), or whose voltage exceeds `max_abs_voltage`. It reads the solved supply grid, not individual devices. Needs `--intent`. |
 | `hv_domain(; max_delta: voltage, isolation: layer \| none)` | A device whose terminals reach supply domains more than `max_delta` apart, directly or through other devices' channels. Needs `--intent`. |
+| `hv_tag(L, tag; voltage: v)` | A shape of the conductor `L` (touching shapes as one) whose net can reach `voltage` or more, not entirely inside `tag`, reported with the area left outside: sky130 hv.X.1 "high voltage source/drain regions must be tagged" and hvnwell.11. Anything joined to a high-voltage net through a conducting device can reach its voltage, so it is a high-voltage feature too (hv.X.4). Needs `--intent`. |
+| `undriven_gate()` | A net with a transistor gate on it that a supply reaches with every supply on, but none reaches in one of the intent's power states: the gate floats there, as the output of a tristate buffer whose enable is held low. Needs `--intent` with `states` (see [usage.md](usage.md#design-intent)). |
+| `missing_isolation(; isolation: models \| none)` | A transistor, not of an `isolation` model, whose gate floats in one of the intent's power states (as for `undriven_gate`) while a power supply still reaches its source or drain there: a powered input left floating by a switched-off domain or a disabled driver, which leaks. Needs `--intent` with `states`. |
+| `mixed_tag(L, tag)` | A shape of the conductor `L` (touching shapes as one) that shares no area with `tag`, on a net that also holds a shape that does: sky130 hvnwell.10, a low-voltage n-well on the net of a high-voltage one (`mixed_tag(nwell, hvi)`). Nets joined through a resistor count as one net, as hvnwell.10 asks. |
 | `esd_latchup(pad, guard_ring; min_guard_ring_width: len, max_tap_distance: len, clamps: models)` | A guard ring too narrow or too far from a supply tap, and a pad net short of a clamp path (as `esd_topological`). Needs `--intent`. |
 | `esd_topological(pad; clamps: models)` | A pad net with no path through `clamps` devices to both a power and a ground supply. The path is a clamp from the pad to a supply, then any rail clamps between supplies. Needs `--intent`. |
 | `floating_gate(; labels_are_ports: bool)` | A net that only connects to gates. With `labels_are_ports: true`, a labelled net is a block input driven from outside the cell and is skipped. |
+| `fanout(; max: count)` | A net driving more than `max` transistor gates. |
 | `floating_well(well, tap)` | A well with no tap in it. |
 | `missing_tie(region, tap; max_distance: len)` | A point of a `region` shape (a device polarity's active area, say) further than `max_distance` from the nearest `tap` edge. |
 | `multiple_drivers(; max: count)` | A net driven by more than `max` separate drivers. A driver is a path through transistor channels from the net to a supply the intent file declares; networks that share a gate net (an inverter, a NAND's pull-up and pull-down) are one driver, and a pass gate that reaches no supply drives nothing by itself. Which end of a channel is the source does not matter. Needs `--intent`. |
@@ -448,6 +457,27 @@ rule esd.pad  esd_topological(pad; clamps: ["esd_diode", "rail_clamp"])
 | `well_bias(; pmos: models \| none, nmos: models \| none)` | A `pmos` device whose well can sit below its source or drain, or an `nmos` device whose substrate can sit above them. Needs `--intent`. |
 | `missing_level_shifter(; shifters: models \| none)` | A transistor whose gate is driven from a power domain its source and drain are not in, unless its model is one of `shifters`. Needs `--intent`. |
 | `domain_crossing()` | A device whose source-to-drain path joins two power domains. Needs `--intent`. |
+| `dielectric_field(L; max_field: f)` | Two shapes on `L` on different nets whose worst-case voltage apart, over their gap, exceeds `max_field`: the gap is below `ΔV / max_field`. Reported as the gap against that limit, rounded up to the grid. Needs `--intent`. |
+| `dielectric_field(A, B; max_field: f)` | The same between a shape on `A` and one on `B`, through the dielectric between the two layers: the separation is `sqrt(gap² + t²)`, `t` the upper layer's `pex` height less the lower layer's height and thickness, so both need a `pex` row. A pair whose voltage `t` alone holds needs no gap. |
+| `voltage_space(L; voltage: [v, ..], space: [len, ..])` | Two shapes on `L` on different nets closer than the space the voltage between their nets needs (see below). Needs `--intent`. |
+| `voltage_space(A, B; voltage: [v, ..], space: [len, ..])` | The same between a shape on `A` and one on `B`, overlap included. |
+
+A voltage table, as LEF `LEF58_VOLTAGESPACING`:
+
+```
+rule m1.vs voltage_space(met1; voltage: [0V, 3.3V, 5V], space: [140nm, 300nm, 600nm])
+```
+
+From each voltage up, two shapes on different nets need the space in the same
+place in `space`: here 140 nm below 3.3 V, 300 nm from 3.3 V, and 600 nm from
+5 V. The voltage between two nets is the worst case of the ranges the intent's
+supplies give them: the highest one can reach minus the lowest the other can.
+A difference exactly at a step's voltage needs that step's space, and a gap
+exactly at the space passes. A pair whose difference is below the first
+voltage needs nothing from the row, and a pair with a net no supply reaches is
+not checked. Voltages start at 0 V or more and rise, spaces never fall, and
+there is one space per voltage. Like `space(L; nets: ..)`, the layers must be
+conductors.
 
 ## Connectivity
 
@@ -527,6 +557,24 @@ the emitter region as a `bjt`'s second, and these are their measures.
 A value the deck does not give is not computed, never taken as zero, so a
 schematic that states it is reported (`lvs.undeclared_param`). Nothing
 measures a capacitor's `w` and `l`.
+
+A `mos` may state when it conducts, for the voltage rules:
+
+```
+device mos ngate model "nfet" terminals [poly, diff, diff] on_gate_min 1V
+device mos pgate model "pfet" terminals [poly, diff, diff] on_gate_max 0V
+```
+
+`on_gate_min 1V` is an n-channel switch: on while its gate can reach 1 V or
+more, off when its gate stays below. `on_gate_max 0V` is a p-channel switch:
+on while its gate can fall to 0 V or less. This is Calibre PERC's conditional
+voltage propagation as its public white paper states it (Siemens 81822,
+figure 1). The gate's reach is the range its net can take from the declared
+supplies, so a switch turns on in propagation if its gate can reach the
+condition at any time. A gate no supply can reach, such as an input to the
+cell, may be anything, so its transistor conducts. A transistor gives one of
+the two, or neither (it always conducts). When on, a channel passes its full
+range: there is no threshold drop.
 
 ## LVS controls
 

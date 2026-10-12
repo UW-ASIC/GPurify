@@ -1032,6 +1032,19 @@ impl<'a> Parser<'a> {
         let mut value = DeviceValue::default();
         while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
             let (key, span) = self.ident("a device value")?;
+            // A transistor is an n- or a p-channel switch, never both.
+            let other = match key.as_str() {
+                "on_gate_min" => value.on_gate_max_mv,
+                "on_gate_max" => value.on_gate_min_mv,
+                _ => None,
+            };
+            if other.is_some() {
+                return Err(self.err(
+                    span,
+                    "a transistor takes on_gate_min (n-channel) or on_gate_max \
+                     (p-channel), not both",
+                ));
+            }
             let (slot, dim, owner) = match key.as_str() {
                 "sheet" => (
                     &mut value.sheet_ohm_sq,
@@ -1048,12 +1061,15 @@ impl<'a> Parser<'a> {
                     Dim::CapPerLength,
                     DeviceKind::Capacitor,
                 ),
+                "on_gate_min" => (&mut value.on_gate_min_mv, Dim::Voltage, DeviceKind::Mos),
+                "on_gate_max" => (&mut value.on_gate_max_mv, Dim::Voltage, DeviceKind::Mos),
                 _ => {
                     return Err(self.err(
                         span,
                         &format!(
                             "unknown device value `{key}`; expected sheet (a resistor), \
-                             area_cap or fringe_cap (a capacitor)"
+                             area_cap or fringe_cap (a capacitor), on_gate_min or \
+                             on_gate_max (a mos)"
                         ),
                     ))
                 }
@@ -1979,6 +1995,19 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(());
             }
+            Dim::VoltageList => {
+                let Val::List(items, span) = value else {
+                    return Err(self.wrong(value, "a list of voltages", label));
+                };
+                if items.is_empty() {
+                    return Err(self.err(*span, &format!("`{label}` needs at least one voltage")));
+                }
+                for item in items {
+                    let millivolts = self.quantity(item, Dim::Voltage, label)?.f64();
+                    out.push((engine, ParamSource::Value(ParamValue::Ratio(millivolts))));
+                }
+                return Ok(());
+            }
             Dim::OptLengthList => {
                 let Val::List(items, span) = value else {
                     return Err(self.wrong(value, "a list of lengths or none", label));
@@ -2481,6 +2510,7 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::Energy => "an energy",
         Dim::ThermalConductivity => "a thermal conductivity",
         Dim::Time => "a time",
+        Dim::Field => "an electric field",
         Dim::CapPerArea => "a capacitance per area",
         Dim::CapPerLength => "a capacitance per length",
         Dim::PerKelvin => "a coefficient per kelvin",
@@ -2501,6 +2531,7 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::LengthRows => "a list of rows of lengths",
         Dim::LengthPairList(_) => "a list of pairs of lengths",
         Dim::Word(_) => "one of the listed words",
+        Dim::VoltageList => "a list of voltages",
         Dim::AreaTable(_) => "a list of (area, number) points",
         Dim::OptLengthList => "a list of lengths or none",
     }

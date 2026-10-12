@@ -50,7 +50,7 @@
 //! | `corner_space(L) >= len` | `corner_to_corner` | [`drc::Rule::CornerToCorner`] | two shapes whose corners are too close | DRC-032 |
 //! | `wide_space(L; width: len) >= len` | `wide_dependent_spacing` | [`drc::Rule::WideDependentSpacing`] | too little space from the wide part of a shape | DRC-025 |
 //! | `wide_space(L; width: len, attached: len) >= len` | `attached_wide_spacing` | [`drc::Rule::AttachedWideSpacing`] | the same, also from what is attached to the wide part | DRC-028 |
-//! | `space(L; nets: same \| different) >= len` | `net_spacing` | [`drc::Rule::NetSpacing`] | same-net or different-net shapes too close | DRC-080 |
+//! | `space(L[, L2]; nets: same \| different) >= len` | `net_spacing` | [`drc::Rule::NetSpacing`] | same-net or different-net shapes too close, on one layer or two | DRC-080, DRC-081 |
 //! | `space_table(L; prl: [..], width: [..], space: [[..]])` | `spacing_table` | [`drc::Rule::SpacingTable`] | two shapes closer than their table cell | DRC-025, DRC-026, DRC-027 |
 //! | `area(L) >= area` | `min_area` | [`drc::Rule::MinArea`] | a shape smaller than the limit | DRC-017, ERC-A9 |
 //! | `hole_area(L) >= area` | `min_enclosed_area` | [`drc::Rule::MinEnclosedArea`] | a hole smaller than the limit | DRC-019 |
@@ -120,9 +120,14 @@
 //! | `p2p_resistance(; max)` | `p2p_resistance` | [`erc::RuleSet::p2p_resistance`] | two points on one net too far apart in resistance | ERC-C6, ERC-D4 |
 //! | `reliability(; ..)` | `reliability` | [`erc::RuleSet::reliability`] | a device whose predicted lifetime is too short | ERC-E5, ERC-F5 |
 //! | `hv_domain(; max_delta, isolation)` | `hv_domain` | [`erc::RuleSet::hv_domain`] | a device spanning supply domains too far apart | DRC-083, ERC-F10 |
+//! | `hv_tag(L, tag; voltage)` | `hv_tag` | [`erc::RuleSet::hv_tag`] | a figure on a net that can reach `voltage` or more, not inside `tag` | DRC-083 |
+//! | `undriven_gate()` | `undriven_gate` | [`erc::RuleSet::undriven_gate`] | a gate net that floats in a declared power state | ERC-F8 |
+//! | `missing_isolation(; isolation)` | `missing_isolation` | [`erc::RuleSet::missing_isolation`] | a powered transistor whose gate floats in a declared power state | ERC-F7, ERC-H1 |
+//! | `mixed_tag(L, tag)` | `mixed_tag` | [`erc::RuleSet::mixed_tag`] | an untagged figure on a net that also holds a tagged one | ERC-F10 |
 //! | `esd_latchup(pad, guard_ring; ..)` | `esd_latchup` | [`erc::RuleSet::esd_latchup`] | a narrow or untapped guard ring, or an unclamped pad | ERC-C1, ERC-D2 |
 //! | `esd_topological(pad; clamps)` | `esd_topological` | [`erc::RuleSet::esd_topological`] | a pad with no clamp path to both supplies | ERC-C1 |
 //! | `floating_gate(; labels_are_ports)` | `floating_gate` | [`erc::RuleSet::floating_gate`] | a net that only reaches gates | ERC-G1 |
+//! | `fanout(; max)` | `fanout` | [`erc::RuleSet::fanout`] | a net driving more than `max` transistor gates | ERC-H4 |
 //! | `floating_well(well, tap)` | `floating_well` | [`erc::RuleSet::floating_well`] | a well with no tap | DRC-085, ERC-G2 |
 //! | `missing_tie(region, tap; max_distance)` | `missing_tie` | [`erc::RuleSet::missing_tie`] | a region too far from a tap | ERC-D1 |
 //! | `multiple_drivers(; max)` | `multiple_drivers` | [`erc::RuleSet::multiple_drivers`] | a net with too many drivers | ERC-G3 |
@@ -135,6 +140,8 @@
 //! | `well_bias(; pmos, nmos)` | `well_bias` | [`erc::RuleSet::well_bias`] | a well that can forward-bias a junction | ERC-D3, ERC-F12 |
 //! | `missing_level_shifter(; shifters)` | `missing_level_shifter` | [`erc::RuleSet::missing_level_shifter`] | a gate driven from another power domain | ERC-F6 |
 //! | `domain_crossing()` | `domain_crossing` | [`erc::RuleSet::domain_crossing`] | a channel joining two power domains | ERC-F9 |
+//! | `dielectric_field(L[, L2]; max_field)` | `dielectric_field` | [`erc::RuleSet::dielectric_field`] | two nets' shapes whose voltage over their separation exceeds the field limit | ERC-F13 |
+//! | `voltage_space(L[, L2]; voltage: [..], space: [..])` | `voltage_spacing` | [`erc::RuleSet::voltage_spacing`] | shapes on two nets closer than the voltage between them allows | DRC-082, ERC-F11 |
 //!
 //! ## Layout against schematic
 //!
