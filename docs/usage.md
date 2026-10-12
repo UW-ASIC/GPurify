@@ -122,8 +122,10 @@ edge, is refused. Both layouts must be on the same grid; derived layers and
 text labels are not compared. It takes `--format text` or `json`.
 
 `xor` does not hold a via array's change in cut area to a tolerance by its
-number of cuts, as those rules go on to do: their text leaves the unit of the
-limit and what a "connector" is unsettled.
+number of cuts, as those rules go on to do. The deck rule
+`cut_area_change(pre, post, lower, upper; cuts: [..], change: [..])` does,
+with both databases' cuts streamed into one layout on two layers, and the
+connector and the tolerances the deck's: their text leaves both unsettled.
 
 ## LVS reduction
 

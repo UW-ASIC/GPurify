@@ -2467,6 +2467,23 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(());
             }
+            Dim::CountList | Dim::AreaList => {
+                let Val::List(items, span) = value else {
+                    return Err(self.wrong(value, dim_name(param.dim), label));
+                };
+                if items.is_empty() {
+                    return Err(self.err(*span, &format!("`{label}` needs at least one value")));
+                }
+                for item in items {
+                    let stated = if param.dim == Dim::CountList {
+                        ParamValue::Count(self.count(item, label)?)
+                    } else {
+                        ParamValue::Area(self.area(item, label)?)
+                    };
+                    out.push((engine, ParamSource::Value(stated)));
+                }
+                return Ok(());
+            }
             Dim::FractionList => {
                 let Val::List(items, span) = value else {
                     return Err(self.wrong(value, "a list of fractions", label));
@@ -3011,6 +3028,8 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::Word(_) => "one of the listed words",
         Dim::VoltageList => "a list of voltages",
         Dim::FractionList => "a list of fractions",
+        Dim::CountList => "a list of counts",
+        Dim::AreaList => "a list of areas",
         Dim::AreaTable(_) => "a list of (area, number) points",
         Dim::OptLengthList => "a list of lengths or none",
         Dim::Frequency => "a frequency",

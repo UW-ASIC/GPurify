@@ -181,6 +181,14 @@ impl Arg for &[u32] {
     }
 }
 
+impl Arg for &[DbuArea] {
+    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
+        for &value in self {
+            value.put(name, params);
+        }
+    }
+}
+
 impl Arg for &[f64] {
     fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
         for &value in self {
@@ -394,6 +402,14 @@ kinds! {
         window: Dbu = "window",
         step: Dbu = "step",
         limit: f64 = "limit",
+    }
+    /// [`Rule::CutAreaChange`](crate::drc::Rule::CutAreaChange):
+    /// `cut_area_change(pre, post, lower, upper; cuts: [..], change: [..])`,
+    /// one cut count and one area per band
+    /// ([`CutAreaBands`](crate::drc::ruleset::CutAreaBands)).
+    cut_area_change(pre: one, post: one, lower: one, upper: one) [] {
+        cuts: &[u32] = "cuts",
+        change: &[DbuArea] = "change",
     }
     /// [`Rule::CoverDensity`](crate::drc::Rule::CoverDensity):
     /// `cover_density(layer, by[, boundary]; window, step, cover: [..],

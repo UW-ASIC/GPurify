@@ -383,6 +383,24 @@ def via_stack(rule, layers, max)
     end
   end
 end
+# A connector's cut area between two databases (sky130 irdrop): per pair of
+# merged lower and upper polygons that overlap, the pre cuts overlapping the
+# footprint pick the band, and |pre - post| area inside it above the band's
+# limit (x4 units) is reported at the footprint's box centre.
+def cut_area_change(rule, pre, post, lower, upper, starts, limits4)
+  pm = pre.data.merged
+  lower.data.merged.each do |l|
+    upper.data.merged.each do |u|
+      f = RBA::Region.new(l) & RBA::Region.new(u)
+      next if f.is_empty?
+      n = pm.overlapping(f).count
+      band = starts.rindex { |t| n >= t }
+      next if band.nil?
+      d = ((pm & f).area - (post.data.merged & f).area).abs
+      put({ rule: rule, pt: [f.bbox.center.x, f.bbox.center.y], v: d / 4.0 }) if d > limits4[band]
+    end
+  end
+end
 # Density per window held to the band the cover layer's coverage picks:
 # `cover` and `need` the bands' starts and densities, `incl` whether a start
 # is in its band.
@@ -1003,6 +1021,33 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 )
                 .expect("a String");
                 exact("critical_area", Key::Point, Value::Area)
+            }
+            Rule::CutAreaChange {
+                pre,
+                post,
+                lower,
+                upper,
+                bands,
+            } => {
+                for layer in [pre, post, lower, upper] {
+                    layers.reads(layer, &mut reads);
+                }
+                let bands = &set.cut_area_bands[bands as usize];
+                let starts: Vec<String> = bands.cuts.iter().map(u32::to_string).collect();
+                let limits: Vec<String> =
+                    bands.change.iter().map(|c| (4 * c.raw()).to_string()).collect();
+                writeln!(
+                    body,
+                    "cut_area_change({q}, {}, {}, {}, {}, [{}], [{}])",
+                    var(pre),
+                    var(post),
+                    var(lower),
+                    var(upper),
+                    starts.join(", "),
+                    limits.join(", ")
+                )
+                .expect("a String");
+                exact("cut_area_change", Key::Point, Value::Area)
             }
             Rule::CoverDensity {
                 layer,

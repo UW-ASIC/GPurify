@@ -399,6 +399,24 @@ impl CompiledDeck {
             } => one(layer)
                 .length("radius", radius)
                 .value("limit", ParamValue::Area(limit)),
+            Rule::CutAreaChange {
+                pre,
+                post,
+                lower,
+                upper,
+                bands,
+            } => {
+                let mut row = Row::new(rule.kind(), &[pre, post, lower, upper]);
+                if let Some(bands) = self.drc.cut_area_bands.get(bands as usize) {
+                    for &cuts in &bands.cuts {
+                        row = row.value("cuts", ParamValue::Count(cuts));
+                    }
+                    for &change in &bands.change {
+                        row = row.value("change", ParamValue::Area(change));
+                    }
+                }
+                row
+            }
             Rule::CoverDensity {
                 layer,
                 cover,

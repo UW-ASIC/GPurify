@@ -10,8 +10,10 @@ use super::{
     bbox_gap2, centre, join_nested, label_pairs_into, merged, pair_distances_into, SortedRects,
     Verdict, REFUSED,
 };
+use crate::drc::ruleset::CutAreaBands;
 use crate::drc::{CutClassTable, Scratch};
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
+use gpurify_geom::boolean::intersection_into;
 use gpurify_geom::connectivity::components_into;
 use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, Point};
@@ -564,4 +566,114 @@ pub(crate) fn keep_out_zone(
         }
     }
     (Outcome::Ran, examined)
+}
+
+/// sky130 ct.irdrop and via.irdrop as a deck states them: each connector (a
+/// merged `lower` figure and a merged `upper` figure that overlap, its
+/// footprint their overlap) is held, by the number of merged `pre` cuts
+/// overlapping its footprint, to the band's limit on the change, either way,
+/// between the `pre` and the `post` area inside the footprint. One violation
+/// per failing connector, on `pre`, at the centre of its footprint's box.
+/// `examined` counts connectors.
+pub(crate) fn cut_area_change(
+    store: &GeometryStore,
+    rule: StrId,
+    (pre, post, lower, upper): (LayerId, LayerId, LayerId, LayerId),
+    bands: &CutAreaBands,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let (Some(under), Some(over), Some(before), Some(after)) = (
+        merged(store, lower, s),
+        merged(store, upper, s),
+        merged(store, pre, s),
+        merged(store, post, s),
+    ) else {
+        return REFUSED;
+    };
+    let mut feet = ValidatedLayer::default();
+    if intersection_into(&under, &over, &mut feet).is_err() {
+        return REFUSED;
+    }
+    let (under, over, pieces) = (
+        figure_rects(&under),
+        figure_rects(&over),
+        figure_rects(&feet),
+    );
+    let first = |sorted: &SortedRects<u32>, r: Bbox| {
+        sorted
+            .overlapping(r)
+            .map(|(_, label)| label)
+            .next()
+            .expect("a footprint lies on both layers")
+    };
+    // Each footprint piece's connector: the two figures it lies in.
+    let (mut rects, mut start) = (Vec::new(), Vec::new());
+    decompose_into(&feet, &mut rects, &mut start);
+    let connector: Vec<(u32, u32)> = start
+        .windows(2)
+        .map(|span| {
+            let r = rects[span[0] as usize];
+            (first(&under, r), first(&over, r))
+        })
+        .collect();
+    let mut keys = connector.clone();
+    keys.sort_unstable();
+    keys.dedup();
+    let index = |piece: u32| {
+        keys.binary_search(&connector[piece as usize])
+            .expect("every piece's connector is listed")
+    };
+    let mut bounds = vec![Bbox::EMPTY; keys.len()];
+    for piece in 0..u32::try_from(connector.len()).expect("a layer's pieces fit a u32") {
+        bounds[index(piece)] = bounds[index(piece)].union(feet.get(piece).bbox());
+    }
+    let area_in = |cuts: &ValidatedLayer| -> Option<Vec<DbuArea>> {
+        let mut inside = ValidatedLayer::default();
+        intersection_into(cuts, &feet, &mut inside).ok()?;
+        let (mut rects, mut start) = (Vec::new(), Vec::new());
+        decompose_into(&inside, &mut rects, &mut start);
+        let mut sums = vec![DbuArea::new(0); keys.len()];
+        for &r in &rects {
+            let at = index(first(&pieces, r));
+            sums[at] = sums[at] + r.area();
+        }
+        Some(sums)
+    };
+    let (Some(was), Some(is)) = (area_in(&before), area_in(&after)) else {
+        return REFUSED;
+    };
+    // Each cut counts once in every connector it overlaps.
+    let mut cuts = vec![0u32; keys.len()];
+    decompose_into(&before, &mut rects, &mut start);
+    let mut hit = Vec::new();
+    for span in start.windows(2) {
+        hit.clear();
+        for &r in &rects[span[0] as usize..span[1] as usize] {
+            hit.extend(pieces.overlapping(r).map(|(_, piece)| index(piece)));
+        }
+        hit.sort_unstable();
+        hit.dedup();
+        for &at in &hit {
+            cuts[at] += 1;
+        }
+    }
+    for at in 0..keys.len() {
+        let Some(limit) = bands.limit(cuts[at]) else {
+            continue;
+        };
+        let change = DbuArea::new((was[at].raw() - is[at].raw()).abs());
+        if change > limit {
+            out.push(Violation {
+                rule,
+                layer: pre,
+                severity: Severity::Error,
+                at: centre(bounds[at]),
+                measured: Measurement::Area(change),
+                limit: Measurement::Area(limit),
+                shapes: (PolyId(u32::MAX), None),
+            });
+        }
+    }
+    (Outcome::Ran, keys.len() as u64)
 }

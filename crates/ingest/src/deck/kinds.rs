@@ -74,6 +74,11 @@ pub(crate) enum Dim {
     /// `[a, b, ..]`, fractions written bare or as `%`; one engine param per
     /// element, from 0 to 1.
     FractionList,
+    /// `[a, b, ..]`, bare whole numbers; one engine param per element.
+    CountList,
+    /// `[a, b, ..]`, areas; one engine param per element, in square grid
+    /// units.
+    AreaList,
     /// `[[a, b, ..], ..]`, rows of lengths; one engine param per cell, row by row.
     LengthRows,
     /// `[a x b, ..]`, pairs of lengths; per pair, the first to the param's
@@ -584,6 +589,19 @@ pub(crate) const KINDS: &[Kind] = &[
             DENSITY,
         )
     },
+    // A connector's cut area held between two databases drawn as two layers,
+    // by its cut count (sky130 ct.irdrop, via.irdrop; every value the deck's).
+    drc(
+        "cut_area_change",
+        Cmp::Absent,
+        "cut_area_change",
+        &[0, 1, 2, 3],
+        None,
+        &[
+            p("cuts", "cuts", Dim::CountList),
+            p("change", "change", Dim::AreaList),
+        ],
+    ),
     // A layer's density per window, held to the band its coverage by a second
     // layer falls in (sky130 m1.- to m4.-, the waffle-drop rule), an optional
     // third layer the die. Every value is the deck's.

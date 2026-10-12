@@ -50,6 +50,7 @@ fn limits(
         class_tables: deck.drc.class_tables.clone(),
         span_tables: deck.drc.span_tables.clone(),
         cover_bands: deck.drc.cover_bands.clone(),
+        cut_area_bands: deck.drc.cut_area_bands.clone(),
         warnings: Vec::new(),
         first_derived: None,
     };
