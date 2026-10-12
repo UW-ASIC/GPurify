@@ -145,6 +145,7 @@
 //! | `floating_gate(; labels_are_ports)` | `floating_gate` | [`erc::RuleSet::floating_gate`] | a net that only reaches gates | ERC-G1 |
 //! | `fanout(; max)` | `fanout` | [`erc::RuleSet::fanout`] | a net driving more than `max` transistor gates | ERC-H4 |
 //! | `supply_path(; both)` | `supply_path` | [`erc::RuleSet::supply_path`] | a net whose path through MOS channels and resistors reaches no supply, or with `both` misses power or ground | ERC-G9 |
+//! | `matching(group; tolerance)` | `matching` | a matched group's unit of another model or size, a channel across the others, or a device off the group's common centroid | ERC-H2 |
 //! | `floating_supply()` | `floating_supply` | [`erc::RuleSet::floating_supply`] | a piece of a declared supply cut off from the piece its grid is fed through | ERC-E9 |
 //! | `combinational_loop()` | `combinational_loop` | [`erc::RuleSet::combinational_loop`] | a cycle of channel-connected components, each driving the next through a gate | ERC-G8 |
 //! | `gate_path(; ground, max_devices)` | `gate_path` | [`erc::RuleSet::gate_path`] | a transistor gate whose shortest path to ground (or power) passes more than `max_devices` devices | ERC-H3 |

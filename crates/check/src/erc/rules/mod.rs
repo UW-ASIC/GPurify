@@ -1,4 +1,4 @@
-//! The fifty-one rule tables and their transforms, grouped by what they need.
+//! The fifty-two rule tables and their transforms, grouped by what they need.
 //!
 //! Each ERC kind is one table type, one row per deck rule of that kind, and one
 //! `check_*` function that runs every row. [`RuleSet`](crate::erc::RuleSet)
@@ -15,6 +15,7 @@
 //! | [`reliability`] | `reliability`, `hv_domain`, `esd_latchup` | the solved supply grid, propagated voltages, the intent |
 //! | [`esd`] | `esd_path`, `esd_clamp_resistance`, `esd_ground_coupling`, `esd_cross_domain`, `esd_parasitic`, `esd_exposed` | nets, devices, the deck's stack and connectivity, propagated voltages, the intent |
 //! | [`latchup`] | `guard_ring_bias`, `tie_area`, `guard_ring`, `forward_diode`, `conditional_tie`, `latchup_victim` | geometry, nets; `guard_ring_bias` the intent, `forward_diode` propagated voltages too |
+//! | [`matching`] | `matching` | devices, the group marker geometry |
 //! | [`domain`] | `gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`, `domain_crossing`, `voltage_spacing`, `dielectric_field`, `hv_tag`, `undriven_gate`, `missing_isolation` | propagated voltages, the intent; `voltage_spacing`, `dielectric_field` and `hv_tag` also geometry; `undriven_gate` and `missing_isolation` also each power state's |
 //!
 //! # Tables
@@ -64,6 +65,7 @@ pub mod domain;
 pub mod electrical;
 pub mod esd;
 pub mod latchup;
+pub mod matching;
 pub mod reliability;
 pub mod supply;
 pub mod topology;

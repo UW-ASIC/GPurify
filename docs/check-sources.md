@@ -146,6 +146,8 @@ plus the dialect real PDK netlists use.
 | `HoganMedhat2021` | Hogan, Medhat (Siemens), "Circuit Reliability Verification For Automotive Electronics", Semiconductor Engineering: the Calibre PERC layout checks it names (P2P and current density pad to ESD device, PMOS/NMOS sharing one well, field-oxide parasitics, latch-up) | 2021-05-06 | Open | https://semiengineering.com/circuit-reliability-verification-for-automotive-electronics/ |
 | `Bakhali2020` | Bakhali (Siemens), "ESD P2P And CD Verification Doesn't Have To Be Hard", Semiconductor Engineering: the pin-to-clamp, clamp-to-clamp and pin-to-pin resistance checks and an example rule ESD.CDM.SEC.1 (bus from a ggNMOS to the closest power clamp under 1 Ω) | 2020-11-24 | Open | https://semiengineering.com/esd-p2p-and-cd-verification-doesnt-have-to-be-hard/ |
 | `Bryant1991` | R. E. Bryant, "Extraction of Gate Level Models from Transistor Circuits by Four-Valued Symbolic Analysis", ICCAD '91: channel-connected components ("a set of storage nodes connected by the source-drain terminals of transistors") and their rank order | 1991 | Open (author's copy) | https://www.cs.cmu.edu/~bryant/pubdir/iccad91.pdf |
+| `Karmokar2022` | Karmokar, Madhusudan, Sharma, Harjani, Lin, Sapatnekar, "Common-Centroid Layout for Active and Passive Devices: A Review and the Road Ahead", ASP-DAC 2022: the centroids of each device's units coincide (Eq. 2-3) | 2022 | Open (author's copy) | http://people.ece.umn.edu/~sachin/conf/aspdac22.pdf |
+| `Sarhan2019` | Sarhan, Arriordaz (Siemens), "Automated Analog Design Constraint Checking", Semiconductor Engineering: common centroid, orientation, symmetry, dummies, WPE and STI checks on designer-declared groups | 2019-02-14 | Open | https://semiengineering.com/automated-analog-design-constraint-checking/ |
 | `JESD78` | JEDEC JESD78F.02, IC latch-up test | Nov 2023 | Free with JEDEC registration. Table 1 was read from a third-party copy, so **obtain the JEDEC original** before citing numbers. | https://www.jedec.org/standards-documents/docs/jesd-78b |
 | `JS001`, `JS002` | ANSI/ESDA/JEDEC JS-001-2024 (HBM), JS-002-2025 (CDM); JTR001-01-12 user guide | 2024 / 2025 | Registration or purchase; bodies not read. JS-001's pin-combination tables set which pin pairs a P2P check must cover. | https://www.jedec.org/sites/default/files/JTR001-01-12%20Final.pdf |
 | `JEP122` | JEDEC JEP122H, failure mechanisms and models (EM, TDDB, HCI, NBTI) | Sep 2016 | Registration; abstract only | https://www.jedec.org/standards-documents/docs/jep-122e |
@@ -217,6 +219,7 @@ The key patents cited in the catalog:
 | P10, P11 | US20080115097A1 (granted US10643015B2); US20090106715A1 (abandoned) | Properties in EDA; programmable DRC (equation-based DRC lineage) |
 | P12 | US20100306720A1 (abandoned) | Programmable electrical rule checking |
 | P13 | US11714117B2 (Synopsys) | ESD path resistance as the pin voltage over a unit forced current |
+| P14 | US10216888B2 (Cadence) | Constraint validation: matched devices of one model, finger count, width and length |
 
 **What was not used:** customer-only manuals and packaged rule sets: the SVRF,
 TVF and PERC references; PERC packaged-check XML; the full LVS discrepancy
@@ -369,6 +372,7 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-G7 | Gate tied directly to a rail | implemented | CAL (weak sourcing) | SY; NV; MR |
 | ERC-G9 | Path check: nets with no path to power or ground | implemented | CAL:ERC PATHCHK,LVS PATHCHK; ICsprout55; P12 | SY; NV; MR |
 | ERC-H1 | Static leakage / HiZ / floating in power-down | implemented | IA | SY; NV |
+| ERC-H2 | Analog constraints (symmetry, common centroid, matching, orientation, dummies, WPE, STI) | partial | CAL:PERC packaged; ICV:NDL; PEG:Constraint Validator; GF:10.6.2 MP.1-MP.13; Karmokar2022; Sarhan2019; P14 | SY; MR |
 | ERC-H3 | Netlist path checks (gate to ground within N devices; net types) | partial | CAL:patent P12; P9 | SY; NV; MR |
 | ERC-H4 | Fanout limits | implemented | ICV; GF:14.1.4.1 | SY; NV |
 | PEX-009 | PEX netlist diff / qualification | partial | SIL:PEX Certify | CF; MR; SY |
