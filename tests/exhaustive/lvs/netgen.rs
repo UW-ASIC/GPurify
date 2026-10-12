@@ -44,7 +44,7 @@
 //! the deck's `lvs ports_by_name` (LVS-016, LVS-032), which no case here
 //! states, so it is left out on purpose.
 //!
-//! **Documented differences** ([`SERIES`], [`CRITICAL`]) are encoded per case
+//! **Documented differences** ([`SERIES`], [`CRITICAL`], [`TAIL_TO_TAIL`]) are encoded per case
 //! ([`Case::differs`]): there the two verdicts must differ, and agreeing is
 //! reported as loudly as an undocumented disagreement. The enumeration makes
 //! every net a port, which no series merge crosses, and draws every length
@@ -77,6 +77,11 @@ const SERIES: &str = "series MOS merge (LVS-041)";
 /// `critical` property); `GPurify` merges only bit-identical ones
 /// (`lvs::reduce`), the conservative side.
 const CRITICAL: &str = "parallel MOS of near-equal L (LVS-040)";
+
+/// Netgen combines two capacitors in series whichever plates meet;
+/// `GPurify` keeps a capacitor's plates ordered (F15) and chains them only
+/// plate to plate, the conservative side (catalog LVS-044).
+const TAIL_TO_TAIL: &str = "series capacitors meeting tail to tail (LVS-044)";
 
 /// The MOS models whose recogniser lists three layers ([`super::MOS_DECK`],
 /// [`super::EXTRA_DECK`]), so that no bulk is extracted for them.
@@ -718,6 +723,9 @@ fn relaxed() -> Vec<Case> {
             &relaxed,
         );
         case.layout = for_netgen(&spice(&with_drawn_values(&layout, &reference)));
+        if name.starts_with("C_tail_to_tail") {
+            case.differs = Some(TAIL_TO_TAIL);
+        }
         out.push(case);
     }
     out
@@ -1000,7 +1008,7 @@ fn compare_all(count: usize, batch: impl Fn(usize) -> Vec<Case> + Sync) -> Tally
         broken.len(),
         broken[..broken.len().min(200)].join("\n")
     );
-    for why in [SERIES, CRITICAL] {
+    for why in [SERIES, CRITICAL, TAIL_TO_TAIL] {
         assert!(
             total.differs.contains_key(why),
             "{why}: no case exercised it"
