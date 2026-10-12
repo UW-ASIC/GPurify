@@ -434,6 +434,14 @@ impl LayerExpr {
         self.call(op, Some(texts.into()), vec![pattern.to_owned()])
     }
 
+    /// `.texts_outside(shapes)`, on a drawn layer: each text drawn on it
+    /// that lies on no shape of `shapes`, as a one-unit box at its anchor
+    /// ([`DerivedOp::TextsOutside`]).
+    #[must_use]
+    pub fn texts_outside(self, shapes: impl Into<LayerExpr>) -> Self {
+        self.call(DerivedOp::TextsOutside, Some(shapes.into()), Vec::new())
+    }
+
     /// `.in_cells("p", ...)`: the shapes of a drawn layer placed under a cell
     /// whose name matches one of `patterns` ([`DerivedOp::InCells`]).
     #[must_use]
@@ -599,6 +607,8 @@ forward! {
     with_text(texts: LayerRef, pattern: &str);
     /// [`LayerExpr::without_text`].
     without_text(texts: LayerRef, pattern: &str);
+    /// [`LayerExpr::texts_outside`].
+    texts_outside(shapes: impl Into<LayerExpr>);
     /// [`LayerExpr::in_cells`].
     in_cells(patterns: &[&str]);
     /// [`LayerExpr::not_in_cells`].

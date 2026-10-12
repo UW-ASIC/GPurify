@@ -480,6 +480,7 @@ fn check_operands(
         | DerivedOp::WithArea(..)
         | DerivedOp::WithWidth(..)
         | DerivedOp::WithText { .. }
+        | DerivedOp::TextsOutside
             if edges =>
         {
             return wrong("the operation needs a polygon layer, not edges");
@@ -496,6 +497,10 @@ fn check_operands(
                 return wrong("text is drawn on a GDS layer, not a derived one");
             }
         }
+    }
+    // Texts are drawn on a GDS layer.
+    if matches!(row.op, DerivedOp::TextsOutside) && layers.is_derived(operands[0]) {
+        return wrong("text is drawn on a GDS layer, not a derived one");
     }
     // A cell tag belongs to a drawn ring; a derived layer has none.
     if matches!(row.op, DerivedOp::InCells { .. })

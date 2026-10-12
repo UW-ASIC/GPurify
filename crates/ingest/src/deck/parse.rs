@@ -808,6 +808,24 @@ impl<'a> Parser<'a> {
                 self.expect(")")?;
                 (DerivedOp::Oriented(op == "vertical"), Some(true), None)
             }
+            "texts_outside" => {
+                let drawn = matches!(&receiver, LExpr::Layer(name)
+                    if self.out.layers.iter().any(|(drawn, _)| drawn == name));
+                if !drawn {
+                    return Err(self.err(
+                        span,
+                        "`.texts_outside` reads the texts drawn on a `gds(..)` layer; apply it to one",
+                    ));
+                }
+                self.expect("(")?;
+                let at = self.peek();
+                let other = self.layer_expr()?;
+                self.expect(")")?;
+                if self.edges_of(&other) {
+                    return Err(self.err_tok(at, "`.texts_outside` takes a polygon layer"));
+                }
+                (DerivedOp::TextsOutside, Some(false), Some(other))
+            }
             "with_text" | "without_text" => {
                 self.expect("(")?;
                 let at = self.peek();

@@ -15,8 +15,8 @@ use crate::deck::{DerivedOp, LayerTable};
 use crate::provenance::{PlacedLabel, Provenance};
 use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
 use gpurify_geom::derive::{
-    covering_into, edge_boolean_into, edge_interacting_into, edge_part_into, edges_into,
-    extended_into, extents_into, holes_into, inside_into, interacting_into, merge_into,
+    boxes_into, covering_into, edge_boolean_into, edge_interacting_into, edge_part_into,
+    edges_into, extended_into, extents_into, holes_into, inside_into, interacting_into, merge_into,
     outside_into, overlapping_into, rectangles_into, sized_into, with_area_into, with_bbox_into,
     with_length_into, with_width_into, EdgeOp,
 };
@@ -401,6 +401,32 @@ fn derive_layers_into(
                         DerivedOp::WithBbox { longer, lo, hi } => {
                             with_bbox_into(a, longer, lo..=hi, &mut folded);
                             Ok(())
+                        }
+                        DerivedOp::TextsOutside => {
+                            // ponytail: every text against every shape; index the
+                            // points by x if a layer carries thousands of texts.
+                            let outside: Vec<Bbox> = labels
+                                .iter()
+                                .filter(|label| label.layer == operands[0])
+                                .map(|label| label.at)
+                                .filter(|&p| {
+                                    !(0..crate::narrow(b.len())).any(|idx| {
+                                        let poly = b.get(idx);
+                                        poly.bbox().contains(Bbox::point(p.x, p.y))
+                                            && on_material(poly, p)
+                                    })
+                                })
+                                .map(|p| {
+                                    let up = |v: Dbu| Dbu::new_unchecked(v.raw() + 1);
+                                    Bbox {
+                                        xlo: p.x,
+                                        ylo: p.y,
+                                        xhi: up(p.x),
+                                        yhi: up(p.y),
+                                    }
+                                })
+                                .collect();
+                            boxes_into(&outside, &mut folded)
                         }
                         DerivedOp::WithText { keep, text } => {
                             let pattern = layers.text(text);

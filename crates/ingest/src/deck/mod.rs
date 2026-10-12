@@ -533,6 +533,13 @@ pub enum DerivedOp {
         /// Index of the pattern, for [`LayerTable::text`].
         text: u32,
     },
+    /// `texts_outside`: each `TEXT` drawn on operand 0 (a drawn layer) whose
+    /// anchor lies on no shape of operand 1, neither on its material nor on
+    /// its boundary, as a one-unit box from its anchor up and right; texts at
+    /// one point are one box each. `KLayout`'s
+    /// `texts.not_interacting(L)`, so a floating label (sky130 x.17) is a
+    /// shape `forbidden` reports.
+    TextsOutside,
     /// `KLayout` `extended` on an edge layer: one box per edge, the edge
     /// lengthened by `begin` before its start and `end` past its end, and
     /// widened by `outside` away from its shape and `inside` into it. The
@@ -595,6 +602,7 @@ impl DerivedOp {
             | Self::Rectangles { .. }
             | Self::WithBbox { .. }
             | Self::WithText { .. }
+            | Self::TextsOutside
             | Self::Extended { .. }
             | Self::InCells { .. } => Some(false),
             Self::And
