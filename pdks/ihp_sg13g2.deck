@@ -551,6 +551,7 @@ rule MIM.c enclosure(mim, metal5) >= 600nm
 rule MIM.d enclosure(topvia1_mim, mim) >= 360nm
 rule MIM.e space(topmetal1_unrel_mim, mim) >= 600nm
 rule MIM.f area(mim) >= 1.3um2
+rule MIM.g forbidden(mim.with_area(> 5625um2))
 
 # ======================= 7 Special rules =======================
 
@@ -578,6 +579,7 @@ rule Slt.h4 space(topmetal2_slit, topvia2) >= 1um
 # 9 Localized backside etching
 rule LBE.a  width(lbe) >= 100um
 rule LBE.b  width(lbe) <= 1500um
+rule LBE.b1 forbidden(lbe.with_area(> 250000um2))
 rule LBE.b2 area(lbe) >= 30000um2
 rule LBE.c  space(lbe) >= 100um
 rule LBE.c.notch notch(lbe) >= 100um
@@ -671,6 +673,16 @@ rule Ant.f_TopVia2 antenna_electrical(gate, via1, via2, via3, via4, topvia1_m5, 
 # 7.2 Latch-up: LU.a, LU.b.
 rule LU.a missing_tie(pact_nw, ntap; max_distance: 20um)
 rule LU.b missing_tie(nact_pw, ptap; max_distance: 20um)
+# LU.d, LU.d1 ([LR] §7.2.2): a tie Activ (one that is no transistor's)
+# reaching more than 6 um beyond the Cont it holds. [DRC] grows each Cont
+# inside the Activ in 0.21 um steps; this grows it in a square, the same on a
+# straight tie and shorter round a bend. LU.c and LU.c1 (an abutted tie, from
+# the Cont of the diffusion it abuts) are not written: the reach is measured
+# on the tie only, through the abutment, which max enclosure does not do.
+layer ntap_lone = ntap.not_interacting(activ.interacting(gatpoly))
+layer ptap_lone = ptap.not_interacting(activ.interacting(gatpoly))
+rule LU.d  enclosure(cont, ntap_lone) <= 6um
+rule LU.d1 enclosure(cont, ptap_lone) <= 6um
 rule floating_nwell floating_well(nwell, ntap)
 rule supply_short supply_short(ntap, ptap)
 
@@ -848,13 +860,8 @@ rule Gat.f forbidden(gate.non_rectangles())
 # rule pSD.f  abutted_extension(activ, psd) >= 300nm
 # rule AFil.i space(activ_filler, pwell_block.edges()) >= 1.5um   # shape to edge
 
-# needs: maximum area / maximum extension / per-chip totals
-# rule MIM.g  area(mim) <= 5625um2
-# rule LBE.b1 area(lbe) <= 250000um2
-# rule LU.c   max_extension(ntap.interacting(psd_c), cont) <= 6um
-# rule LU.c1  max_extension(ptap.interacting(nsd_c), cont) <= 6um
-# rule LU.d   max_extension(ntap, cont) <= 6um
-# rule LU.d1  max_extension(ptap, cont) <= 6um
+# needs: a tie's reach measured through the diffusion it abuts (LU.c, LU.c1;
+# see LU.d above)
 
 # ======================= Not carried, and why =======================
 # - Sheet and fringe capacitances other than Metal1-substrate are not in [PS];

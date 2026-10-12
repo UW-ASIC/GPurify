@@ -1619,6 +1619,10 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
         min_spacing_diff(l["topmetal1_unrel_mim"], l["mim"], nm(600)),
     );
     d.rule("MIM.f", min_area(l["mim"], nm2(1300000)));
+    d.rule(
+        "MIM.g",
+        forbidden(l["mim"].with_area(&[Bound::Above(nm2(5_625_000_000))])),
+    );
     d.rule("Slt.a.M1", min_width(l["metal1_slit"], nm(2800)));
     d.rule("Slt.b.M1", max_width(l["metal1_slit"], nm(20000)));
     d.rule("Slt.c.M1", max_width(l["metal1_wide"], nm(30000)));
@@ -1730,6 +1734,10 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     );
     d.rule("LBE.a", min_width(l["lbe"], nm(100000)));
     d.rule("LBE.b", max_width(l["lbe"], nm(1500000)));
+    d.rule(
+        "LBE.b1",
+        forbidden(l["lbe"].with_area(&[Bound::Above(nm2(250_000_000_000))])),
+    );
     d.rule("LBE.b2", min_area(l["lbe"], nm2(30000000000)));
     d.rule("LBE.c", min_spacing(l["lbe"], nm(100000)));
     d.rule("LBE.c.notch", notch(l["lbe"], nm(100000)));
@@ -2189,6 +2197,22 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     );
     d.rule("LU.a", missing_tie(l["pact_nw"], l["ntap"], nm(20000)));
     d.rule("LU.b", missing_tie(l["nact_pw"], l["ptap"], nm(20000)));
+    l.insert(
+        "ntap_lone",
+        d.derived(
+            "ntap_lone",
+            l["ntap"].not_interacting(l["activ"].interacting(l["gatpoly"])),
+        ),
+    );
+    l.insert(
+        "ptap_lone",
+        d.derived(
+            "ptap_lone",
+            l["ptap"].not_interacting(l["activ"].interacting(l["gatpoly"])),
+        ),
+    );
+    d.rule("LU.d", max_enclosure(l["cont"], l["ntap_lone"], nm(6000)));
+    d.rule("LU.d1", max_enclosure(l["cont"], l["ptap_lone"], nm(6000)));
     d.rule("floating_nwell", floating_well(l["nwell"], l["ntap"]));
     d.rule("supply_short", supply_short(l["ntap"], l["ptap"], None));
     d.rule(

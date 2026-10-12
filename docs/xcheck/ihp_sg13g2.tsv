@@ -443,13 +443,13 @@ Gat.a3	Gat.a3	Gat.a3	agrees
 Gat.a4	Gat.a4	Gat.a4	agrees	
 Gat.f	Gat.f	Gat.f	agrees	
 -	Gat.g	Gat.g	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
--	LBE.b1	LBE.b1	ours_missing	maximum area: no kind (deck: waiting)
+LBE.b1	LBE.b1	LBE.b1	agrees	maximum area as forbidden(lbe.with_area(> 250000um2)), [LR] §9.1
 -	LBE.d	LBE.d	ours_missing	EdgeSeal inner edge and LBE ring: left out
 -	LBE.h	LBE.h	ours_missing	EdgeSeal inner edge and LBE ring: left out
--	LU.c	LU.c	ours_missing	maximum extension of a tie from its contact (deck: waiting)
--	LU.c1	LU.c1	ours_missing	maximum extension of a tie from its contact (deck: waiting)
--	LU.d	LU.d	ours_missing	maximum extension of a tie from its contact (deck: waiting)
--	LU.d1	LU.d1	ours_missing	maximum extension of a tie from its contact (deck: waiting)
+-	LU.c	LU.c	ours_missing	the abutted tie's reach is measured through the diffusion it abuts, from that diffusion's Cont: no kind measures one shape's reach from another's cuts (deck: waiting)
+-	LU.c1	LU.c1	ours_missing	as LU.c (deck: waiting)
+LU.d	LU.d	LU.d	agrees	max enclosure of Cont by a lone NWell tie, [LR] §7.2.2; the foundry grows Cont inside Activ in steps, the deck in a square (deck note): the same on straight ties
+LU.d1	LU.d1	LU.d1	agrees	as LU.d, for a lone substrate tie
 -	M1.g	M1.g	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
 -	M1.i	M1.i	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
 -	M2.g	M2.g	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
@@ -460,7 +460,7 @@ Gat.f	Gat.f	Gat.f	agrees
 -	M4.i	M4.i	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
 -	M5.g	M5.g	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
 -	M5.i	M5.i	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
--	MIM.g Mim.g	MIM.g	ours_missing	maximum MIM area (deck: waiting)
+MIM.g	MIM.g Mim.g	MIM.g	differs	Not a rule difference: both decks flag the 75.1 x 75 um MIM of the Mim.g FAIL row ([LR] §6.11, 5625 um2) and pass the 75 x 75 um one, but the deck reports a forbidden shape at its top-left corner, which lies 0.55 um above the FAIL row's box, in the Mim.h row, so the harness counts the Mim.g FAIL as missed.
 -	MIM.gR Mim.gR	MIM.gR	ours_missing	maximum MIM area (deck: waiting)
 -	NBL.c	NBL.c	ours_missing	different-net well spacing: wells are not nets in the deck (deck: waiting)
 -	NBL.d	NBL.d	ours_missing	different-net well spacing: wells are not nets in the deck (deck: waiting)
