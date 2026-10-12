@@ -35,6 +35,7 @@ fn tolerance(model: StrId, param: StrId, relative: f64, absolute: f64) -> LvsCon
             param,
             relative,
             absolute,
+            stated: 0.0,
         }],
         ..LvsControls::default()
     }

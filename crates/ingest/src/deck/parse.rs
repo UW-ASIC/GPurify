@@ -1313,7 +1313,7 @@ impl<'a> Parser<'a> {
                     (&mut relative, fraction)
                 }
                 "absolute" => {
-                    let Some((dim, to_si)) = absolute_unit(&param) else {
+                    let Some(dim) = absolute_dim(&param) else {
                         return Err(self.err(
                             span,
                             &format!(
@@ -1325,7 +1325,7 @@ impl<'a> Parser<'a> {
                     if amount < 0.0 {
                         return Err(self.err(value.span(), "an absolute tolerance is zero or more"));
                     }
-                    (&mut absolute, amount * to_si)
+                    (&mut absolute, amount)
                 }
                 _ => {
                     return Err(self.err(
@@ -2449,19 +2449,17 @@ fn cmp_text(cmp: Cmp) -> &'static str {
     }
 }
 
-/// The unit an absolute tolerance on `param` is written in, and the factor
-/// from the deck's engine unit to SI: a length in nm, an area in nm², a
-/// resistance in ohms, a capacitance in aF, a count. A parameter not listed
-/// has no known unit.
-fn absolute_unit(param: &str) -> Option<(Dim, f64)> {
-    match param {
-        "w" | "l" | "ps" | "pd" | "pe" | "perim" => Some((Dim::Length, 1e-9)),
-        "area" | "as" | "ad" | "ae" => Some((Dim::Area, 1e-18)),
-        "r" => Some((Dim::Resistance, 1.0)),
-        "c" => Some((Dim::Capacitance, 1e-18)),
-        "m" | "nf" => Some((Dim::Count, 1.0)),
-        _ => None,
-    }
+/// The kind an absolute tolerance on `param` is written as, in the unit
+/// [`absolute_unit`](super::absolute_unit) names.
+fn absolute_dim(param: &str) -> Option<Dim> {
+    let (unit, _) = super::absolute_unit(param)?;
+    Some(match unit {
+        "nm" => Dim::Length,
+        "nm2" => Dim::Area,
+        "ohm" => Dim::Resistance,
+        "aF" => Dim::Capacitance,
+        _ => Dim::Count,
+    })
 }
 
 fn pex_keys() -> String {
