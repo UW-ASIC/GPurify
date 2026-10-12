@@ -100,12 +100,9 @@ pub enum DrcError {
     /// table fails its kind's check
     /// ([`ClassTable::is_valid_tips`](ruleset::ClassTable::is_valid_tips),
     /// [`ClassTable::is_valid_two_widths`](ruleset::ClassTable::is_valid_two_widths)),
-    /// or its forbidden range starts above its end.
+    /// its forbidden range starts above its end, or its cut-class table
+    /// fails [`CutClassTable::is_valid`].
     #[error("rule {0}: its table or range is not well formed")]
-    /// The named row's spacing table fails
-    /// [`SpacingTable::is_valid`](ruleset::SpacingTable::is_valid), or its
-    /// cut-class table [`CutClassTable::is_valid`].
-    #[error("rule {0}: the spacing table is not complete and monotone")]
     BadTable(String),
 }
 

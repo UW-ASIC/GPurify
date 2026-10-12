@@ -6,21 +6,15 @@ use super::builder::assert_same;
 use super::grid;
 use super::printer::assert_round_trip;
 use gpurify_check::deck::rules::{
-    allowed_width, aspect_ratio, convex_corner_spacing, count, cut_class, edge_facing_space,
-    edge_width, eol_keep_out, eol_within_spacing, exact_pitch, forbidden, forbidden_spacing,
-    min_interior_angle, min_step, polygon_validity, region_density, span_length, tip_spacing_table,
-    total_area, two_width_spacing_table,
+    allowed_width, aspect_ratio, asymmetric_enclosure, convex_corner_spacing, count, cut_class,
+    cut_class_spacing, cut_spacing, edge_facing_space, edge_width, eol_keep_out,
+    eol_within_spacing, exact_pitch, forbidden, forbidden_spacing, full_width, gate_corner,
+    max_enclosure, min_enclosure, min_interior_angle, min_step, minimum_cut, must_contain,
+    noncoincident_enclosure, polygon_validity, projection_spacing, region_density, span_length,
+    tip_spacing_table, total_area, two_width_spacing_table, via_stack,
 };
 use gpurify_check::deck::{compile, Bound, CompiledDeck, DeckBuilder};
 use gpurify_check::drc::ruleset::EolParallel;
-use gpurify_check::drc::StepKind;
-    allowed_width, aspect_ratio, asymmetric_enclosure, count, cut_class, cut_class_spacing,
-    cut_spacing, edge_facing_space, edge_width, forbidden, full_width, gate_corner, max_enclosure,
-    min_enclosure, min_interior_angle, min_step, minimum_cut, must_contain,
-    noncoincident_enclosure, polygon_validity, projection_spacing, region_density, total_area,
-    via_stack,
-};
-use gpurify_check::deck::{compile, Bound, CompiledDeck, DeckBuilder};
 use gpurify_check::drc::{StepKind, WireBand};
 use gpurify_geom::{Dbu, DbuArea, StrTable};
 use gpurify_ingest::deck::StackSource;

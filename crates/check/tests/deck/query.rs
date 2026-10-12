@@ -45,10 +45,10 @@ fn limits(
         tables: deck.drc.tables.clone(),
         classes: deck.drc.classes.clone(),
         widths: deck.drc.widths.clone(),
-        class_tables: deck.drc.class_tables.clone(),
-        span_tables: deck.drc.span_tables.clone(),
         cut_tables: deck.drc.cut_tables.clone(),
         stacks: deck.drc.stacks.clone(),
+        class_tables: deck.drc.class_tables.clone(),
+        span_tables: deck.drc.span_tables.clone(),
         first_derived: None,
     };
     let mut out = Violations::default();

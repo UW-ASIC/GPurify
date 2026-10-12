@@ -2269,6 +2269,58 @@ pub struct SpacingQuery {
     pub end_of_line: Option<Dbu>,
 }
 
+/// A cut-class spacing table, `LEF58_SPACINGTABLE` on a cut layer with
+/// `CUTCLASS` SIDE/END entries: class `i` is the cut size `short[i]` x
+/// `long[i]`, and `space` is square, two rows and columns per class (its END,
+/// then its SIDE), the space two cuts facing that way need.
+/// [`Rule::CutClassSpacing`] says how a pair's classes and facings are read.
+///
+/// Every table in a [`RuleSet`] passed [`CutClassTable::is_valid`]; one built
+/// by hand must too, or [`RuleSet::run`] may panic indexing it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CutClassTable {
+    /// Each class's shorter side, in grid units; positive.
+    pub short: Vec<Dbu>,
+    /// Each class's longer side, in grid units; at least its `short`.
+    pub long: Vec<Dbu>,
+    /// Row-major, `2n` rows of `2n` positive cells for `n` classes; the
+    /// space for row `r`, column `c` is the space for column `r`, row `c`.
+    pub space: Vec<Dbu>,
+}
+
+impl CutClassTable {
+    /// Whether the table is complete and symmetric, with distinct classes, as
+    /// the struct states. [`RuleSet::from_deck`] refuses one that is not
+    /// ([`DrcError::BadTable`]).
+    pub fn is_valid(&self) -> bool {
+        let n = self.short.len();
+        let classes: Vec<(Dbu, Dbu)> = self
+            .short
+            .iter()
+            .copied()
+            .zip(self.long.iter().copied())
+            .collect();
+        n > 0
+            && self.long.len() == n
+            && classes.iter().all(|&(s, l)| s.raw() > 0 && s <= l)
+            && (0..n).all(|i| !classes[..i].contains(&classes[i]))
+            && self.space.len() == 4 * n * n
+            && self.space.iter().all(|cell| cell.raw() > 0)
+            && (0..2 * n).all(|r| (0..2 * n).all(|c| self.at(r, c) == self.at(c, r)))
+    }
+
+    /// The cell at `row`, `column`.
+    pub(crate) fn at(&self, row: usize, column: usize) -> Dbu {
+        self.space[row * 2 * self.short.len() + column]
+    }
+
+    /// The class a `w` x `h` cut belongs to, either way round.
+    pub(crate) fn class_of(&self, w: Dbu, h: Dbu) -> Option<usize> {
+        let (short, long) = (w.min(h), w.max(h));
+        (0..self.short.len()).find(|&i| self.short[i] == short && self.long[i] == long)
+    }
+}
+
 /// A square table indexed by a class of each of two edges or shapes, for
 /// [`Rule::TipSpacingTable`] (classes by edge length) and
 /// [`Rule::TwoWidthSpacingTable`] (classes by width, each with an optional
@@ -2335,55 +2387,6 @@ impl ClassTable {
     /// The cell for classes `i` and `j`.
     pub(crate) fn at(&self, i: usize, j: usize) -> Dbu {
         self.space[i * self.class.len() + j]
-/// A cut-class spacing table, `LEF58_SPACINGTABLE` on a cut layer with
-/// `CUTCLASS` SIDE/END entries: class `i` is the cut size `short[i]` x
-/// `long[i]`, and `space` is square, two rows and columns per class (its END,
-/// then its SIDE), the space two cuts facing that way need.
-/// [`Rule::CutClassSpacing`] says how a pair's classes and facings are read.
-///
-/// Every table in a [`RuleSet`] passed [`CutClassTable::is_valid`]; one built
-/// by hand must too, or [`RuleSet::run`] may panic indexing it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CutClassTable {
-    /// Each class's shorter side, in grid units; positive.
-    pub short: Vec<Dbu>,
-    /// Each class's longer side, in grid units; at least its `short`.
-    pub long: Vec<Dbu>,
-    /// Row-major, `2n` rows of `2n` positive cells for `n` classes; the
-    /// space for row `r`, column `c` is the space for column `r`, row `c`.
-    pub space: Vec<Dbu>,
-}
-
-impl CutClassTable {
-    /// Whether the table is complete and symmetric, with distinct classes, as
-    /// the struct states. [`RuleSet::from_deck`] refuses one that is not
-    /// ([`DrcError::BadTable`]).
-    pub fn is_valid(&self) -> bool {
-        let n = self.short.len();
-        let classes: Vec<(Dbu, Dbu)> = self
-            .short
-            .iter()
-            .copied()
-            .zip(self.long.iter().copied())
-            .collect();
-        n > 0
-            && self.long.len() == n
-            && classes.iter().all(|&(s, l)| s.raw() > 0 && s <= l)
-            && (0..n).all(|i| !classes[..i].contains(&classes[i]))
-            && self.space.len() == 4 * n * n
-            && self.space.iter().all(|cell| cell.raw() > 0)
-            && (0..2 * n).all(|r| (0..2 * n).all(|c| self.at(r, c) == self.at(c, r)))
-    }
-
-    /// The cell at `row`, `column`.
-    pub(crate) fn at(&self, row: usize, column: usize) -> Dbu {
-        self.space[row * 2 * self.short.len() + column]
-    }
-
-    /// The class a `w` x `h` cut belongs to, either way round.
-    pub(crate) fn class_of(&self, w: Dbu, h: Dbu) -> Option<usize> {
-        let (short, long) = (w.min(h), w.max(h));
-        (0..self.short.len()).find(|&i| self.short[i] == short && self.long[i] == long)
     }
 }
 
@@ -2442,12 +2445,8 @@ impl RuleSet {
     /// - what [`Rule::validate`] refuses: a limit that is not positive, or a
     ///   spacing table that is not complete and monotone;
     /// - [`DrcError::BadTable`] when a class or span table fails its kind's
-    ///   check, or a forbidden range has `min` above `max`.
-    ///   spacing table that is not complete and monotone.
-    /// - [`DrcError::BadTable`] when a spacing table fails
-    ///   [`SpacingTable::is_valid`], or a cut-class table
-    ///   [`CutClassTable::is_valid`].
-    ///   spacing or cut-class table that is not complete and monotone.
+    ///   check, a forbidden range has `min` above `max`, or a cut-class
+    ///   table is not complete and symmetric.
     pub fn from_deck(deck: &Deck, strings: &StrTable) -> Result<Self, DrcError> {
         let rules = &deck.rules;
         let name_of = |id: StrId| strings.resolve(id).to_owned();
@@ -2530,6 +2529,23 @@ impl RuleSet {
             1 => Ok((layer(spec, 0), None)),
             _ => two(spec).map(|(layer, boundary)| (layer, Some(boundary))),
         };
+        // An enclosure's optional wire band, `width:` and `below:`.
+        let wire = |spec: &RuleSpec| -> Result<WireBand, DrcError> {
+            let bound =
+                |param: &'static str| match strings.get(param).and_then(|p| rules.param(spec, p)) {
+                    Some(_) => length(spec, param).map(Some),
+                    None => Ok(None),
+                };
+            let from = bound("wire_width")?.unwrap_or(Dbu::new_unchecked(0));
+            let below = bound("wire_below")?;
+            if let Some(below) = below.filter(|&below| below <= from) {
+                return Err(DrcError::NonPositiveLimit {
+                    rule: name_of(spec.id),
+                    limit: (below - from).raw(),
+                });
+            }
+            Ok(WireBand { from, below })
+        };
         // A length that may be 0, as a run a pair must exceed.
         let at_least_zero = |spec: &RuleSpec, param| -> Result<Dbu, DrcError> {
             let ParamValue::Length(value) = value(spec, param)? else {
@@ -2554,35 +2570,6 @@ impl RuleSet {
                 ParamValue::Flag(set) => Ok(set),
                 _ => Err(wrong_type(spec, param)),
             }
-        };
-        // Every length given for a list parameter, in deck order.
-        let lengths = |spec: &RuleSpec, param: &'static str| -> Result<Vec<Dbu>, DrcError> {
-            let wanted = strings.get(param);
-            rules
-                .params_of(spec)
-                .iter()
-                .filter(|&&(name, _)| Some(name) == wanted)
-                .map(|&(_, stated)| match stated {
-                    ParamValue::Length(length) => Ok(length),
-                    _ => Err(wrong_type(spec, param)),
-                })
-                .collect()
-        // An enclosure's optional wire band, `width:` and `below:`.
-        let wire = |spec: &RuleSpec| -> Result<WireBand, DrcError> {
-            let bound =
-                |param: &'static str| match strings.get(param).and_then(|p| rules.param(spec, p)) {
-                    Some(_) => length(spec, param).map(Some),
-                    None => Ok(None),
-                };
-            let from = bound("wire_width")?.unwrap_or(Dbu::new_unchecked(0));
-            let below = bound("wire_below")?;
-            if let Some(below) = below.filter(|&below| below <= from) {
-                return Err(DrcError::NonPositiveLimit {
-                    rule: name_of(spec.id),
-                    limit: (below - from).raw(),
-                });
-            }
-            Ok(WireBand { from, below })
         };
         let sense = |spec: &RuleSpec| -> Result<LimitSense, DrcError> {
             let ParamValue::Flag(maximum) = value(spec, "maximum")? else {
@@ -2939,11 +2926,6 @@ impl RuleSet {
                 "spacing_table" => {
                     let layer = one(spec)?;
                     set.tables.push(SpacingTable {
-                        prl: lengths(spec, "prl")?,
-                        width: lengths(spec, "width")?,
-                        space: lengths(spec, "space")?,
-                    });
-                    let table = SpacingTable {
                         prl: lengths(spec, "prl")?,
                         width: lengths(spec, "width")?,
                         space: lengths(spec, "space")?,
@@ -3725,11 +3707,11 @@ impl RuleSet {
                 ),
             };
             record_run(runs, out, before, id, outcome, examined);
-            // A rule over every layer (`angle` with none named, `off_grid`)
+            // A rule over every layer (`angle` with none named, `off_grid`, `via_stack`)
             // declares none.
             let declared = rule.layers();
             debug_assert!(
-                declared == [None, None]
+                declared == [None, None, None]
                     || out.layer[before..]
                         .iter()
                         .all(|&layer| declared.contains(&Some(layer))),
@@ -3931,7 +3913,11 @@ impl Rule {
             | Rule::PolygonValidity { .. }
             | Rule::TipSpacingTable { .. }
             | Rule::TwoWidthSpacingTable { .. }
-            | Rule::SpanLength { .. } => Ok(()),
+            | Rule::SpanLength { .. }
+            | Rule::FullWidth { .. }
+            | Rule::GateCorner { .. }
+            // A cut-class table is checked where it is filed.
+            | Rule::CutClassSpacing { .. } => Ok(()),
             Rule::ForbiddenSpacing { min, max, .. } => length(min).and(length(max)),
             Rule::EolWithinSpacing {
                 eol_width,
@@ -3950,10 +3936,6 @@ impl Rule {
                 except_eol, limit, ..
             } => except_eol.map_or(Ok(()), length).and(length(limit)),
             Rule::ExactPitch { pitch, .. } => length(pitch),
-            | Rule::FullWidth { .. }
-            | Rule::GateCorner { .. }
-            // A cut-class table is checked where it is filed.
-            | Rule::CutClassSpacing { .. } => Ok(()),
             Rule::SpacingTable { table, .. } => {
                 if tables
                     .get(table as usize)
@@ -4149,10 +4131,7 @@ impl Rule {
             | Rule::TwoWidthSpacingTable { layer, .. }
             | Rule::SpanLength { layer, .. }
             | Rule::ConvexCornerSpacing { layer, .. }
-            | Rule::ExactPitch { layer, .. } => [Some(layer), None],
-            Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
-            | Rule::EdgeMinLength { layer, .. } => [Some(layer), None, None],
-            | Rule::MinStep { layer, .. } => [Some(layer), None, None],
+            | Rule::ExactPitch { layer, .. } => [Some(layer), None, None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b, None],
             Rule::Density {
                 layer, boundary, ..

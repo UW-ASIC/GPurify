@@ -49,7 +49,6 @@
 
 use super::builder::{LayerExpr, LayerRef};
 use crate::drc::ruleset::EolParallel;
-use crate::drc::StepKind;
 use crate::drc::{StepKind, WireBand};
 use gpurify_geom::{Dbu, DbuArea};
 use gpurify_ingest::deck::ParamValue;
