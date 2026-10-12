@@ -44,7 +44,7 @@ fn id_of(kind: &str) -> StrId {
 }
 
 /// The kinds that cannot answer their question without design intent.
-const INTENT_GATED: [&str; 33] = [
+const INTENT_GATED: [&str; 34] = [
     "combinational_loop",
     "dielectric_field",
     "domain_crossing",
@@ -72,6 +72,7 @@ const INTENT_GATED: [&str; 33] = [
     "missing_isolation",
     "missing_level_shifter",
     "multiple_drivers",
+    "power_switch",
     "reliability",
     "supply_path",
     "tie_high_low",
@@ -145,6 +146,11 @@ fn every_kind() -> RuleSet {
         supply_path: topology::SupplyPathTable {
             head: head(id_of("supply_path")),
             both: vec![true],
+        },
+        power_switch: domain::PowerSwitchTable {
+            head: head(id_of("power_switch")),
+            model_start: vec![0, 1],
+            model: vec![rule(900)],
         },
         matching: matching::MatchingTable {
             head: head(id_of("matching")),
@@ -519,6 +525,7 @@ impl Cell {
             intent,
             voltage: &self.voltage,
             states: &[],
+            switched: &[],
             networks: Ok(&self.networks),
             power: Ok(None),
             rms: (intent, Ok(None)),

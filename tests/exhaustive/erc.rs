@@ -92,6 +92,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(path_through_resistor());
     out.extend(combinational_loop());
     out.extend(matching());
+    out.extend(power_switch());
     out.extend(esd(depth));
     out.extend(esd_wiring());
     out.extend(esd_path());
@@ -5864,6 +5865,70 @@ fn matching() -> Vec<Fixture> {
         .layout(layout)
         .expect(Expect::rule("mt", findings));
         out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// `power_switch` (ERC-F14), hand-derived. VDD, VDDV, VSS and VDD2 are
+/// supplies of one 1.8 V domain; the state `sleep` turns VDDV and VDD2 off,
+/// so they are switched and VDD and VSS always on. The switch is the
+/// `clamp` model, its gate on EN; a pfet from a supply to EN drives the
+/// control.
+///
+/// - VDD to VDDV, EN driven from VDD: clean.
+/// - VDD to OUT (not a supply), or VDD to VSS (another role): the wiring
+///   is flagged, 0 against 1.
+/// - VDD to VDDV, EN driven only from VDD2: in `sleep` nothing reaches EN,
+///   so the control floats in 1 state.
+/// - without power states the row is skipped.
+fn power_switch() -> Vec<Fixture> {
+    let labels = ["VDD", "VDDV", "VSS", "VDD2", "EN", "OUT", "IN"];
+    let (vdd, vddv, vss, vdd2, en, out_net, input) = (0, 1, 2, 3, 4, 5, 6);
+    let deck = format!("{TOPO_PROCESS}rule ps power_switch(; models: [\"clamp\"])\n");
+    let supplies = intent(
+        &[("d", 1800.0)],
+        &[
+            ("VDD", "d", "power"),
+            ("VDDV", "d", "power"),
+            ("VSS", "d", "ground"),
+            ("VDD2", "d", "power"),
+        ],
+        &[],
+    );
+    let with_sleep = format!(
+        r#"{},"states":[{{"name":"sleep","off":["VDDV","VDD2"],"inputs":[]}}]}}"#,
+        &supplies[..supplies.len() - 1]
+    );
+    let cases = [
+        ("good", vddv, vdd, vec![]),
+        ("to_signal", out_net, vdd, vec![count(0)]),
+        ("across_roles", vss, vdd, vec![count(0)]),
+        ("switched_control", vddv, vdd2, vec![count(1)]),
+    ];
+    let mut out = Vec::new();
+    for (name, output, control, findings) in cases {
+        let devs = [
+            dev(Model::Clamp, en, vdd, output),
+            dev(Model::Pfet, input, control, en),
+        ];
+        let layout = circuit(&labels, &devs, &[]);
+        let mut f = Fixture::new(
+            &format!("erc/power_switch/{name}"),
+            &["ERC-F14"],
+            &deck,
+            ERC,
+        )
+        .layout(layout.clone())
+        .expect(Expect::rule("ps", findings));
+        f.intent = Some(with_sleep.clone());
+        out.extend(every_placement(&[f]));
+        if name == "good" {
+            let mut g = Fixture::new("erc/power_switch/no_states", &["ERC-F14"], &deck, ERC)
+                .layout(layout)
+                .expect(Expect::outcome("ps", Want::Skipped));
+            g.intent = Some(supplies.clone());
+            out.push(g);
+        }
     }
     out
 }
