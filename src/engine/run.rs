@@ -762,6 +762,18 @@ fn pex_network(
         &loaded.strings,
         grid,
     );
+    let tsvs: Vec<_> = (loaded.deck.pex_models.tsv)
+        .iter()
+        .filter_map(|model| Some((loaded.deck.layers.id(&loaded.strings, &model.layer)?, model)))
+        .collect();
+    gpurify_extract::tsv::add_into(
+        &mut network,
+        &loaded.store,
+        &extracted.nets,
+        &loaded.deck.connectivity,
+        &tsvs,
+        grid,
+    );
     gpurify_extract::fill::treat(&mut network, &fill_nets(loaded, extracted))
         .map_err(|why| why.to_string())?;
     gpurify_extract::reduce::reduce(&mut network, loaded.deck.extraction);

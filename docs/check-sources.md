@@ -65,7 +65,7 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 | DRC | 43 | 6 | 43 | 14 | 0 | 0 |
 | LVS | 24 | 1 | 15 | 8 | 0 | 0 |
 | ERC | 53 | 4 | 13 | 11 | 0 | 0 |
-| PEX | 9 | 0 | 5 | 2 | 0 | 0 |
+| PEX | 9 | 0 | 6 | 1 | 0 | 0 |
 | Flow | 2 | 0 | 5 | 3 | 0 | 0 |
 
 These numbers come from the TSV. Once `tests/catalog.rs` exists, it computes
@@ -368,6 +368,7 @@ single oracle is a named gap that ledger P1 closes.
 | PEX-010 | SPEF output | implemented | IEEE1481 | CF; SE; MR; golden |
 | PEX-011 | Device-region (MEOL/FEOL) parasitics: gate-to-contact and gate-to-diffusion C, trench contact, via-location gate R | partial | SRC:datasheet | SY; MR |
 | PEX-012 | Metal-fill treatment (floating or grounded fill, virtual fill) | partial | SRC:datasheet | CF; SY |
+| PEX-015 | 3D-IC extraction (TSV, micro-bump, interposer, TSV-TSV coupling) | partial | SRC:datasheet; CAL:3DSTACK | CF; SY |
 | PEX-016 | Point-to-point resistance and net-to-net coupling report between arbitrary points | partial | SRC:datasheet; CAL:PERC P2P | CF; NV |
 | FLOW-001 | Geometric / hierarchy-invariant waivers | implemented | CAL:Auto-Waivers; PEG | SY; MR |
 | FLOW-002 | Early / dirty-design staged runs | implemented | CAL:Recon; ICV:Explorer | SY; MR |

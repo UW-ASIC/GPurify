@@ -201,7 +201,7 @@ extraction rcc coupling_threshold 0.1fF
     }
 }
 
-/// A deck's parasitic models (`pex_fill`, `pex_device`) survive printing,
+/// A deck's parasitic models (`pex_fill`, `pex_device`, `pex_tsv`) survive printing,
 /// and one naming what the deck lacks is refused.
 /// Oracle: round trip; and the refusals `docs/deck.md` states (a fill
 /// layer that carries no net, a model no `device mos` declares, a key
@@ -213,9 +213,12 @@ layer poly = gds(66, 20)
 layer diff = gds(65, 20)
 layer met1 = gds(68, 20)
 layer fill1 = gds(68, 28)
+layer via1 = gds(68, 44)
 layer gate = poly and diff
 connect conductors [poly, diff, met1, fill1]
+connect via via1 [met1, fill1]
 device mos gate model \"nfet\" terminals [poly, diff, diff]
+pex_tsv via1 length 50um liner 200nm liner_k 3.9
 pex fill1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9 area_cap 25.8aF/um2 fringe_cap 40.5aF/um
 pex_fill fill1 floating
 pex_device \"nfet\" gate_contact_cap 0.3aF/um gate_diffusion_cap 0.25aF/um
@@ -233,4 +236,7 @@ pex_device \"nfet\" gate_contact_cap 0.3aF/um gate_diffusion_cap 0.25aF/um
     assert!(refused(("pex_device \"nfet\"", "pex_device \"pfet\"")));
     assert!(refused((" gate_diffusion_cap 0.25aF/um", "")));
     assert!(refused(("floating", "sometimes")));
+    assert!(refused(("pex_tsv via1", "pex_tsv met1")));
+    assert!(refused((" liner_k 3.9", "")));
+    assert_eq!(deck.pex_models.tsv[0].length_nm, 50_000.0);
 }

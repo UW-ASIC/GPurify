@@ -147,6 +147,23 @@ pub struct PexModels {
     /// in deck order: the device-region capacitances of a MOS model,
     /// per µm of gate width (catalog PEX-011).
     pub device: Vec<DeviceParasitics>,
+    /// `pex_tsv <cut layer> length <l> liner <t> liner_k <k>`, in deck
+    /// order: a through-silicon via layer's geometry (catalog PEX-015).
+    pub tsv: Vec<TsvModel>,
+}
+
+/// One `pex_tsv` line: a through-silicon via cut layer, each cut a copper
+/// cylinder of the cut's area through the silicon, inside an oxide liner.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TsvModel {
+    /// The via cut layer, as written.
+    pub layer: String,
+    /// The via's length through the silicon, nm.
+    pub length_nm: f64,
+    /// The liner's thickness, nm.
+    pub liner_nm: f64,
+    /// The liner's relative permittivity.
+    pub liner_k: f64,
 }
 
 /// One `pex_device` line: the capacitances in a MOS device's region that

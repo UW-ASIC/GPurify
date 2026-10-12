@@ -428,6 +428,24 @@ fn check_pex_models(
     connectivity: &super::Connectivity,
     strings: &StrTable,
 ) -> Result<super::PexModels, DeckError> {
+    for (at, tsv) in models.tsv.iter().enumerate() {
+        let id = layer_of(layers, strings, &tsv.layer, "pex_tsv")?;
+        if !connectivity.via_cut.contains(&id) {
+            return Err(DeckError::Malformed(format!(
+                "pex_tsv {}: not a `connect via` cut layer",
+                tsv.layer
+            )));
+        }
+        if models.tsv[..at]
+            .iter()
+            .any(|earlier| earlier.layer == tsv.layer)
+        {
+            return Err(DeckError::Malformed(format!(
+                "pex_tsv {}: stated twice",
+                tsv.layer
+            )));
+        }
+    }
     for (at, (layer, _)) in models.fill.iter().enumerate() {
         let id = layer_of(layers, strings, layer, "pex_fill")?;
         if !connectivity.conductors.contains(&id) {

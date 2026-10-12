@@ -470,6 +470,7 @@ impl<'a> Parser<'a> {
             "pex" => self.pex(),
             "pex_fill" => self.pex_fill(),
             "pex_device" => self.pex_device(),
+            "pex_tsv" => self.pex_tsv(),
             "temperature" => self.temperature(span),
             "extraction" => self.extraction(span),
             "corner" => self.corner(),
@@ -479,7 +480,7 @@ impl<'a> Parser<'a> {
             "lvs" => self.lvs(),
             _ => Err(self.err(
                 span,
-                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, pex_fill, pex_device, temperature, lvs, extraction, corner, stage or waive"),
+                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, pex_fill, pex_device, pex_tsv, temperature, lvs, extraction, corner, stage or waive"),
             )),
         }
     }
@@ -1701,6 +1702,43 @@ impl<'a> Parser<'a> {
             model,
             gate_contact_af_um,
             gate_diffusion_af_um,
+        });
+        Ok(())
+    }
+
+    /// `pex_tsv <layer> length <l> liner <t> liner_k <k>`: a through-silicon
+    /// via layer ([`super::TsvModel`]), every value required and positive.
+    fn pex_tsv(&mut self) -> R<()> {
+        let layer = self.layer_word()?;
+        let keys = ["length", "liner", "liner_k"];
+        let mut values = [None::<f64>; 3];
+        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+            let (key, span) = self.ident("length, liner or liner_k")?;
+            let Some(at) = keys.iter().position(|&k| k == key) else {
+                return Err(self.err(
+                    span,
+                    &format!("unknown pex_tsv key `{key}`; expected length, liner or liner_k"),
+                ));
+            };
+            let value = self.value()?;
+            let dim = if at == 2 { Dim::Scalar } else { Dim::Length };
+            let number = self.physical(&value, dim, &key)?;
+            if !(number > 0.0 && number.is_finite()) {
+                return Err(self.err(value.span(), &format!("{key} must be positive")));
+            }
+            if values[at].replace(number).is_some() {
+                return Err(self.err(span, &format!("`{key}` is given twice")));
+            }
+        }
+        let [Some(length_nm), Some(liner_nm), Some(liner_k)] = values else {
+            let t = self.peek();
+            return Err(self.err_tok(t, "pex_tsv states length, liner and liner_k"));
+        };
+        self.out.pex_models.tsv.push(super::TsvModel {
+            layer,
+            length_nm,
+            liner_nm,
+            liner_k,
         });
         Ok(())
     }

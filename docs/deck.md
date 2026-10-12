@@ -961,6 +961,23 @@ fill's own nets are gone from the output. The layer must be a conductor
 with a `pex` line, and each layer is stated once. Which treatment a
 foundry signs off with is its own; no open deck states one.
 
+### Through-silicon vias
+
+```
+connect via tsv [met1, backside_metal]
+pex tsv thickness 100nm height 0nm sheet 0.02ohm area_cap 0aF/um2 fringe_cap 0aF/um
+pex_tsv tsv length 50um liner 200nm liner_k 3.9
+```
+
+`pex_tsv <cut layer> length <l> liner <t> liner_k <k>` says a via cut
+layer is a through-silicon via: each cut is a copper cylinder through the
+silicon, of the radius of the circle of its drawn area, inside an oxide
+liner. PEX adds the liner's capacitance to the via's net, `2π ε₀ k l /
+ln((r + t) / r)` (Katti et al., IEEE TED 2010), and its resistance is the
+`pex` row's per cut. All three values are required and positive; the
+layer must be a `connect via` cut layer, stated once. No open PDK has a
+TSV, so the values are the deck's to state.
+
 ### Device-region capacitance
 
 ```

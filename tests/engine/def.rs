@@ -406,6 +406,69 @@ fn point_to_point_resistance_and_net_coupling_are_reported() {
     assert!(gpurify::engine::p2p::coupling(&loaded, &extracted, &network, "a", "zz").is_err());
 }
 
+/// Two through-silicon vias on one net add their liners' capacitance
+/// (PEX-015).
+///
+/// Oracle: closed form (Katti et al., IEEE TED 57(1), 2010, eq. 2): a 5 ×
+/// 5 µm cut is a cylinder of radius `5/√π` µm; 50 µm long in a 0.2 µm
+/// liner of k = 3.9 it is `2π ε₀ k L / ln((r + t) / r)` to ground, and two
+/// of them twice that. The plates carry no capacitance of their own
+/// (`area_cap` and `fringe_cap` 0) and one net couples to nothing, so the
+/// net's capacitance is the liners' alone.
+#[test]
+fn a_through_silicon_via_adds_its_liner_capacitance() {
+    let lef = "VERSION 5.8 ;\nUNITS DATABASE MICRONS 1000 ; END UNITS\n\
+               LAYER met1 TYPE ROUTING ; WIDTH 0.2 ; END met1\n\
+               LAYER tsv TYPE CUT ; END tsv\n\
+               LAYER bm TYPE ROUTING ; WIDTH 1 ; END bm\n\
+               VIA T1 LAYER met1 ; RECT -3 -3 3 3 ; LAYER tsv ; RECT -2.5 -2.5 2.5 2.5 ;\n\
+               LAYER bm ; RECT -3 -3 3 3 ; END T1\nEND LIBRARY\n";
+    let deck = "grid 1nm\nlayer met1 = gds(1, 0)\nlayer tsv = gds(2, 0)\nlayer bm = gds(3, 0)\n\
+                connect conductors [met1, bm]\nconnect touch_within_layer\n\
+                connect via tsv [met1, bm]\n\
+                connect label met1 names met1\nconnect label bm names bm\n\
+                pex met1 thickness 100nm height 1000nm sheet 0.1ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um\n\
+                pex tsv thickness 100nm height 1100nm sheet 0.05ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um\n\
+                pex bm thickness 100nm height 1200nm sheet 0.1ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um\n\
+                pex_tsv tsv length 50um liner 200nm liner_k 3.9\n";
+    let mut inputs = inputs(
+        "tsv",
+        &design(
+            "SPECIALNETS 1 ;\n- t + RECT met1 ( 7000 7000 ) ( 33000 13000 ) \
+             + VIA T1 ( 10000 10000 ) ( 30000 10000 ) ;\nEND SPECIALNETS",
+        ),
+    );
+    inputs.lef = vec![{
+        let path = inputs.lef[0].with_file_name("tsv.lef");
+        std::fs::write(&path, lef).expect("writable");
+        path
+    }];
+    std::fs::write(&inputs.deck, deck).expect("writable");
+    let options = RunOptions {
+        checks: Checks {
+            drc: false,
+            erc: false,
+            lvs: false,
+            pex: true,
+        },
+        lvs: gpurify_check::lvs::CompareOptions::default(),
+        quasistatic_nets: Vec::new(),
+    };
+    let (loaded, extracted, outputs, _) = run(&inputs, &options).expect("the DEF runs");
+    let net = extracted
+        .ports
+        .net_of(loaded.strings.get("t").expect("named"))
+        .expect("one net");
+    let total = outputs.parasitics.expect("PEX ran").capacitance_per_net()[net.0 as usize];
+    let r = 5.0 / std::f64::consts::PI.sqrt();
+    let one = 2.0 * std::f64::consts::PI * 8.854_187_812_8e-3 * 3.9 * 50.0 / ((r + 0.2) / r).ln();
+    assert!(
+        (total - 2.0 * one).abs() < 1e-9 * one,
+        "{total} against {}",
+        2.0 * one
+    );
+}
+
 /// A DEF whose layer the deck does not have is refused naming it, and an
 /// unreadable LEF names its path.
 ///
