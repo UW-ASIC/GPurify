@@ -66,6 +66,11 @@ pub enum LayoutError {
     /// An `SREF` or `AREF` names a structure the library does not define.
     #[error("cell {0} is referenced but not defined")]
     MissingCell(String),
+    /// Two structures share a name. GDSII names a structure once (the
+    /// format's `STRNAME`); with two, which one a reference places is not
+    /// stated, and reading either would drop the other's geometry.
+    #[error("cell {0} is defined more than once")]
+    DuplicateCell(String),
     /// A structure reaches itself again through its references, whether a
     /// root reaches it or not (a library whose every structure is referenced
     /// has such a cycle).
@@ -839,8 +844,10 @@ pub mod gds {
         ///
         /// [`LayoutError::Truncated`], [`LayoutError::UnsupportedRecord`] or
         /// [`LayoutError::UnsupportedTransform`] at the first record that cannot
-        /// be read exactly, and [`LayoutError::MissingCell`] for a reference to
-        /// an undefined structure. On error, `strings` may have gained names.
+        /// be read exactly, [`LayoutError::DuplicateCell`] for a name two
+        /// structures share, and [`LayoutError::MissingCell`] for a reference
+        /// to an undefined structure. On error, `strings` may have gained
+        /// names.
         pub fn parse(bytes: &[u8], strings: &mut StrTable) -> Result<Self, LayoutError> {
             let mut lib = Library::default();
             let mut stroke = Stroke::default();
@@ -927,6 +934,12 @@ pub mod gds {
             // Resolve every reference to its cell index. Sorted by name, then index.
             let mut by_name: Vec<u32> = (0..narrow(lib.cells.len())).collect();
             by_name.sort_unstable_by_key(|&i| (lib.cells[i as usize].name, i));
+            let name_of = |i: u32| lib.cells[i as usize].name;
+            if let Some(pair) = by_name.windows(2).find(|w| name_of(w[0]) == name_of(w[1])) {
+                return Err(LayoutError::DuplicateCell(
+                    strings.resolve(name_of(pair[0])).to_owned(),
+                ));
+            }
             for r in &mut lib.refs {
                 let found = by_name.binary_search_by_key(&r.cell, |&i| lib.cells[i as usize].name);
                 r.child = match found {
@@ -3216,6 +3229,163 @@ mod tests {
                 ),
             }
         }
+    }
+
+    /// Catalog DRC-124: each layout input exception Calibre grades (`LAYOUT
+    /// INPUT EXCEPTION SEVERITY`) has one answer here, refused by name or
+    /// read exactly: a reference to no structure, two structures of one name
+    /// (refused since X2: the reference resolved to either), a placement
+    /// turned 45 degrees, a fractional magnification, a `PATH` of odd or
+    /// zero width; an integral magnification is read as the scaling it
+    /// states, a spike (a vertex the outline runs out to and straight back
+    /// from) as the region its ring encloses, without it, and an
+    /// 8000-vertex boundary whole. None is reported as a rule: a refusal
+    /// stops the run, and what is read is read exactly.
+    ///
+    /// Oracle: the GDSII format (`STRNAME` once per structure; a `PATH`
+    /// outline at half its width from the centreline) and `LayoutError`'s
+    /// documented refusals; the magnified square's box by hand (3 x 100);
+    /// a spike encloses no area, so the region is the square. Metamorphic:
+    /// the duplicates in either order are refused alike, and adding the
+    /// spike leaves the square's store unchanged.
+    #[test]
+    fn each_layout_input_exception_is_refused_by_name_or_read_as_stated() {
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let square = [first_layer_square()];
+        let refused = |bytes: &[u8]| read(bytes, &deck, UnknownLayers::Reject).map(|_| ());
+
+        let missing = [sref("NOWHERE", 0, 0.0, 0, 0)];
+        assert!(matches!(
+            refused(&gds_hierarchy(&[("TOP", &[], &missing)])),
+            Err(LayoutError::MissingCell(name)) if name == "NOWHERE"
+        ));
+        let leaf = [sref("LEAF", 0, 0.0, 0, 0)];
+        assert!(matches!(
+            refused(&gds_hierarchy(&[("TOP", &[], &leaf), ("LEAF", &square, &[]), ("LEAF", &[], &[])])),
+            Err(LayoutError::DuplicateCell(name)) if name == "LEAF"
+        ));
+        assert!(
+            matches!(
+                refused(&gds_hierarchy(&[("LEAF", &[], &[]), ("TOP", &[], &leaf), ("LEAF", &square, &[])])),
+                Err(LayoutError::DuplicateCell(name)) if name == "LEAF"
+            ),
+            "whichever comes first"
+        );
+        let turned = [sref("LEAF", 0, 45.0, 0, 0)];
+        assert!(matches!(
+            refused(&gds_hierarchy(&[
+                ("TOP", &[], &turned),
+                ("LEAF", &square, &[])
+            ])),
+            Err(LayoutError::UnsupportedTransform)
+        ));
+        let tripled = [sref("LEAF", 0, 0.0, 0, 0).magnified(3)];
+        let bytes = gds_hierarchy(&[("TOP", &[], &tripled), ("LEAF", &square, &[])]);
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("an integral magnification");
+        let b = first_square_bbox();
+        assert_eq!(
+            layout.store.poly_bbox(PolyId(0)),
+            Bbox {
+                xlo: gpurify_geom::Dbu::new_unchecked(3 * b.xlo.raw()),
+                ylo: gpurify_geom::Dbu::new_unchecked(3 * b.ylo.raw()),
+                xhi: gpurify_geom::Dbu::new_unchecked(3 * b.xhi.raw()),
+                yhi: gpurify_geom::Dbu::new_unchecked(3 * b.yhi.raw()),
+            },
+            "the square three times over"
+        );
+        // The same library with the MAG record's real 3.0 replaced by 2.5.
+        let (three, half) = (gds_real(3.0), gds_real(2.5));
+        let at = bytes
+            .windows(8)
+            .position(|w| w == three)
+            .expect("the MAG record");
+        let mut fractional = bytes.clone();
+        fractional[at..at + 8].copy_from_slice(&half);
+        assert!(matches!(
+            refused(&fractional),
+            Err(LayoutError::UnsupportedTransform)
+        ));
+
+        for width in [0i32, 101] {
+            const PATH: u16 = 0x0900;
+            const WIDTH: u16 = 0x0F03;
+            let mut bytes = gds_hierarchy(&[]);
+            bytes.truncate(bytes.len() - 4);
+            record(&mut bytes, BGNSTR, &[0u8; 24]);
+            record(&mut bytes, STRNAME, &ascii("TOP"));
+            record(&mut bytes, PATH, &[]);
+            record(&mut bytes, LAYER, &ROWS[0].1.to_be_bytes());
+            record(&mut bytes, DATATYPE, &ROWS[0].2.to_be_bytes());
+            record(&mut bytes, WIDTH, &width.to_be_bytes());
+            let mut xy = Vec::new();
+            for (x, y) in [(0i32, 0i32), (4000, 0)] {
+                xy.extend_from_slice(&x.to_be_bytes());
+                xy.extend_from_slice(&y.to_be_bytes());
+            }
+            record(&mut bytes, XY, &xy);
+            record(&mut bytes, ENDEL, &[]);
+            record(&mut bytes, ENDSTR, &[]);
+            record(&mut bytes, ENDLIB, &[]);
+            assert!(
+                matches!(
+                    refused(&bytes),
+                    Err(LayoutError::UnsupportedRecord(WIDTH, _))
+                ),
+                "a path {width} wide"
+            );
+        }
+
+        // A spike out of the square's top edge and straight back encloses no
+        // area: the ring is read as the region it encloses, the square.
+        let spiked = boundary(
+            ROWS[0].1,
+            ROWS[0].2,
+            &[0, 100, 100, 50, 50, 50, 0],
+            &[0, 0, 100, 100, 200, 100, 100],
+        );
+        let layout = read(&gds_library("TOP", &[spiked]), &deck, UnknownLayers::Reject)
+            .expect("a spike is read, not refused");
+        let plain = boundary(ROWS[0].1, ROWS[0].2, &[0, 100, 100, 0], &[0, 0, 100, 100]);
+        let unspiked =
+            read(&gds_library("TOP", &[plain]), &deck, UnknownLayers::Reject).expect("a square");
+        // The same ring, wherever it starts.
+        let corners = |store: &GeometryStore| {
+            let (xs, ys) = store.poly_verts(PolyId(0));
+            let mut corners: Vec<(i64, i64)> =
+                xs.iter().zip(ys).map(|(x, y)| (x.raw(), y.raw())).collect();
+            corners.sort_unstable();
+            corners
+        };
+        assert_eq!(
+            corners(&layout.store),
+            corners(&unspiked.store),
+            "adding a spike changes nothing"
+        );
+        assert_eq!(layout.store.poly_count(), 1);
+        assert_eq!(
+            layout.store.poly_bbox(PolyId(0)),
+            Bbox {
+                xlo: gpurify_geom::Dbu::new_unchecked(0),
+                ylo: gpurify_geom::Dbu::new_unchecked(0),
+                xhi: gpurify_geom::Dbu::new_unchecked(100),
+                yhi: gpurify_geom::Dbu::new_unchecked(100),
+            },
+            "the spike encloses nothing"
+        );
+
+        // 8000 vertices, a staircase of 3999 steps closing back along the axes.
+        let (mut xs, mut ys) = (vec![0i64], vec![0i64]);
+        for step in 0..3999 {
+            xs.extend([step * 10 + 10, step * 10 + 10]);
+            ys.extend([step * 10, step * 10 + 10]);
+        }
+        xs.push(0);
+        ys.push(3999 * 10);
+        let stairs = boundary(ROWS[0].1, ROWS[0].2, &xs, &ys);
+        let layout = read(&gds_library("TOP", &[stairs]), &deck, UnknownLayers::Reject)
+            .expect("a long boundary is read whole");
+        assert_eq!(layout.store.poly_verts(PolyId(0)).0.len(), 8000);
     }
 
     /// The cell every mirroring test below instantiates: a counter-clockwise
