@@ -807,6 +807,7 @@ impl RuleSet {
                     let clamps = row.models("clamp")?;
                     let resistors = row.models("resistor")?;
                     let rated = row.models("rated")?;
+                    let min_series = row.opt_number("min_series")?.map(Qty::new);
                     let table = &mut set.esd_exposed;
                     row.head(&mut table.head)?;
                     table.pad.push(layers[0]);
@@ -816,6 +817,7 @@ impl RuleSet {
                     close_csr(&mut table.resistor_start, table.resistor.len());
                     table.rated.extend(rated);
                     close_csr(&mut table.rated_start, table.rated.len());
+                    table.min_series.push(min_series);
                 }
                 "esd_ground_coupling" => {
                     row.layers(0)?;

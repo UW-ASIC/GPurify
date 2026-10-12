@@ -330,7 +330,7 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-B1 | Windowed density + CMP thickness | implemented | GF:13 | CF; MR; SY |
 | ERC-C1 | Pad ESD path to power and ground | implemented | TR18-01:4.5.2-4.5.4; Khazhinsky2012 | SY; NV; MR |
 | ERC-C2 | ESD device sizing (perimeter, clamp width) | implemented | TR18-01:Fig23,Fig24; Hogan2012:III; GF:14.5 | CF; SY; MR |
-| ERC-C3 | Protected device (pad-exposed gates and drains) | partial | TR18-01:4.5.1; Khazhinsky2012; GF:14.4 | SY; MR |
+| ERC-C3 | Protected device (pad-exposed gates and drains) | implemented | TR18-01:4.5.1,6.1.11; Khazhinsky2012; GF:14.4; WP2:2.3 | SY; MR |
 | ERC-C4 | Cross-domain signal ESD protection | partial | TR18-01(2011):5.1.3; TR18-01:5.6.2; Hogan2012; Khazhinsky2012:Fig5 | SE:Part II pseudocode; SY; NV; MR |
 | ERC-C5 | Ground-domain coupling (anti-parallel diodes) | implemented | TR18-01:Fig5; Hogan2012:Fig1,IV; Khazhinsky2012:Fig2 | SY; NV; MR |
 | ERC-C7 | ESD-pulse current density | implemented | TR18-01:Fig58; TR22:4.4; Khazhinsky2012; CAL; ICV; PF | CF; MR; SY |

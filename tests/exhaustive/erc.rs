@@ -111,6 +111,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(latchup_victim());
     out.extend(esd_parasitic());
     out.extend(esd_exposed());
+    out.extend(esd_secondary());
     out.extend(supply_short(depth));
     out.extend(soft_connection());
     out.extend(floating_well(depth));
@@ -6748,7 +6749,7 @@ fn esd_exposed() -> Vec<Fixture> {
     let (vdd1, vss1, vss3, sig, out_net) = (0, 1, 4, 5, 6);
     let deck = format!(
         "{}rule exp esd_exposed(pad; clamps: [\"dio\"], resistors: [\"rs\"], \
-         rated: [\"clamp\"])\n",
+         rated: [\"clamp\"], min_series: none)\n",
         diode_process()
     );
     let down = ("mkdi", vss1, sig);
@@ -6794,6 +6795,95 @@ fn esd_exposed() -> Vec<Fixture> {
             .expect(Expect::rule("exp", findings));
         f.intent = Some(domain_intent());
         out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// `esd_exposed`'s `min_series` (ERC-C3), the secondary stage, hand-derived.
+/// The `rs` resistor states `sheet 100ohm`; [`circuit_pins`] draws its
+/// marker 400 nm along its ends and 200 nm across, so each is 200 Ω. The pad
+/// is on SIG; every gate behind a resistor has local clamps on its net.
+///
+/// - a gate on the pad net: 0 Ω, flagged against 150 Ω;
+/// - behind one resistor: 200 Ω, flagged against 300 Ω, clean at 150 Ω;
+/// - behind two in parallel: 100 Ω (effective), flagged against 150 Ω;
+/// - behind two in series through MID: 400 Ω, clean against 300 Ω;
+/// - a resistor with no `sheet` cannot be valued: the row is refused.
+fn esd_secondary() -> Vec<Fixture> {
+    let labels = ["VDD1", "VSS1", "VDD2", "VSS2", "VSS3", "SIG", "OUT", "MID"];
+    let (vdd1, vss1, vss3, sig, out_net, mid) = (0, 1, 4, 5, 6, 7);
+    let valued = diode_process().replace(
+        "model \"rs\" terminals [diff, diff]",
+        "model \"rs\" terminals [diff, diff] sheet 100ohm",
+    );
+    let deck = |process: &str, min: f64| {
+        format!(
+            "{process}rule exp esd_exposed(pad; clamps: [\"dio\"], resistors: [\"rs\"], \
+             rated: none, min_series: {min}ohm)\n"
+        )
+    };
+    let primary = [("mkdi", vss1, sig), ("mkdi", sig, vdd1)];
+    let local = [("mkdi", vss1, out_net), ("mkdi", out_net, vdd1)];
+    let input = dev(Model::Nfet, sig, vss1, vss3);
+    let behind = dev(Model::Nfet, out_net, vss1, vss3);
+    let one = [("mkres", sig, out_net)];
+    let parallel = [("mkres", sig, out_net), ("mkres", sig, out_net)];
+    let chain = [("mkres", sig, mid), ("mkres", mid, out_net)];
+    let pins = |extra: &[(&'static str, usize, usize)], with_local: bool| {
+        let mut all: Vec<(&str, usize, usize)> = primary.to_vec();
+        all.extend_from_slice(extra);
+        if with_local {
+            all.extend_from_slice(&local);
+        }
+        all
+    };
+    let cases: Vec<(&str, Dev, Vec<(&str, usize, usize)>, f64, Vec<Finding>)> = vec![
+        ("on_pad", input, pins(&[], false), 150.0, vec![ohms(0.0)]),
+        (
+            "one/below",
+            behind,
+            pins(&one, true),
+            300.0,
+            vec![ohms(200.0)],
+        ),
+        ("one/above", behind, pins(&one, true), 150.0, vec![]),
+        (
+            "parallel",
+            behind,
+            pins(&parallel, true),
+            150.0,
+            vec![ohms(100.0)],
+        ),
+        ("series", behind, pins(&chain, true), 300.0, vec![]),
+    ];
+    let mut out = Vec::new();
+    for (name, device, all, min, findings) in cases {
+        let mut l = circuit_pins(&labels, &[device], &all);
+        let ty = track_y(sig);
+        rect(&mut l, "pad", (-1000, ty, -400, ty + TRACK_H));
+        rect(&mut l, "padv", (-800, ty + 150, -600, ty + 250));
+        let mut f = Fixture::new(
+            &format!("erc/esd_exposed/secondary/{name}"),
+            &["ERC-C3"],
+            &deck(&valued, min),
+            ERC,
+        )
+        .layout(l.clone())
+        .expect(Expect::rule("exp", findings));
+        f.intent = Some(domain_intent());
+        out.extend(every_placement(&[f]));
+        if name == "one/below" {
+            let mut g = Fixture::new(
+                "erc/esd_exposed/secondary/unvalued",
+                &["ERC-C3"],
+                &deck(&diode_process(), min),
+                ERC,
+            )
+            .layout(l)
+            .expect(Expect::outcome("exp", Want::Refused));
+            g.intent = Some(domain_intent());
+            out.push(g);
+        }
     }
     out
 }

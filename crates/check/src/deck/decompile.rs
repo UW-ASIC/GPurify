@@ -854,6 +854,9 @@ impl CompiledDeck {
             for &id in &t.rated[span(&t.rated_start, r)] {
                 row.params.push(("rated", model(id)));
             }
+            if let Some(min) = t.min_series[r] {
+                row = row.number("min_series", min.raw());
+            }
             file(&t.head, r, row);
         }
         let t = &erc.esd_ground_coupling;

@@ -1034,7 +1034,7 @@ pub fn check_esd_parasitic(
 
 /// The devices a pad exposes, protected: deck kind `esd_exposed`, written
 /// `esd_exposed(pad; clamps: models, resistors: models | none, rated: models |
-/// none)`.
+/// none, min_series: resistance | none)`.
 ///
 /// Khazhinsky 2012: the layout checker "could flag input buffer gates and
 /// output buffer drains without adequate ESD protection". A gate is exposed
@@ -1048,24 +1048,42 @@ pub fn check_esd_parasitic(
 /// on its junction; it is protected when it is of a `rated` model (an
 /// ESD-rated device, gf180mcu's `ESD_MK`) or of a `clamps` model. A row flags
 /// every transistor whose gate is exposed and unprotected, and every unrated
-/// output driver. Needs design intent, for which nets are the rails.
+/// output driver.
+///
+/// With `min_series`, every exposed gate needs a secondary stage: a series
+/// resistance of at least that between the pad and its gate (Industry
+/// Council White Paper 2 §2.3.1: "any IR drop across R1 will reduce the
+/// voltage stress seen across the fragile gates ... R1 values from
+/// 100-5000 Ω are common"; TR18-01 Rule 6.1.11, "Verify Implementation of
+/// Secondary ESD Protection Scheme"). The resistance is the effective
+/// resistance from the pad nets, joined, to the gate's net through the
+/// `resistors` devices, each `sheet × l / w` as the deck's `device` row
+/// states it; a gate on the pad net itself has 0. Together with the local
+/// clamps the walk above already asks for behind a resistor, that is the
+/// primary-resistor-secondary topology of Siemens's US9378324B2. Needs
+/// design intent, for which nets are the rails.
 ///
 /// # Limits
 ///
-/// A gate on the pad net itself counts as protected by the pad's primary
-/// clamps: a deck cannot ask for a secondary stage before every input gate
-/// (a CDM rule). A clamp is linear and wired as `esd_topological` takes it.
+/// A clamp is linear and wired as `esd_topological` takes it. The
+/// `min_series` value is deck-supplied: no public deck states one (White
+/// Paper 2's range is typical, not a rule), and a high-speed input that
+/// cannot take a resistor is a waiver.
 ///
 /// Catalog: ERC-C3 in the [check catalog]. Defined by [ESDA TR18.0-01]
-/// §4.5.1; [Khazhinsky 2012] ("Protected device checks"; "input buffer gates
-/// and output buffer drains"); [GF180MCU] §14.4 (`ESD_MK` on a transistor used
-/// for protection). Source tags are in [check-sources.md].
+/// §4.5.1 and Rule 6.1.11; [Khazhinsky 2012] ("Protected device checks";
+/// "input buffer gates and output buffer drains"); [GF180MCU] §14.4
+/// (`ESD_MK` on a transistor used for protection); [White Paper 2] §2.3
+/// (the secondary stage); US9378324B2 (Siemens: "presence of series
+/// resistance in the signal path, presence of secondary high/low ESD
+/// clamps"). Source tags are in [check-sources.md].
 ///
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [ESDA TR18.0-01]: https://www.esda.org/store/standards/product/457/esd-tr18-0-01-25/
 /// [Khazhinsky 2012]: https://www.esda.org/assets/News/8df611267c/ESDEDA-InCompliance-part1.pdf
 /// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
+/// [White Paper 2]: https://www.esdindustrycouncil.org/ic/en/shared/industry-council-white-paper-2-rev3.0-may-2021-final.pdf
 /// [`EsdTopologicalTable`]: crate::erc::rules::supply::EsdTopologicalTable
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct EsdExposedTable {
@@ -1085,6 +1103,118 @@ pub struct EsdExposedTable {
     pub rated_start: Vec<u32>,
     /// Rated models, CSR by `rated_start`.
     pub rated: Vec<StrId>,
+    /// Per row: the least series resistance between a pad and an exposed
+    /// gate, Ω; `None` asks for no secondary stage.
+    pub min_series: Vec<Option<Qty<Resistance, { prefix::BASE }>>>,
+}
+
+/// The effective resistance from the pad nets, joined into one node, to
+/// every exposed net through the resistor devices `resistors`, Ω: 0 on a
+/// pad net, `None` for the whole when a resistor on the way states no value
+/// (`sheet`, or a measured width or length). Dense: the exposed nets are a
+/// pad's input stages.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "a resistor's width and length in database units are far below 2^53"
+)]
+fn series_resistance(
+    design: Design<'_>,
+    pads: &[NetId],
+    exposed: &[bool],
+    resistors: &[StrId],
+) -> Option<Vec<f64>> {
+    let (nets, devices) = (design.nets, design.devices);
+    let is_pad = |net: NetId| pads.binary_search(&net).is_ok();
+    // Node 0 is the pads; then every exposed net that is not one.
+    let mut node = vec![usize::MAX; nets.net_count()];
+    let mut count = 1usize;
+    for net in 0..nets.net_count() {
+        if exposed[net] {
+            node[net] = if is_pad(NetId(u32::try_from(net).expect("a net id is a u32"))) {
+                0
+            } else {
+                count += 1;
+                count - 1
+            };
+        }
+    }
+    let mut laplacian = vec![vec![0.0f64; count]; count];
+    for device in 0..devices.len() {
+        if devices.kind[device] != DeviceKind::Resistor
+            || !resistors.contains(&devices.model[device])
+        {
+            continue;
+        }
+        let (on, _) = devices.terminals_of(device_id(device));
+        let ends: Vec<usize> = on
+            .iter()
+            .filter(|&&n| n != NetId::NONE && exposed[n.idx()])
+            .map(|n| node[n.idx()])
+            .collect();
+        let [a, b] = ends[..] else {
+            continue;
+        };
+        if a == b {
+            continue;
+        }
+        let length_of = |want: DeviceParam| {
+            devices.params_of(device_id(device)).iter().find_map(
+                |&(param, measure)| match measure {
+                    DeviceMeasure::Length(length) if param == want => Some(length.raw() as f64),
+                    _ => None,
+                },
+            )
+        };
+        let sheet = devices.value[device].sheet_ohm_sq?;
+        let ohms = sheet * length_of(DeviceParam::Length)? / length_of(DeviceParam::Width)?;
+        if ohms.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
+            return None;
+        }
+        let g = 1.0 / ohms;
+        laplacian[a][a] += g;
+        laplacian[b][b] += g;
+        laplacian[a][b] -= g;
+        laplacian[b][a] -= g;
+    }
+    // Ground the pads and invert the rest by Gauss-Jordan elimination.
+    let n = count - 1;
+    let mut m: Vec<Vec<f64>> = (1..count)
+        .map(|r| {
+            let mut row = laplacian[r][1..].to_vec();
+            row.extend((0..n).map(|c| f64::from(u8::from(c + 1 == r))));
+            row
+        })
+        .collect();
+    for col in 0..n {
+        let pivot = (col..n).max_by(|&a, &b| m[a][col].abs().total_cmp(&m[b][col].abs()))?;
+        if m[pivot][col].abs() < f64::MIN_POSITIVE {
+            return None;
+        }
+        m.swap(col, pivot);
+        let scale = m[col][col];
+        for value in &mut m[col] {
+            *value /= scale;
+        }
+        for row in 0..n {
+            if row != col {
+                let factor = m[row][col];
+                if factor != 0.0 {
+                    let pivot_row = m[col].clone();
+                    for (value, p) in m[row].iter_mut().zip(&pivot_row) {
+                        *value -= factor * p;
+                    }
+                }
+            }
+        }
+    }
+    Some(
+        (0..nets.net_count())
+            .map(|net| match node[net] {
+                usize::MAX | 0 => 0.0,
+                k => m[k - 1][n + k - 1],
+            })
+            .collect(),
+    )
 }
 
 /// Runs every [`EsdExposedTable`] row over every transistor.
@@ -1141,6 +1271,15 @@ pub fn check_esd_exposed(
                 }
             }
         }
+        let series = if table.min_series[row].is_some() {
+            let Some(series) = series_resistance(design, &pads, &exposed, &resistors) else {
+                record_run(runs, out, before, rule, Outcome::Refused, 0);
+                continue;
+            };
+            Some(series)
+        } else {
+            None
+        };
         let mut rails: Vec<Option<u32>> = vec![None; nets.net_count()];
         let mut examined = 0u64;
         for index in 0..devices.len() {
@@ -1157,6 +1296,13 @@ pub fn check_esd_exposed(
                 if reached < 2 {
                     let (measured, limit) = (Measurement::Count(reached), Measurement::Count(2));
                     push_device(design, index, rule, severity, measured, limit, out);
+                }
+                if let (Some(series), Some(min)) = (&series, table.min_series[row]) {
+                    let measured = Measurement::Resistance(Qty::new(series[gate.idx()]));
+                    let limit = Measurement::Resistance(min);
+                    if measured.violates(limit, LimitSense::Minimum) {
+                        push_device(design, index, rule, severity, measured, limit, out);
+                    }
                 }
             }
             let driver = [TerminalRole::Source, TerminalRole::Drain]

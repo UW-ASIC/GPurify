@@ -892,6 +892,7 @@ fn run_exposed(circuit: &Circuit, id: StrId) -> (Violations, Vec<RuleRun>) {
             resistor: circuit.models(&["rs"]),
             rated_start: vec![0, 0],
             rated: Vec::new(),
+            min_series: vec![None],
         },
         &mut violations,
         &mut runs,
