@@ -80,8 +80,15 @@ use gpurify_ingest::StrId;
 /// clamps' resistive rise only; a deck folds a clamp's holding voltage into
 /// it (the protected device's failure voltage less the clamp's holding
 /// voltage). The pin's voltage is checked, not each device's own terminals.
+/// The ESD layout rules on recognised devices (ERC-C14) are two of these
+/// limits: a clamp's distance to its pad is held as a resistance
+/// ([Bakhali 2020]'s pin-to-clamp check, "Resistance of the bus line from
+/// ggnmos to the closest PowerClamp less than 1 Ohm"), here the pin-to-supply
+/// path through the clamp, not the pin-to-clamp bus alone; and the minimum
+/// ESD-path metal width is `max_density`, a current per width. No public
+/// source states either limit's value.
 ///
-/// Catalog: ERC-C2, ERC-C6, ERC-C7, ERC-C8, ERC-D4 in the [check catalog]. Defined by
+/// Catalog: ERC-C2, ERC-C6, ERC-C7, ERC-C8, ERC-C14 (partial), ERC-D4 in the [check catalog]. Defined by
 /// [ESDA TR18.0-01] §2.1, Fig. 23, Fig. 24 and Fig. 58; [ESDA TR22] §4.1
 /// and §8 (the design window), §4.4 (ESD current density); [ESDA TR18.0-02] Fig. 21
 /// and §2.3 (guard-ring resistance under injection); [JESD78] Table 1;
@@ -103,6 +110,7 @@ use gpurify_ingest::StrId;
 /// [JS-001]: https://www.jedec.org/sites/default/files/JTR001-01-12%20Final.pdf
 /// [Khazhinsky 2012]: https://www.esda.org/assets/News/8df611267c/ESDEDA-InCompliance-part1.pdf
 /// [Hogan 2012]: https://www.esda.org/assets/News/ESDEDA-InCompliance-part2.pdf
+/// [Bakhali 2020]: https://semiengineering.com/esd-p2p-and-cd-verification-doesnt-have-to-be-hard/
 /// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
 /// [`EsdTopologicalTable`]: crate::erc::rules::supply::EsdTopologicalTable
 /// [`P2pResistanceTable`]: crate::erc::rules::electrical::P2pResistanceTable
