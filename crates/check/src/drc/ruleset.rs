@@ -1301,8 +1301,10 @@ pub enum Rule {
     /// of at most that column's cell in that row (the spacing it judges).
     /// It is held, for each row above the first, to that row's cell, measured
     /// from the part of either shape strictly wider than the row's width
-    /// (where a `width + 1` square fits in the merged layer), the column
-    /// taken from that wide part's own run along the other figure; and to the
+    /// (where a `width + 1` square fits in the merged layer): past the first
+    /// column, on a stretch of the wide part facing the other figure that runs
+    /// past the column's length, its gap read on that same stretch
+    /// (projected); in the first column, at any distance; and to the
     /// first row's cell measured from the whole shapes, the column from their
     /// run. A thin tab of a wide plate is held to the first row only, and so
     /// is a thin line beside a wide part too short to run past the column's
