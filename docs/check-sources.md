@@ -305,8 +305,11 @@ single oracle is a named gap that ledger P1 closes.
 | DRC-085 | Tap presence per well | implemented | SKY:nwell.4; GF:DN.3; IHP:nmosi.d | FR; SY; MR |
 | DRC-092 | Exemptions (areaid regions, cell-name, rule flags) | partial | SKY:flags,areaid.*,m1.4a,licon.11c; IHP:6.12 IND,8 DigiBnd | FR; MR; SY |
 | DRC-100 | Colouring legality (odd cycle) | implemented | Kahng2008; Yu2011; YuPan2016; CAL; ICV; PEG | NV:brute-force k-colouring; MR; SY |
-| DRC-101 | MP error taxonomy (anchor path, anchor self-conflict, same-mask self-conflict, min opposite-mask spacing) | partial | CAL | NV; MR; SY |
-| DRC-110 | Recommended rules reported as warnings | partial | IHP:R suffix,4.1; SKY:RR,RC; A7:type R; LEF:PREFERENCLOSURE | FR; SY |
+| DRC-101 | MP error taxonomy (anchor path, anchor self-conflict, same-mask self-conflict, min opposite-mask spacing) | implemented | CAL | NV; MR; SY |
+| DRC-102 | Pre-coloured (MASK) same-/different-mask spacing | partial | LEF:MASK; LEF58 SAMEMASK,PARALLELSAMEMASK; A7:M4.S.1 | NV; MR; SY |
+| DRC-103 | Stitch legality | expressible | CAL; ICV | MR; SY |
+| DRC-105 | Trim / cut-metal layers | expressible | LEF58_TYPE TRIMMETAL; LEF58_TRIMMEDMETAL; A7:GCUT | FR; MR; SY |
+| DRC-110 | Recommended rules reported as warnings | implemented | IHP:R suffix,4.1; SKY:RR,RC; A7:type R; LEF:PREFERENCLOSURE | FR; SY; MR |
 | DRC-113 | Litho / CMP simulation hotspots | partial | CAL:LFD,CMPAnalyzer; PEG; Ouma2002 | CF; MR; SY |
 | LVS-005 | Short isolation / localisation | partial | CAL:LVS ISOLATE SHORT,LVS ISOLATE OPENS; ICV:ShortFinder; PEG | SY; MR |
 | LVS-020 | Undeclared parameter | implemented | - | SY; MR |
