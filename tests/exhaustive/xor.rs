@@ -43,6 +43,7 @@ fn xor(tag: &str, a: Layout, b: Layout) -> (Report, bool) {
         deck,
         reference: None,
         intent: None,
+        ..Inputs::default()
     };
     let (loaded, outputs, summary) =
         gpurify::engine::xor::run(&inputs, &write(&dir, "b", b)).expect("both layouts load");

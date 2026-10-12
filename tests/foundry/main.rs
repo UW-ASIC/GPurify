@@ -330,6 +330,7 @@ fn ours(deck: &str, gds: &Path, pairs: &[(u16, u16)], dir: &Path) -> Result<Ours
         deck: path,
         reference: None,
         intent: None,
+        ..Inputs::default()
     })
     .map_err(|e| format!("GPurify refused the layout: {e}"))?;
     let rules = &loaded.deck.drc;

@@ -4,6 +4,7 @@
 mod gen_fixtures;
 
 mod custom;
+mod def;
 
 use gpurify::engine::pipeline::{extract, load, ExtractError, Inputs, LoadError, Loaded};
 use gpurify::engine::run::{

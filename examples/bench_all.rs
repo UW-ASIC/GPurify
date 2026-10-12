@@ -124,6 +124,7 @@ fn fixture_inputs(deck: &Path) -> Inputs {
         deck: deck.to_path_buf(),
         reference: None,
         intent: None,
+        lef: Vec::new(),
     }
 }
 

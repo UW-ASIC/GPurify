@@ -260,6 +260,7 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
         // idempotent.
         reference: None,
         intent: None,
+        lef: Vec::new(),
     };
 
     // The run's own string table, from a real load, so a `StrId` in a violation
@@ -592,6 +593,7 @@ fn case_inputs(
         deck: fixtures().join("params.deck"),
         reference,
         intent,
+        lef: Vec::new(),
     }
 }
 

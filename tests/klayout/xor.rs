@@ -109,6 +109,7 @@ fn random_layout_pairs_agree_with_klayout_xor() {
             deck: deck.clone(),
             reference: None,
             intent: None,
+            lef: Vec::new(),
         };
         let (loaded, outputs, _) =
             gpurify::engine::xor::run(&inputs, &dir.join(&name_b)).expect("both layouts load");

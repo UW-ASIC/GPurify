@@ -146,6 +146,8 @@ jobs:
             seeds: fuzz/seeds/liberty_spec
           - target: drc_e2e
             seeds: ""
+          - target: lefdef
+            seeds: fuzz/seeds/lefdef
     steps:
       - uses: actions/checkout@v4
       # Nightly in this job only: cargo-fuzz needs it, and rebuilds std with
