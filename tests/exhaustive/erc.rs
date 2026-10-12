@@ -91,6 +91,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(topology_cases());
     out.extend(path_through_resistor());
     out.extend(combinational_loop());
+    out.extend(matching());
     out.extend(esd(depth));
     out.extend(esd_wiring());
     out.extend(esd_path());
@@ -5734,6 +5735,134 @@ fn combinational_loop() -> Vec<Fixture> {
             &[("VDD", "d", "power"), ("VSS", "d", "ground")],
             &[],
         ));
+        out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// One matched unit at column `x0` of [`TOPO_PROCESS`], `w` wide, its
+/// channel along x (diffusions left and right of a vertical gate, as
+/// [`Board`] draws) or, `rotated`, along y (diffusions below and above a
+/// horizontal gate), wired by risers to the met2 tracks of `g`, `s`, `d`.
+fn matched_unit(l: &mut Layout, x0: i64, rotated: bool, w: i64, (g, s, d): (usize, usize, usize)) {
+    if rotated {
+        rect(l, "diff", (x0, 0, x0 + w, 1000));
+        rect(l, "diff", (x0, 1200, x0 + w, 2200));
+        rect(l, "poly", (x0 - 700, 1000, x0 + w, 1200));
+        rect(l, "mkn", (x0, 1000, x0 + w, 1200));
+        riser(l, x0 - 700, 1000, g);
+        riser(l, x0 + 100, 400, s);
+        riser(l, x0 + w - 300, 1600, d);
+    } else {
+        rect(l, "diff", (x0, 0, x0 + 1000, w));
+        rect(l, "diff", (x0 + 1200, 0, x0 + 2200, w));
+        rect(l, "poly", (x0 + 1000, 0, x0 + 1200, w + 600));
+        rect(l, "mkn", (x0 + 1000, 0, x0 + 1200, w));
+        riser(l, x0 + 400, 400, s);
+        riser(l, x0 + 1600, 400, d);
+        riser(l, x0 + 1000, w + 400, g);
+    }
+}
+
+/// `matching` (ERC-H2), hand-derived. Units sit 4 µm apart in a row inside
+/// one `grp` polygon; device A has its gate on net 1 and device B on net 2,
+/// both from net 0 to net 3, every unit 1 µm wide and 200 nm long, its
+/// marker 200 x 1000 nm (area-weighted centroid = mean of equal markers).
+///
+/// - ABBA: A's centroid (0 + 12 µm) / 2 and B's (4 + 8 µm) / 2 coincide:
+///   clean.
+/// - ABAB: A at (0 + 8) / 2 = 4 µm, B at (4 + 12) / 2 = 8 µm: 4000 nm
+///   apart, flagged against tolerance 3999 nm, clean at 4000 nm.
+/// - a 1.2 µm wide B unit beside a 1 µm A: the widths differ by 200 nm.
+/// - an A unit turned 90°, its channel along y beside one along x: one
+///   crossing unit, both one device (no centroid to compare).
+/// - units outside the polygon are not in the group: ABAB with the last B
+///   outside reads A at 4 µm and B at 4 µm, clean.
+fn matching() -> Vec<Fixture> {
+    let deck = |tolerance: i64| {
+        format!(
+            "{TOPO_PROCESS}layer grp = gds(40, 0)\nrule mt matching(grp; tolerance: {tolerance}nm)\n"
+        )
+    };
+    let (a, b) = ((1, 0, 3), (2, 0, 3));
+    let board = |units: &[((usize, usize, usize), bool, i64)], inside: usize| {
+        let mut l = Layout::default();
+        for (k, &(nets, rotated, w)) in units.iter().enumerate() {
+            matched_unit(&mut l, k as i64 * PITCH, rotated, w, nets);
+        }
+        let right = units.len() as i64 * PITCH + 1000;
+        for net in 0..NETS {
+            let ty = track_y(net);
+            rect(&mut l, "met2", (-2000, ty, right, ty + TRACK_H));
+        }
+        rect(
+            &mut l,
+            "grp",
+            (-1000, -500, inside as i64 * PITCH - 500, 2500),
+        );
+        l
+    };
+    let unit = |nets, w| (nets, false, w);
+    let cases: Vec<(&str, Layout, i64, Vec<Finding>)> = vec![
+        (
+            "abba",
+            board(
+                &[unit(a, 1000), unit(b, 1000), unit(b, 1000), unit(a, 1000)],
+                4,
+            ),
+            0,
+            vec![],
+        ),
+        (
+            "abab/below",
+            board(
+                &[unit(a, 1000), unit(b, 1000), unit(a, 1000), unit(b, 1000)],
+                4,
+            ),
+            3999,
+            vec![length(4000)],
+        ),
+        (
+            "abab/at",
+            board(
+                &[unit(a, 1000), unit(b, 1000), unit(a, 1000), unit(b, 1000)],
+                4,
+            ),
+            4000,
+            vec![],
+        ),
+        (
+            "width",
+            board(&[unit(a, 1000), unit(b, 1200)], 2),
+            100_000,
+            vec![length(200)],
+        ),
+        (
+            "crossing",
+            board(&[unit(a, 1000), (a, true, 1000)], 2),
+            100_000,
+            vec![count(1)],
+        ),
+        (
+            "outside",
+            board(
+                &[unit(a, 1000), unit(b, 1000), unit(a, 1000), unit(b, 1000)],
+                3,
+            ),
+            0,
+            vec![],
+        ),
+    ];
+    let mut out = Vec::new();
+    for (name, layout, tolerance, findings) in cases {
+        let f = Fixture::new(
+            &format!("erc/matching/{name}"),
+            &["ERC-H2"],
+            &deck(tolerance),
+            ERC,
+        )
+        .layout(layout)
+        .expect(Expect::rule("mt", findings));
         out.extend(every_placement(&[f]));
     }
     out

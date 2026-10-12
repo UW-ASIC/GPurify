@@ -1113,6 +1113,11 @@ impl CompiledDeck {
             let row = Row::new("supply_path", &[]).value("both", ParamValue::Flag(t.both[r]));
             file(&t.head, r, row);
         }
+        let t = &erc.matching;
+        for r in 0..t.head.len() {
+            let row = Row::new("matching", &[t.group[r]]).length("tolerance", t.tolerance[r]);
+            file(&t.head, r, row);
+        }
         for r in 0..erc.floating_supply.head.len() {
             file(
                 &erc.floating_supply.head,

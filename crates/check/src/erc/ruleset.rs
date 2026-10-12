@@ -1,11 +1,13 @@
-//! The fifty-one tables, the deck parser that fills them, and the dispatcher.
+//! The fifty-two tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
 
 use crate::erc::facts::{IntentMap, NetFacts};
 use crate::erc::power::{NetNetworks, Power, PowerError, Process};
-use crate::erc::rules::{antenna, domain, electrical, esd, latchup, reliability, supply, topology};
+use crate::erc::rules::{
+    antenna, domain, electrical, esd, latchup, matching, reliability, supply, topology,
+};
 use crate::erc::voltage::NetVoltage;
 use crate::erc::{Design, ErcError, Scratch};
 use crate::report::{RuleRun, Severity, Violations};
@@ -135,6 +137,8 @@ pub struct RuleSet {
     pub conditional_tie: latchup::ConditionalTieTable,
     /// `latchup_victim` rows: [`latchup::LatchupVictimTable`].
     pub latchup_victim: latchup::LatchupVictimTable,
+    /// `matching` rows: [`matching::MatchingTable`].
+    pub matching: matching::MatchingTable,
 
     /// `gate_oxide` rows: [`domain::ModelLimitTable`], checked by
     /// [`domain::check_gate_oxide`].
@@ -1066,6 +1070,14 @@ impl RuleSet {
                     row.head(&mut table.head)?;
                     table.both.push(both);
                 }
+                "matching" => {
+                    let layers = row.layers(1)?;
+                    let tolerance = row.length("tolerance")?;
+                    let table = &mut set.matching;
+                    row.head(&mut table.head)?;
+                    table.group.push(layers[0]);
+                    table.tolerance.push(tolerance);
+                }
                 "floating_supply" => {
                     row.layers(0)?;
                     row.head(&mut set.floating_supply.head)?;
@@ -1308,6 +1320,7 @@ impl RuleSet {
             "forward_diode" => &self.forward_diode.head,
             "conditional_tie" => &self.conditional_tie.head,
             "latchup_victim" => &self.latchup_victim.head,
+            "matching" => &self.matching.head,
             "floating_gate" => &self.floating_gate.head,
             "floating_well" => &self.floating_well.head,
             "gate_oxide" => &self.gate_oxide.head,
@@ -1710,6 +1723,7 @@ impl RuleSet {
             &self.esd_topological.head,
             &self.mixed_tag.head,
             &self.floating_supply.head,
+            &self.matching.head,
             &self.antenna.head,
             &self.antenna_electrical.head,
             &self.density_cmp.head,
@@ -1804,6 +1818,7 @@ impl RuleSet {
         topology::check_supply_path(design, facts, intent, &self.supply_path, out, runs);
         topology::check_gate_path(design, intent, &self.gate_path, out, runs);
         topology::check_combinational_loop(design, intent, &self.combinational_loop, out, runs);
+        matching::check_matching(design, &self.matching, out, runs);
 
         supply::check_supply_short(design, &self.supply_short, scratch, out, runs);
         supply::check_soft_connection(design, &self.soft_connection, scratch, out, runs);

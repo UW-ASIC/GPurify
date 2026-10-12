@@ -17,7 +17,7 @@ use common::{head, manufacturing_grid, operating_temperature, rule};
 use gpurify_check::erc::facts::{IntentMap, NetFacts};
 use gpurify_check::erc::power::{NetNetworks, PowerError, Process};
 use gpurify_check::erc::rules::{
-    antenna, domain, electrical, esd, latchup, reliability, supply, topology,
+    antenna, domain, electrical, esd, latchup, matching, reliability, supply, topology,
 };
 use gpurify_check::erc::ruleset::{RuleSet, RunInputs, KINDS};
 use gpurify_check::erc::voltage::NetVoltage;
@@ -145,6 +145,11 @@ fn every_kind() -> RuleSet {
         supply_path: topology::SupplyPathTable {
             head: head(id_of("supply_path")),
             both: vec![true],
+        },
+        matching: matching::MatchingTable {
+            head: head(id_of("matching")),
+            group: vec![LayerId(0)],
+            tolerance: vec![dbu(0)],
         },
         floating_supply: supply::FloatingSupplyTable {
             head: head(id_of("floating_supply")),
