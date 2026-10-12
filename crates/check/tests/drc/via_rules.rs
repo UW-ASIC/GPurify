@@ -403,6 +403,7 @@ fn a_via_on_a_wire_wider_than_the_limit_needs_the_cut_count() {
             wide: B,
             other: C,
             width: dbu(500),
+            thin: None,
             within: None,
             min_count: 2,
         },

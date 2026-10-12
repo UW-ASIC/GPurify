@@ -727,12 +727,39 @@ pub(crate) const KINDS: &[Kind] = &[
             p("within", "within", Dim::Length),
         ],
     ),
-    // LEF MAXVIASTACK over the cut layers listed, bottom to top:
+    // LEF MINIMUMCUT ... LENGTH length WITHIN distance: the thin wires
+    // beside a wide one longer than `length`, with or without `within`.
+    drc(
+        "min_cuts",
+        Cmp::Ge,
+        "minimum_cut",
+        &[0, 1, 2],
+        Some(p("", "min_count", Dim::Count)),
+        &[
+            p("width", "width", Dim::Length),
+            p("length", "length", Dim::Length),
+            p("distance", "distance", Dim::Length),
+        ],
+    ),
+    drc(
+        "min_cuts",
+        Cmp::Ge,
+        "minimum_cut",
+        &[0, 1, 2],
+        Some(p("", "min_count", Dim::Count)),
+        &[
+            p("width", "width", Dim::Length),
+            p("within", "within", Dim::Length),
+            p("length", "length", Dim::Length),
+            p("distance", "distance", Dim::Length),
+        ],
+    ),
     // A cut with no other cut within the limit, centre to centre
     // (`LEF58_MAXSPACING`): `max_space(via1) <= 2um`, or a cut class's cuts
     // against the whole cut layer, `max_space(via1_class, via1) <= 2um`.
     drc("max_space", Cmp::Le, "max_cut_spacing", &[0], LIMIT, &[]),
     drc("max_space", Cmp::Le, "max_cut_spacing", &[0, 1], LIMIT, &[]),
+    // LEF MAXVIASTACK over the cut layers listed, bottom to top:
     // `via_stack(via1, via2, via3) <= 2`.
     Kind {
         more: true,

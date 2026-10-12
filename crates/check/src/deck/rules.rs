@@ -131,6 +131,25 @@ impl RuleRow {
         self
     }
 
+    /// A [`minimum_cut`] row that holds the thin wires beside a wide one,
+    /// LEF `MINIMUMCUT ... LENGTH length WITHIN distance` (the deck's
+    /// `length:` and `distance:`).
+    ///
+    /// # Panics
+    ///
+    /// On a row of any other kind.
+    #[must_use]
+    pub fn thin_wires(mut self, length: Dbu, distance: Dbu) -> Self {
+        assert_eq!(
+            self.kind, "minimum_cut",
+            "{} has no thin-wire form",
+            self.kind
+        );
+        length.put("length", &mut self.params);
+        distance.put("distance", &mut self.params);
+        self
+    }
+
     /// A [`span_length`] row with `EXCEPTOTHERSPAN` per list: a rectangle's
     /// horizontal span held only when its height exceeds `x`, its vertical
     /// span only when its width exceeds `y` (the deck's `x_except:` and

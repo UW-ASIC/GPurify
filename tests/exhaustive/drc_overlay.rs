@@ -51,6 +51,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         cut_spacing(),
         redundant_via(),
         minimum_cut(),
+        minimum_cut_thin(),
         via_stack(),
         max_cut_spacing(),
         via_array_spacing(depth),
@@ -1845,6 +1846,93 @@ fn redundant_via() -> Vec<Fixture> {
         vec![count(2); 2],
     ));
     cases.push(case("empty", &[], vec![], vec![]));
+    every_placement(cases)
+}
+
+/// LEF `MINIMUMCUT 2 WIDTH 0.11 LENGTH 2.0 WITHIN 0.5` on `m1` (Minimum
+/// Cut Rule Example 4 scaled by a tenth): `min_cuts(via, m1, m2; width:
+/// 110nm, length: 2000nm, distance: 500nm) >= 2` (`minimum_cut`, DRC-066),
+/// "the rule applies for thin wires directly connected to wide wires, if
+/// the wide wire has a width that is greater than width and a length that
+/// is greater than length, and the vias on the thin wire are less than
+/// distance from the wide wire ... and does not check the wide wire
+/// itself". A one-cut via held is one finding, its count 1, at the cut.
+///
+/// Oracle: the LEF text and Figure 1-11, wires drawn to a width, a length
+/// and a distance, each swept one step either side: a 50 wide stub up from
+/// a 200 x 3000 bar with a 30 cut 499, 500 and 501 above the bar (held
+/// below 500); the bar 1999, 2000 and 2001 long (held above 2000); the bar
+/// 110 and 111 high (wide only above 110). Not held: a cut on the bar
+/// itself, a two-cut via on the stub, and a thin wire 100 off the bar but
+/// not joined to it.
+fn minimum_cut_thin() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["via", "m1", "m2"],
+        "rule mct min_cuts(via, m1, m2; width: 110nm, length: 2000nm, distance: 500nm) >= 2\n",
+    );
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("minimum_cut_thin/{name}"),
+            &["DRC-066"],
+            &deck,
+            layout.rect("m2", 900, -500, 1200, 3000),
+            &[("mct", findings)],
+        )
+    };
+    // A bar `long` x `high` with a 50 wide stub up from x = 1000 and a 30
+    // cut `gap` above the bar's top.
+    let stub = |long: i64, high: i64, gap: i64| {
+        Layout::default()
+            .rect("m1", 0, 0, long, high)
+            .rect("m1", 1000, high, 1050, high + 2000)
+            .rect("via", 1010, high + gap, 1040, high + gap + 30)
+    };
+    let one = |x: i64, y: i64| {
+        vec![Finding {
+            measured: Some(Measurement::Count(1)),
+            at: Some((x, y)),
+        }]
+    };
+    let mut cases = Vec::new();
+    for (gap, side) in sweep(500) {
+        let found = if gap < 500 {
+            one(1025, 215 + gap)
+        } else {
+            vec![]
+        };
+        cases.push(case(
+            &format!("distance/{side}"),
+            stub(3000, 200, gap),
+            found,
+        ));
+    }
+    for (long, side) in sweep(2000) {
+        let found = if long > 2000 { one(1025, 315) } else { vec![] };
+        cases.push(case(&format!("length/{side}"), stub(long, 200, 100), found));
+    }
+    for (high, found) in [(110, vec![]), (111, one(1025, 226))] {
+        cases.push(case(&format!("width/{high}"), stub(3000, high, 100), found));
+    }
+    cases.push(case(
+        "on_the_wide_wire",
+        Layout::default()
+            .rect("m1", 0, 0, 3000, 200)
+            .rect("via", 1010, 100, 1040, 130),
+        vec![],
+    ));
+    cases.push(case(
+        "two_cuts",
+        stub(3000, 200, 100).rect("via", 1010, 360, 1040, 390),
+        vec![],
+    ));
+    cases.push(case(
+        "not_joined",
+        Layout::default()
+            .rect("m1", 0, 0, 3000, 200)
+            .rect("m1", 1000, 300, 1050, 2300)
+            .rect("via", 1010, 400, 1040, 430),
+        vec![],
+    ));
     every_placement(cases)
 }
 
@@ -5596,26 +5684,25 @@ fn edge_extended() -> Vec<Fixture> {
 /// either side:
 ///
 /// - sky130 difftap.6, "Diff and tap are not allowed to extend beyond their
-///   abutting edge" (DRC-051): the butting edge `tap.edges() and
-///   diff.edges()` lengthened 1 past each end (open_pdks `sky130.lydrc`
-///   extends it 0.01 past both ends and asks whether diff or tap lies
-///   there); a tap the height of its diff is clean, a taller one leaves a
+///   abutting edge" (DRC-051): the butting edge, tap's edges and diff's,
+///   lengthened 1 past each end (`open_pdks`'s `sky130.lydrc` extends it
+///   0.01 past both ends and asks whether diff or tap lies there); a tap the height of its diff is clean, a taller one leaves a
 ///   1 x 1 square in the cap, and a shifted one two.
-/// - IHP Rppd.c's maximum, "Min. and max. SalBlock space to Cont 0.20"
+/// - IHP Rppd.c's maximum, "Min. and max. `SalBlock` space to Cont 0.20"
 ///   (DRC-044): a contact not touching the band 200 either side of a
-///   SalBlock edge (IHP `sg13g2_maximal.drc`: `Rppd_Cont.ext_interacting(
-///   SalBlock.edges.extended(:out => 0.2, :in => 0.2), inverted: true)`); a
+///   `SalBlock` edge (IHP `sg13g2_maximal.drc` takes the contacts not
+///   interacting with the block's edges extended 0.2 out and 0.2 in); a
 ///   100 contact 199, 200 and 201 off the block's side, and one 400 inside
 ///   the block.
 /// - ASAP7 M4.S.3, "Minimum tip-to-tip spacing between two M4 layer polygons
 ///   that do not share a parallel run length on adjacent tracks" 40
 ///   (DRC-031): lines on adjacent tracks are 24 apart (M4.W.1 24 on a
 ///   48 track pitch, M4.AUX.2), so the larger axis gap of their facing
-///   corners is the tip-to-tip gap, `corner_space(met4; corner_to_corner:
-///   false, except_eol: none) >= 40nm`; tips 39, 40 and 41 apart, and two
+///   corners is the tip-to-tip gap: `corner_space` by the larger gap at
+///   40; tips 39, 40 and 41 apart, and two
 ///   lines sharing a run (no facing corners).
 /// - IHP CntB.b, CntB.b1 and CntB.b2 on bar contacts (DRC-064): "Any Cont
-///   shape not being a square shape is considered a ContBar" (IHP layout
+///   shape not being a square shape is considered a `ContBar`" (IHP layout
 ///   rules §5.15; its deck: `cont.non_squares`), so `cont.non_squares()`
 ///   holds bars of any length; two 160 x 1000 bars 279/280 apart (b, 280),
 ///   two 160 x 6000 bars 359/360 apart running 6000 (b1, 360 beyond a 5 µm
