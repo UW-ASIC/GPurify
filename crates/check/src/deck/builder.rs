@@ -471,9 +471,11 @@ impl LayerExpr {
     #[track_caller]
     pub fn with_width(self, bounds: &[Bound<Dbu>]) -> Self {
         let at = Location::caller();
+        // Twice the signed square, as the parser stores it
+        // ([`DerivedOp::WithWidth`]).
         let squared = |width: Dbu| {
             let n = i128::from(width.raw());
-            n * n.abs()
+            2 * n * n.abs()
         };
         let (range, fault) = range("with_width", bounds, squared, at);
         self.ranged(DerivedOp::WithWidth(range.0, range.1), fault)

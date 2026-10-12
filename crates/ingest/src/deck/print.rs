@@ -153,7 +153,7 @@ fn quoted(text: &str) -> Result<String, PrintError> {
     ))
 }
 
-/// `m` such that `m * |m|` is `squared`, as `with_width` stores a bound.
+/// `m` such that `m * |m|` is `squared`: a `with_width` bound is twice that.
 fn signed_root(squared: i128) -> Option<i64> {
     let magnitude = squared.unsigned_abs();
     // An integer square root by Newton's method, from above.
@@ -572,20 +572,29 @@ impl Printer<'_> {
                 call("with_length", Some(Self::bounds(&row.name, lo, hi, bound)?))
             }
             DerivedOp::WithWidth(lo, hi) => {
-                let root = |squared: i128| {
-                    signed_root(squared).ok_or_else(|| {
+                // A bound is stored as twice its signed square; the width is
+                // the root of half of it, when that is whole.
+                let half_root = |doubled: i128| {
+                    if doubled % 2 == 0 {
+                        signed_root(doubled / 2)
+                    } else {
+                        None
+                    }
+                };
+                let root = |doubled: i128| {
+                    half_root(doubled).ok_or_else(|| {
                         PrintError::Unprintable(format!("layer {}: a width bound", row.name))
                     })
                 };
-                // A strict bound moved the squared value one past the root.
+                // A strict bound moved the stored value one past the bound's.
                 let low = |value: i128| -> Result<String, PrintError> {
-                    match signed_root(value) {
+                    match half_root(value) {
                         Some(root) => self.length(i128::from(root)).map(|l| format!(">= {l}")),
                         None => Ok(format!("> {}", self.length(i128::from(root(value - 1)?))?)),
                     }
                 };
                 let high = |value: i128| -> Result<String, PrintError> {
-                    match signed_root(value) {
+                    match half_root(value) {
                         Some(root) => self.length(i128::from(root)).map(|l| format!("<= {l}")),
                         None => Ok(format!("< {}", self.length(i128::from(root(value + 1)?))?)),
                     }
