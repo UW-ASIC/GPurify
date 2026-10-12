@@ -311,8 +311,9 @@ explains (kind 30).
 | 65 | anchored_patterning | `patterning(L, A1, ..; colors) >= l` | — | NONE | reported as not mirrored | — |
 | 66 | density_balance | `density_balance(A, B[, d]; window, step) >= f` | POINT | EXACT | exact | — |
 | 67 | critical_area | `critical_area(L; radius) <= a` | POINT | EXACT | exact | — |
+| 68 | keep_out_zone | `keep_out_zone(L; class, to, end_side, end_forward, side_side, side_forward)` | ROW PAIR | EXACT (scripted) | exact | new |
 
-43 kinds are EXACT (five scripted over KLayout's polygons), 16 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
+44 kinds are EXACT (six scripted over KLayout's polygons), 16 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`, and between two layers (`space(A, B; nets: ..)`), which is not mirrored. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1415,6 +1416,21 @@ emit(id, I.not_inside(O))
   measurement is not compared.
 
 ## (c) Derived layers, connectivity, antenna
+
+### 68. keep_out_zone — EXACT (scripted)
+
+**GPurify** (`via.rs` `keep_out_zone`): each drawn row of the cut layer, read as its bounding box,
+whose box is the class's size either way round owns two zones: the side zone, its box grown along
+its long axis by `side_forward` and across by `side_side`, and the end zone, grown along by
+`end_side` and across by `end_forward`. Every other row (of class `to`, when given) whose box
+overlaps either zone with a positive area is a finding, measuring its area inside the zones.
+
+**KLayout** (prelude `keep_out_zone`, over `L.dup.raw`): the same boxes with `Box#enlarged`, the
+same strict overlap, every ordered pair of rows reported by row index. KLayout has no keep-out
+zone of its own, so this is scripted.
+
+**Key**: ROW PAIR (the two rows). **Oracle**: `OpenROAD` `drt` `checKeepOutZone_main` (the zones
+as it bloats a via) and `odb::Rect::overlaps` (strict). Fixtures `keep_out_zone/*`.
 
 ### Derived-layer operations
 

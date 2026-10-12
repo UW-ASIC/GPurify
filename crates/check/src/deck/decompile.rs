@@ -608,6 +608,22 @@ impl CompiledDeck {
                 }
                 row.length("limit", limit)
             }
+            Rule::KeepOutZone {
+                layer,
+                class,
+                to,
+                end,
+                side,
+            } => {
+                let mut row = one(layer).length("short", class.0).length("long", class.1);
+                if let Some((short, long)) = to {
+                    row = row.length("to_short", short).length("to_long", long);
+                }
+                row.length("end_side", end.0)
+                    .length("end_forward", end.1)
+                    .length("side_side", side.0)
+                    .length("side_forward", side.1)
+            }
             Rule::EolKeepOut {
                 layer,
                 eol_width,

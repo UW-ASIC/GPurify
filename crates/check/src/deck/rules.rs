@@ -555,6 +555,19 @@ kinds! {
         side: Dbu = "side",
         forward: Dbu = "forward",
     }
+    /// [`Rule::KeepOutZone`](crate::drc::Rule::KeepOutZone):
+    /// `keep_out_zone(layer; class: short x long, to: short x long | none,
+    /// end_side, end_forward, side_side, side_forward)`.
+    keep_out_zone(layer: one) [] {
+        short: Dbu = "short",
+        long: Dbu = "long",
+        to_short: Option<Dbu> = "to_short",
+        to_long: Option<Dbu> = "to_long",
+        end_side: Dbu = "end_side",
+        end_forward: Dbu = "end_forward",
+        side_side: Dbu = "side_side",
+        side_forward: Dbu = "side_forward",
+    }
     /// [`Rule::TwoWidthSpacingTable`](crate::drc::Rule::TwoWidthSpacingTable):
     /// `two_width_table(layer; width: [..], prl: [none, ..], space: [[..], ..])`,
     /// `space` row by row.

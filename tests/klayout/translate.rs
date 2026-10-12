@@ -383,6 +383,24 @@ def via_stack(rule, layers, max)
     end
   end
 end
+# LEF58 KEEPOUTZONE as OpenROAD's router bloats a via: round each drawn cut
+# of class `cls` ([short, long]), a side zone grown along its long axis by
+# `sf` and across by `ss`, and an end zone grown along by `es` and across by
+# `ef`; every other cut (of class `to`, nil any) overlapping either with a
+# positive area, as a pair of rows, the cut first.
+def keep_out_zone(rule, layer, cls, to, es, ef, ss, sf)
+  bs = layer.data.each.to_a.map(&:bbox)
+  over = lambda { |a, b| a.left < b.right && b.left < a.right && a.bottom < b.top && b.bottom < a.top }
+  bs.each_with_index do |b, i|
+    next unless [b.width, b.height].minmax == cls
+    grow = lambda { |al, ac| b.width > b.height ? b.enlarged(al, ac) : b.enlarged(ac, al) }
+    zones = [grow.(sf, ss), grow.(es, ef)]
+    bs.each_with_index do |o, j|
+      next if j == i || !(to.nil? || [o.width, o.height].minmax == to)
+      put({ rule: rule, rows: [i, j] }) if zones.any? { |z| over.(z, o) }
+    end
+  end
+end
 # Each merged `inner` figure a merged `outer` figure covers, unless one axis
 # of its edges all read 0 straight out to the nearest host edge facing them
 # (projection). KLayout hulls are clockwise: the material is on the right of
@@ -1374,6 +1392,31 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 )
                 .expect("a String");
                 exact("cut_class_spacing", Key::RowPair(name), Value::Ignore)
+            }
+            Rule::KeepOutZone {
+                layer,
+                class,
+                to,
+                end,
+                side,
+            } => {
+                layers.reads(layer, &mut reads);
+                let name = layers.name(layer);
+                let to = to.map_or("nil".to_owned(), |(s, l)| format!("[{}, {}]", lim(s), lim(l)));
+                writeln!(
+                    body,
+                    "emit({raw}, {v}.dup.raw) ; keep_out_zone({q}, {v}.dup.raw, [{}, {}], {to}, {}, {}, {}, {})",
+                    lim(class.0),
+                    lim(class.1),
+                    lim(end.0),
+                    lim(end.1),
+                    lim(side.0),
+                    lim(side.1),
+                    raw = rb(&format!("raw:{name}")),
+                    v = var(layer)
+                )
+                .expect("a String");
+                exact("keep_out_zone", Key::RowPair(name), Value::Ignore)
             }
             Rule::MultiPatterning { .. } => (
                 "multi_patterning",

@@ -56,6 +56,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         center_spacing(),
         adjacent_cut_spacing(),
         cut_class_spacing(),
+        keep_out_zone(),
         global_density(),
         density(depth),
         cheesing(),
@@ -2363,6 +2364,95 @@ fn adjacent_cut_spacing() -> Vec<Fixture> {
         vec![],
     ));
     every_placement(cases)
+}
+
+/// `LEF58_KEEPOUTZONE CUTCLASS c1 [TO c2] ENDEXTENSION 0.010 0.080
+/// SIDEEXTENSION 0.050 0.020` (`keep_out_zone`, DRC-126) on a 100 x 300 class:
+/// `k` holds out every cut, `kt` (its class written 300 x 100) only 100 nm
+/// squares. Round a bar `[0, 300] x [0, 100]` the side zone is `[-20, 320] x
+/// [-50, 150]` and the end zone `[-10, 310] x [-80, 180]`, as `OpenROAD`'s
+/// `checKeepOutZone_main` bloats a horizontal via. One finding per cut of the
+/// class and cut in its zones, measuring that cut's area inside them.
+///
+/// Oracle: areas by hand from the zones: a square past the bar's end 19, 20,
+/// 21 from it (in the side zone below 20: 100 at 19; touching is outside), a
+/// square above it 79, 80, 81 off (in the end zone below 80); a square 20
+/// above it, in both zones (6000, their union: summing the two gives 9000); a
+/// square off the corner (125, in the end zone only); a second bar 79 above
+/// (300 each way for `k`, two findings, none for `kt`); two squares 10 apart
+/// (no class owns a zone: a check holding squares breaks it).
+fn keep_out_zone() -> Vec<Fixture> {
+    const ZONES: &str = "end_side: 10nm, end_forward: 80nm, side_side: 50nm, side_forward: 20nm";
+    let deck = new_deck(
+        &["v"],
+        &format!(
+            "rule k keep_out_zone(v; class: 100nm x 300nm, to: none, {ZONES})\n\
+             rule kt keep_out_zone(v; class: 300nm x 100nm, to: 100nm x 100nm, {ZONES})\n"
+        ),
+    );
+    let bar = || Layout::default().rect("v", 0, 0, 300, 100);
+    let square = |x: i64, y: i64| bar().rect("v", x, y, x + 100, y + 100);
+    let case = |name: &str, layout: Layout, k: Vec<Finding>, kt: Vec<Finding>| {
+        fixture(
+            &format!("keep_out_zone/{name}"),
+            &["DRC-126"],
+            &deck,
+            layout,
+            &[("k", k), ("kt", kt)],
+        )
+    };
+    let mut cases = Vec::new();
+    for (gap, side) in sweep(20) {
+        let found = if gap < 20 { areas(&[100]) } else { Vec::new() };
+        cases.push(case(
+            &format!("past_the_end/{side}"),
+            square(300 + gap, 0),
+            found.clone(),
+            found,
+        ));
+    }
+    for (gap, side) in sweep(80) {
+        let found = if gap < 80 { areas(&[100]) } else { Vec::new() };
+        cases.push(case(
+            &format!("above/{side}"),
+            square(100, 100 + gap),
+            found.clone(),
+            found,
+        ));
+    }
+    cases.push(case(
+        "in_both_zones",
+        square(100, 120),
+        areas(&[6000]),
+        areas(&[6000]),
+    ));
+    cases.push(case(
+        "off_the_corner",
+        square(305, 155),
+        areas(&[125]),
+        areas(&[125]),
+    ));
+    cases.push(case(
+        "two_bars",
+        bar().rect("v", 0, 179, 300, 279),
+        areas(&[300, 300]),
+        Vec::new(),
+    ));
+    cases.push(case(
+        "two_squares",
+        Layout::default()
+            .rect("v", 0, 0, 100, 100)
+            .rect("v", 110, 0, 210, 100),
+        Vec::new(),
+        Vec::new(),
+    ));
+    let mut out = every_placement(cases);
+    out.push(
+        Fixture::new("keep_out_zone/vacuous", &["DRC-126"], &deck, DRC)
+            .layout(Layout::default().rect("v", 0, 0, 100, 100))
+            .expect(Expect::rule("k", Vec::new()).examined(0)),
+    );
+    out
 }
 
 /// sky130 licon.2 to licon.2d as one cut-class table (`cut_class_spacing`,

@@ -930,6 +930,23 @@ pub(crate) const KINDS: &[Kind] = &[
             p("forward", "forward", Dim::Length),
         ],
     ),
+    // Another cut inside a cut class's keep-out zones (`LEF58_KEEPOUTZONE
+    // CUTCLASS c1 [TO c2] ENDEXTENSION .. SIDEEXTENSION ..`).
+    drc(
+        "keep_out_zone",
+        Cmp::Absent,
+        "keep_out_zone",
+        &[0],
+        None,
+        &[
+            p("class", "short", Dim::LengthPair("long")),
+            opt("to", "to_short", Dim::LengthPair("to_long")),
+            p("end_side", "end_side", Dim::Length),
+            p("end_forward", "end_forward", Dim::Length),
+            p("side_side", "side_side", Dim::Length),
+            p("side_forward", "side_forward", Dim::Length),
+        ],
+    ),
     // A gap in a forbidden range between facing edges that run alongside
     // (`LEF58_TWOWIRESFORBIDDENSPACING`).
     drc(
