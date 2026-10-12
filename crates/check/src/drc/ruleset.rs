@@ -219,7 +219,7 @@ pub enum Rule {
     /// boxes come within `limit`.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
-    /// DRC-047, DRC-065, DRC-073, ERC-C11. Rules: sky130 poly.4 and licon.11,
+    /// DRC-047, DRC-065, DRC-073, DRC-090, ERC-C11. Rules: sky130 poly.4 and licon.11,
     /// GF180 DF.16, IHP NW.d and Gat.d, ASAP7 GATE.ACTIVE.S.4; `KLayout`
     /// `separation`.
     ///
@@ -1350,7 +1350,7 @@ pub enum Rule {
     /// drawn outer row under the figure. `examined` counts outer figures.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
-    /// DRC-048, DRC-049, DRC-085. Rules: sky130 licon.4, licon.16 and
+    /// DRC-048, DRC-049, DRC-085, DRC-090. Rules: sky130 licon.4, licon.16 and
     /// nwell.4, IHP Cnt.g and Cnt.h, GF180 DN.3; the maximum is sky130 rpm.1g
     /// to rpm.1k ("only 1 licon is allowed in `xhrpoly_0p35`
     /// `prec_resistor_terminal`"); `KLayout` `covering` and `not_covering` with
