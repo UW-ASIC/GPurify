@@ -1624,7 +1624,10 @@ fn a_cell_selection_built_in_code_is_held_to_the_parser_s_rules() {
         source.layers.push(("met1".to_owned(), (68, 20)));
         source.derived.push(DerivedSource {
             name: "big".to_owned(),
-            op: DerivedOp::Sized(gpurify_geom::Dbu::new_unchecked(10)),
+            op: DerivedOp::Sized(
+                gpurify_geom::Dbu::new_unchecked(10),
+                gpurify_geom::Dbu::new_unchecked(10),
+            ),
             layers: vec!["met1".to_owned()],
         });
         source.derived.push(DerivedSource {

@@ -97,7 +97,7 @@ come from and using the foundry's rule ids:
 |---|---:|---:|---:|
 | `ihp_sg13g2` | 75 | 460 | 12 |
 | `gf180mcu` | 56 | 286 | 27 |
-| `sky130` | 60 | 274 | 30 |
+| `sky130` | 59 | 274 | 30 |
 | `generic_finfet` (ASAP7) | 45 | 178 | 0 |
 
 From Rust, each is also compiled into the library as a constant
