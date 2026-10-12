@@ -170,29 +170,29 @@ ERC-A14	erc	antenna	Hierarchical / macro-pin antenna	LEF:ANTENNAPIN*	-	missing	S
 ERC-A15	erc	antenna	Fix hint: required diode area	CAL:Auto-Waivers	-	missing	CF	Report feature
 ERC-B1	erc	planarity	Windowed density + CMP thickness	GF:13	density_cmp	implemented	CF; MR; SY	partial_windows governs every limit, neighbour deltas included; the CMP model states no nominal thickness
 ERC-C1	erc	esd	Pad ESD path to power and ground	TR18-01:4.5.2-4.5.4; Khazhinsky2012	esd_topological,esd_latchup	implemented	SY; NV; MR	A clamp is any device of a listed model, however wired (limitations.md, "Rules that can pass a layout signoff would flag")
-ERC-C2	erc	esd	ESD device sizing (perimeter, clamp width)	TR18-01:Fig23,Fig24	-	missing	FR; SY	
-ERC-C3	erc	esd	Protected device (pad-exposed gates and drains)	TR18-01:4.5.1; Khazhinsky2012	-	missing	SY; CF	
-ERC-C4	erc	esd	Cross-domain signal ESD protection	TR18-01(2011):5.1.3; TR18-01:5.6.2; Hogan2012	-	missing	SE:Part II pseudocode; SY	domain_crossing and missing_level_shifter are functional checks, not ESD
-ERC-C5	erc	esd	Ground-domain coupling (anti-parallel diodes)	TR18-01:Fig5	-	missing	SY	
-ERC-C6	erc	esd	P2P resistance on the discharge path, per pin pair	TR18-01:Fig58; TR18-02:Fig21; JS001:Tables 2A/2B; CAL; ICV; VOL	p2p_resistance	partial	CF; TX:ngspice; MR; SY	Measures within one net; the pad-device-bus-clamp path is missing
-ERC-C7	erc	esd	ESD-pulse current density	TR18-01:Fig58; TR22:4.4; CAL; ICV; PF	em_current_density	partial	CF; MR; SY	No ESD stimulus and no It2 limits
-ERC-C8	erc	esd	Path voltage vs device failure (ESD window)	TR18-01:2.1; TR22:4.1,8	-	missing	SE:Khazhinsky 1.33 A	
-ERC-C9	erc	esd	CDM checks (bus inductance, local clamps, driver/receiver ground R)	TR18-01:5.6.3,6.6; JEP157A; PF	-	missing	TX:SPICE	
-ERC-C10	erc	esd	Layout parasitic ESD paths	TR18-01:5.6.1; HoganMedhat2021; Khazhinsky2012	-	missing	SY	Spacing values are NDA. The public forms: field-oxide parasitic MOS between PMOS/NMOS diffusions (HoganMedhat2021) and parasitic bipolars in I/O assemblies (Khazhinsky2012)
+ERC-C2	erc	esd	ESD device sizing (perimeter, clamp width)	TR18-01:Fig23,Fig24; Hogan2012:III; GF:14.5	esd_path	implemented	CF; SY; MR	A clamp's rating is It2 per unit size times its width (transistor) or perimeter (any other device), against its share of the forced current
+ERC-C3	erc	esd	Protected device (pad-exposed gates and drains)	TR18-01:4.5.1; Khazhinsky2012; GF:14.4	esd_exposed	partial	SY; MR	A gate on the pad net counts as protected by the primary clamps (no CDM secondary stage is required); clamps are as esd_topological takes them
+ERC-C4	erc	esd	Cross-domain signal ESD protection	TR18-01(2011):5.1.3; TR18-01:5.6.2; Hogan2012; Khazhinsky2012:Fig5	esd_cross_domain	partial	SE:Part II pseudocode; SY; NV; MR	The grounds' anti-parallel coupling of check 5.1.3, and with `local` a local clamp; no series resistor at the receiver
+ERC-C5	erc	esd	Ground-domain coupling (anti-parallel diodes)	TR18-01:Fig5; Hogan2012:Fig1,IV; Khazhinsky2012:Fig2	esd_ground_coupling	implemented	SY; NV; MR	Only diode pairs couple: a ground pair joined through another clamp or a resistor is not coupled
+ERC-C6	erc	esd	P2P resistance on the discharge path, per pin pair	TR18-01:Fig58; TR18-02:Fig21; JS001:Tables 2A/2B; Khazhinsky2012:Fig2; CAL; ICV; VOL	p2p_resistance,esd_path	partial	CF; TX:ngspice; MR; SY; NV	Pin-to-supply pairs only: two signal pins meet only through the supplies between them; a clamp is its on-resistance, with no turn-on or holding voltage
+ERC-C7	erc	esd	ESD-pulse current density	TR18-01:Fig58; TR22:4.4; Khazhinsky2012; CAL; ICV; PF	em_current_density,esd_path	implemented	CF; MR; SY	The pulse is DC at its peak current: no waveform, no self-heating
+ERC-C8	erc	esd	Path voltage vs device failure (ESD window)	TR18-01:2.1; TR22:4.1,8; Khazhinsky2012:Fig4; GF:14.4	esd_path	partial	CF; SY; MR; NV	The pin's voltage under a forced current through linear clamps: a clamp's turn-on or holding voltage is folded into the limit, and each protected device's own terminal voltages are not read
+ERC-C9	erc	esd	CDM checks (bus inductance, local clamps, driver/receiver ground R)	TR18-01:5.6.3,6.6; JEP157A; Khazhinsky2012; PF	esd_cross_domain	partial	SY; MR	Local clamps at a domain-crossing receiver only: the driver/receiver ground resistance and the bus inductance are not checked
+ERC-C10	erc	esd	Layout parasitic ESD paths	TR18-01:5.6.1; Khazhinsky2012; GF:14.4	esd_parasitic	implemented	SY; MR	Spacing values are NDA: a deck states its own; spacing alone decides, not what lies between
 ERC-C11	erc	esd	ESD device geometry (DCGS, SCGS, fingers)	GF:LVESD.1-13; IHP:6.8	min_width,min_spacing_diff	expressible	FR; MR; SY	Under an ESD marker
 ERC-C12	erc	esd	Package / 2.5D / 3D ESD	TR18-01:6.3-6.7; JEP196; CAL:3DPERC	-	missing	-	In scope since 2026-10-11 (was: On-chip only: package and multi-die ESD models are outside a layout verifier)
 ERC-C13	erc	esd	System-level ESD	TR18-01:7; WP3	-	missing	-	In scope since 2026-10-11 (was: A board and system concern, outside a layout verifier)
 ERC-C14	erc	esd	ESD layout rules on recognised devices (clamp distance to pad, minimum ESD-path metal width)	Khazhinsky2012; HoganMedhat2021; CAL:PERC LDL	-	missing	SY	Numeric limits are NDA
 ERC-D1	erc	latchup	Max distance to well/substrate tap	GF:LU.1-4; IHP:LU.a,LU.b; A7:ACTIVE.LUP.1; TR18-02:3.1.1	max_distance_to_tap,missing_tie	implemented	FR; CF; MR; SY; TX:KL	A well's hole is measured as if filled (over-report only); hole rows are not wells of their own (F34, fixed)
-ERC-D1a	erc	latchup	Tap distance conditional on neighbouring well spacing	GF:LU.1-4	-	missing	FR	
-ERC-D1b	erc	latchup	Minimum well-tie area	TR18-02:Annex A; GF:LU.7	-	missing	FR; CF	
-ERC-D2	erc	latchup	Pad-diffusion guard ring (spacing, width)	GF:IO.1-4; IHP:7.2.1; TR18-02:3.1.2	esd_latchup	partial	FR; MR; SY	No deck carries it (limitations.md, "Shipped decks"); width is the merged ring's narrowest band, tap distance a bounding-box gap
-ERC-D3	erc	latchup	Guard ring / well tied to the correct rail	GF:LU.9,LU.10	well_bias	partial	SY; NV	Devices only, not guard rings
-ERC-D4	erc	latchup	Guard-ring resistance / current under injection	TR18-02:2.3; JESD78:Table 1; CAL	p2p_resistance,em_current_density	partial	CF; MR; SY	Resistance and current density are computed within one net; a guard ring's path to the supply pins under an injection stimulus is not modelled
-ERC-D5	erc	latchup	Voltage-aware aggressor/victim	TR18-02:2.2.3; CAL	-	missing	SY	
-ERC-D6	erc	latchup	HV latch-up between isolated pockets	TR18-02:3.3	-	missing	SY	
-ERC-D7	erc	latchup	Native-device guard ring	GF:LU.5	-	missing	FR	
-ERC-D8	erc	latchup	Forward-biased diode marked and ringed	GF:14.3.3	-	missing	SY	
+ERC-D1a	erc	latchup	Tap distance conditional on neighbouring well spacing	GF:LU.1-4	conditional_tie	implemented	FR; CF; SY; MR	The neighbour's space is to any well polygon, which can only pick a tighter band
+ERC-D1b	erc	latchup	Minimum well-tie area	TR18-02:Annex A; GF:LU.7,IO.2,IO.4	tie_area	implemented	FR; CF; SY; MR	Per merged region figure: contact area inside it over channel area inside it
+ERC-D2	erc	latchup	Pad-diffusion guard ring (spacing, width)	GF:IO.1-4; IHP:7.2.1; TR18-02:3.1.2	esd_latchup,guard_ring	implemented	FR; MR; SY	No shipped deck carries it (limitations.md, "Shipped decks"); the space is box to box, exact for rectangles
+ERC-D3	erc	latchup	Guard ring / well tied to the correct rail	GF:LU.9,LU.10,IO.1,IO.3	well_bias,guard_ring_bias	implemented	SY; MR; NV	The most positive supply is the highest declared one of the design, not of the ring's own domain
+ERC-D4	erc	latchup	Guard-ring resistance / current under injection	TR18-02:2.3; JESD78:Table 1; CAL	p2p_resistance,em_current_density,esd_path	implemented	CF; MR; SY	The injection is a DC current into the ring's metal path to its supply's pins; the substrate's share of the carriers is not modelled
+ERC-D5	erc	latchup	Voltage-aware aggressor/victim	TR18-02:2.2.3; GF:IO.1,IO.3; CAL	latchup_victim	partial	FR; CF; SY; MR	Aggressors are chosen by pad connection or layer, not by the voltage the intent propagates; the whole victim polygon is held to the limit
+ERC-D6	erc	latchup	HV latch-up between isolated pockets	TR18-02:3.3; GF:14.3.4	guard_ring,guard_ring_bias	expressible	SY; MR	As gf180mcu §14.3.4's double guard ring round high-voltage devices: two guard_ring rows and their guard_ring_bias; TR18-02 §3.3's pocket-to-pocket rules were not read
+ERC-D7	erc	latchup	Native-device guard ring	GF:LU.5	guard_ring	partial	FR; SY; MR	LU.5's "no other NCOMP, NWELL in between" the device and its ring is not checked
+ERC-D8	erc	latchup	Forward-biased diode marked and ringed	GF:14.3.2,14.3.3	forward_diode,guard_ring	implemented	SY; MR	Forward bias from the supplies' reach through channels, which can over-report; the ring is guard_ring over the marked diodes
 ERC-D9	erc	latchup	PMOS/NMOS devices sharing one well	HoganMedhat2021	-	missing	SY	Named as a Calibre PERC layout check without a public definition of which sharing is illegal
 ERC-E1	erc	em	DC current per width	GF:Table 14.3; IHP:2.15	em_current_density	implemented	FR; CF; TX:OR psm; MR; SY	
 ERC-E2	erc	em	Current per cut	GF:Table 14.4; IHP:2.15	em_current_density	implemented	FR; TX:OR psm; MR; SY	

@@ -64,7 +64,7 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 |---|---:|---:|---:|---:|---:|---:|
 | DRC | 43 | 6 | 42 | 15 | 0 | 0 |
 | LVS | 24 | 1 | 14 | 9 | 0 | 0 |
-| ERC | 43 | 3 | 9 | 26 | 0 | 0 |
+| ERC | 53 | 4 | 11 | 13 | 0 | 0 |
 | PEX | 4 | 0 | 3 | 9 | 0 | 0 |
 | Flow | 0 | 0 | 2 | 8 | 0 | 0 |
 
@@ -319,11 +319,24 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-A13 | Exemption for substrate-shorted nets | implemented | SKY:.ar.1 | SE:SKY .ar.1; MR; SY |
 | ERC-B1 | Windowed density + CMP thickness | implemented | GF:13 | CF; MR; SY |
 | ERC-C1 | Pad ESD path to power and ground | implemented | TR18-01:4.5.2-4.5.4; Khazhinsky2012 | SY; NV; MR |
-| ERC-C7 | ESD-pulse current density | partial | TR18-01:Fig58; TR22:4.4; CAL; ICV; PF | CF; MR; SY |
+| ERC-C2 | ESD device sizing (perimeter, clamp width) | implemented | TR18-01:Fig23,Fig24; Hogan2012:III; GF:14.5 | CF; SY; MR |
+| ERC-C3 | Protected device (pad-exposed gates and drains) | partial | TR18-01:4.5.1; Khazhinsky2012; GF:14.4 | SY; MR |
+| ERC-C4 | Cross-domain signal ESD protection | partial | TR18-01(2011):5.1.3; TR18-01:5.6.2; Hogan2012; Khazhinsky2012:Fig5 | SE:Part II pseudocode; SY; NV; MR |
+| ERC-C5 | Ground-domain coupling (anti-parallel diodes) | implemented | TR18-01:Fig5; Hogan2012:Fig1,IV; Khazhinsky2012:Fig2 | SY; NV; MR |
+| ERC-C7 | ESD-pulse current density | implemented | TR18-01:Fig58; TR22:4.4; Khazhinsky2012; CAL; ICV; PF | CF; MR; SY |
+| ERC-C8 | Path voltage vs device failure (ESD window) | partial | TR18-01:2.1; TR22:4.1,8; Khazhinsky2012:Fig4; GF:14.4 | CF; SY; MR; NV |
+| ERC-C9 | CDM checks (bus inductance, local clamps, driver/receiver ground R) | partial | TR18-01:5.6.3,6.6; JEP157A; Khazhinsky2012; PF | SY; MR |
+| ERC-C10 | Layout parasitic ESD paths | implemented | TR18-01:5.6.1; Khazhinsky2012; GF:14.4 | SY; MR |
 | ERC-C11 | ESD device geometry (DCGS, SCGS, fingers) | expressible | GF:LVESD.1-13; IHP:6.8 | FR; MR; SY |
-| ERC-D2 | Pad-diffusion guard ring (spacing, width) | partial | GF:IO.1-4; IHP:7.2.1; TR18-02:3.1.2 | FR; MR; SY |
-| ERC-D3 | Guard ring / well tied to the correct rail | partial | GF:LU.9,LU.10 | SY; NV |
-| ERC-D4 | Guard-ring resistance / current under injection | partial | TR18-02:2.3; JESD78:Table 1; CAL | CF; MR; SY |
+| ERC-D1a | Tap distance conditional on neighbouring well spacing | implemented | GF:LU.1-4 | FR; CF; SY; MR |
+| ERC-D1b | Minimum well-tie area | implemented | TR18-02:Annex A; GF:LU.7,IO.2,IO.4 | FR; CF; SY; MR |
+| ERC-D2 | Pad-diffusion guard ring (spacing, width) | implemented | GF:IO.1-4; IHP:7.2.1; TR18-02:3.1.2 | FR; MR; SY |
+| ERC-D3 | Guard ring / well tied to the correct rail | implemented | GF:LU.9,LU.10,IO.1,IO.3 | SY; MR; NV |
+| ERC-D4 | Guard-ring resistance / current under injection | implemented | TR18-02:2.3; JESD78:Table 1; CAL | CF; MR; SY |
+| ERC-D5 | Voltage-aware aggressor/victim | partial | TR18-02:2.2.3; GF:IO.1,IO.3; CAL | FR; CF; SY; MR |
+| ERC-D6 | HV latch-up between isolated pockets | expressible | TR18-02:3.3; GF:14.3.4 | SY; MR |
+| ERC-D7 | Native-device guard ring | partial | GF:LU.5 | FR; SY; MR |
+| ERC-D8 | Forward-biased diode marked and ringed | implemented | GF:14.3.2,14.3.3 | SY; MR |
 | ERC-E3 | Width-banded absolute current for narrow lines | implemented | IHP:2.15 | SE:IHP 2.15; FR; MR; SY |
 | ERC-E4 | Temperature derating (Black / Arrhenius) | implemented | GF:14.2.2; Black1969; JEP122; JESD63 | SE:GF formula vs table (1.6% rounding); MR; SY |
 | ERC-E5 | Lifetime target and percentile | implemented | GF:14.2; IHP:2.15; JESD202 | SE; MR; SY |

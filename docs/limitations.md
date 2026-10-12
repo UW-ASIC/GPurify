@@ -283,27 +283,16 @@ says which foundry manual, standard or tool defines each one.
 | ERC-A11 | MIM capacitor as victim | partial | The gate argument takes any layer; a non-conductor gate joins the layer a device mos row names as its gate terminal, else the conductor it lies on, never metal routed over it (F72, F81 fixed). gf180 leaves ANT.14/15 out, and the FuseTop/Via5 connectivity needs care |
 | ERC-A14 | Hierarchical / macro-pin antenna | missing | — |
 | ERC-A15 | Fix hint: required diode area | missing | Report feature |
-| ERC-C2 | ESD device sizing (perimeter, clamp width) | missing | — |
-| ERC-C3 | Protected device (pad-exposed gates and drains) | missing | — |
-| ERC-C4 | Cross-domain signal ESD protection | missing | domain_crossing and missing_level_shifter are functional checks, not ESD |
-| ERC-C5 | Ground-domain coupling (anti-parallel diodes) | missing | — |
-| ERC-C6 | P2P resistance on the discharge path, per pin pair | partial | Measures within one net; the pad-device-bus-clamp path is missing |
-| ERC-C7 | ESD-pulse current density | partial | No ESD stimulus and no It2 limits |
-| ERC-C8 | Path voltage vs device failure (ESD window) | missing | — |
-| ERC-C9 | CDM checks (bus inductance, local clamps, driver/receiver ground R) | missing | — |
-| ERC-C10 | Layout parasitic ESD paths | missing | Spacing values are NDA. The public forms: field-oxide parasitic MOS between PMOS/NMOS diffusions (HoganMedhat2021) and parasitic bipolars in I/O assemblies (Khazhinsky2012) |
+| ERC-C3 | Protected device (pad-exposed gates and drains) | partial | A gate on the pad net counts as protected by the primary clamps (no CDM secondary stage is required); clamps are as esd_topological takes them |
+| ERC-C4 | Cross-domain signal ESD protection | partial | The grounds' anti-parallel coupling of check 5.1.3, and with `local` a local clamp; no series resistor at the receiver |
+| ERC-C6 | P2P resistance on the discharge path, per pin pair | partial | Pin-to-supply pairs only: two signal pins meet only through the supplies between them; a clamp is its on-resistance, with no turn-on or holding voltage |
+| ERC-C8 | Path voltage vs device failure (ESD window) | partial | The pin's voltage under a forced current through linear clamps: a clamp's turn-on or holding voltage is folded into the limit, and each protected device's own terminal voltages are not read |
+| ERC-C9 | CDM checks (bus inductance, local clamps, driver/receiver ground R) | partial | Local clamps at a domain-crossing receiver only: the driver/receiver ground resistance and the bus inductance are not checked |
 | ERC-C12 | Package / 2.5D / 3D ESD | missing | In scope since 2026-10-11 (was: On-chip only: package and multi-die ESD models are outside a layout verifier) |
 | ERC-C13 | System-level ESD | missing | In scope since 2026-10-11 (was: A board and system concern, outside a layout verifier) |
 | ERC-C14 | ESD layout rules on recognised devices (clamp distance to pad, minimum ESD-path metal width) | missing | Numeric limits are NDA |
-| ERC-D1a | Tap distance conditional on neighbouring well spacing | missing | — |
-| ERC-D1b | Minimum well-tie area | missing | — |
-| ERC-D2 | Pad-diffusion guard ring (spacing, width) | partial | No deck carries it (limitations.md, "Shipped decks"); width is the merged ring's narrowest band, tap distance a bounding-box gap |
-| ERC-D3 | Guard ring / well tied to the correct rail | partial | Devices only, not guard rings |
-| ERC-D4 | Guard-ring resistance / current under injection | partial | Resistance and current density are computed within one net; a guard ring's path to the supply pins under an injection stimulus is not modelled |
-| ERC-D5 | Voltage-aware aggressor/victim | missing | — |
-| ERC-D6 | HV latch-up between isolated pockets | missing | — |
-| ERC-D7 | Native-device guard ring | missing | — |
-| ERC-D8 | Forward-biased diode marked and ringed | missing | — |
+| ERC-D5 | Voltage-aware aggressor/victim | partial | Aggressors are chosen by pad connection or layer, not by the voltage the intent propagates; the whole victim polygon is held to the limit |
+| ERC-D7 | Native-device guard ring | partial | LU.5's "no other NCOMP, NWELL in between" the device and its ring is not checked |
 | ERC-D9 | PMOS/NMOS devices sharing one well | missing | Named as a Calibre PERC layout check without a public definition of which sharing is illegal |
 | ERC-E7 | RMS / Joule heating / peak limits | missing | Public limits exist: LEF 5.8's ACCURRENTDENSITY tables by frequency and width, and the sky130 tech LEF's RMS limits (6.1 mA/um met1-met2, 14.9 met3-met4, 22.34 met5, Tj 90 C). The intent states only a DC current budget per net, so no RMS or peak current reaches a check |
 | ERC-E9 | PDN integrity (floating stripes, unconnected instances) | partial | Flags unconnected conductors; PDN-specific checks (floating stripes, instance supply terminals) are missing |
