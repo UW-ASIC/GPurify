@@ -62,7 +62,7 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 
 | Domain | implemented | expressible | partial | missing | verify | out of scope |
 |---|---:|---:|---:|---:|---:|---:|
-| DRC | 31 | 4 | 36 | 35 | 0 | 0 |
+| DRC | 31 | 4 | 40 | 31 | 0 | 0 |
 | LVS | 17 | 1 | 16 | 14 | 0 | 0 |
 | ERC | 35 | 3 | 11 | 32 | 0 | 0 |
 | PEX | 4 | 0 | 3 | 9 | 0 | 0 |
@@ -294,6 +294,7 @@ single oracle is a named gap that ledger P1 closes.
 
 | Id | Check | Status | Defined by (public) | Evidence |
 |---|---|---|---|---|
+| DRC-036 | Span-length table | partial | LEF58_SPANLENGTHTABLE | SE; MR; SY |
 | DRC-037 | Bent / 45-degree features | partial | IHP:M1.g,Mn.g,Gat.g; GF:PL.7,MT30.4; SKY:via.14a | FR; MR; SY |
 | DRC-083 | HV tag propagation (shorted to HV becomes HV) | partial | SKY:hv.X.1-hv.X.6 | FR; SY; MR |
 | DRC-084 | Floating interconnect / must-join ports | partial | SKY:x.22; LEF58_MUSTJOINALLPORTS | SY; MR |
