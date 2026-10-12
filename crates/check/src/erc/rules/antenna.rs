@@ -172,12 +172,15 @@ pub struct CmpModel {
 ///   protection diode: IHP's minimum diode size (Ant.g, ERC-A9) is a
 ///   derived `diode.with_area(>= 0.16um2)` named as the `diode`, and the
 ///   size itself a DRC `area` rule.
-/// - A MIM victim works as a gate layer, but gf180's deck leaves ANT.14/15
-///   out (ERC-A11). A cut area factor (LEF's `ANTENNAAREAFACTOR` on a cut
+/// - A MIM victim works as a gate layer. On gf180's topology (ANT.14 and
+///   ANT.15) the FuseTop top plate is written as a conductor joined to
+///   Metal(n+1) by Via(n), so it is not on its Metal(n) bottom plate's net;
+///   the shipped gf180 deck does not carry those rows yet (ERC-A11). A cut
+///   area factor (LEF's `ANTENNAAREAFACTOR` on a cut
 ///   layer) is [`AntennaElectricalTable`]'s.
 ///
-/// Catalog: ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A9, ERC-A11
-/// (partial), ERC-A12, ERC-A13 in the [check catalog]. Defined by
+/// Catalog: ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A9, ERC-A11,
+/// ERC-A12, ERC-A13 in the [check catalog]. Defined by
 /// [LEF/DEF 5.8] Appendix C (PAR, CAR, `ANTENNAMODEL`); [GF180MCU] ANT.1-ANT.15;
 /// [IHP SG13G2] Ant.a-Ant.f; [SKY130] antenna rules, licon.1 and via.1;
 /// [KLayout] `antenna_check` (diodes). Source tags are in [check-sources.md].
