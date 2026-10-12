@@ -35,7 +35,13 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     [
         min_enclosure(depth),
         asymmetric_enclosure(depth),
+        wire_enclosure(),
+        noncoincident_enclosure(),
+        full_width(),
+        projection_spacing(),
+        max_enclosure(),
         min_extension(depth),
+        gate_corner(),
         overlap(depth),
         must_contain(),
         must_be_inside(),
@@ -44,7 +50,12 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         edge_enclosure(),
         cut_spacing(),
         redundant_via(),
+        minimum_cut(),
+        via_stack(),
         via_array_spacing(depth),
+        center_spacing(),
+        adjacent_cut_spacing(),
+        cut_class_spacing(),
         global_density(),
         density(depth),
         cheesing(),
@@ -370,18 +381,25 @@ fn margins4() -> Vec<(i64, i64, i64, i64)> {
 }
 
 /// `enclosure(via, met1, opposite) >= 100nm` (`asymmetric_enclosure`, DRC-041
-/// and DRC-042): a rectangular via measures `max(min(left, right),
-/// min(bottom, top))`, each side read straight out to the nearest host edge
-/// facing it; a via of any other shape is held to the limit on every side, as
-/// `min_enclosure` measures it (fails closed).
+/// and DRC-042): each edge of a via is read straight out to the nearest host
+/// edge facing it; the via measures `max(min over its vertical edges, min
+/// over its horizontal edges)`, which for a rectangle is `max(min(left,
+/// right), min(bottom, top))`.
+///
+/// Oracle: every margin is drawn, so each edge's straight-out reading is a
+/// number the layout was built to have.
 ///
 /// Shapes: the limit on one axis with the other axis touching; one side short
 /// with the other axis far; both axes short; every side touching; a host with
 /// notches down to the via on two sides (a bounding-box measure sees the far
 /// edges); the plus host, clean here because its straight strips run 450 nm
-/// although its concave corners are 70 nm off; an L-shaped via, swept, and
-/// with the limit only on one axis (held to every side, so 0); an unhosted
-/// via; an empty via layer. Nightly: every combination of four margins.
+/// although its concave corners are 70 nm off; an L-shaped via, swept; an L
+/// via with the limit only along x (clean: the old every-side fallback read
+/// 0); an L via whose concave top edge decides the y axis, swept, while a
+/// host notch 50 nm right of its upper arm spoils the x axis (an every-side
+/// or bounding-box measure reads 50 or the box's 100 at every step); an
+/// unhosted via; an empty via layer. Nightly: every combination of four
+/// margins.
 fn asymmetric_enclosure(depth: Depth) -> Vec<Fixture> {
     const LIMIT: i64 = 100;
     let deck = new_deck(
@@ -469,8 +487,33 @@ fn asymmetric_enclosure(depth: Depth) -> Vec<Fixture> {
         Layout::default()
             .polygon("via", &l_via)
             .rect("met1", -100, 0, 300, 200),
-        lengths(&[0]),
+        Vec::new(),
     ));
+    // A notch comes down from the host's top over x in [150, 250] to
+    // 100 + k: the via's concave top edge (y = 100, x in [100, 200]) reads k,
+    // its other horizontal edges 100, so y measures min(k, 100). The upper
+    // arm's right edge (x = 100) reads 50 to the notch while the notch
+    // reaches below y = 200, so x measures 50 then, else 100.
+    for (k, side) in sweep(LIMIT) {
+        let host = [
+            (-100, -100),
+            (300, -100),
+            (300, 300),
+            (250, 300),
+            (250, 100 + k),
+            (150, 100 + k),
+            (150, 300),
+            (-100, 300),
+        ];
+        let x = if 100 + k < 200 { 50 } else { 100 };
+        cases.push(case(
+            &format!("l_via_concave_edge/{side}"),
+            Layout::default()
+                .polygon("via", &l_via)
+                .polygon("met1", &host),
+            below(x.max(k.min(100)), LIMIT),
+        ));
+    }
     cases.push(case(
         "unhosted",
         Layout::default()
@@ -493,6 +536,384 @@ fn asymmetric_enclosure(depth: Depth) -> Vec<Fixture> {
             ));
         }
     }
+    every_placement(cases)
+}
+
+/// Enclosure by wire width, LEF/DEF 5.8 Example 1-3's `via23` in nm:
+/// `enclosure(via, met2, opposite; below: 1000nm) >= 50nm` (`narrow`),
+/// `enclosure(via, met2; width: 1000nm, below: 2000nm) >= 20nm` (`mid`) and
+/// `enclosure(via, met2; width: 2000nm) >= 50nm` (`wide`) (`min_enclosure`
+/// and `asymmetric_enclosure` with a wire band, DRC-043): each 200 nm via is
+/// held by exactly one row, the one whose band holds the width of the wire it
+/// lies on (where a square that wide fits around all of it), and an unhosted
+/// via by the lowest.
+///
+/// Oracle: the wires are drawn to a width, and the via's margins to the
+/// wire's edges are drawn: 15 to the left, 30 below. So `narrow` reads
+/// `max(min(15, far), min(30, far)) = 30` and the others 15.
+///
+/// Shapes: a wire 999, 1000, 1001, 1999, 2000 and 2001 wide (the bands'
+/// edges, inclusive below, exclusive above); a via on a 500 nm tab off a
+/// 3000 nm plate (the tab's width, not the plate's, so `narrow` reads 20);
+/// a via 40 into a corner of the plate (`wide` only); an unhosted via
+/// (`narrow`, 0).
+fn wire_enclosure() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["via", "met2"],
+        "rule narrow enclosure(via, met2, opposite; below: 1000nm) >= 50nm\n\
+         rule mid enclosure(via, met2; width: 1000nm, below: 2000nm) >= 20nm\n\
+         rule wide enclosure(via, met2; width: 2000nm) >= 50nm\n",
+    );
+    let case = |name: &str, layout: Layout, rows: [Vec<Finding>; 3]| {
+        let [narrow, mid, wide] = rows;
+        fixture(
+            &format!("wire_enclosure/{name}"),
+            &["DRC-043", "DRC-040", "DRC-041"],
+            &deck,
+            layout,
+            &[("narrow", narrow), ("mid", mid), ("wide", wide)],
+        )
+    };
+    let via = || Layout::default().rect("via", 0, 0, 200, 200);
+    let mut cases = Vec::new();
+    for w in [999, 1000, 1001, 1999, 2000, 2001] {
+        let rows = if w < 1000 {
+            [lengths(&[30]), vec![], vec![]]
+        } else if w < 2000 {
+            [vec![], lengths(&[15]), vec![]]
+        } else {
+            [vec![], vec![], lengths(&[15])]
+        };
+        cases.push(case(
+            &format!("wire/{w}"),
+            via().rect("met2", -15, -30, 3000, w - 30),
+            rows,
+        ));
+    }
+    cases.push(case(
+        "tab",
+        Layout::default()
+            .rect("met2", 0, 0, 3000, 3000)
+            .rect("met2", 3000, 1000, 3800, 1500)
+            .rect("via", 3580, 1150, 3780, 1490),
+        [lengths(&[20]), vec![], vec![]],
+    ));
+    cases.push(case(
+        "plate",
+        Layout::default()
+            .rect("met2", 0, 0, 3000, 3000)
+            .rect("via", 40, 40, 240, 240),
+        [vec![], vec![], lengths(&[40])],
+    ));
+    cases.push(case(
+        "unhosted",
+        via().rect("met2", 5000, 5000, 6000, 6000),
+        [lengths(&[0]), vec![], vec![]],
+    ));
+    every_placement(cases)
+}
+
+/// `enclosure(lvtn, nwell, noncoincident) >= 380nm` (`noncoincident_enclosure`,
+/// DRC-054, sky130 lvtn.10 "(exclude coincident edges)") beside the plain
+/// `enclosure(lvtn, nwell) >= 380nm`: an lvtn edge lying on the nwell's edge,
+/// or an lvtn corner touching it, is exempt from the first and measures 0
+/// under the second.
+///
+/// Oracle: drawn margins; the touching pairs are drawn to coincide.
+///
+/// lvtn is `[0, 1000]^2`. Shapes: concentric at 379/380/381 (both rules
+/// alike); the left edge on the nwell's left edge with the other margins
+/// swept, and also the bottom edge; the left edge on the nwell's edge for
+/// its lower half only, the nwell stepping 400 out above it (exempt, then
+/// 400); lvtn in an L nwell's concave corner, touching it only at that
+/// corner (exempt; 600 elsewhere); an unhosted lvtn (0 for both).
+fn noncoincident_enclosure() -> Vec<Fixture> {
+    const LIMIT: i64 = 380;
+    let deck = new_deck(
+        &["lvtn", "nwell"],
+        "rule lvtn.10 enclosure(lvtn, nwell, noncoincident) >= 380nm\n\
+         rule plain enclosure(lvtn, nwell) >= 380nm\n",
+    );
+    let case = |name: &str, layout: Layout, apart: Vec<Finding>, plain: Vec<Finding>| {
+        fixture(
+            &format!("noncoincident_enclosure/{name}"),
+            &["DRC-054"],
+            &deck,
+            layout,
+            &[("lvtn.10", apart), ("plain", plain)],
+        )
+    };
+    let lvtn = || Layout::default().rect("lvtn", 0, 0, 1000, 1000);
+    let mut cases = Vec::new();
+    for (m, side) in sweep(LIMIT) {
+        cases.push(case(
+            &format!("concentric/{side}"),
+            lvtn().rect("nwell", -m, -m, 1000 + m, 1000 + m),
+            below(m, LIMIT),
+            below(m, LIMIT),
+        ));
+        cases.push(case(
+            &format!("left_on_edge/{side}"),
+            lvtn().rect("nwell", 0, -m, 1000 + m, 1000 + m),
+            below(m, LIMIT),
+            lengths(&[0]),
+        ));
+        cases.push(case(
+            &format!("corner_on_edges/{side}"),
+            lvtn().rect("nwell", 0, 0, 1000 + m, 1000 + m),
+            below(m, LIMIT),
+            lengths(&[0]),
+        ));
+    }
+    cases.push(case(
+        "partly_on_edge",
+        lvtn().polygon(
+            "nwell",
+            &[
+                (0, -400),
+                (1400, -400),
+                (1400, 1400),
+                (-400, 1400),
+                (-400, 500),
+                (0, 500),
+            ],
+        ),
+        vec![],
+        lengths(&[0]),
+    ));
+    cases.push(case(
+        "kissing_corner",
+        Layout::default()
+            .rect("lvtn", 600, 600, 1000, 1000)
+            .polygon("nwell", &L_HOST),
+        vec![],
+        lengths(&[0]),
+    ));
+    cases.push(case(
+        "unhosted",
+        lvtn().rect("nwell", 2000, 2000, 3000, 3000),
+        lengths(&[0]),
+        lengths(&[0]),
+    ));
+    every_placement(cases)
+}
+
+/// `full_width(v1, m2)` (`full_width`, DRC-053, ASAP7 V1.M2.AUX.2 "V1 must
+/// exactly be the same width as M2 along the direction perpendicular to the
+/// M2 length"): one finding per via that meets the wire's edges on neither
+/// axis, measuring the widest straight-out gap on its better axis.
+///
+/// Oracle: drawn gaps between the via's edges and the wire's.
+///
+/// Shapes, a 100 nm via: in a horizontal wire 100 wide, spanning it (clean);
+/// 0 or 1 short of its top edge, and 10 short of both; in a vertical wire 100
+/// wide (spanning it along x: clean); on a 300 nm pad (100 on every side);
+/// alone on a 100 nm pad (both axes span: clean); a via on no wire (not
+/// measured: `inside` is that rule).
+fn full_width() -> Vec<Fixture> {
+    let deck = new_deck(&["v1", "m2"], "rule V1.M2.AUX.2 full_width(v1, m2)\n");
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("full_width/{name}"),
+            &["DRC-053"],
+            &deck,
+            layout,
+            &[("V1.M2.AUX.2", findings)],
+        )
+    };
+    let wire = || Layout::default().rect("m2", -500, 0, 1000, 100);
+    let mut cases = Vec::new();
+    for short in [0, 1] {
+        cases.push(case(
+            &format!("top_short/{short}"),
+            wire().rect("v1", 0, 0, 100, 100 - short),
+            if short > 0 { lengths(&[short]) } else { vec![] },
+        ));
+    }
+    cases.push(case(
+        "narrower",
+        wire().rect("v1", 0, 10, 100, 90),
+        lengths(&[10]),
+    ));
+    cases.push(case(
+        "vertical_wire",
+        Layout::default()
+            .rect("m2", 0, -200, 100, 1000)
+            .rect("v1", 0, 0, 100, 100),
+        vec![],
+    ));
+    cases.push(case(
+        "pad",
+        Layout::default()
+            .rect("m2", -100, -100, 200, 200)
+            .rect("v1", 0, 0, 100, 100),
+        lengths(&[100]),
+    ));
+    cases.push(case(
+        "equal_pad",
+        Layout::default()
+            .rect("m2", 0, 0, 100, 100)
+            .rect("v1", 0, 0, 100, 100),
+        vec![],
+    ));
+    cases.push(case(
+        "off_wire",
+        wire().rect("v1", 3000, 0, 3100, 100),
+        vec![],
+    ));
+    every_placement(cases)
+}
+
+/// `space(lvtn, sd, projection) >= 235nm` (`projection_spacing`, DRC-055,
+/// sky130 lvtn.3b as its `KLayout` deck writes it) beside the Euclidean
+/// `space(lvtn, sd) >= 235nm`: a pair is measured across facing edges that
+/// overlap in projection, so a pair offset diagonally passes the first.
+///
+/// Oracle: drawn gaps; a diagonal pair at offsets (100, 100) is 141 apart by
+/// Euclid and has no facing edges.
+///
+/// lvtn is `[0, 500]^2`. Shapes: sd beside it at 234/235/236; sd diagonally
+/// off its corner (100, 100) away (clean here, 141 there); sd overlapping
+/// lvtn's side by 1 nm of projection, 100 away (100); sd whose projection
+/// only meets lvtn's at a point, 50 away (clean here, 50 there); sd touching
+/// (0 for both) and overlapping lvtn (0 for both).
+fn projection_spacing() -> Vec<Fixture> {
+    const LIMIT: i64 = 235;
+    let deck = new_deck(
+        &["lvtn", "sd"],
+        "rule lvtn.3b space(lvtn, sd, projection) >= 235nm\n\
+         rule euclid space(lvtn, sd) >= 235nm\n",
+    );
+    let case = |name: &str, sd: Rect, projection: Vec<Finding>, euclid: Vec<Finding>| {
+        fixture(
+            &format!("projection_spacing/{name}"),
+            &["DRC-055"],
+            &deck,
+            Layout::default()
+                .rect("lvtn", 0, 0, 500, 500)
+                .rect("sd", sd.0, sd.1, sd.2, sd.3),
+            &[("lvtn.3b", projection), ("euclid", euclid)],
+        )
+    };
+    let mut cases = Vec::new();
+    for (g, side) in sweep(LIMIT) {
+        cases.push(case(
+            &format!("beside/{side}"),
+            (500 + g, 100, 900 + g, 400),
+            below(g, LIMIT),
+            below(g, LIMIT),
+        ));
+    }
+    cases.push(case(
+        "diagonal",
+        (600, 600, 900, 900),
+        vec![],
+        lengths(&[141]),
+    ));
+    cases.push(case(
+        "one_unit_of_projection",
+        (600, 499, 900, 900),
+        lengths(&[100]),
+        lengths(&[100]),
+    ));
+    cases.push(case(
+        "projection_meets_at_a_point",
+        (550, 500, 900, 900),
+        vec![],
+        lengths(&[50]),
+    ));
+    cases.push(case(
+        "touching",
+        (500, 100, 900, 400),
+        lengths(&[0]),
+        lengths(&[0]),
+    ));
+    cases.push(case(
+        "overlapping",
+        (400, 100, 900, 400),
+        lengths(&[0]),
+        lengths(&[0]),
+    ));
+    every_placement(cases)
+}
+
+/// `enclosure(licon, npc) <= 95nm` (`max_enclosure`, DRC-044, sky130 npc.5):
+/// each npc figure holding licons must lie inside their union grown by 95 nm
+/// with square corners; one finding per npc figure that reaches further,
+/// measuring its furthest reach rounded up.
+///
+/// Oracle: the reach is drawn. A licon `[0, 100]^2` in npc 50 past it on
+/// three sides and `m` on the fourth reaches `max(50, m)`; a corner square
+/// added off the npc's corner reaches its diagonal point's Chebyshev
+/// distance; between two licons `g` apart under one npc the furthest point
+/// is midway, `g / 2` from both.
+///
+/// Shapes: one side swept 94/95/96; a corner square to (195, 195) and to
+/// (196, 196), which every straight strip from the licon reads as 50; two
+/// licons 190, 191 and 192 apart under one npc (reach 95, 95.5 and 96); an
+/// npc holding no licon, and one only straddled by a licon (neither is
+/// measured).
+fn max_enclosure() -> Vec<Fixture> {
+    const LIMIT: i64 = 95;
+    let deck = new_deck(
+        &["licon", "npc"],
+        "rule npc.5 enclosure(licon, npc) <= 95nm\n",
+    );
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("max_enclosure/{name}"),
+            &["DRC-044"],
+            &deck,
+            layout,
+            &[("npc.5", findings)],
+        )
+    };
+    let above = |reach: i64| {
+        if reach > LIMIT {
+            lengths(&[reach])
+        } else {
+            vec![]
+        }
+    };
+    let licon = || Layout::default().rect("licon", 0, 0, 100, 100);
+    let mut cases = Vec::new();
+    for (m, side) in sweep(LIMIT) {
+        cases.push(case(
+            &format!("side/{side}"),
+            licon().rect("npc", -50, -50, 100 + m, 150),
+            above(m),
+        ));
+    }
+    for c in [195, 196] {
+        cases.push(case(
+            &format!("corner/{c}"),
+            licon()
+                .rect("npc", -50, -50, 150, 150)
+                .rect("npc", 100, 100, c, c),
+            above(c - 100),
+        ));
+    }
+    for (g, reach) in [(190, 95), (191, 96), (192, 96)] {
+        cases.push(case(
+            &format!("two_licons/{g}"),
+            licon()
+                .rect("licon", 100 + g, 0, 200 + g, 100)
+                .rect("npc", -50, -50, 250 + g, 150),
+            above(reach),
+        ));
+    }
+    cases.push(case(
+        "holding_nothing",
+        licon()
+            .rect("npc", -50, -50, 150, 150)
+            .rect("npc", 1000, 1000, 2000, 2000),
+        vec![],
+    ));
+    cases.push(case(
+        "straddled",
+        licon().rect("npc", 50, -500, 1000, 500),
+        vec![],
+    ));
     every_placement(cases)
 }
 
@@ -613,6 +1034,107 @@ fn min_extension(depth: Depth) -> Vec<Fixture> {
     every_placement(cases)
 }
 
+/// `bend(poly, diff)` (sky130 poly.11, "No 90 deg turns of poly on diff")
+/// and `covers_corner(poly, diff)` (poly.10, "Poly can't overlap inner
+/// corners of diff") (`gate_corner`, DRC-052): one finding per concave
+/// corner of the shared area that is a concave corner of poly, or of diff,
+/// at the corner.
+///
+/// Oracle: every corner is drawn where it is; a concave corner of an
+/// intersection of rectilinear shapes is a concave corner of one of them.
+///
+/// Diffusion is `[0, 1000]^2` unless said. Shapes: a straight gate (clean);
+/// an L poly bent inside the diffusion (a bend at (500, 500)), above it
+/// (clean), and with its bend on the diffusion's top edge (the gate is a
+/// rectangle: clean); a gate with a stub inside the diffusion (two bends);
+/// a gate over a jog in the diffusion's edge (an inner corner at (450,
+/// 300)); a poly square over an L diffusion's inner corner (500, 500), with
+/// no gate bend; an empty poly layer.
+fn gate_corner() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["diff", "poly"],
+        "rule poly.11 bend(poly, diff)\nrule poly.10 covers_corner(poly, diff)\n",
+    );
+    let corner = |x: i64, y: i64| Finding {
+        measured: Some(Measurement::Count(1)),
+        at: Some((x, y)),
+    };
+    let case = |name: &str, layout: Layout, bends: Vec<Finding>, covers: Vec<Finding>| {
+        fixture(
+            &format!("gate_corner/{name}"),
+            &["DRC-052"],
+            &deck,
+            layout,
+            &[("poly.11", bends), ("poly.10", covers)],
+        )
+    };
+    let diff = || Layout::default().rect("diff", 0, 0, 1000, 1000);
+    // An L poly: a bar x 400..500 from y -200 up to `y + 100`, turning right
+    // along y..y + 100 to x 1200; its concave corner is (500, y).
+    let l_poly = |y: i64| {
+        [
+            (400, -200),
+            (500, -200),
+            (500, y),
+            (1200, y),
+            (1200, y + 100),
+            (400, y + 100),
+        ]
+    };
+    let mut cases = vec![case(
+        "straight",
+        diff().rect("poly", 400, -200, 500, 1200),
+        vec![],
+        vec![],
+    )];
+    cases.push(case(
+        "bent_inside",
+        diff().polygon("poly", &l_poly(500)),
+        vec![corner(500, 500)],
+        vec![],
+    ));
+    cases.push(case(
+        "bent_outside",
+        diff().polygon("poly", &l_poly(1100)),
+        vec![],
+        vec![],
+    ));
+    cases.push(case(
+        "bent_on_edge",
+        diff().polygon("poly", &l_poly(1000)),
+        vec![],
+        vec![],
+    ));
+    cases.push(case(
+        "stub",
+        diff()
+            .rect("poly", 400, -200, 500, 1200)
+            .rect("poly", 500, 400, 700, 500),
+        vec![corner(500, 400), corner(500, 500)],
+        vec![],
+    ));
+    cases.push(case(
+        "diffusion_jog",
+        Layout::default()
+            .rect("diff", 0, 0, 450, 400)
+            .rect("diff", 450, 0, 1000, 300)
+            .rect("poly", 400, -200, 500, 600),
+        vec![],
+        vec![corner(450, 300)],
+    ));
+    cases.push(case(
+        "inner_corner_covered",
+        Layout::default()
+            .rect("diff", 0, 0, 1000, 500)
+            .rect("diff", 0, 500, 500, 1000)
+            .rect("poly", 300, 300, 700, 700),
+        vec![],
+        vec![corner(500, 500)],
+    ));
+    cases.push(case("empty_poly", diff(), vec![], vec![]));
+    every_placement(cases)
+}
+
 /// `overlap(a, b) >= 100nm` (`overlap`, DRC-046): one finding per pair whose
 /// shared area is narrower than the limit, measuring the narrower side of that
 /// area; shapes that share no area do not overlap.
@@ -692,74 +1214,79 @@ fn overlap(depth: Depth) -> Vec<Fixture> {
 
 // ------------------------------------------------------- containment, inside
 
-/// `contains(tap, licon) >= 1` and `>= 2` (`must_contain`, DRC-048 and
-/// DRC-049), and `contains(nwell, ntap) >= 1` (DRC-085, tap presence per
-/// well): one finding per merged outer figure holding fewer merged inner
-/// figures entirely, counting what it holds.
+/// `contains(tap, licon) >= 1`, `>= 2`, `<= 1` and `== 2` (`must_contain`,
+/// DRC-048 and DRC-049), and `contains(nwell, ntap) >= 1` (DRC-085, tap
+/// presence per well): one finding per merged outer figure holding fewer, or
+/// more, merged inner figures entirely than its bound, measuring what it
+/// holds.
 ///
-/// Shapes: none, one and two held; one touching the tap's edge from inside
-/// (held); one straddling the edge and one touching it from outside (not
-/// held); two touching or overlapping licons (one figure); a tap of two
+/// Oracle: each case states how many licons each tap holds, by
+/// construction, and every rule's findings follow from that count and the
+/// rule's bound.
+///
+/// Shapes: none, one, two and three held; one touching the tap's edge from
+/// inside (held); one straddling the edge and one touching it from outside
+/// (not held); two touching or overlapping licons (one figure); a tap of two
 /// abutting halves holding a licon across the seam; two taps; a licon in a
 /// tap ring's hole (not held); an empty tap layer. For wells: tapped,
 /// untapped, a tap across the well's edge.
 fn must_contain() -> Vec<Fixture> {
     let deck_tap = new_deck(
         &["tap", "licon"],
-        "rule one contains(tap, licon) >= 1\nrule two contains(tap, licon) >= 2\n",
+        "rule one contains(tap, licon) >= 1\nrule two contains(tap, licon) >= 2\n\
+         rule most contains(tap, licon) <= 1\nrule exact contains(tap, licon) == 2\n",
     );
-    let case = |name: &str, layout: Layout, one: Vec<Finding>, two: Vec<Finding>| {
+    // `held` is what each tap figure holds.
+    let case = |name: &str, layout: Layout, held: &[u32]| {
+        let failing = |bad: fn(u32) -> bool| -> Vec<Finding> {
+            held.iter()
+                .filter(|&&h| bad(h))
+                .map(|&h| count(h))
+                .collect()
+        };
         fixture(
             &format!("must_contain/{name}"),
             &["DRC-048", "DRC-049"],
             &deck_tap,
             layout,
-            &[("one", one), ("two", two)],
+            &[
+                ("one", failing(|h| h < 1)),
+                ("two", failing(|h| h < 2)),
+                ("most", failing(|h| h > 1)),
+                ("exact", failing(|h| h != 2)),
+            ],
         )
     };
     let tap = || Layout::default().rect("tap", 0, 0, 1000, 500);
     let mut cases = Vec::new();
-    for (name, licons, one, two) in [
-        ("none", vec![], vec![count(0)], vec![count(0)]),
-        ("one", vec![(100, 100, 200, 200)], vec![], vec![count(1)]),
+    for (name, licons, held) in [
+        ("none", vec![], 0),
+        ("one", vec![(100, 100, 200, 200)], 1),
+        ("two", vec![(100, 100, 200, 200), (400, 100, 500, 200)], 2),
         (
-            "two",
-            vec![(100, 100, 200, 200), (400, 100, 500, 200)],
-            vec![],
-            vec![],
+            "three",
+            vec![
+                (100, 100, 200, 200),
+                (400, 100, 500, 200),
+                (700, 100, 800, 200),
+            ],
+            3,
         ),
-        (
-            "edge_inside",
-            vec![(0, 0, 100, 100)],
-            vec![],
-            vec![count(1)],
-        ),
-        (
-            "straddling",
-            vec![(950, 100, 1050, 200)],
-            vec![count(0)],
-            vec![count(0)],
-        ),
-        (
-            "touching_outside",
-            vec![(1000, 100, 1100, 200)],
-            vec![count(0)],
-            vec![count(0)],
-        ),
+        ("edge_inside", vec![(0, 0, 100, 100)], 1),
+        ("straddling", vec![(950, 100, 1050, 200)], 0),
+        ("touching_outside", vec![(1000, 100, 1100, 200)], 0),
         (
             "touching_pair",
             vec![(100, 100, 200, 200), (200, 100, 300, 200)],
-            vec![],
-            vec![count(1)],
+            1,
         ),
         (
             "overlapping_pair",
             vec![(100, 100, 250, 200), (200, 100, 300, 200)],
-            vec![],
-            vec![count(1)],
+            1,
         ),
     ] {
-        cases.push(case(name, rects(tap(), "licon", &licons), one, two));
+        cases.push(case(name, rects(tap(), "licon", &licons), &[held]));
     }
     cases.push(case(
         "tap_halves",
@@ -767,22 +1294,19 @@ fn must_contain() -> Vec<Fixture> {
             .rect("tap", 0, 0, 500, 500)
             .rect("tap", 500, 0, 1000, 500)
             .rect("licon", 450, 100, 550, 200),
-        vec![],
-        vec![count(1)],
+        &[1],
     ));
     cases.push(case(
         "two_taps",
         tap()
             .rect("licon", 100, 100, 200, 200)
             .rect("tap", 2000, 0, 3000, 500),
-        vec![count(0)],
-        vec![count(1), count(0)],
+        &[1, 0],
     ));
     cases.push(case(
         "empty_tap",
         Layout::default().rect("licon", 100, 100, 200, 200),
-        vec![],
-        vec![],
+        &[],
     ));
     cases.push(case(
         "in_hole",
@@ -792,8 +1316,7 @@ fn must_contain() -> Vec<Fixture> {
             (0, 0, 1000, 500),
             (300, 100, 700, 400),
         ),
-        vec![count(0)],
-        vec![count(0)],
+        &[0],
     ));
 
     let deck_well = new_deck(
@@ -1313,6 +1836,197 @@ fn redundant_via() -> Vec<Fixture> {
     every_placement(cases)
 }
 
+/// LEF `MINIMUMCUT 2 WIDTH 1.0` on `m1`, vias from `m2`: `min_cuts(via, m1,
+/// m2; width: 1000nm) >= 2` (`mc`) and with `within: 300nm` (`mcw`,
+/// `MINIMUMCUT 2 WIDTH 1.0 WITHIN 0.3`) (`minimum_cut`, DRC-066): a via is the
+/// cuts joining one `m1` figure to one `m2` figure, split by `within` into
+/// groups of cuts closer than 300 nm; one held by the part of `m1` wider than
+/// 1000 nm needs two cuts, and each of its cuts is reported with its count.
+///
+/// Oracle: LEF/DEF 5.8 "the number of cuts a via must have when it is on a
+/// wide wire or pin whose width is greater than width", on vias and wires
+/// drawn to a count and a width.
+///
+/// Shapes, 100 nm cuts on a 3000 nm `m1` plate: one cut under an `m2` pad;
+/// two under one pad 200 apart (one via, one group) and 400 apart (one via,
+/// two groups under `within`); two cuts under two pads (two vias); a cut with
+/// no `m2` over it; a wire 999, 1000 and 1001 wide with one cut (held only
+/// when strictly wider); a cut on a 500 nm tab off the plate (not held); a cut
+/// on no `m1` (not held).
+fn minimum_cut() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["via", "m1", "m2"],
+        "rule mc min_cuts(via, m1, m2; width: 1000nm) >= 2\n\
+         rule mcw min_cuts(via, m1, m2; width: 1000nm, within: 300nm) >= 2\n",
+    );
+    let case = |name: &str, layout: Layout, mc: &[u32], mcw: &[u32]| {
+        let counts = |n: &[u32]| n.iter().map(|&c| count(c)).collect::<Vec<_>>();
+        fixture(
+            &format!("minimum_cut/{name}"),
+            &["DRC-066"],
+            &deck,
+            layout,
+            &[("mc", counts(mc)), ("mcw", counts(mcw))],
+        )
+    };
+    let plate = || Layout::default().rect("m1", 0, 0, 3000, 3000);
+    let mut cases = Vec::new();
+    cases.push(case(
+        "single",
+        plate()
+            .rect("via", 1000, 1000, 1100, 1100)
+            .rect("m2", 900, 900, 1200, 1200),
+        &[1],
+        &[1],
+    ));
+    for (gap, name, mcw) in [(200, "pair_close", &[][..]), (400, "pair_far", &[1, 1][..])] {
+        let x = 1100 + gap;
+        cases.push(case(
+            name,
+            plate()
+                .rect("via", 1000, 1000, 1100, 1100)
+                .rect("via", x, 1000, x + 100, 1100)
+                .rect("m2", 900, 900, x + 200, 1200),
+            &[],
+            mcw,
+        ));
+    }
+    cases.push(case(
+        "two_pads",
+        plate()
+            .rect("via", 1000, 1000, 1100, 1100)
+            .rect("via", 1300, 1000, 1400, 1100)
+            .rect("m2", 900, 900, 1150, 1200)
+            .rect("m2", 1250, 900, 1500, 1200),
+        &[1, 1],
+        &[1, 1],
+    ));
+    cases.push(case(
+        "no_far_metal",
+        plate().rect("via", 1000, 1000, 1100, 1100),
+        &[1],
+        &[1],
+    ));
+    for (w, held) in [(999, false), (1000, false), (1001, true)] {
+        let one: &[u32] = if held { &[1] } else { &[] };
+        cases.push(case(
+            &format!("wire/{w}"),
+            Layout::default()
+                .rect("m1", 0, 0, 5000, w)
+                .rect("via", 2000, 100, 2100, 200)
+                .rect("m2", 1900, 0, 2200, 300),
+            one,
+            one,
+        ));
+    }
+    cases.push(case(
+        "narrow_tab",
+        plate()
+            .rect("m1", 3000, 1000, 4000, 1500)
+            .rect("via", 3500, 1200, 3600, 1300)
+            .rect("m2", 3400, 1100, 3700, 1400),
+        &[],
+        &[],
+    ));
+    cases.push(case(
+        "off_metal",
+        plate()
+            .rect("via", 5000, 5000, 5100, 5100)
+            .rect("m2", 4900, 4900, 5200, 5200),
+        &[],
+        &[],
+    ));
+    every_placement(cases)
+}
+
+/// `via_stack(v1, v2, v3, v4) <= 2` (`via_stack`, DRC-065, LEF `MAXVIASTACK
+/// 2`): a cut stacks on a cut of the layer below that it overlaps; the cut
+/// third from the bottom of each stack taller than two is one finding,
+/// measuring the stack's height.
+///
+/// Oracle: LEF/DEF 5.8 "a via is considered to be in a stack with another
+/// via if the cut of the first via overlaps any part of the cut of the
+/// second via", on stacks drawn to a height.
+///
+/// Shapes, 100 nm cuts: stacks of two, three and four aligned cuts (the
+/// four-high stack is reported once, on its third cut, measuring 4); a stack
+/// of three whose cuts overlap by half; a v3 cut beside the v2 cut, not on
+/// it (two stacks of two); a v2 cut abutting the v1 cut (touching is not
+/// stacking); a v1 cut under two v2 cuts each carrying a v3 (two stacks of
+/// three, two findings).
+fn via_stack() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["v1", "v2", "v3", "v4"],
+        "rule stack via_stack(v1, v2, v3, v4) <= 2\n",
+    );
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("via_stack/{name}"),
+            &["DRC-065"],
+            &deck,
+            layout,
+            &[("stack", findings)],
+        )
+    };
+    let cut =
+        |layout: Layout, layer: &str, x: i64, y: i64| layout.rect(layer, x, y, x + 100, y + 100);
+    let tower = |height: usize| {
+        ["v1", "v2", "v3", "v4"][..height]
+            .iter()
+            .fold(Layout::default(), |l, layer| cut(l, layer, 0, 0))
+    };
+    let mut cases = Vec::new();
+    for (height, findings) in [(2, vec![]), (3, vec![count(3)]), (4, vec![count(4)])] {
+        cases.push(case(&format!("tower/{height}"), tower(height), findings));
+    }
+    cases.push(case(
+        "half_overlap",
+        cut(
+            cut(cut(Layout::default(), "v1", 0, 0), "v2", 50, 0),
+            "v3",
+            100,
+            0,
+        ),
+        vec![count(3)],
+    ));
+    cases.push(case(
+        "broken",
+        cut(
+            cut(
+                cut(cut(Layout::default(), "v1", 0, 0), "v2", 0, 0),
+                "v3",
+                300,
+                0,
+            ),
+            "v4",
+            300,
+            0,
+        ),
+        vec![],
+    ));
+    cases.push(case(
+        "abutting",
+        cut(
+            cut(cut(Layout::default(), "v1", 0, 0), "v2", 100, 0),
+            "v3",
+            100,
+            0,
+        ),
+        vec![],
+    ));
+    cases.push(case(
+        "branching",
+        Layout::default()
+            .rect("v1", 0, 0, 300, 100)
+            .rect("v2", 0, 0, 100, 100)
+            .rect("v2", 200, 0, 300, 100)
+            .rect("v3", 0, 0, 100, 100)
+            .rect("v3", 200, 0, 300, 100),
+        vec![count(3), count(3)],
+    ));
+    every_placement(cases)
+}
+
 /// `via_array_space(cut; array: 3) >= 100nm` (`via_array_spacing`, DRC-062):
 /// cuts joined by gaps of at most 100 nm form a cluster, a cluster of more
 /// than 3 is an array, and each pair in an array closer than 100 nm is one
@@ -1436,6 +2150,301 @@ fn via_array_spacing(depth: Depth) -> Vec<Fixture> {
             }
         }
     }
+    every_placement(cases)
+}
+
+/// `space(cut, center) >= 300nm` (`cut_spacing`, DRC-061, LEF `SPACING
+/// CENTERTOCENTER`): one finding per pair of drawn cuts whose bounding-box
+/// centres are closer than the limit, measuring that distance floored.
+///
+/// Oracle: the cuts are drawn so their centres are a chosen distance apart;
+/// the diagonal pair at centre offsets (180, 239/240/241) is 299.2, 300 and
+/// 300.8 apart (a 180-240-300 triangle).
+///
+/// Shapes: two 100 nm squares, swept; a 100 nm and a 200 nm cut, swept, whose
+/// 150 nm edge gap an edge measure would flag at every step; a 101 nm and a
+/// 100 nm cut, whose centres are a half unit off the grid (299.5 floors to
+/// 299, 300.5 passes); the diagonal pair; overlapping cuts (50) and a cut
+/// nested in another (0); a row of three at a 250 nm pitch (the outer pair,
+/// 500 apart, passes); an empty layer.
+fn center_spacing() -> Vec<Fixture> {
+    const LIMIT: i64 = 300;
+    let deck = new_deck(&["cut"], "rule c2c space(cut, center) >= 300nm\n");
+    let case = |name: &str, cuts: &[Rect], findings: Vec<Finding>| {
+        fixture(
+            &format!("center_spacing/{name}"),
+            &["DRC-061"],
+            &deck,
+            rects(Layout::default(), "cut", cuts),
+            &[("c2c", findings)],
+        )
+    };
+    let mut cases = Vec::new();
+    for (d, side) in sweep(LIMIT) {
+        cases.push(case(
+            &format!("squares/{side}"),
+            &[(0, 0, 100, 100), (d, 0, d + 100, 100)],
+            below(d, LIMIT),
+        ));
+        // Centres 50 and x + 100 apart by d: x = d - 50.
+        cases.push(case(
+            &format!("unequal/{side}"),
+            &[(0, 0, 100, 100), (d - 50, 0, d + 150, 100)],
+            below(d, LIMIT),
+        ));
+        // Centres 50.5 and x + 50 along x, both 50 along y: d - 0.5 apart
+        // for x = d, floored to d - 1.
+        cases.push(case(
+            &format!("half_unit/{side}"),
+            &[(0, 0, 101, 100), (d, 0, d + 100, 100)],
+            below(d - 1, LIMIT),
+        ));
+    }
+    for (dy, side, findings) in [
+        (239, "below", lengths(&[299])),
+        (240, "at", vec![]),
+        (241, "above", vec![]),
+    ] {
+        cases.push(case(
+            &format!("diagonal/{side}"),
+            &[(0, 0, 100, 100), (180, dy, 280, dy + 100)],
+            findings,
+        ));
+    }
+    cases.push(case(
+        "overlapping",
+        &[(0, 0, 100, 100), (50, 0, 150, 100)],
+        lengths(&[50]),
+    ));
+    cases.push(case(
+        "nested",
+        &[(0, 0, 300, 300), (100, 100, 200, 200)],
+        lengths(&[0]),
+    ));
+    cases.push(case(
+        "row_of_three",
+        &[(0, 0, 100, 100), (250, 0, 350, 100), (500, 0, 600, 100)],
+        lengths(&[250, 250]),
+    ));
+    cases.push(fixture(
+        "center_spacing/empty",
+        &["DRC-061"],
+        &new_deck(&["cut", "other"], "rule c2c space(cut, center) >= 300nm\n"),
+        Layout::default().rect("other", 0, 0, 100, 100),
+        &[("c2c", vec![])],
+    ));
+    every_placement(cases)
+}
+
+/// `adjacent_space(cut; cuts: 3, within: 250nm) >= 220nm` (`cut_spacing`,
+/// DRC-062, LEF Spacing Rule Example 2 "SPACING 0.22 ADJACENTCUTS 3 WITHIN
+/// 0.25") on 200 nm cuts, and `adjacent_space(cut, center; cuts: 3, within:
+/// 300nm) >= 300nm` (DRC-061 and DRC-062, Example 4 "a cut can have only two
+/// other cuts with center-to-center spacing that is less than 0.30 um") on
+/// 100 nm cuts: a pair closer than the limit fails when either cut has at
+/// least three other cuts strictly closer than `within`.
+///
+/// Oracle: the manual's own Figure 1-6. With the diagonal beyond `within`, a
+/// cut of a 1 x n row or a 2 x 2 array has two adjacent cuts, a middle cut of
+/// a 2 x 3 array three, and the centre of a 3 x 3 four; so at a 219 nm gap a
+/// row and a 2 x 2 pass, a 2 x 3 fails on the five pairs that touch its
+/// middle cuts, and a 3 x 3 on all twelve side pairs.
+///
+/// Shapes: those arrays at gaps 219/220/221; a 2 x 3 array 219 apart along
+/// its rows with its rows 249, 250 and 251 apart (its middle cuts are held
+/// only at 249: `within` is strict); for the centre form, a T of four cuts at
+/// a 299/300/301 pitch (its middle has three neighbours) and a 2 x 2 at 299
+/// (two each, clean).
+fn adjacent_cut_spacing() -> Vec<Fixture> {
+    const LIMIT: i64 = 220;
+    let deck = new_deck(
+        &["cut"],
+        "rule adj adjacent_space(cut; cuts: 3, within: 250nm) >= 220nm\n",
+    );
+    let case = |name: &str, cuts: Vec<Rect>, findings: Vec<Finding>| {
+        fixture(
+            &format!("adjacent_cut_spacing/{name}"),
+            &["DRC-062"],
+            &deck,
+            rects(Layout::default(), "cut", &cuts),
+            &[("adj", findings)],
+        )
+    };
+    // `cols` x `rows` cuts of 200 nm, `gx` apart along a row and `gy` apart
+    // between rows.
+    let array = |cols: i64, rows: i64, gx: i64, gy: i64| -> Vec<Rect> {
+        (0..cols)
+            .flat_map(|c| {
+                (0..rows).map(move |r| {
+                    let (x, y) = (c * (200 + gx), r * (200 + gy));
+                    (x, y, x + 200, y + 200)
+                })
+            })
+            .collect()
+    };
+    let mut cases = Vec::new();
+    for (g, side) in sweep(LIMIT) {
+        let close = |n: usize| {
+            if g < LIMIT {
+                lengths(&vec![g; n])
+            } else {
+                vec![]
+            }
+        };
+        cases.push(case(&format!("row4/{side}"), array(4, 1, g, g), vec![]));
+        cases.push(case(&format!("array2x2/{side}"), array(2, 2, g, g), vec![]));
+        cases.push(case(
+            &format!("array3x2/{side}"),
+            array(3, 2, g, g),
+            close(5),
+        ));
+        cases.push(case(
+            &format!("array3x3/{side}"),
+            array(3, 3, g, g),
+            close(12),
+        ));
+    }
+    for (gy, side, findings) in [
+        (249, "below", lengths(&[219; 4])),
+        (250, "at", vec![]),
+        (251, "above", vec![]),
+    ] {
+        cases.push(case(
+            &format!("rows_apart/{side}"),
+            array(3, 2, 219, gy),
+            findings,
+        ));
+    }
+    let deck_center = new_deck(
+        &["cut"],
+        "rule adjc adjacent_space(cut, center; cuts: 3, within: 300nm) >= 300nm\n",
+    );
+    let centred = |name: &str, cuts: &[Rect], findings: Vec<Finding>| {
+        fixture(
+            &format!("adjacent_cut_spacing/center/{name}"),
+            &["DRC-061", "DRC-062"],
+            &deck_center,
+            rects(Layout::default(), "cut", cuts),
+            &[("adjc", findings)],
+        )
+    };
+    for (p, side) in sweep(300) {
+        cases.push(centred(
+            &format!("tee/{side}"),
+            &[
+                (0, 0, 100, 100),
+                (-p, 0, 100 - p, 100),
+                (p, 0, 100 + p, 100),
+                (0, p, 100, 100 + p),
+            ],
+            if p < 300 { lengths(&[p; 3]) } else { vec![] },
+        ));
+    }
+    cases.push(centred(
+        "array2x2",
+        &[
+            (0, 0, 100, 100),
+            (299, 0, 399, 100),
+            (0, 299, 100, 399),
+            (299, 299, 399, 399),
+        ],
+        vec![],
+    ));
+    every_placement(cases)
+}
+
+/// sky130 licon.2 to licon.2d as one cut-class table (`cut_class_spacing`,
+/// DRC-063 and DRC-064): square 170 nm licons 170 apart (licon.2), slotted
+/// 190 x 2000 licons 350 apart end to end (licon.2b, "when both the edges are
+/// 0.19um in length") and 510 otherwise (licon.2c), and 510 from a square
+/// (licon.2d). One finding per pair closer than its cell, measuring the gap.
+///
+/// Oracle: the sky130 manual's values, and gaps drawn to them; a pair apart
+/// along both axes needs the larger of its two readings (`OpenROAD`'s
+/// `checkLef58CutSpacingTbl_helper` checks both directions).
+///
+/// Shapes: squares, slots end to end, slots side by side, a slot beside a
+/// square and a square past a slot's end, each swept around its cell; slots
+/// end to end 400 apart (only an END-to-END reading passes them); slots
+/// offset diagonally 414.8 apart (END to END along y, SIDE to SIDE along x:
+/// 510); a 200 nm cut of no class 10 from a square (not checked);
+/// overlapping squares, and a slot abutting a square (0, held to the
+/// largest cell).
+fn cut_class_spacing() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["licon"],
+        "rule licon.2 cut_class_space(licon;\n\
+         short: [170nm, 190nm], long: [170nm, 2000nm],\n\
+         space: [[170nm, 170nm, 510nm, 510nm], [170nm, 170nm, 510nm, 510nm],\n\
+         [510nm, 510nm, 350nm, 510nm], [510nm, 510nm, 510nm, 510nm]])\n",
+    );
+    let case = |name: &str, cuts: &[Rect], findings: Vec<Finding>| {
+        fixture(
+            &format!("cut_class_spacing/{name}"),
+            &["DRC-063", "DRC-064"],
+            &deck,
+            rects(Layout::default(), "licon", cuts),
+            &[("licon.2", findings)],
+        )
+    };
+    let slot: Rect = (0, 0, 190, 2000);
+    let mut cases = Vec::new();
+    for (g, side) in sweep(170) {
+        cases.push(case(
+            &format!("squares/{side}"),
+            &[(0, 0, 170, 170), (170 + g, 0, 340 + g, 170)],
+            below(g, 170),
+        ));
+    }
+    for (g, side) in sweep(350) {
+        cases.push(case(
+            &format!("end_to_end/{side}"),
+            &[slot, (0, 2000 + g, 190, 4000 + g)],
+            below(g, 350),
+        ));
+    }
+    for (g, side) in sweep(510) {
+        cases.push(case(
+            &format!("side_by_side/{side}"),
+            &[slot, (190 + g, 0, 380 + g, 2000)],
+            below(g, 510),
+        ));
+        cases.push(case(
+            &format!("slot_beside_square/{side}"),
+            &[slot, (190 + g, 900, 360 + g, 1070)],
+            below(g, 510),
+        ));
+        cases.push(case(
+            &format!("square_past_slot_end/{side}"),
+            &[slot, (10, 2000 + g, 180, 2170 + g)],
+            below(g, 510),
+        ));
+    }
+    cases.push(case(
+        "end_to_end_400",
+        &[slot, (0, 2400, 190, 4400)],
+        vec![],
+    ));
+    cases.push(case(
+        "diagonal",
+        &[slot, (300, 2400, 490, 4400)],
+        lengths(&[414]),
+    ));
+    cases.push(case(
+        "unclassed",
+        &[(0, 0, 170, 170), (180, 0, 380, 200)],
+        vec![],
+    ));
+    cases.push(case(
+        "overlapping_squares",
+        &[(0, 0, 170, 170), (100, 0, 270, 170)],
+        lengths(&[0]),
+    ));
+    cases.push(case(
+        "slot_abutting_square",
+        &[slot, (190, 0, 360, 170)],
+        lengths(&[0]),
+    ));
     every_placement(cases)
 }
 

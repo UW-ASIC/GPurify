@@ -795,12 +795,13 @@ fn kind_of(rule: &RuleSource) -> Result<&'static Kind, PrintError> {
     let layers = rule.layers.len();
     KINDS
         .iter()
-        .find(|kind| {
+        .filter(|kind| {
             kind.engine == rule.kind
                 && (layers == kind.layers.len() || (kind.more && layers > kind.layers.len()))
                 // A row's required values are stated (MINSTEP's two rows
-                // differ only in which they require).
-                && kind.params.iter().all(|param| {
+                // differ only in which they require, `contains`' three only
+                // in their limit's).
+                && kind.limit.iter().chain(kind.params).all(|param| {
                     param.none
                         || matches!(
                             param.dim,
@@ -817,6 +818,21 @@ fn kind_of(rule: &RuleSource) -> Result<&'static Kind, PrintError> {
                         *name == flag && *value == ParamSource::Value(ParamValue::Flag(on))
                     })
                 })
+        })
+        // The row knowing the most stated values, the first on a tie, as the
+        // parser picks among an enclosure's wire-band rows.
+        .min_by_key(|kind| {
+            std::cmp::Reverse(
+                rule.params
+                    .iter()
+                    .filter(|(name, _)| {
+                        kind.limit
+                            .iter()
+                            .chain(kind.params)
+                            .any(|param| param.engine == *name)
+                    })
+                    .count(),
+            )
         })
         .ok_or_else(|| {
             PrintError::Unprintable(format!(

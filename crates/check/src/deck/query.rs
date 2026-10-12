@@ -11,12 +11,14 @@
 //! 5 nm read different values.
 
 use super::CompiledDeck;
-use crate::drc::{Rule, SpacingQuery};
+use crate::drc::{CutClassTable, Rule, SpacingQuery};
 use crate::erc::rules::antenna::AntennaMeasure;
 use crate::report::LimitSense;
 use gpurify_geom::{prefix, Current, CurrentDensity, Dbu, DbuArea, LayerId, Qty, StrId, Voltage};
 
-/// The enclosure rules between one inner and one outer layer.
+/// The enclosure rules between one inner and one outer layer. A rule with a
+/// wire band ([`WireBand`](crate::drc::WireBand)) counts as if it held every
+/// wire: the strictest it can be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Enclosure {
     /// The enclosure every side needs: the largest [`Rule::MinEnclosure`]
@@ -25,6 +27,15 @@ pub struct Enclosure {
     /// The enclosure both sides of one axis need: the largest
     /// [`Rule::AsymmetricEnclosure`] limit, `None` without one.
     pub opposite: Option<Dbu>,
+    /// The enclosure every side not on the host's boundary needs: the
+    /// largest [`Rule::NoncoincidentEnclosure`] limit, `None` without one.
+    pub noncoincident: Option<Dbu>,
+    /// The most the host may reach past the inner shape on any side: the
+    /// smallest [`Rule::MaxEnclosure`] limit, `None` without one.
+    pub at_most: Option<Dbu>,
+    /// Whether a [`Rule::FullWidth`] holds the inner shape to span the
+    /// host's width along one axis.
+    pub full_width: bool,
 }
 
 /// One density rule on a layer.
@@ -237,13 +248,32 @@ impl CompiledDeck {
                     outer: o,
                     inner: i,
                     limit,
+                    ..
                 } if (o, i) == (outer, inner) => found.all_sides = found.all_sides.max(Some(limit)),
                 Rule::AsymmetricEnclosure {
                     outer: o,
                     inner: i,
                     min_one_side,
+                    ..
                 } if (o, i) == (outer, inner) => {
                     found.opposite = found.opposite.max(Some(min_one_side));
+                }
+                Rule::NoncoincidentEnclosure {
+                    outer: o,
+                    inner: i,
+                    limit,
+                } if (o, i) == (outer, inner) => {
+                    found.noncoincident = found.noncoincident.max(Some(limit));
+                }
+                Rule::MaxEnclosure {
+                    outer: o,
+                    inner: i,
+                    limit,
+                } if (o, i) == (outer, inner) => {
+                    found.at_most = Some(found.at_most.map_or(limit, |most| most.min(limit)));
+                }
+                Rule::FullWidth { outer: o, inner: i } if (o, i) == (outer, inner) => {
+                    found.full_width = true;
                 }
                 _ => {}
             }
@@ -265,6 +295,110 @@ impl CompiledDeck {
                 _ => None,
             })
             .max()
+    }
+
+    /// The space the cuts on `cut` must keep from every other cut, centre to
+    /// centre when `center`, else edge to edge: the largest
+    /// [`Rule::CutSpacing`] limit that holds every cut (no `adjacent`).
+    /// `None` when none does.
+    pub fn cut_spacing(&self, cut: LayerId, center: bool) -> Option<Dbu> {
+        self.drc_on(cut)
+            .filter_map(|(_, rule)| match *rule {
+                Rule::CutSpacing {
+                    layer,
+                    center: c,
+                    adjacent: 0,
+                    limit,
+                    ..
+                } if layer == cut && c == center => Some(limit),
+                _ => None,
+            })
+            .max()
+    }
+
+    /// The cut-class spacing table on `cut` ([`Rule::CutClassSpacing`]),
+    /// the first stated; `None` without one.
+    pub fn cut_class_spacing(&self, cut: LayerId) -> Option<&CutClassTable> {
+        self.drc_on(cut).find_map(|(_, rule)| match *rule {
+            Rule::CutClassSpacing { layer, table } if layer == cut => {
+                self.drc.cut_tables.get(table as usize)
+            }
+            _ => None,
+        })
+    }
+
+    /// The fewest cuts on `cut` a via needs where it lands on a `wide` wire
+    /// `wire_width` wide: the largest [`Rule::MinimumCut`] count among the
+    /// rules whose `width` the wire is strictly wider than, whatever their
+    /// far-side metal. `None` when none holds it.
+    pub fn minimum_cuts(&self, cut: LayerId, wide: LayerId, wire_width: Dbu) -> Option<u16> {
+        self.drc_on(cut)
+            .filter_map(|(_, rule)| match *rule {
+                Rule::MinimumCut {
+                    cut: c,
+                    wide: w,
+                    width,
+                    min_count,
+                    ..
+                } if (c, w) == (cut, wide) && wire_width > width => Some(min_count),
+                _ => None,
+            })
+            .max()
+    }
+
+    /// The tallest stack of overlapping cuts through `cut`: the smallest
+    /// [`Rule::ViaStack`] `max_height` among the stacks naming it. `None`
+    /// when none does.
+    pub fn max_via_stack(&self, cut: LayerId) -> Option<u16> {
+        self.drc
+            .rules
+            .iter()
+            .filter_map(|(_, rule)| match *rule {
+                Rule::ViaStack { stack, max_height }
+                    if self
+                        .drc
+                        .stacks
+                        .get(stack as usize)
+                        .is_some_and(|layers| layers.contains(&cut)) =>
+                {
+                    Some(max_height)
+                }
+                _ => None,
+            })
+            .min()
+    }
+
+    /// The space a shape on `a` must keep from one on `b` in the projection
+    /// metric: the largest [`Rule::ProjectionSpacing`] limit between them,
+    /// in either order. `None` without one.
+    pub fn projection_spacing(&self, a: LayerId, b: LayerId) -> Option<Dbu> {
+        self.drc_on(a)
+            .filter_map(|(_, rule)| match *rule {
+                Rule::ProjectionSpacing { a: x, b: y, limit }
+                    if (x, y) == (a, b) || (x, y) == (b, a) =>
+                {
+                    Some(limit)
+                }
+                _ => None,
+            })
+            .max()
+    }
+
+    /// How many `inner` shapes an `outer` shape must hold, `(fewest, most)`:
+    /// the tightest bounds of the [`Rule::MustContain`] rules between them,
+    /// `u32::MAX` for no most. `None` without one.
+    pub fn contains(&self, outer: LayerId, inner: LayerId) -> Option<(u32, u32)> {
+        self.drc_on(outer)
+            .filter_map(|(_, rule)| match *rule {
+                Rule::MustContain {
+                    outer: o,
+                    inner: i,
+                    min_count,
+                    max_count,
+                } if (o, i) == (outer, inner) => Some((min_count, max_count)),
+                _ => None,
+            })
+            .reduce(|(min_a, max_a), (min_b, max_b)| (min_a.max(min_b), max_a.min(max_b)))
     }
 
     /// The density rules on `layer`, in deck order.

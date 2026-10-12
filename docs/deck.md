@@ -230,6 +230,7 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `notch(L) >= len` | A gap narrower than the limit between two parts of the same shape. |
 | `space(L) >= len` | Two shapes on one layer closer than the limit. |
 | `space(A, B) >= len` | A shape on `A` closer than the limit to a shape on `B`. |
+| `space(A, B, projection) >= len` | The same, measured only across edges that face each other and overlap in projection (KLayout's `projection` metric): corner to corner is not measured. sky130's own KLayout deck writes lvtn.3b "spacing of lvtn to pfet along the S/D direction" so. Touching or overlapping shapes measure 0. |
 | `eol_space(L; eol_width: len) >= len` | Space from an end of line (an edge shorter than `eol_width`) below the limit. |
 | `eol_space(L; eol_width: len, within: len, parallel: none, end_to_end: none) >= len` | LEF's end-of-line rule (`SPACING ENDOFLINE eolWidth WITHIN eolWithin`): an end of line is an edge shorter than `eol_width` with both corners convex, and its keep-out reaches the limit straight out from it and `within` past each of its sides (less than). An edge of another shape facing the end inside the keep-out is measured by its depth from the end's line. |
 | `eol_space(L; eol_width: len, within: len, parallel: (space: len, within: len, two_edges: bool), end_to_end: len \| none) >= len` | The same, applied to an end only where an edge runs beside its line (LEF `PARALLELEDGE`): at a corner, an edge facing the line's side less than `space` from it, overlapping the stretch from `within` behind the end to the end's `within` past it; `two_edges: true` needs one on both sides (`TWOEDGES`). With `end_to_end`, two ends of line facing each other need that space instead of the limit (LEF58 `ENDTOEND`). |
@@ -259,8 +260,14 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `region_density(L, R) <= frac` | A shape of `R` inside which `L` covers more than the limit of its area, each shape measured on its own: the pattern density over a device, as sky130 vpp.5a "max pattern density of met3.dg over capacitor.dg". Use `>=` for a minimum (vpp.11). |
 | `global_density(L) >= frac` | Coverage of the whole layout (the drawn layers' extent, as for `density`) below the limit. Add a boundary layer, `global_density(L, boundary)`, to measure over the die outline. Use `<=` for a maximum. |
 | `enclosure(inner, outer) >= len` | An `inner` shape not surrounded by `outer` by the limit on every side, measured to the outer shape's real edges, holes included. |
-| `enclosure(inner, outer, opposite) >= len` | An `inner` shape without the limit on both sides of at least one axis (sky130 m1.5 "two opposite sides"). |
+| `enclosure(inner, outer, opposite) >= len` | An `inner` shape without the limit on both sides of at least one axis (LEF `ENCLOSURE` "on two opposite sides"; for a rectangle the same as sky130 m1.5 "on one of two adjacent sides"). Each edge is measured straight out to the outer shape, so an L-shaped inner needs the limit past every vertical edge, or past every horizontal one. LEF `ENCLOSURE o1 o2` is this rule at `o1` plus `enclosure(inner, outer) >= o2`. |
+| `enclosure(inner, outer[, opposite]; width: len, below: len) >= len` | Either enclosure, only for an `inner` shape lying on a part of `outer` at least `width` wide and not on a part `below` wide: where a square that wide fits around all of it (LEF `ENCLOSURE ... WIDTH minWidth`). Either bound can be left out. LEF applies the rule with the largest `minWidth` the wire reaches, so write one row per band, each `below` the next one's `width`; a shape on no `outer` falls in the lowest band. GF180 CO.6 "Metal1 (< 0.34 µm) end-of-line overlap" is `enclosure(contact, metal1, opposite; below: 340nm) >= 60nm`. |
+| `enclosure(inner, outer, noncoincident) >= len` | An `inner` shape closer than the limit to `outer`'s edge, except where its edges lie on `outer`'s edge, as sky130 lvtn.10 "(exclude coincident edges)": each edge is measured to the parallel `outer` edges facing the same way beyond it, and pairs that touch (coincident edges, a corner on the edge) are not measured. |
+| `full_width(inner, outer)` | An `inner` shape that does not span `outer`'s full width along one axis: on one axis, every edge of `inner` must meet `outer`'s edge, as ASAP7 V1.M2.AUX.2 "V1 must exactly be the same width as M2 along the direction perpendicular to the M2 length". Reported with the widest gap on the better axis. An `inner` shape on no `outer` shape is for `inside`. |
+| `enclosure(inner, outer) <= len` | An `outer` shape reaching further than the limit from the `inner` shapes it holds, in any direction, corners included (inside their union grown by the limit with square corners), as sky130 npc.5 "Max enclosure of poly overlapping slotted_licon by npcm". Two inner shapes under one outer shape are measured together. An outer shape that holds no inner shape is not checked. Reported on the outer shape with the furthest reach, rounded up. |
 | `extension(A, B) >= len` | `A` not extending past `B` by the limit, as poly past diffusion. |
+| `bend(A, B)` | `A` turning a corner on `B`: a concave corner of `A` inside `B`'s material, where their shared area turns too, as sky130 poly.11 "No 90 deg turns of poly on diff" (GF180 PL.6, ASAP7 GATE.AUX.1). A stub off a gate is two such corners; a turn on `B`'s edge is none. Each corner is reported where it is. |
+| `covers_corner(A, B)` | `A` covering an inner (concave) corner of `B`, so their shared area turns there, as sky130 poly.10 "Poly can't overlap inner corners of diff". |
 | `overlap(A, B) >= len` | `A` and `B` overlapping by less than the limit. |
 | `tap_distance(well, tap) <= len` | Any point of a well further than the limit from a tap. |
 | `off_grid(; pitch: len)` | A vertex of a drawn shape off the manufacturing grid. Derived layers are not checked: they repeat the drawn vertices, and sizing by less than the grid would put on-grid drawing off it. |
@@ -269,10 +276,18 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `interior_angle(L) >= deg` | A corner whose angle inside its shape is under the limit, as IHP 3.1 "shapes with acute angles <87 degree are not allowed": 90 at a rectangle's corner, 270 at an L's inner corner, 45 at a right isosceles triangle's acute corners. Drawn shapes are read as drawn, diagonal ones included; write `interior_angle() >= deg` for every drawn layer. |
 | `valid(L)` | A drawn polygon that crosses itself or encloses no area (IHP 3.1 "self-intersecting polygons must be avoided"), named one by one, where every other rule on its layer is refused. Write `valid()` for every drawn layer. |
 | `redundant_via(L; within: len) >= count` | A cut with fewer than `count` cuts, itself included, within `within`. |
+| `min_cuts(cut, wide, other; width: len) >= count` | A via with fewer than `count` cuts on a part of `wide` wider than `width` (LEF `MINIMUMCUT count WIDTH width`). A via is the cuts joining one `wide` shape to one `other` shape, so `other` is the metal on its far side (`FROMABOVE`, `FROMBELOW`; write both for LEF's default). Add `within: len` to count only cuts closer than that together (LEF `WITHIN`). Each cut of a short via is reported with the count. |
+| `via_stack(cut1, cut2, ..) <= count` | A stack of overlapping cuts taller than `count` (LEF `MAXVIASTACK`), the cut layers listed bottom to top: a cut stacks on a cut of the layer before it that it overlaps. The cut at height `count + 1` of each taller stack is reported with the stack's height. Every cut counts as a single-cut via. |
 | `via_array_space(L; array: count) >= len` | Cuts in a cluster larger than `array`, closer than the limit. |
+| `space(L, center) >= len` | Two cuts whose centres are closer than the limit (LEF `SPACING CENTERTOCENTER`). Cuts are taken as drawn; the centre is the middle of a cut's bounding box. |
+| `adjacent_space(L; cuts: count, within: len) >= len` | Two cuts closer than the limit, where either has at least `cuts` other cuts strictly closer than `within` (LEF `SPACING ADJACENTCUTS count WITHIN within`): `cuts: 3` lets a 2x2 array keep tight spacing and holds a 2x3 one. Distances are boundary to boundary. |
+| `adjacent_space(L, center; cuts: count, within: len) >= len` | The same, with every distance centre to centre. |
+| `cut_class_space(L; short: [len, ..], long: [len, ..], space: [[len, ..], ..])` | Two cuts closer than their cell of a cut-class table (LEF58 `SPACINGTABLE` with `CUTCLASS`; see below). |
 | `patterning(L; colors: count) >= len` | Shapes that cannot be split into `colors` masks with same-mask shapes at least the limit apart. |
 | `forbidden(L)` | Every shape on `L`, reported with its area. Write the forbidden overlap as the layer: `forbidden(licon and poly and (diff or tap))`. On an edge layer, every edge. |
 | `contains(outer, inner) >= count` | An `outer` shape holding fewer than `count` `inner` shapes entirely, as sky130 licon.16 "every tap must enclose at least one licon". An inner shape across the outer's edge is not held, and touching inner shapes count as one. |
+| `contains(outer, inner) <= count` | An `outer` shape holding more than `count` `inner` shapes, counted the same way, as sky130 rpm.1g "only 1 licon is allowed in xhrpoly_0p35 prec_resistor_terminal". |
+| `contains(outer, inner) == count` | An `outer` shape holding any other number of `inner` shapes than `count`. |
 | `inside(inner, outer)` | An `inner` shape not entirely inside `outer`, reported with the area left outside, as licon.18 "npc must enclose poly_licon". Touching `outer`'s edge from inside is inside. |
 
 A spacing table, as a LEF `SPACINGTABLE PARALLELRUNLENGTH` or IHP Metal1
@@ -343,6 +358,30 @@ class is the last `length` it reaches, here below 24 nm, 24 to 36 nm, or
 `length` starts at 0 and rises, `space` has one row and one column per class,
 and the table is symmetric; it need not rise. Edges that meet only at a
 diagonal do not face: `corner_space` measures those.
+
+A cut-class table, as sky130 licon.2 to licon.2d (square licons 170 nm
+apart; slotted 0.19 x 2.0 µm licons 350 nm apart end to end, 510 nm
+otherwise, and 510 nm from a square licon):
+
+```
+rule licon.2 cut_class_space(licon;
+    short: [170nm, 190nm],
+    long:  [170nm, 2000nm],
+    space: [[170nm, 170nm, 510nm, 510nm],
+            [170nm, 170nm, 510nm, 510nm],
+            [510nm, 510nm, 350nm, 510nm],
+            [510nm, 510nm, 510nm, 510nm]])
+```
+
+Each class is a cut size, `short` x `long` either way round; a cut of no
+class is not checked by this rule. `space` has two rows and two columns per
+class, in class order: its END, then its SIDE. Two cuts apart along y face
+each other with the sides across y, so a cut faces with its SIDE (a long side)
+when it is wider than tall, and otherwise with its END (a square always does);
+apart along x, the same with taller than wide. A pair apart along both axes
+needs the larger of its two cells, and a pair that touches or overlaps the
+largest cell of its classes. Distances are edge to edge. The table must be
+symmetric.
 
 ### Edge checks
 

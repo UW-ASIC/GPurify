@@ -209,7 +209,7 @@ pub(crate) const fn seg_bbox(s: Seg) -> Bbox {
 
 /// Squared distance between two boxes, zero where they touch or overlap; a
 /// lower bound on the distance between anything they contain.
-const fn bbox_gap2(a: Bbox, b: Bbox) -> DbuArea {
+pub(crate) const fn bbox_gap2(a: Bbox, b: Bbox) -> DbuArea {
     let dx = axis_gap(a.xlo, a.xhi, b.xlo, b.xhi);
     let dy = axis_gap(a.ylo, a.yhi, b.ylo, b.yhi);
     DbuArea::new(dx * dx + dy * dy)

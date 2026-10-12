@@ -1,4 +1,4 @@
-//! Via family: `redundant_via` and `via_array_spacing`.
+//! Via family: `redundant_via`, `via_array_spacing` and `cut_spacing`.
 //!
 //! Both rules count cuts rather than measuring one, and both are policies
 //! rather than physical limits, so what is definitive
@@ -14,9 +14,9 @@
 
 use crate::common;
 
-use common::{Sink, A, RULE};
-use gpurify_check::drc::Rule;
-use gpurify_check::report::{Measurement, Severity, Violation};
+use common::{Sink, A, B, RULE};
+use gpurify_check::drc::{CutClassTable, Rule, RuleSet};
+use gpurify_check::report::{Measurement, Outcome, Severity, Violation};
 use gpurify_geom::PolyId;
 use gpurify_ingest::StrId;
 use gpurify_testgen::shapes::LayoutBuilder;
@@ -234,4 +234,257 @@ fn a_cluster_exactly_at_the_array_threshold_is_not_yet_an_array() {
     assert_eq!(sink.runs[0].examined, 0);
     assert_eq!(sink.runs[0].violations, 0);
     assert!(sink.out.rule.is_empty());
+}
+
+// -------------------------------------------------------------- cut_spacing
+
+fn cut_spacing_table(center: bool, adjacent: u16, within: i64, limit: i64) -> Vec<(StrId, Rule)> {
+    vec![(
+        RULE,
+        Rule::CutSpacing {
+            layer: A,
+            center,
+            adjacent,
+            within: dbu(within),
+            limit: dbu(limit),
+        },
+    )]
+}
+
+/// Oracle: construct-from-answer (LEF `SPACING CENTERTOCENTER`). A 100 cut
+/// centred on the origin and a 300 x 100 cut centred 299 to its right are 299
+/// apart centre to centre (149 edge to edge): one finding of 299 under a
+/// 300 requirement, midway between the centres at `(149, 0)`. At 300 apart
+/// they pass.
+#[test]
+fn centre_to_centre_spacing_measures_between_cut_centres() {
+    let mut layout = LayoutBuilder::new(1);
+    let small = layout.rect(A, -50, -50, 50, 50);
+    let big = layout.rect(A, 149, -50, 449, 50);
+    let (store, ids) = layout.finish();
+    let mut sink = Sink::default();
+    sink.run(&store, &cut_spacing_table(true, 0, 0, 300));
+    assert_only_violation(
+        &sink.out,
+        &Violation {
+            rule: RULE,
+            layer: A,
+            severity: Severity::Error,
+            at: point(149, 0),
+            measured: Measurement::Length(dbu(299)),
+            limit: Measurement::Length(dbu(300)),
+            shapes: (ids.of(small), Some(ids.of(big))),
+        },
+    );
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 2);
+
+    let (store, _) = cut_row(2, 300);
+    let mut sink = Sink::default();
+    sink.run(&store, &cut_spacing_table(true, 0, 0, 300));
+    assert_clean(&sink.runs, &sink.out, RULE);
+}
+
+/// Oracle: LEF/DEF 5.8 Figure 1-6, "SPACING 0.22 ADJACENTCUTS 3 WITHIN 0.25".
+/// In a row of 100 cuts at a 300 pitch (gap 200), each cut has at most two
+/// neighbours within 250, so nothing is held and the 200 gaps pass a 220
+/// requirement. A fourth cut 200 above the second gives that cut three
+/// neighbours: its three pairs, each 200 apart, fail, and the pair of the
+/// first and third cuts, 500 apart, does not.
+#[test]
+fn adjacent_cuts_hold_only_a_cut_with_enough_close_neighbours() {
+    let (store, _) = cut_row(3, 300);
+    let mut sink = Sink::default();
+    sink.run(&store, &cut_spacing_table(false, 3, 250, 220));
+    assert_eq!(sink.runs[0].outcome, Outcome::Ran);
+    assert!(sink.out.is_empty(), "no cut is held, so no pair fails");
+    assert_eq!(sink.runs[0].examined, 0, "no cut is held");
+
+    let mut layout = LayoutBuilder::new(1);
+    for x in [0, 300, 600] {
+        layout.rect(A, x - 50, -50, x + 50, 50);
+    }
+    layout.rect(A, 250, 250, 350, 350);
+    let (store, _) = layout.finish();
+    let mut sink = Sink::default();
+    sink.run(&store, &cut_spacing_table(false, 3, 250, 220));
+    assert_eq!(sink.out.len(), 3);
+    assert!(sink
+        .out
+        .measured
+        .iter()
+        .all(|&m| m == Measurement::Length(dbu(200))));
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
+}
+
+// -------------------------------------------------------- cut_class_spacing
+
+/// sky130 licon.2 to licon.2d as one table: classes 170 x 170 and 190 x 2000,
+/// END then SIDE per class.
+fn licon_table() -> RuleSet {
+    let cells = [
+        [170, 170, 510, 510],
+        [170, 170, 510, 510],
+        [510, 510, 350, 510],
+        [510, 510, 510, 510],
+    ];
+    RuleSet {
+        rules: vec![(RULE, Rule::CutClassSpacing { layer: A, table: 0 })],
+        cut_tables: vec![CutClassTable {
+            short: vec![dbu(170), dbu(190)],
+            long: vec![dbu(170), dbu(2_000)],
+            space: cells.iter().flatten().map(|&c| dbu(c)).collect(),
+        }],
+        ..RuleSet::default()
+    }
+}
+
+/// Oracle: the sky130 manual (licon.2b, licon.2c). Two slotted licons 349
+/// apart end to end break licon.2b's 350; side by side, 509 apart, they break
+/// licon.2c's 510; 400 apart end to end they pass. Each finding names the
+/// cell it broke.
+#[test]
+fn a_cut_class_table_reads_slots_end_to_end_and_side_by_side() {
+    let set = licon_table();
+    assert!(set.cut_tables[0].is_valid());
+    for (second, broken) in [
+        ((0, 2_349, 190, 4_349), Some((349, 350))),
+        ((699, 0, 889, 2_000), Some((509, 510))),
+        ((0, 2_400, 190, 4_400), None),
+    ] {
+        let mut layout = LayoutBuilder::new(1);
+        layout.rect(A, 0, 0, 190, 2_000);
+        layout.rect(A, second.0, second.1, second.2, second.3);
+        let (store, _) = layout.finish();
+        let mut sink = Sink::default();
+        set.run(&store, &mut sink.out, &mut sink.runs);
+        let found: Vec<(Measurement, Measurement)> = sink
+            .out
+            .measured
+            .iter()
+            .copied()
+            .zip(sink.out.limit.iter().copied())
+            .collect();
+        let want: Vec<(Measurement, Measurement)> = broken
+            .into_iter()
+            .map(|(m, l)| (Measurement::Length(dbu(m)), Measurement::Length(dbu(l))))
+            .collect();
+        assert_eq!(found, want, "{second:?}");
+        assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
+    }
+}
+
+/// Oracle: construct-from-answer. A table whose cells are not symmetric, or
+/// whose two classes are one size, is not a table the rule can read.
+#[test]
+fn a_cut_class_table_must_be_symmetric_with_distinct_classes() {
+    let mut table = licon_table().cut_tables.remove(0);
+    table.space[1] = dbu(200);
+    assert!(!table.is_valid());
+    let mut table = licon_table().cut_tables.remove(0);
+    table.short[1] = dbu(170);
+    table.long[1] = dbu(170);
+    assert!(!table.is_valid());
+}
+
+// -------------------------------------------------------------- minimum_cut
+
+/// Oracle: LEF/DEF 5.8 Minimum Cut Rule Example 1, "two via cuts are
+/// required for metal4 wires that are greater than 0.5 um": on a 600 wide
+/// wire, a via of one cut under its own pad fails with its count, one of two
+/// cuts under one pad passes, and on a 500 wide wire (not greater) a single
+/// cut passes. Layer A holds the cuts, B the wide metal, C the far metal.
+#[test]
+fn a_via_on_a_wire_wider_than_the_limit_needs_the_cut_count() {
+    const C: gpurify_geom::LayerId = gpurify_geom::LayerId(2);
+    let rule = vec![(
+        RULE,
+        Rule::MinimumCut {
+            cut: A,
+            wide: B,
+            other: C,
+            width: dbu(500),
+            within: None,
+            min_count: 2,
+        },
+    )];
+    for (wire, cuts, want) in [(600, 1, Some(1)), (600, 2, None), (500, 1, None)] {
+        let mut layout = LayoutBuilder::new(3);
+        layout.rect(B, 0, 0, 5_000, wire);
+        let single = layout.rect(A, 1_000, 100, 1_100, 200);
+        if cuts == 2 {
+            layout.rect(A, 1_200, 100, 1_300, 200);
+        }
+        layout.rect(C, 900, 0, 1_400, 300);
+        let (store, ids) = layout.finish();
+        let mut sink = Sink::default();
+        sink.run(&store, &rule);
+        if let Some(count) = want {
+            let _row = assert_has_violation(
+                &sink.out,
+                &Violation {
+                    rule: RULE,
+                    layer: A,
+                    severity: Severity::Error,
+                    at: point(1_050, 150),
+                    measured: Measurement::Count(count),
+                    limit: Measurement::Count(2),
+                    shapes: (ids.of(single), None),
+                },
+            );
+        } else {
+            assert_eq!(sink.runs[0].outcome, Outcome::Ran);
+            assert!(sink.out.is_empty(), "wire {wire}, {cuts} cuts");
+        }
+        let held = u64::from(wire > 500);
+        assert_eq!(sink.runs[0].examined, held, "held vias");
+    }
+}
+
+// ---------------------------------------------------------------- via_stack
+
+/// Oracle: LEF/DEF 5.8 "Maximum Via Stack": a cut is in a stack with another
+/// when it overlaps any part of it. Three aligned cuts on three layers under
+/// a limit of two: the third cut is reported, measuring 3. With the middle
+/// cut moved off the bottom one there are two stacks, each within the limit.
+#[test]
+fn a_stack_of_overlapping_cuts_taller_than_the_limit_is_reported_once() {
+    const C: gpurify_geom::LayerId = gpurify_geom::LayerId(2);
+    let set = RuleSet {
+        rules: vec![(
+            RULE,
+            Rule::ViaStack {
+                stack: 0,
+                max_height: 2,
+            },
+        )],
+        stacks: vec![vec![A, B, C]],
+        ..RuleSet::default()
+    };
+    for (middle, want) in [(0, Some(3)), (300, None)] {
+        let mut layout = LayoutBuilder::new(3);
+        layout.rect(A, 0, 0, 100, 100);
+        layout.rect(B, middle, 0, middle + 100, 100);
+        let top = layout.rect(C, middle, 0, middle + 100, 100);
+        let (store, ids) = layout.finish();
+        let mut sink = Sink::default();
+        set.run(&store, &mut sink.out, &mut sink.runs);
+        match want {
+            Some(height) => {
+                assert_only_violation(
+                    &sink.out,
+                    &Violation {
+                        rule: RULE,
+                        layer: C,
+                        severity: Severity::Error,
+                        at: point(middle + 50, 50),
+                        measured: Measurement::Count(height),
+                        limit: Measurement::Count(2),
+                        shapes: (ids.of(top), None),
+                    },
+                );
+            }
+            None => assert_clean(&sink.runs, &sink.out, RULE),
+        }
+        assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 3);
+    }
 }

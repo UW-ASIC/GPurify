@@ -704,3 +704,48 @@ fn a_huge_plate_is_not_spaced_against_its_own_hole() {
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
 }
+
+// ------------------------------------------------------- projection_spacing
+
+/// Oracle: construct-from-answer (`KLayout`'s projection metric, sky130
+/// lvtn.3b as its deck writes it). Two squares 100 apart side by side face
+/// each other over their whole height: one finding of 100, midway between
+/// the edges at the middle of their shared span, `(250, 100)`. Offset by 100
+/// on both axes they face nowhere and pass, though 141 apart by Euclid.
+#[test]
+fn projection_spacing_measures_only_facing_edges() {
+    let table = vec![(
+        RULE,
+        Rule::ProjectionSpacing {
+            a: A,
+            b: B,
+            limit: dbu(235),
+        },
+    )];
+    let mut layout = LayoutBuilder::new(2);
+    let left = layout.rect(A, 0, 0, 200, 200);
+    let right = layout.rect(B, 300, 0, 500, 200);
+    let (store, ids) = layout.finish();
+    let mut sink = Sink::default();
+    sink.run(&store, &table);
+    assert_only_violation(
+        &sink.out,
+        &Violation {
+            rule: RULE,
+            layer: A,
+            severity: Severity::Error,
+            at: point(250, 100),
+            measured: Measurement::Length(dbu(100)),
+            limit: Measurement::Length(dbu(235)),
+            shapes: (ids.of(left), Some(ids.of(right))),
+        },
+    );
+
+    let mut layout = LayoutBuilder::new(2);
+    layout.rect(A, 0, 0, 200, 200);
+    layout.rect(B, 300, 300, 500, 500);
+    let (store, _) = layout.finish();
+    sink.run(&store, &table);
+    assert_clean(&sink.runs, &sink.out, RULE);
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
+}

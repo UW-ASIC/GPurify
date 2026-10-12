@@ -252,6 +252,32 @@ const EM_NARROW: &[Param] = &[
     p("width", "narrow_width", Dim::Length),
     p("current", "narrow_current", Dim::Current),
 ];
+/// An enclosure's wire band: the wire widths the rule holds.
+const WIRE_WIDTH: &[Param] = &[p("width", "wire_width", Dim::Length)];
+const WIRE_BELOW: &[Param] = &[p("below", "wire_below", Dim::Length)];
+const WIRE: &[Param] = &[
+    p("width", "wire_width", Dim::Length),
+    p("below", "wire_below", Dim::Length),
+];
+
+/// `enclosure(inner, outer, opposite) >= len` with `params`.
+const fn opposite(params: &'static [Param]) -> Kind {
+    Kind {
+        modifier: Some("opposite"),
+        ..drc(
+            "enclosure",
+            Cmp::Ge,
+            "asymmetric_enclosure",
+            &[1, 0],
+            Some(p("", "min_one_side", Dim::Length)),
+            params,
+        )
+    }
+}
+const ADJACENT: &[Param] = &[
+    p("cuts", "adjacent", Dim::Count),
+    p("within", "within", Dim::Length),
+];
 /// LEF `PARALLELEDGE parSpace WITHIN parWithin [TWOEDGES]`.
 const EOL_PARALLEL: &[Param] = &[
     p("space", "par_space", Dim::Length),
@@ -314,6 +340,12 @@ pub(crate) const KINDS: &[Kind] = &[
     drc("notch", Cmp::Ge, "notch", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "min_spacing", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "min_spacing_diff", &[0, 1], LIMIT, &[]),
+    // Facing edges only, KLayout's `projection` metric:
+    // `space(lvtn, sd, projection) >= 235nm` (sky130 lvtn.3b).
+    Kind {
+        modifier: Some("projection"),
+        ..drc("space", Cmp::Ge, "projection_spacing", &[0, 1], LIMIT, &[])
+    },
     drc(
         "eol_space",
         Cmp::Ge,
@@ -479,19 +511,68 @@ pub(crate) const KINDS: &[Kind] = &[
         &[],
     ),
     // The engine takes the outer layer first; the deck writes `enclosure(inner, outer)`.
+    // A wire band (`width:`, `below:`, LEF `ENCLOSURE ... WIDTH`) is one more
+    // row per combination, the plain row first: a row knowing every given
+    // name wins, the first on a tie.
     drc("enclosure", Cmp::Ge, "min_enclosure", &[1, 0], LIMIT, &[]),
+    drc(
+        "enclosure",
+        Cmp::Ge,
+        "min_enclosure",
+        &[1, 0],
+        LIMIT,
+        WIRE_WIDTH,
+    ),
+    drc(
+        "enclosure",
+        Cmp::Ge,
+        "min_enclosure",
+        &[1, 0],
+        LIMIT,
+        WIRE_BELOW,
+    ),
+    drc("enclosure", Cmp::Ge, "min_enclosure", &[1, 0], LIMIT, WIRE),
+    // Coincident edges exempt, `enclosure(lvtn, nwell, noncoincident)`
+    // (sky130 lvtn.10).
     Kind {
-        modifier: Some("opposite"),
+        modifier: Some("noncoincident"),
         ..drc(
             "enclosure",
             Cmp::Ge,
-            "asymmetric_enclosure",
+            "noncoincident_enclosure",
             &[1, 0],
-            Some(p("", "min_one_side", Dim::Length)),
+            LIMIT,
             &[],
         )
     },
+    // The inner spans its host along one axis: `full_width(V1, M2)` (ASAP7
+    // V1.M2.AUX.2).
+    drc("full_width", Cmp::Absent, "full_width", &[1, 0], None, &[]),
+    // A maximum enclosure, `enclosure(licon, npc) <= 95nm` (sky130 npc.5).
+    drc("enclosure", Cmp::Le, "max_enclosure", &[1, 0], LIMIT, &[]),
+    opposite(&[]),
+    opposite(WIRE_WIDTH),
+    opposite(WIRE_BELOW),
+    opposite(WIRE),
     drc("extension", Cmp::Ge, "min_extension", &[0, 1], LIMIT, &[]),
+    // A gate's shape: `bend(poly, diff)` (poly turning on diff, sky130
+    // poly.11) and `covers_corner(poly, diff)` (poly over an inner corner of
+    // diff, poly.10).
+    Kind {
+        fixed: &[("of_reference", false)],
+        ..drc("bend", Cmp::Absent, "gate_corner", &[0, 1], None, &[])
+    },
+    Kind {
+        fixed: &[("of_reference", true)],
+        ..drc(
+            "covers_corner",
+            Cmp::Absent,
+            "gate_corner",
+            &[0, 1],
+            None,
+            &[],
+        )
+    },
     drc("overlap", Cmp::Ge, "overlap", &[0, 1], LIMIT, &[]),
     drc(
         "tap_distance",
@@ -534,6 +615,41 @@ pub(crate) const KINDS: &[Kind] = &[
         Some(p("", "min_count", Dim::Count)),
         &[p("within", "within", Dim::Length)],
     ),
+    // LEF MINIMUMCUT on the wide layer, the via's far metal third:
+    // `min_cuts(via1, met2, met1; width: 1um) >= 2` is MINIMUMCUT 2 WIDTH 1.0
+    // FROMBELOW on met2.
+    drc(
+        "min_cuts",
+        Cmp::Ge,
+        "minimum_cut",
+        &[0, 1, 2],
+        Some(p("", "min_count", Dim::Count)),
+        &[p("width", "width", Dim::Length)],
+    ),
+    drc(
+        "min_cuts",
+        Cmp::Ge,
+        "minimum_cut",
+        &[0, 1, 2],
+        Some(p("", "min_count", Dim::Count)),
+        &[
+            p("width", "width", Dim::Length),
+            p("within", "within", Dim::Length),
+        ],
+    ),
+    // LEF MAXVIASTACK over the cut layers listed, bottom to top:
+    // `via_stack(via1, via2, via3) <= 2`.
+    Kind {
+        more: true,
+        ..drc(
+            "via_stack",
+            Cmp::Le,
+            "via_stack",
+            &[0],
+            Some(p("", "max_height", Dim::Count)),
+            &[],
+        )
+    },
     drc(
         "via_array_space",
         Cmp::Ge,
@@ -541,6 +657,50 @@ pub(crate) const KINDS: &[Kind] = &[
         &[0],
         LIMIT,
         &[p("array", "array_threshold", Dim::Count)],
+    ),
+    // LEF cut-layer SPACING: `space(via1, center)` is CENTERTOCENTER, and
+    // `adjacent_space(via1; cuts: 3, within: 250nm)` ADJACENTCUTS 3 WITHIN.
+    Kind {
+        modifier: Some("center"),
+        fixed: &[("center", true)],
+        ..drc("space", Cmp::Ge, "cut_spacing", &[0], LIMIT, &[])
+    },
+    Kind {
+        fixed: &[("center", false)],
+        ..drc(
+            "adjacent_space",
+            Cmp::Ge,
+            "cut_spacing",
+            &[0],
+            LIMIT,
+            ADJACENT,
+        )
+    },
+    Kind {
+        modifier: Some("center"),
+        fixed: &[("center", true)],
+        ..drc(
+            "adjacent_space",
+            Cmp::Ge,
+            "cut_spacing",
+            &[0],
+            LIMIT,
+            ADJACENT,
+        )
+    },
+    // LEF58_SPACINGTABLE on a cut layer, by cut class: `short`/`long` are the
+    // classes' sizes, `space` two rows and columns per class (END, SIDE).
+    drc(
+        "cut_class_space",
+        Cmp::Absent,
+        "cut_class_spacing",
+        &[0],
+        None,
+        &[
+            p("short", "class_short", Dim::LengthList),
+            p("long", "class_long", Dim::LengthList),
+            p("space", "space", Dim::LengthRows),
+        ],
     ),
     drc(
         "patterning",
@@ -582,6 +742,24 @@ pub(crate) const KINDS: &[Kind] = &[
         "must_contain",
         &[0, 1],
         Some(p("", "min_count", Dim::Count)),
+        &[],
+    ),
+    // At most `count` (sky130 rpm.1g "only 1 licon is allowed in ..."), or
+    // exactly `count`.
+    drc(
+        "contains",
+        Cmp::Le,
+        "must_contain",
+        &[0, 1],
+        Some(p("", "max_count", Dim::Count)),
+        &[],
+    ),
+    drc(
+        "contains",
+        Cmp::Eq,
+        "must_contain",
+        &[0, 1],
+        Some(p("", "count", Dim::Count)),
         &[],
     ),
     // Every inner shape lies entirely inside the outer layer: `inside(poly_licon, npc)`.

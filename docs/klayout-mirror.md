@@ -241,7 +241,7 @@ explains (kind 30).
 | 25 | via_array_spacing | `via_array_space(L; array) >= l` | ROW PAIR | APPROX | lo ⊆ GPurify ⊆ hi | 67 |
 | 26 | multi_patterning | `patterning(L; colors) >= l` | — | NONE | reported as not mirrored | — |
 | 27 | forbidden | `forbidden(L)` | ROW / EDGE | EXACT | exact | 3964 |
-| 28 | must_contain | `contains(o, i) >= n` | FIG by marker (outer) | EXACT | exact | 3236 |
+| 28 | must_contain | `contains(o, i) >= n` (`<=`, `==`) | FIG by marker (outer) | EXACT | exact | 3236 |
 | 29 | must_be_inside | `inside(i, o)` | FIG by marker (inner) | EXACT | exact | 3107 |
 | 30 | net_spacing | `space(L; nets: same\|different)` | PAIR | EXACT on one layer with `touch_within_layer`, else NONE | exact | 1141 / 10 (F88) |
 | 31 | spacing_table | `space_table(L; …)` | PAIR | APPROX | exact on R, else KLayout ⊆ GPurify | 1209 |
@@ -268,8 +268,17 @@ explains (kind 30).
 | 52 | span_length | `span_length(L; x, y)` | — | NONE | reported as not mirrored | — |
 | 53 | convex_corner_spacing | `corner_space(L; corner_to_corner, except_eol)` | PAIR | APPROX without `except_eol`, else NONE | GPurify ⊆ KLayout | — |
 | 54 | exact_pitch | `pitch(L, vertical \| horizontal) == l` | — | NONE | reported as not mirrored | — |
+| 55 | cut_spacing | `space(L, center) >= l`, `adjacent_space(L[, center]; cuts, within) >= l` | ROW PAIR | EXACT (scripted) | exact | new |
+| 56 | cut_class_spacing | `cut_class_space(L; short, long, space)` | ROW PAIR | EXACT (scripted) | exact | new |
+| 57 | minimum_cut | `min_cuts(C, W, O; width[, within]) >= n` | ROW | EXACT (scripted) | exact | new |
+| 58 | gate_corner | `bend(A, B)`, `covers_corner(A, B)` | POINT | EXACT | exact | new |
+| 59 | max_enclosure | `enclosure(i, o) <= l` | FIG by marker (outer) | EXACT | exact | new |
+| 60 | noncoincident_enclosure | `enclosure(i, o, noncoincident) >= l` | FIG by shape (inner) | APPROX | KLayout ⊆ GPurify | new |
+| 61 | via_stack | `via_stack(C1, C2, ..) <= n` | ROW | EXACT (scripted) | exact | new |
+| 62 | full_width | `full_width(i, o)` | FIG by shape (inner) | EXACT (scripted) | exact | new |
+| 63 | projection_spacing | `space(A, B, projection) >= l` | PAIR | APPROX | KLayout ⊆ GPurify | new |
 
-34 kinds are EXACT, 13 APPROX and seven NONE; `convex_corner_spacing` is NONE on a deck with
+41 kinds are EXACT (five scripted over KLayout's polygons), 15 APPROX and seven NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`, and between two layers (`space(A, B; nets: ..)`), which is not mirrored. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -559,14 +568,18 @@ emit(id, O.enclosing(I, LIM, euclidian, transparent)) ; emit(id, I.not_inside(O)
 
 - `enclosing` ignores inner shapes that are partly or fully outside (v T7), hence the
   `not_inside`. Coincident edges are reported at 0, and corner-to-corner distances count.
+- A wire band restricts `I` first, for this kind and the next: `I.inside(O.sized(-T).sized(T))`
+  with `T = W - 1` at x2 (the wide part of kind 11) for `width: W`, and `.not_inside(...)` the
+  same way for `below:`.
 - Key FIG by shape: per inner figure, the least over its drawn rows (the marker is in the strip
   outside the inner).
 
 ### 18. asymmetric_enclosure — APPROX (exact when the inner layer is R, else KLayout ⊆ GPurify)
 
-**GPurify** (`overlay.rs` `strips`, `enclosure_of`): for a rectangular inner row, each side's
-margin is read straight out; the measure is `max(min(l, r), min(b, t))`. A non-rectangular inner
-is held to the limit on every side by Euclidean distance (fails closed); an unhosted one is 0.
+**GPurify** (`overlay.rs` `strips`, `enclosure_of`): each edge of an inner row, holes included,
+is read straight out to the nearest host edge facing it; the measure is the better axis,
+`max(min over vertical edges, min over horizontal edges)`, which is `max(min(l, r), min(b, t))`
+for a rectangle. An unhosted inner is 0.
 
 **KLayout**
 
@@ -578,9 +591,11 @@ emit(id, I.not_inside(O))
 
 - (v t4 T17.) Do not use the classic rectangle filter: it stops waiving when an error covers only
   part of a side (v t3 T9e).
-- A non-rectangular inner that KLayout passes, GPurify may fail (x: fixture
-  `asymmetric_enclosure/l_via_one_axis`), so off R
-  KLayout ⊆ GPurify. The measurement is not compared.
+- The recipe is the same definition edge by edge: an inner fails when it has a short vertical
+  edge and a short horizontal one. Off R, KLayout's projection pairs an inner edge only with
+  outer edges whose projection overlaps it by a positive length, as `strips` does, but a
+  shielded outer edge and a partly unhosted inner can still differ, so off R KLayout ⊆ GPurify
+  (fixtures `asymmetric_enclosure/l_via_*`). The measurement is not compared.
 
 ### 19. min_extension — APPROX (exact on R+, else not compared)
 
@@ -734,13 +749,19 @@ emit(id, E)               # edge layer: maximal runs (a2)
 
 **GPurify** (`presence.rs` `must_contain`): merged inner and outer figures; an inner figure is
 held by the outer figure that covers all of it (straddling the boundary, by none); each outer
-figure holding fewer than `min_count` fails, `measured` the count it holds.
+figure holding fewer than `min_count` or more than `max_count` fails, `measured` the count it
+holds. `>=` sets the minimum, `<=` the maximum, `==` both.
 
 **KLayout**
 
 ```ruby
-emit(id, O.not_covering(I.inside(O), MIN_COUNT)) { |p| { v: I.data.merged.inside(RBA::Region.new(p)).count } }
+emit(id, O.not_covering(I.inside(O), MIN_COUNT)) { |p| { v: I.data.merged.inside(RBA::Region.new(p)).count } }   # a minimum
+emit(id, O.covering(I.inside(O), MAX_COUNT + 1)) { |p| { v: … } }                                                # a maximum
 ```
+
+- Too few and too many are disjoint, so a `==` row emits both lines and no figure twice. The
+  maximum reuses the counted `covering` the minimum is verified on ([L] "covering": "only
+  selected when covering a given number of shapes").
 
 - `covering` drops an outer figure that any inner shape straddles, whatever else it holds (v t18
   Z4; random layout 133). Counting only inners that some outer holds restores the definition.
@@ -1037,7 +1058,6 @@ oracle is LEF 5.8's own Example 1-16 and Figures 1-14 and 1-15, drawn as fixture
 staircase swept at the limit. OpenROAD's TritonRoute implements base `MINSTEP` runs, but its
 typed `INSIDECORNER`/`OUTSIDECORNER` branch never sets its corner flags (read from
 `FlexGC_main.cpp`), so it is not an oracle for them.
-
 ### 47. tip_spacing_table — EXACT
 
 **GPurify** (`facing.rs` `tip_spacing_table`, `each_facing`): whole edges of the merged layer, in
@@ -1181,6 +1201,160 @@ as too small. The oracles: ASAP7's own values (FIN.S.1 27 nm on 7 nm fins, GATE.
 gates) at the pitch and one step either side (FR), a missing line, rows that do not overlap, and a
 bent shape refused, hand-derived under the four symmetries that keep the axes (SY, MR).
 ---
+
+### 55. cut_spacing — EXACT (scripted)
+
+**GPurify** (`via.rs` `cut_spacing`): LEF cut-layer `SPACING` with `CENTERTOCENTER` and
+`ADJACENTCUTS n WITHIN w`. On drawn cut rows, distances are between bounding-box centres or
+boundary to boundary (0 for cuts that touch, overlap or nest). A cut is held when at least `n`
+other cuts lie strictly closer than `w` (every cut when `n` is 0); a pair closer than the limit
+fails when either cut is held.
+
+**KLayout** has no centre-to-centre metric and no per-cut neighbour count, so the prelude's
+`cut_spacing` computes the definition over KLayout's raw polygons, independently of GPurify's
+code:
+
+```ruby
+emit("raw:" + C, C.dup.raw) ; cut_spacing(id, C.dup.raw, LIM, N, WITHIN, CENTER)
+# per pair: box centres (whole at x2) or poly_d2 (0 when Region(p).sized(1) & q is not empty,
+# else the least vertex-to-edge distance, exact); counts by `< WITHIN²`, failures by `< LIM²`
+```
+
+- Key ROW PAIR, both cuts by index into `raw:<layer>`; the measurement is not compared.
+- (d) `Polygon#each_edge`, `#each_point_hull`, `#bbox`, `Box#center` ([R]).
+
+### 56. cut_class_spacing — EXACT (scripted)
+
+**GPurify** (`via.rs` `cut_class_spacing`): a `LEF58_SPACINGTABLE` of `CUTCLASS` SIDE/END
+cells. A drawn cut's class is the `short` x `long` its bounding box matches. Apart along y, a cut
+faces with its SIDE when wider than tall; along x, when taller than wide; apart along both, the
+larger cell; touching or overlapping, the class pair's largest cell. Edge-to-edge distance.
+
+**KLayout** has no cut classes, so the prelude's `cut_class_spacing` reads the same table over
+KLayout's raw boxes:
+
+```ruby
+emit("raw:" + C, C.dup.raw) ; cut_class_spacing(id, C.dup.raw, [[S0, L0], ..], [[cells x2], ..])
+```
+
+- Key ROW PAIR; the measurement is not compared.
+
+### 57. minimum_cut — EXACT (scripted)
+
+**GPurify** (`via.rs` `minimum_cut`): LEF `MINIMUMCUT n WIDTH w [WITHIN d]`. A via is the drawn
+cuts (by box) joining one merged figure of the wide layer to one of the far layer, split into
+groups closer than `d`; a group with a cut on the part of the wide layer where a `w + 1` square
+fits and fewer than `n` cuts reports each cut, `measured` the group's count.
+
+**KLayout** has no via or cut count by connection, so the prelude's `minimum_cut` groups KLayout's
+raw cuts by the merged figures they overlap, with the wide part `W.merged.sized(-w).sized(w)` at x2
+(kind 11's wide part for `w + 1`):
+
+```ruby
+minimum_cut(id, C.dup.raw, W, O, w, N, D2 or nil)   # one polygon per reported cut, v = its count
+```
+
+- Key ROW, the cut's box; the count is compared exactly. A cut that bridges two figures of one
+  layer is grouped by a figure each tool picks in its own order, so the random deck carries no
+  `min_cuts` row.
+
+### 58. gate_corner — EXACT
+
+**GPurify** (`overlay.rs` `gate_corner`, `concave_corners`): each concave corner (a right turn
+with the material on the left) of a figure of merged `A & B` that is also a concave corner of
+merged A (`bend`) or of merged B (`covers_corner`). `at` the corner.
+
+**KLayout**
+
+```ruby
+emit(id, (A & B).corners(90) & A.corners(90))   # bend; B.corners(90) for covers_corner
+```
+
+- (d) [L] "corners": "Since polygons are oriented clockwise, positive angles indicate concave
+  (inner) corners", marked by "small 2x2 DBU boxes". Boxes of two corners overlap only when the
+  corners are one point (one unit apart is two DBU at x2, so their boxes only touch), and the
+  overlap's centre, halved and floored, is the corner. Key POINT.
+
+### 59. max_enclosure — EXACT
+
+**GPurify** (`overlay.rs` `max_enclosure`, `beyond`): each merged outer figure holding inner
+figures (covering them entirely) fails when it reaches past their union grown by the limit with
+square corners; `at` a point of that excess, `measured` the least whole growth that covers it.
+
+**KLayout**
+
+```ruby
+max_enclosure(id, O, I, LIM)   # per merged O figure: held = merged I figures inside it;
+                               # fails when Region(o) - Region(held).sized(LIM) is not empty
+```
+
+- Key FIG by marker over the outer figures; the measurement is not compared. `sized` grows a
+  rectilinear region with square corners, as `.sized()` in a derived layer (c).
+
+### 60. noncoincident_enclosure — APPROX (KLayout ⊆ GPurify)
+
+**GPurify** (`overlay.rs` `apart_enclosure`): each inner edge against each host edge parallel to
+it, facing the same way at or beyond it, Euclidean; pairs that touch are not measured; the least
+of the rest is the enclosure, 0 when unhosted.
+
+**KLayout**
+
+```ruby
+emit(id, O.enclosing(I, LIM, euclidian, transparent, without_touching_edges)) ; emit(id, I.not_inside(O))
+```
+
+- (d) [L] "without_touching_edges": "coincident edges will not yield errors"; it also drops
+  touching corners, as GPurify's touching pairs. `enclosing` pairs edges by its own angle and
+  orientation filter, which this repository has not run against the per-edge definition, so the
+  comparison is the safe bracket until a run settles it. Key FIG by shape (inner); the
+  measurement is not compared.
+
+### 61. via_stack — EXACT (scripted)
+
+**GPurify** (`via.rs` `via_stack`): LEF `MAXVIASTACK` over the cut layers listed, bottom to top.
+A drawn cut stacks on a cut of the layer before whose box it overlaps with positive area; the
+tallest chain from below (`down`) and from above (`up`) through each cut; each cut with
+`down == max + 1` is reported, `measured` `down + up - 1`.
+
+**KLayout** has no stack count, so the prelude's `via_stack` runs the same chains over raw boxes:
+
+```ruby
+via_stack(id, [C1.dup.raw, C2.dup.raw, ..], MAX)   # one polygon per reported cut, v = its stack
+```
+
+- Key ROW, the cut's box; the count is compared exactly.
+
+### 62. full_width — EXACT (scripted)
+
+**GPurify** (`overlay.rs` `enclosure_of`, `Mode::FullWidth`): each inner edge read straight out
+to the nearest host edge facing it (`strips`); the inner fails when neither axis reads 0 on every
+edge. Unhosted inners are not measured.
+
+**KLayout** has no per-axis span test, so the prelude's `full_width` reads the same straight-out
+distances from KLayout's merged polygons (projection: host edges whose span overlaps the inner
+edge's, at or beyond it):
+
+```ruby
+full_width(id, O, I)   # each merged I figure covered by an O figure, failing on both axes
+```
+
+- Key FIG by shape (inner); the measurement is not compared.
+
+### 63. projection_spacing — APPROX (KLayout ⊆ GPurify)
+
+**GPurify** (`spacing.rs` `projection_spacing`, `facing_gap`): drawn shapes of A and B; a pair
+measures the least gap between parallel edges facing each other across it with a positive
+projection overlap, 0 when the shapes touch, overlap or nest.
+
+**KLayout**
+
+```ruby
+emit(id, A.separation(B, LIM, projection, transparent)) ; emit(id, A & B)
+```
+
+- (d) [L] "separation" with the `projection` metric. Key PAIR as `min_spacing_diff`; the
+  measurement is not compared, and the comparison is the safe bracket until a run settles how
+  KLayout pairs edges that meet only at a projection's end.
 
 ## (c) Derived layers, connectivity, antenna
 

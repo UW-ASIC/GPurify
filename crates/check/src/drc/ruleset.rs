@@ -221,9 +221,43 @@ pub enum Rule {
     /// GF180 DF.16, IHP NW.d and Gat.d, ASAP7 GATE.ACTIVE.S.4; `KLayout`
     /// `separation`.
     ///
-    /// Limits: cross-layer spacing only; the via stack-count limit of DRC-065
-    /// (LEF `MAXVIASTACK`) is missing.
+    /// Limits: LEF `SPACING ... LAYER ... STACK`, which lets aligned
+    /// same-net cuts of two layers stack, is not modelled; the stack-count
+    /// limit is [`Rule::ViaStack`].
     MinSpacingDiff {
+        /// The first layer; findings are reported on it.
+        a: LayerId,
+        /// The second layer.
+        b: LayerId,
+        /// The smallest legal gap, in grid units; positive.
+        limit: Dbu,
+    },
+    /// A shape on `a` closer than `limit` to a shape on `b` across facing
+    /// edges.
+    ///
+    /// Deck: `space(A, B, projection) >= len`, kind `projection_spacing`:
+    /// `KLayout`'s `projection` metric, the reading sky130's own `KLayout`
+    /// deck gives lvtn.3b "Min spacing of lvtn to pfet along the S/D
+    /// direction" (`lvtn.separation(diff.and(nwell).not(poly), 0.235,
+    /// projection)`). Shapes are as drawn. A pair is measured across each
+    /// edge of one and each edge of the other that are parallel, face each
+    /// other across the gap and overlap in projection by a positive length;
+    /// the pair's distance is the least such gap. Corner to corner is not
+    /// measured, so shapes offset diagonally pass however close. A pair that
+    /// touches, overlaps or nests measures 0, as [`Rule::MinSpacingDiff`].
+    ///
+    /// One violation per offending pair, reported on layer `a`, midway
+    /// between the two edges at the middle of their shared projection (where
+    /// the boundaries meet, for a pair at 0). `examined` counts pairs whose
+    /// boxes come within `limit`.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-055. Rules: sky130 lvtn.3b as its `KLayout` deck writes it;
+    /// `KLayout` `separation` with `projection`.
+    ///
+    /// Limits: the S/D direction is not derived from the gate: facing edges
+    /// are measured along both axes, as sky130's own deck measures them.
+    ProjectionSpacing {
         /// The first layer; findings are reported on it.
         a: LayerId,
         /// The second layer.
@@ -492,15 +526,21 @@ pub enum Rule {
     /// from the inner polygon to the host's boundary, holes and concave
     /// corners included. An inner polygon no host covers measures 0.
     ///
+    /// `enclosure(inner, outer; width: len, below: len) >= len` (either bound
+    /// alone too) holds only the inner polygons its [`WireBand`] selects: LEF
+    /// `ENCLOSURE ... WIDTH minWidth`, an enclosure that applies by the width
+    /// of the wire around the cut.
+    ///
     /// One violation per offending inner polygon, reported on the `inner`
     /// layer. A rectangle is marked in the middle of the strip on its least
     /// enclosed side, any other shape at the centre of its bounding box.
     /// `shapes` is the inner row and the host's drawn row (`None` when
-    /// unhosted). `examined` counts inner polygons.
+    /// unhosted). `examined` counts the inner polygons the band holds.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
-    /// DRC-040, DRC-090, DRC-096. Rules: sky130 ct.4, m1.4 and licon.5a,
-    /// GF180 CO.3, IHP M1.c and V1.c, ASAP7 V3.M4.EN.2; LEF `ENCLOSURE`;
+    /// DRC-040, DRC-043, DRC-090, DRC-096. Rules: sky130 ct.4, m1.4 and
+    /// licon.5a, GF180 CO.3, IHP M1.c and V1.c, ASAP7 V3.M4.EN.2; LEF
+    /// `ENCLOSURE`, and `ENCLOSURE ... WIDTH` (LEF/DEF 5.8, Example 1-3);
     /// `KLayout` `enclosing`.
     MinEnclosure {
         /// The enclosing layer, merged; the deck's second argument.
@@ -509,30 +549,113 @@ pub enum Rule {
         inner: LayerId,
         /// The smallest legal enclosure, in grid units; positive.
         limit: Dbu,
+        /// The wire widths at which the rule holds an inner polygon.
+        wire: WireBand,
+    },
+    /// An `inner` shape closer than `limit` to `outer`'s boundary, edges that
+    /// coincide with it apart.
+    ///
+    /// Deck: `enclosure(inner, outer, noncoincident) >= len`, kind
+    /// `noncoincident_enclosure`, as sky130 lvtn.10 "Min enclosure of lvtn by
+    /// (nwell not overlapping `Var_channel`) (exclude coincident edges)". Hosts
+    /// are chosen as for [`Rule::MinEnclosure`]. Each edge of the inner
+    /// polygon is measured to each edge of the host that is parallel to it,
+    /// faces the same way and lies at or beyond its line, Euclidean, end to
+    /// end too (`KLayout`'s `enclosing` edge pairs, `euclidian`); a pair that
+    /// touches measures nothing, so an inner edge on the host's boundary, and
+    /// an inner corner on it, are exempt (`KLayout`'s
+    /// `without_touching_edges`, "coincident edges will not yield errors").
+    /// Without such contact this is [`Rule::MinEnclosure`]'s distance: a
+    /// rectilinear host's nearest boundary point faces an inner edge along a
+    /// parallel host edge, or is a concave corner of the host where two meet.
+    /// An inner polygon whose every edge lies on its host's boundary passes;
+    /// one no host covers measures 0.
+    ///
+    /// One violation per offending inner polygon, on the `inner` layer, in the
+    /// middle of the gap between the boxes of the pair that measured it, or
+    /// at the centre of its box when unhosted. `shapes` is the inner row and
+    /// the host's drawn row (`None` when unhosted). `examined` counts inner
+    /// polygons.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-054. Rules: sky130 lvtn.10; `KLayout` `enclosing` with
+    /// `without_touching_edges`.
+    NoncoincidentEnclosure {
+        /// The enclosing layer, merged; the deck's second argument.
+        outer: LayerId,
+        /// The enclosed layer; findings are reported on it.
+        inner: LayerId,
+        /// The smallest legal enclosure, in grid units; positive.
+        limit: Dbu,
+    },
+    /// An `inner` shape that does not span its host's full width along one
+    /// axis.
+    ///
+    /// Deck: `full_width(inner, outer)`, kind `full_width`, as ASAP7
+    /// V1.M2.AUX.2 "V1 must exactly be the same width as M2 along the
+    /// direction perpendicular to the M2 length". Hosts are chosen as for
+    /// [`Rule::MinEnclosure`] (the one reading least). Each edge of the inner
+    /// polygon is read straight out to the nearest host edge facing it, as
+    /// [`Rule::AsymmetricEnclosure`] reads it; the inner spans its host along
+    /// x when every vertical edge reads 0 (it meets the host's edge on both
+    /// sides), along y likewise, and the rule measures the better axis's
+    /// widest reading, `min(max(left, right), max(bottom, top))` for a
+    /// rectangle, which must be 0. An inner shape no host covers is not
+    /// measured: `inside(inner, outer)` is that rule (ASAP7 V1.AUX.1).
+    ///
+    /// One violation per offending inner polygon, on the `inner` layer, in the
+    /// middle of the strip past the widest-reading edge of the better axis,
+    /// with `limit` 0. `shapes` is the inner row and the host's drawn row.
+    /// `examined` counts inner polygons.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-053. Rules: ASAP7 V1.M2.AUX.2.
+    ///
+    /// Limits: `LEF58_SPACING ... EXACTALIGNED`, a spacing rule for exactly
+    /// aligned line ends, is not this rule and is not modelled.
+    FullWidth {
+        /// The host layer, merged; the deck's second argument.
+        outer: LayerId,
+        /// The layer that must span it; findings are reported on it.
+        inner: LayerId,
     },
     /// An `inner` shape without `min_one_side` of enclosure on both sides of
     /// at least one axis.
     ///
     /// Deck: `enclosure(inner, outer, opposite) >= len`, kind
     /// `asymmetric_enclosure`. Hosts are chosen as for [`Rule::MinEnclosure`].
-    /// For a rectangular inner polygon, each side's enclosure is read straight
-    /// out from that side to the nearest host edge facing it, and the rule
-    /// measures `max(min(left, right), min(bottom, top))`. Write the every-side
-    /// minimum as its own [`Rule::MinEnclosure`] row (sky130 m1.4 beside m1.5).
+    /// Each edge of the inner polygon, holes included, is read straight out
+    /// from its outside to the nearest host edge facing it (the projection
+    /// metric). The inner is enclosed along x by the least reading of its
+    /// vertical edges and along y by the least of its horizontal edges, and
+    /// the rule measures the better axis: `max(min(left, right), min(bottom,
+    /// top))` for a rectangle. An L-shaped inner's concave edges count as its
+    /// outer ones do. LEF `ENCLOSURE overhang1 overhang2` is two rows: this
+    /// one at `overhang1` and a [`Rule::MinEnclosure`] row at `overhang2`
+    /// (sky130 m1.4 beside m1.5), which together hold exactly when one axis
+    /// has `overhang1` on both sides and every side has `overhang2`.
+    ///
+    /// For a rectangle, "on one of two adjacent sides" (sky130 m1.5, via.5a,
+    /// licon.5c, licon.7, licon.8a, li.5) is this rule: no two adjacent sides
+    /// fall short exactly when one axis has the limit on both sides. sky130's
+    /// own `KLayout` deck checks those rows as two opposite edges too.
+    ///
+    /// With `width:` and `below:`, the rule holds only the inner polygons its
+    /// [`WireBand`] selects, as [`Rule::MinEnclosure`]'s: LEF `ENCLOSURE
+    /// overhang1 overhang2 WIDTH minWidth`.
     ///
     /// One violation per offending inner polygon, on the `inner` layer, in the
-    /// middle of the strip on the less enclosed side of the better axis.
+    /// middle of the strip past the least enclosed edge of the better axis.
     /// `shapes` is the inner row and the host's drawn row (`None` when
-    /// unhosted). `examined` counts inner polygons.
+    /// unhosted). `examined` counts the inner polygons the band holds.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
-    /// DRC-041, DRC-042. Rules: sky130 m1.5, via.5a and licon.5c, ASAP7
-    /// V1.M1.EN.1, IHP M1.c1 and V1.c1; LEF `ENCLOSURE` with two overhangs.
+    /// DRC-041, DRC-042, DRC-043. Rules: sky130 m1.5, via.5a and licon.5c, ASAP7
+    /// V1.M1.EN.1, IHP M1.c1 and V1.c1; LEF `ENCLOSURE` with two overhangs
+    /// (LEF/DEF 5.8, "ENCLOSURE"); `KLayout` `enclosed` with `projection`.
     ///
-    /// Limits: an inner polygon that is not a rectangle is held to
-    /// `min_one_side` on every side, as [`Rule::MinEnclosure`] measures (fails
-    /// closed). Only the two-opposite-sides form exists: one of two adjacent
-    /// sides and end-cap-only enclosure cannot be written.
+    /// Limits: end-cap enclosure that depends on the host's end of line
+    /// (`LEF58_ENCLOSURE EOL`) is not modelled.
     AsymmetricEnclosure {
         /// The enclosing layer, merged; the deck's second argument.
         outer: LayerId,
@@ -540,6 +663,48 @@ pub enum Rule {
         inner: LayerId,
         /// The enclosure both sides of one axis need, in grid units; positive.
         min_one_side: Dbu,
+        /// The wire widths at which the rule holds an inner polygon.
+        wire: WireBand,
+    },
+    /// An `outer` shape reaching further than `limit` from the `inner` shapes
+    /// it holds.
+    ///
+    /// Deck: `enclosure(inner, outer) <= len`, kind `max_enclosure`: a
+    /// maximum enclosure, as sky130 npc.5 "Max enclosure of poly overlapping
+    /// `slotted_licon` by npcm" or IHP LU.c "Max. extension of an abutted `NWell`
+    /// tie beyond Cont". Both layers are merged. An outer figure holds the
+    /// inner figures it covers entirely, and must lie within `limit` of them
+    /// in every direction, corners included: inside the union of its held
+    /// inner figures grown by `limit` with square corners (`KLayout`
+    /// `sized`), the reading a deck's `outer not inner.sized(limit)` gives.
+    /// So two cuts under one host are measured together, the host's part
+    /// between them included (npc.5's "merge between adjacent short edges").
+    /// An outer figure that holds no inner shape is not measured.
+    ///
+    /// One violation per offending outer figure, on the `outer` layer, at the
+    /// centre of a rectangle of its part beyond `limit`. `measured` is the
+    /// least whole distance the held figures would have to be grown by to
+    /// cover it (the furthest reach, rounded up, so an exceeded limit never
+    /// reads as met); `shapes.0` is the lowest drawn outer row under the
+    /// figure. `examined` counts the outer figures that hold an inner one.
+    ///
+    /// Min-and-max rules (IHP Sdiod.a "Min. and max. PWell:block enclosure
+    /// of `ContBar`") are this row beside a [`Rule::MinEnclosure`] row.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-044. Rules: sky130 npc.5, IHP LU.c, LU.c1 and Sdiod.a to Sdiod.c;
+    /// `KLayout` `sized` and boolean `-`.
+    ///
+    /// Limits: a maximum space (IHP Rppd.c, GF180 NP.3d "min/max space") is
+    /// not this rule and cannot be written.
+    MaxEnclosure {
+        /// The enclosing layer, merged; findings are reported on it.
+        outer: LayerId,
+        /// The enclosed layer, merged.
+        inner: LayerId,
+        /// The furthest the outer figure may reach past what it holds, in
+        /// grid units; positive.
+        limit: Dbu,
     },
     /// `layer` not extending past `reference` by `limit`, as poly past
     /// diffusion.
@@ -566,7 +731,8 @@ pub enum Rule {
     ///
     /// Limits: a gate that bends or carries a stub inside B has edges inside
     /// B along both axes, so A crosses B along neither and the gate measures
-    /// 0 (fails closed).
+    /// 0 (fails closed); [`Rule::GateCorner`]'s `bend` reports the bend
+    /// itself.
     MinExtension {
         /// The extending layer (A); findings are reported on it.
         layer: LayerId,
@@ -574,6 +740,41 @@ pub enum Rule {
         reference: LayerId,
         /// The smallest legal extension, in grid units; positive.
         limit: Dbu,
+    },
+    /// A concave corner of the area two layers share that is a concave corner
+    /// of `layer` (it turns on `reference`) or of `reference` (it covers an
+    /// inner corner of `reference`).
+    ///
+    /// Deck: `bend(A, B)` (`of_reference` false) and `covers_corner(A, B)`
+    /// (true), kind `gate_corner`. Both layers are merged, and the area they
+    /// share is the gate. A concave corner of a rectilinear intersection is a
+    /// concave corner of one operand (both, where they coincide), so a gate
+    /// is a rectangle exactly when neither form finds a corner on it. `bend`
+    /// finds where A turns 90 degrees on B, the corner lying in B's material:
+    /// an L-shaped poly bent over diffusion, or a stub off a gate (two
+    /// corners). A turn on B's edge leaves the gate a rectangle and is not
+    /// one. `covers_corner` finds an inner corner of B under A's material, as
+    /// a gate over a jog in the diffusion's edge. Corners of holes count.
+    ///
+    /// One violation per corner, at it, on layer A, `measured` `Count(1)`
+    /// against a `limit` of `Count(0)`. `shapes` is the lowest A row and the
+    /// lowest B row under its gate. `examined` counts the gates.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-052. Rules: sky130 poly.11 "No 90 deg turns of poly on diff" and
+    /// poly.10 "Poly can't overlap inner corners of diff", GF180 PL.6 "90 deg
+    /// bends on the COMP are not allowed", IHP Gat.f, ASAP7 GATE.AUX.1 "GATE
+    /// may not bend"; `KLayout` `corners`.
+    ///
+    /// Limits: 45-degree turns (IHP Gat.f) cannot occur: every rule but
+    /// [`Rule::Angle`] refuses a non-rectilinear layer.
+    GateCorner {
+        /// The layer that bends or covers (A); findings are reported on it.
+        layer: LayerId,
+        /// The layer it lies on (B).
+        reference: LayerId,
+        /// Corners of `reference` (`covers_corner`), else of `layer` (`bend`).
+        of_reference: bool,
     },
     /// `a` and `b` overlapping by less than `limit`.
     ///
@@ -707,6 +908,84 @@ pub enum Rule {
         /// inclusive.
         within: Dbu,
     },
+    /// A via on a wide wire with fewer than `min_count` cuts.
+    ///
+    /// Deck: `min_cuts(cut, wide, other; width: len) >= count`, and with
+    /// `within: len`, kind `minimum_cut`: LEF `MINIMUMCUT numCuts WIDTH width
+    /// [WITHIN cutDistance]` on layer `wide`, "the number of cuts a via must
+    /// have when it is on a wide wire or pin whose width is greater than
+    /// width". `other` is the metal on the via's far side, so `FROMABOVE` and
+    /// `FROMBELOW` are the choice of `other`; LEF's default, both, is two
+    /// rows. Cuts are the rows on `cut`, as drawn, read by their bounding
+    /// boxes. A via is the cuts joining one figure of merged `wide` to one
+    /// figure of merged `other` (the lowest of each it overlaps; a cut on no
+    /// `other` figure joins the others like it); with `within`, the via splits
+    /// into groups of cuts closer than `within` to one another ("numCuts via
+    /// cuts must be less than cutDistance from each other in order to be
+    /// counted together"). A via is held when one of its cuts overlaps the
+    /// part of `wide` wider than `width`: where a `width + 1` square fits,
+    /// strictly wider, as LEF says.
+    ///
+    /// One violation per cut of a held via with too few cuts, at the cut's
+    /// centre, `measured` the via's cut count. `examined` counts the held
+    /// vias. Records [`Outcome::Refused`] when `wide` or `other` fails
+    /// validation.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-066. Rules: LEF `MINIMUMCUT` (LEF/DEF 5.8, Minimum Cut Rule
+    /// Examples 1 to 3); GF180 MT30.8a, "single top via ... at one location
+    /// cannot exist under the thick (3um thick) metal", is `width: 1nm` with
+    /// `>= 2` on the thick metal.
+    ///
+    /// Limits: the `LENGTH length WITHIN distance` form (thin wires near a
+    /// wide one) and `LEF58_MINIMUMCUT`'s cut classes and `AREA` are missing.
+    MinimumCut {
+        /// The cut layer.
+        cut: LayerId,
+        /// The metal whose width triggers the rule; findings name its cuts.
+        wide: LayerId,
+        /// The metal on the vias' far side.
+        other: LayerId,
+        /// The wire width, in grid units, strictly above which the rule
+        /// holds a via; positive.
+        width: Dbu,
+        /// How close, in grid units, cuts must be to count together; `None`
+        /// counts every cut of a via.
+        within: Option<Dbu>,
+        /// The fewest cuts a held via needs; at least 1.
+        min_count: u16,
+    },
+    /// A stack of overlapping cuts taller than `max_height`.
+    ///
+    /// Deck: `via_stack(cut1, cut2, ..) <= count`, the cut layers bottom to
+    /// top, kind `via_stack`: LEF `MAXVIASTACK value [RANGE bottomLayer
+    /// topLayer]`, "the maximum number of single-cut stacked vias that are
+    /// allowed on top of each other ... A via is considered to be in a stack
+    /// with another via if the cut of the first via overlaps any part of the
+    /// cut of the second via". Cuts are the rows on each layer, as drawn,
+    /// read by their bounding boxes; a cut stacks on a cut of the layer
+    /// listed before it when the two overlap with positive area. A stack's
+    /// height through a cut is the longest chain of stacked cuts through it,
+    /// one per layer. The layers listed are the `RANGE`.
+    ///
+    /// One violation per cut at the height `max_height + 1` of a taller stack,
+    /// at its centre and on its layer, `measured` the tallest stack through
+    /// it. `examined` counts the cuts. The layers are not validated, so this
+    /// rule never records `Refused`.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-065. Rules: LEF `MAXVIASTACK` (LEF/DEF 5.8, "Maximum Via Stack",
+    /// Example 1-34).
+    ///
+    /// Limits: every cut counts as a single-cut via, so a double-cut via does
+    /// not interrupt a stack (it fails closed: a stack LEF would split is
+    /// read as one).
+    ViaStack {
+        /// Index into [`RuleSet::stacks`]: the cut layers, bottom to top.
+        stack: u32,
+        /// The tallest legal stack; at least 1.
+        max_height: u16,
+    },
     /// Cuts in a large array closer than `limit`.
     ///
     /// Deck: `via_array_space(L; array: count) >= len`, kind
@@ -733,6 +1012,94 @@ pub enum Rule {
         array_threshold: u16,
         /// The smallest legal gap inside an array, in grid units; positive.
         limit: Dbu,
+    },
+    /// Two cuts closer than `limit`, centre to centre or edge to edge, where
+    /// the rule holds either of them.
+    ///
+    /// Deck: `space(L, center) >= len` (LEF `SPACING CENTERTOCENTER`),
+    /// `adjacent_space(L; cuts: count, within: len) >= len` (LEF `SPACING
+    /// ADJACENTCUTS count WITHIN within`), and `adjacent_space(L, center;
+    /// cuts: count, within: len) >= len` (both), kind `cut_spacing`. Cuts are
+    /// the rows on the layer, as drawn and not merged. With `center`, every
+    /// distance is between the centres of the two cuts' bounding boxes (LEF
+    /// "computes the cutSpacing or cutWithin distances from cut-center to
+    /// cut-center"); without, it is boundary to boundary, 0 for cuts that
+    /// touch, overlap or nest. Without `cuts`, the rule holds every cut. With
+    /// it, a cut is held when at least `cuts` other cuts lie strictly closer
+    /// than `within` (LEF: "applies the spacing rule only when the cut has
+    /// two, three, or four via cuts that are less than cutWithin distance"),
+    /// so `cuts: 3` waives a 2x2 array and holds a 2x3 one whose diagonal is
+    /// beyond `within` (LEF/DEF 5.8, Figure 1-6). A pair is checked when
+    /// either cut is held.
+    ///
+    /// One violation per pair closer than `limit`, at the midpoint of its
+    /// measured points: the two centres, or the nearest points of the two
+    /// boundaries as the spacing family marks them. `measured` is the
+    /// distance floored. `examined` counts the cuts held. The layer is not
+    /// validated, so this rule never records `Refused`.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-061, DRC-062. Rules: LEF cut-layer `SPACING` with `CENTERTOCENTER`
+    /// and `ADJACENTCUTS ... WITHIN` (LEF/DEF 5.8, "SPACING", Spacing Rule
+    /// Examples 2 to 4); `LEF58_SPACING ADJACENTCUTS` as `OpenROAD`'s
+    /// detailed router checks it (`checkLef58CutSpacing_spc_adjCut`).
+    ///
+    /// Limits: `EXCEPTSAMEPGNET` (the rule waived between cuts of one power
+    /// or ground net) is not modelled.
+    CutSpacing {
+        /// The cut layer.
+        layer: LayerId,
+        /// Distances between cut centres, else between cut boundaries.
+        center: bool,
+        /// How many other cuts closer than `within` hold a cut to `limit`; 0
+        /// holds every cut.
+        adjacent: u16,
+        /// The reach of `adjacent`, in grid units; positive when `adjacent`
+        /// is not 0, else unused.
+        within: Dbu,
+        /// The smallest legal distance, in grid units; positive.
+        limit: Dbu,
+    },
+    /// Two cuts closer than their cell of a cut-class spacing table.
+    ///
+    /// Deck: `cut_class_space(L; short: [len, ..], long: [len, ..], space:
+    /// [[len, ..], ..])`, kind `cut_class_spacing`. Cuts are the rows on the
+    /// layer, as drawn. A cut's class is the first whose `short` x `long`
+    /// matches its bounding box either way round (`LEF58_CUTCLASS WIDTH ...
+    /// LENGTH ...`); a cut of no class is not checked. Each class has two rows
+    /// and two columns of `space`, in class order: its END, then its SIDE. Two
+    /// cuts apart along y face each other with their sides across y, so a cut
+    /// faces with its SIDE (a long side) when it is wider than tall, else
+    /// with its END; apart along x, when it is taller than wide. A square cut
+    /// always faces with its END. A pair apart along both axes is held to
+    /// both readings, the larger cell, as `OpenROAD`'s detailed router checks
+    /// a `LEF58_SPACINGTABLE` of `CUTCLASS` SIDE/END entries
+    /// (`checkLef58CutSpacingTbl_helper`). A pair that touches or overlaps is
+    /// held to the largest cell of its two classes. Distances are boundary
+    /// to boundary, Euclidean. So sky130 licon.2 to licon.2d are one table:
+    /// slotted licons end to end 350 nm apart, otherwise 510 nm, and 510 nm
+    /// to a square licon.
+    ///
+    /// One violation per pair closer than its cell, at the midpoint of its
+    /// measured points, with `limit` the cell. `examined` counts the pairs of
+    /// classed cuts whose boxes come within the table's largest cell. The
+    /// layer is not validated, so this rule never records `Refused`.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-063, DRC-064. Rules: sky130 licon.2, licon.2b, licon.2c and
+    /// licon.2d; `LEF58_SPACINGTABLE` on a cut layer with `CUTCLASS` entries,
+    /// and `LEF58_CUTCLASS`, as `OpenROAD` reads them.
+    ///
+    /// Limits: the second, parallel-run value of a cell (`PRL`), the
+    /// `CENTERTOCENTER` and `CENTERANDEDGE` cells, same-net, same-metal and
+    /// cross-layer (`LAYER`) tables, `EXACTALIGNEDSPACING` and LEF's
+    /// `SPACINGTABLE ORTHOGONAL` are missing. A bar of free length (IHP
+    /// `CntB`) has no class.
+    CutClassSpacing {
+        /// The cut layer.
+        layer: LayerId,
+        /// Index into [`RuleSet::cut_tables`].
+        table: u32,
     },
     /// Shapes that cannot be split onto `colors` masks with same-mask shapes
     /// at least `color_spacing` apart.
@@ -796,31 +1163,37 @@ pub enum Rule {
         /// The layer, or edge layer, that must be empty.
         layer: LayerId,
     },
-    /// An `outer` shape holding fewer than `min_count` `inner` shapes.
+    /// An `outer` shape holding fewer than `min_count`, or more than
+    /// `max_count`, `inner` shapes.
     ///
-    /// Deck: `contains(outer, inner) >= count`, kind `must_contain`. Both
+    /// Deck: `contains(outer, inner) >= count` (a minimum), `<= count` (a
+    /// maximum) or `== count` (exactly that many), kind `must_contain`. Both
     /// layers are merged, so touching inner shapes count as one. An inner
     /// figure is held when one outer figure covers all of it; one across the
     /// outer's edge is held by none.
     ///
-    /// One violation per outer figure holding too few, on the `outer` layer,
-    /// at the centre of one of its rectangles. `measured` is the count held,
-    /// `shapes.0` the lowest drawn outer row under the figure. `examined`
-    /// counts outer figures.
+    /// One violation per outer figure holding too few or too many, on the
+    /// `outer` layer, at the centre of one of its rectangles. `measured` is
+    /// the count held and `limit` the bound it broke, `shapes.0` the lowest
+    /// drawn outer row under the figure. `examined` counts outer figures.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-048, DRC-049, DRC-085. Rules: sky130 licon.4, licon.16 and
-    /// nwell.4, IHP Cnt.g and Cnt.h, GF180 DN.3; `KLayout` `covering`.
-    ///
-    /// Limits: a minimum count only. An exact or maximum count (sky130 rpm.1g
-    /// to rpm.1k, via.13) cannot be written.
+    /// nwell.4, IHP Cnt.g and Cnt.h, GF180 DN.3; the maximum is sky130 rpm.1g
+    /// to rpm.1k ("only 1 licon is allowed in `xhrpoly_0p35`
+    /// `prec_resistor_terminal`"); `KLayout` `covering` and `not_covering` with
+    /// a count range.
     MustContain {
         /// The holding layer; findings are reported on it.
         outer: LayerId,
         /// The held layer.
         inner: LayerId,
-        /// The fewest inner figures each outer figure must hold; at least 1.
+        /// The fewest inner figures each outer figure must hold; 0 for no
+        /// minimum.
         min_count: u32,
+        /// The most it may hold, at least `min_count` and at least 1;
+        /// `u32::MAX` for no maximum.
+        max_count: u32,
     },
     /// An `inner` shape not entirely inside `outer`.
     ///
@@ -1769,6 +2142,36 @@ pub enum StepKind {
     Step,
 }
 
+/// The wire widths at which an enclosure rule holds an inner polygon (LEF
+/// `ENCLOSURE ... WIDTH minWidth`: "the enclosure rule only applies when the
+/// width of the routing layer is greater than or equal to minWidth").
+///
+/// An inner polygon lies on a wire at least `w` wide when the part of the
+/// merged outer layer where an axis-aligned `w` square fits (sky130's
+/// `sized(-w/2).sized(w/2)`, `KLayout`'s opening) covers all of it, as
+/// [`Rule::WideDependentSpacing`] reads a wide part. The band holds the inner
+/// polygons that lie on a wire at least `from` wide and not on one `below`
+/// wide. LEF applies "the largest minWidth rule that is still less than or
+/// equal to the wire width", so a deck writes one row per band, each `below`
+/// the next one's `from`, and every inner polygon falls in exactly one; one
+/// no host covers falls in the lowest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WireBand {
+    /// The narrowest wire held, in grid units; 0 holds every width.
+    pub from: Dbu,
+    /// The wire width, in grid units and above `from`, at and above which an
+    /// inner polygon is no longer held; `None` for no upper bound.
+    pub below: Option<Dbu>,
+}
+
+impl WireBand {
+    /// Every wire width: the rule holds every inner polygon.
+    pub const ANY: Self = Self {
+        from: Dbu::new_unchecked(0),
+        below: None,
+    };
+}
+
 /// A spacing table, LEF `SPACINGTABLE PARALLELRUNLENGTH`: the required space
 /// for a pair is `space[row][column]`, with `row` the last width exceeded by
 /// the wider shape and `column` the last run length exceeded by the pair; the
@@ -1880,6 +2283,58 @@ pub struct SpacingQuery {
     pub end_of_line: Option<Dbu>,
 }
 
+/// A cut-class spacing table, `LEF58_SPACINGTABLE` on a cut layer with
+/// `CUTCLASS` SIDE/END entries: class `i` is the cut size `short[i]` x
+/// `long[i]`, and `space` is square, two rows and columns per class (its END,
+/// then its SIDE), the space two cuts facing that way need.
+/// [`Rule::CutClassSpacing`] says how a pair's classes and facings are read.
+///
+/// Every table in a [`RuleSet`] passed [`CutClassTable::is_valid`]; one built
+/// by hand must too, or [`RuleSet::run`] may panic indexing it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CutClassTable {
+    /// Each class's shorter side, in grid units; positive.
+    pub short: Vec<Dbu>,
+    /// Each class's longer side, in grid units; at least its `short`.
+    pub long: Vec<Dbu>,
+    /// Row-major, `2n` rows of `2n` positive cells for `n` classes; the
+    /// space for row `r`, column `c` is the space for column `r`, row `c`.
+    pub space: Vec<Dbu>,
+}
+
+impl CutClassTable {
+    /// Whether the table is complete and symmetric, with distinct classes, as
+    /// the struct states. [`RuleSet::from_deck`] refuses one that is not
+    /// ([`DrcError::BadTable`]).
+    pub fn is_valid(&self) -> bool {
+        let n = self.short.len();
+        let classes: Vec<(Dbu, Dbu)> = self
+            .short
+            .iter()
+            .copied()
+            .zip(self.long.iter().copied())
+            .collect();
+        n > 0
+            && self.long.len() == n
+            && classes.iter().all(|&(s, l)| s.raw() > 0 && s <= l)
+            && (0..n).all(|i| !classes[..i].contains(&classes[i]))
+            && self.space.len() == 4 * n * n
+            && self.space.iter().all(|cell| cell.raw() > 0)
+            && (0..2 * n).all(|r| (0..2 * n).all(|c| self.at(r, c) == self.at(c, r)))
+    }
+
+    /// The cell at `row`, `column`.
+    pub(crate) fn at(&self, row: usize, column: usize) -> Dbu {
+        self.space[row * 2 * self.short.len() + column]
+    }
+
+    /// The class a `w` x `h` cut belongs to, either way round.
+    pub(crate) fn class_of(&self, w: Dbu, h: Dbu) -> Option<usize> {
+        let (short, long) = (w.min(h), w.max(h));
+        (0..self.short.len()).find(|&i| self.short[i] == short && self.long[i] == long)
+    }
+}
+
 /// A square table indexed by a class of each of two edges or shapes, for
 /// [`Rule::TipSpacingTable`] (classes by edge length) and
 /// [`Rule::TwoWidthSpacingTable`] (classes by width, each with an optional
@@ -1969,6 +2424,10 @@ pub struct RuleSet {
     pub class_tables: Vec<ClassTable>,
     /// The tables [`Rule::SpanLength`] names.
     pub span_tables: Vec<SpanTable>,
+    /// The tables [`Rule::CutClassSpacing`] names.
+    pub cut_tables: Vec<CutClassTable>,
+    /// The cut layers, bottom to top, of each [`Rule::ViaStack`].
+    pub stacks: Vec<Vec<LayerId>>,
     /// The deck's first derived layer: it and every higher id are computed,
     /// and the layers below it are drawn. `None` when every layer is drawn,
     /// as in a rule set built in code. A [`Rule::Density`] or
@@ -2000,7 +2459,8 @@ impl RuleSet {
     /// - what [`Rule::validate`] refuses: a limit that is not positive, or a
     ///   spacing table that is not complete and monotone;
     /// - [`DrcError::BadTable`] when a class or span table fails its kind's
-    ///   check, or a forbidden range has `min` above `max`.
+    ///   check, a forbidden range has `min` above `max`, or a cut-class
+    ///   table is not complete and symmetric.
     pub fn from_deck(deck: &Deck, strings: &StrTable) -> Result<Self, DrcError> {
         let rules = &deck.rules;
         let name_of = |id: StrId| strings.resolve(id).to_owned();
@@ -2031,6 +2491,19 @@ impl RuleSet {
                 ParamValue::Length(limit) => Ok(limit),
                 _ => Err(wrong_type(spec, param)),
             }
+        };
+        // Every length a row states under `param`, in order: a list's elements.
+        let lengths = |spec: &RuleSpec, param: &'static str| -> Result<Vec<Dbu>, DrcError> {
+            let wanted = strings.get(param);
+            rules
+                .params_of(spec)
+                .iter()
+                .filter(|&&(name, _)| Some(name) == wanted)
+                .map(|&(_, stated)| match stated {
+                    ParamValue::Length(length) => Ok(length),
+                    _ => Err(wrong_type(spec, param)),
+                })
+                .collect()
         };
         let area_limit = |spec: &RuleSpec, param| -> Result<DbuArea, DrcError> {
             match value(spec, param)? {
@@ -2070,6 +2543,23 @@ impl RuleSet {
             1 => Ok((layer(spec, 0), None)),
             _ => two(spec).map(|(layer, boundary)| (layer, Some(boundary))),
         };
+        // An enclosure's optional wire band, `width:` and `below:`.
+        let wire = |spec: &RuleSpec| -> Result<WireBand, DrcError> {
+            let bound =
+                |param: &'static str| match strings.get(param).and_then(|p| rules.param(spec, p)) {
+                    Some(_) => length(spec, param).map(Some),
+                    None => Ok(None),
+                };
+            let from = bound("wire_width")?.unwrap_or(Dbu::new_unchecked(0));
+            let below = bound("wire_below")?;
+            if let Some(below) = below.filter(|&below| below <= from) {
+                return Err(DrcError::NonPositiveLimit {
+                    rule: name_of(spec.id),
+                    limit: (below - from).raw(),
+                });
+            }
+            Ok(WireBand { from, below })
+        };
         // A length that may be 0, as a run a pair must exceed.
         let at_least_zero = |spec: &RuleSpec, param| -> Result<Dbu, DrcError> {
             let ParamValue::Length(value) = value(spec, param)? else {
@@ -2094,19 +2584,6 @@ impl RuleSet {
                 ParamValue::Flag(set) => Ok(set),
                 _ => Err(wrong_type(spec, param)),
             }
-        };
-        // Every length given for a list parameter, in deck order.
-        let lengths = |spec: &RuleSpec, param: &'static str| -> Result<Vec<Dbu>, DrcError> {
-            let wanted = strings.get(param);
-            rules
-                .params_of(spec)
-                .iter()
-                .filter(|&&(name, _)| Some(name) == wanted)
-                .map(|&(_, stated)| match stated {
-                    ParamValue::Length(length) => Ok(length),
-                    _ => Err(wrong_type(spec, param)),
-                })
-                .collect()
         };
         let sense = |spec: &RuleSpec| -> Result<LimitSense, DrcError> {
             let ParamValue::Flag(maximum) = value(spec, "maximum")? else {
@@ -2155,6 +2632,14 @@ impl RuleSet {
                 "min_spacing_diff" => {
                     let (a, b) = two(spec)?;
                     Rule::MinSpacingDiff {
+                        a,
+                        b,
+                        limit: length(spec, "limit")?,
+                    }
+                }
+                "projection_spacing" => {
+                    let (a, b) = two(spec)?;
+                    Rule::ProjectionSpacing {
                         a,
                         b,
                         limit: length(spec, "limit")?,
@@ -2218,6 +2703,19 @@ impl RuleSet {
                         outer,
                         inner,
                         limit: length(spec, "limit")?,
+                        wire: wire(spec)?,
+                    }
+                }
+                "full_width" => {
+                    let (outer, inner) = two(spec)?;
+                    Rule::FullWidth { outer, inner }
+                }
+                "noncoincident_enclosure" => {
+                    let (outer, inner) = two(spec)?;
+                    Rule::NoncoincidentEnclosure {
+                        outer,
+                        inner,
+                        limit: length(spec, "limit")?,
                     }
                 }
                 "asymmetric_enclosure" => {
@@ -2226,6 +2724,15 @@ impl RuleSet {
                         outer,
                         inner,
                         min_one_side: length(spec, "min_one_side")?,
+                        wire: wire(spec)?,
+                    }
+                }
+                "max_enclosure" => {
+                    let (outer, inner) = two(spec)?;
+                    Rule::MaxEnclosure {
+                        outer,
+                        inner,
+                        limit: length(spec, "limit")?,
                     }
                 }
                 "min_extension" => {
@@ -2234,6 +2741,17 @@ impl RuleSet {
                         layer,
                         reference,
                         limit: length(spec, "limit")?,
+                    }
+                }
+                "gate_corner" => {
+                    let (layer, reference) = two(spec)?;
+                    let ParamValue::Flag(of_reference) = value(spec, "of_reference")? else {
+                        return Err(wrong_type(spec, "of_reference"));
+                    };
+                    Rule::GateCorner {
+                        layer,
+                        reference,
+                        of_reference,
                     }
                 }
                 "overlap" => {
@@ -2298,6 +2816,38 @@ impl RuleSet {
                         within: length(spec, "within")?,
                     }
                 }
+                "minimum_cut" => {
+                    layers(spec, 3)?;
+                    let width = length(spec, "width")?;
+                    let within = match strings.get("within").and_then(|p| rules.param(spec, p)) {
+                        Some(_) => Some(length(spec, "within")?),
+                        None => None,
+                    };
+                    let min_count = count(spec, "min_count", u16::MAX.into())?;
+                    Rule::MinimumCut {
+                        cut: layer(spec, 0),
+                        wide: layer(spec, 1),
+                        other: layer(spec, 2),
+                        width,
+                        within,
+                        min_count: u16::try_from(min_count).expect("checked against the ceiling"),
+                    }
+                }
+                "via_stack" => {
+                    if spec.layer_len < 2 {
+                        return Err(DrcError::WrongLayerCount {
+                            rule: name_of(spec.id),
+                            expected: 2,
+                            found: spec.layer_len,
+                        });
+                    }
+                    let max_height = count(spec, "max_height", u16::MAX.into())?;
+                    set.stacks.push(rules.layers_of(spec).to_vec());
+                    Rule::ViaStack {
+                        stack: u32::try_from(set.stacks.len() - 1).expect("a deck has few stacks"),
+                        max_height: u16::try_from(max_height).expect("checked against the ceiling"),
+                    }
+                }
                 "via_array_spacing" => {
                     let layer = one(spec)?;
                     // Zero is legal: it makes every cluster an array.
@@ -2305,6 +2855,33 @@ impl RuleSet {
                     Rule::ViaArraySpacing {
                         layer,
                         array_threshold: u16::try_from(threshold).expect("checked"),
+                        limit: length(spec, "limit")?,
+                    }
+                }
+                "cut_spacing" => {
+                    let layer = one(spec)?;
+                    let ParamValue::Flag(center) = value(spec, "center")? else {
+                        return Err(wrong_type(spec, "center"));
+                    };
+                    // No `adjacent` holds every cut.
+                    let stated = strings
+                        .get("adjacent")
+                        .and_then(|p| rules.param(spec, p))
+                        .is_some();
+                    let (adjacent, within) = if stated {
+                        let cuts = count(spec, "adjacent", u16::MAX.into())?;
+                        (
+                            u16::try_from(cuts).expect("checked against the ceiling"),
+                            length(spec, "within")?,
+                        )
+                    } else {
+                        (0, Dbu::new_unchecked(0))
+                    };
+                    Rule::CutSpacing {
+                        layer,
+                        center,
+                        adjacent,
+                        within,
                         limit: length(spec, "limit")?,
                     }
                 }
@@ -2320,10 +2897,29 @@ impl RuleSet {
                 "forbidden" => Rule::Forbidden { layer: one(spec)? },
                 "must_contain" => {
                     let (outer, inner) = two(spec)?;
+                    // `==` states `count`, `>=` `min_count`, `<=` `max_count`.
+                    let bound = |param: &'static str| match strings
+                        .get(param)
+                        .and_then(|p| rules.param(spec, p))
+                    {
+                        Some(_) => count(spec, param, u32::MAX).map(Some),
+                        None => Ok(None),
+                    };
+                    let (min_count, max_count) = match bound("count")? {
+                        Some(exact) => (Some(exact), Some(exact)),
+                        None => (bound("min_count")?, bound("max_count")?),
+                    };
+                    if min_count.is_none() && max_count.is_none() {
+                        return Err(DrcError::MissingParam {
+                            rule: name_of(spec.id),
+                            param: "min_count",
+                        });
+                    }
                     Rule::MustContain {
                         outer,
                         inner,
-                        min_count: count(spec, "min_count", u32::MAX)?,
+                        min_count: min_count.unwrap_or(0),
+                        max_count: max_count.unwrap_or(u32::MAX),
                     }
                 }
                 "must_be_inside" => {
@@ -2358,6 +2954,23 @@ impl RuleSet {
                     Rule::SpacingTable {
                         layer,
                         table: u32::try_from(set.tables.len() - 1).expect("a deck has few tables"),
+                    }
+                }
+                "cut_class_spacing" => {
+                    let layer = one(spec)?;
+                    let table = CutClassTable {
+                        short: lengths(spec, "class_short")?,
+                        long: lengths(spec, "class_long")?,
+                        space: lengths(spec, "space")?,
+                    };
+                    if !table.is_valid() {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    set.cut_tables.push(table);
+                    Rule::CutClassSpacing {
+                        layer,
+                        table: u32::try_from(set.cut_tables.len() - 1)
+                            .expect("a deck has few tables"),
                     }
                 }
                 "attached_wide_spacing" => Rule::AttachedWideSpacing {
@@ -2699,6 +3312,9 @@ impl RuleSet {
     /// table that is missing or fails [`SpacingTable::is_valid`], or when a
     /// [`Rule::CutClass`] or [`Rule::AllowedWidth`] names a list that is
     /// missing.
+    /// [`Rule::NetSpacing`] layer holds, or when a [`Rule::SpacingTable`] or
+    /// [`Rule::CutClassSpacing`] names a table that is missing or fails its
+    /// `is_valid`.
     pub fn run_with_nets(
         &self,
         store: &GeometryStore,
@@ -2748,6 +3364,9 @@ impl RuleSet {
                 }
                 Rule::MinSpacingDiff { a, b, limit } => {
                     spacing::min_spacing_diff(store, id, a, b, limit, s, out)
+                }
+                Rule::ProjectionSpacing { a, b, limit } => {
+                    spacing::projection_spacing(store, id, (a, b), limit, s, out)
                 }
                 Rule::EolSpacing {
                     layer,
@@ -2812,17 +3431,67 @@ impl RuleSet {
                     outer,
                     inner,
                     limit,
-                } => overlay::enclosure(store, id, outer, inner, limit, false, s, out),
+                    wire,
+                } => overlay::enclosure(
+                    store,
+                    id,
+                    (outer, inner),
+                    (limit, wire),
+                    overlay::Mode::EverySide,
+                    s,
+                    out,
+                ),
+                Rule::FullWidth { outer, inner } => overlay::enclosure(
+                    store,
+                    id,
+                    (outer, inner),
+                    (Dbu::new_unchecked(0), WireBand::ANY),
+                    overlay::Mode::FullWidth,
+                    s,
+                    out,
+                ),
+                Rule::NoncoincidentEnclosure {
+                    outer,
+                    inner,
+                    limit,
+                } => overlay::enclosure(
+                    store,
+                    id,
+                    (outer, inner),
+                    (limit, WireBand::ANY),
+                    overlay::Mode::NonCoincident,
+                    s,
+                    out,
+                ),
                 Rule::AsymmetricEnclosure {
                     outer,
                     inner,
                     min_one_side,
-                } => overlay::enclosure(store, id, outer, inner, min_one_side, true, s, out),
+                    wire,
+                } => overlay::enclosure(
+                    store,
+                    id,
+                    (outer, inner),
+                    (min_one_side, wire),
+                    overlay::Mode::Opposite,
+                    s,
+                    out,
+                ),
+                Rule::MaxEnclosure {
+                    outer,
+                    inner,
+                    limit,
+                } => overlay::max_enclosure(store, id, (outer, inner), limit, s, out),
                 Rule::MinExtension {
                     layer,
                     reference,
                     limit,
                 } => overlay::min_extension(store, id, layer, reference, limit, s, out),
+                Rule::GateCorner {
+                    layer,
+                    reference,
+                    of_reference,
+                } => overlay::gate_corner(store, id, (layer, reference), of_reference, s, out),
                 Rule::Overlap { a, b, limit } => overlay::overlap(store, id, a, b, limit, s, out),
                 Rule::MaxDistanceToTap { well, tap, limit } => {
                     overlay::max_distance_to_tap(store, id, well, tap, limit, s, out)
@@ -2841,6 +3510,48 @@ impl RuleSet {
                     array_threshold,
                     limit,
                 } => via::via_array_spacing(store, id, layer, array_threshold, limit, s, out),
+                Rule::CutSpacing {
+                    layer,
+                    center,
+                    adjacent,
+                    within,
+                    limit,
+                } => via::cut_spacing(
+                    store,
+                    id,
+                    (layer, center),
+                    (adjacent, within),
+                    limit,
+                    s,
+                    out,
+                ),
+                Rule::MinimumCut {
+                    cut,
+                    wide,
+                    other,
+                    width,
+                    within,
+                    min_count,
+                } => via::minimum_cut(
+                    store,
+                    id,
+                    (cut, wide, other),
+                    (width, within),
+                    min_count,
+                    s,
+                    out,
+                ),
+                Rule::ViaStack { stack, max_height } => {
+                    via::via_stack(store, id, &self.stacks[stack as usize], max_height, out)
+                }
+                Rule::CutClassSpacing { layer, table } => via::cut_class_spacing(
+                    store,
+                    id,
+                    layer,
+                    &self.cut_tables[table as usize],
+                    s,
+                    out,
+                ),
                 Rule::MultiPatterning {
                     layer,
                     colors,
@@ -2851,7 +3562,15 @@ impl RuleSet {
                     outer,
                     inner,
                     min_count,
-                } => presence::must_contain(store, id, outer, inner, min_count, s, out),
+                    max_count,
+                } => presence::must_contain(
+                    store,
+                    id,
+                    (outer, inner),
+                    (min_count, max_count),
+                    s,
+                    out,
+                ),
                 Rule::MustBeInside { inner, outer } => {
                     presence::must_be_inside(store, id, inner, outer, s, out)
                 }
@@ -3017,11 +3736,11 @@ impl RuleSet {
                 ),
             };
             record_run(runs, out, before, id, outcome, examined);
-            // A rule over every layer (`angle` with none named, `off_grid`)
+            // A rule over every layer (`angle` with none named, `off_grid`, `via_stack`)
             // declares none.
             let declared = rule.layers();
             debug_assert!(
-                declared == [None, None]
+                declared == [None, None, None]
                     || out.layer[before..]
                         .iter()
                         .all(|&layer| declared.contains(&Some(layer))),
@@ -3103,8 +3822,11 @@ impl Rule {
             | Rule::Notch { limit, .. }
             | Rule::MinSpacing { limit, .. }
             | Rule::MinSpacingDiff { limit, .. }
+            | Rule::ProjectionSpacing { limit, .. }
             | Rule::CornerToCorner { limit, .. }
             | Rule::MinEnclosure { limit, .. }
+            | Rule::NoncoincidentEnclosure { limit, .. }
+            | Rule::MaxEnclosure { limit, .. }
             | Rule::AsymmetricEnclosure {
                 min_one_side: limit,
                 ..
@@ -3179,7 +3901,35 @@ impl Rule {
                 color_spacing,
                 ..
             } => count(colors.into()).and(length(color_spacing)),
-            Rule::MustContain { min_count, .. } => count(min_count),
+            Rule::MinimumCut {
+                width,
+                within,
+                min_count,
+                ..
+            } => length(width)
+                .and(within.map_or(Ok(()), length))
+                .and(count(min_count.into())),
+            Rule::ViaStack { max_height, .. } => count(max_height.into()),
+            Rule::CutSpacing {
+                adjacent,
+                within,
+                limit,
+                ..
+            } => length(limit).and(if adjacent == 0 {
+                Ok(())
+            } else {
+                length(within)
+            }),
+            // The bound stated: `max_count` when there is one, else `min_count`.
+            Rule::MustContain {
+                min_count,
+                max_count,
+                ..
+            } => count(if max_count == u32::MAX {
+                min_count
+            } else {
+                max_count
+            }),
             // A shape count of zero is a limit: none allowed, or at least none.
             // The cut and width lists, the class and span tables, the runs
             // that may be 0 and a forbidden range's order are checked where
@@ -3192,7 +3942,11 @@ impl Rule {
             | Rule::PolygonValidity { .. }
             | Rule::TipSpacingTable { .. }
             | Rule::TwoWidthSpacingTable { .. }
-            | Rule::SpanLength { .. } => Ok(()),
+            | Rule::SpanLength { .. }
+            | Rule::FullWidth { .. }
+            | Rule::GateCorner { .. }
+            // A cut-class table is checked where it is filed.
+            | Rule::CutClassSpacing { .. } => Ok(()),
             Rule::ForbiddenSpacing { min, max, .. } => length(min).and(length(max)),
             Rule::EolWithinSpacing {
                 eol_width,
@@ -3304,6 +4058,7 @@ impl Rule {
             Rule::Notch { .. } => "notch",
             Rule::MinSpacing { .. } => "min_spacing",
             Rule::MinSpacingDiff { .. } => "min_spacing_diff",
+            Rule::ProjectionSpacing { .. } => "projection_spacing",
             Rule::EolSpacing { .. } => "eol_spacing",
             Rule::PrlSpacing { .. } => "prl_spacing",
             Rule::CornerToCorner { .. } => "corner_to_corner",
@@ -3314,14 +4069,22 @@ impl Rule {
             Rule::Density { .. } => "density",
             Rule::GlobalDensity { .. } => "global_density",
             Rule::MinEnclosure { .. } => "min_enclosure",
+            Rule::NoncoincidentEnclosure { .. } => "noncoincident_enclosure",
+            Rule::FullWidth { .. } => "full_width",
             Rule::AsymmetricEnclosure { .. } => "asymmetric_enclosure",
+            Rule::MaxEnclosure { .. } => "max_enclosure",
             Rule::MinExtension { .. } => "min_extension",
+            Rule::GateCorner { .. } => "gate_corner",
             Rule::Overlap { .. } => "overlap",
             Rule::MaxDistanceToTap { .. } => "max_distance_to_tap",
             Rule::OffGrid { .. } => "off_grid",
             Rule::Angle { .. } => "angle",
             Rule::RedundantVia { .. } => "redundant_via",
+            Rule::MinimumCut { .. } => "minimum_cut",
+            Rule::ViaStack { .. } => "via_stack",
             Rule::ViaArraySpacing { .. } => "via_array_spacing",
+            Rule::CutSpacing { .. } => "cut_spacing",
+            Rule::CutClassSpacing { .. } => "cut_class_spacing",
             Rule::MultiPatterning { .. } => "multi_patterning",
             Rule::Forbidden { .. } => "forbidden",
             Rule::MustContain { .. } => "must_contain",
@@ -3354,10 +4117,10 @@ impl Rule {
         }
     }
 
-    /// Every layer the rule reads: one or two, `None` past them (an
+    /// Every layer the rule reads: one to three, `None` past them (an
     /// [`Rule::OffGrid`] reads none of its own; an [`Rule::Angle`] without a
     /// layer reads every drawn one).
-    pub fn layers(&self) -> [Option<LayerId>; 2] {
+    pub fn layers(&self) -> [Option<LayerId>; 3] {
         match *self {
             Rule::MinWidth { layer, .. }
             | Rule::MaxWidth { layer, .. }
@@ -3374,6 +4137,8 @@ impl Rule {
             | Rule::Cheesing { layer, .. }
             | Rule::RedundantVia { layer, .. }
             | Rule::ViaArraySpacing { layer, .. }
+            | Rule::CutSpacing { layer, .. }
+            | Rule::CutClassSpacing { layer, .. }
             | Rule::MultiPatterning { layer, .. }
             | Rule::Forbidden { layer }
             | Rule::SpacingTable { layer, .. }
@@ -3394,18 +4159,19 @@ impl Rule {
             | Rule::TwoWidthSpacingTable { layer, .. }
             | Rule::SpanLength { layer, .. }
             | Rule::ConvexCornerSpacing { layer, .. }
-            | Rule::ExactPitch { layer, .. } => [Some(layer), None],
+            | Rule::ExactPitch { layer, .. } => [Some(layer), None, None],
             Rule::EdgeSpacing { a, b, .. }
             | Rule::NetSpacing {
                 layer: a, other: b, ..
-            } => [Some(a), b],
+            } => [Some(a), b, None],
             Rule::Density {
                 layer, boundary, ..
             }
             | Rule::GlobalDensity {
                 layer, boundary, ..
-            } => [Some(layer), boundary],
+            } => [Some(layer), boundary, None],
             Rule::MinSpacingDiff { a, b, .. }
+            | Rule::ProjectionSpacing { a, b, .. }
             | Rule::Overlap { a, b, .. }
             | Rule::MinEnclosure {
                 outer: a, inner: b, ..
@@ -3413,7 +4179,19 @@ impl Rule {
             | Rule::AsymmetricEnclosure {
                 outer: a, inner: b, ..
             }
+            | Rule::MaxEnclosure {
+                outer: a, inner: b, ..
+            }
+            | Rule::NoncoincidentEnclosure {
+                outer: a, inner: b, ..
+            }
+            | Rule::FullWidth { outer: a, inner: b }
             | Rule::MinExtension {
+                layer: a,
+                reference: b,
+                ..
+            }
+            | Rule::GateCorner {
                 layer: a,
                 reference: b,
                 ..
@@ -3432,11 +4210,15 @@ impl Rule {
             }
             | Rule::EdgeEnclosure {
                 edges: a, outer: b, ..
-            } => [Some(a), Some(b)],
+            } => [Some(a), Some(b), None],
+            Rule::MinimumCut {
+                cut, wide, other, ..
+            } => [Some(cut), Some(wide), Some(other)],
             Rule::Angle { layer, .. }
             | Rule::MinInteriorAngle { layer, .. }
-            | Rule::PolygonValidity { layer } => [layer, None],
-            Rule::OffGrid { .. } => [None, None],
+            | Rule::PolygonValidity { layer } => [layer, None, None],
+            // Raw rows, never validated: nothing to forget.
+            Rule::OffGrid { .. } | Rule::ViaStack { .. } => [None, None, None],
         }
     }
 }

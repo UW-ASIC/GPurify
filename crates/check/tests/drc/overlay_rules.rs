@@ -5,7 +5,7 @@
 use crate::common;
 
 use common::{Sink, A, B, RULE};
-use gpurify_check::drc::Rule;
+use gpurify_check::drc::{Rule, WireBand};
 use gpurify_check::report::{Measurement, Outcome, Severity, SkipReason, Violation};
 use gpurify_geom::PolyId;
 use gpurify_ingest::StrId;
@@ -41,6 +41,7 @@ fn min_enclosure_table(limit: i64) -> Vec<(StrId, Rule)> {
             outer: B,
             inner: A,
             limit: dbu(limit),
+            wire: WireBand::ANY,
         },
     )]
 }
@@ -273,6 +274,7 @@ fn asymmetric_table(limit: i64) -> Vec<(StrId, Rule)> {
             outer: B,
             inner: A,
             min_one_side: dbu(limit),
+            wire: WireBand::ANY,
         },
     )]
 }
@@ -327,6 +329,106 @@ fn sky130_m1_5_sixty_on_two_opposite_sides_passes_with_thirty_on_the_others() {
     sink.run(&store, &asymmetric_table(60));
 
     assert_clean(&sink.runs, &sink.out, RULE);
+}
+
+/// The L via of the shapes below: lower arm `[0, 200] x [0, 100]`, upper arm
+/// `[0, 100] x [100, 200]`.
+fn l_via(layout: &mut LayoutBuilder) -> gpurify_testgen::shapes::Handle {
+    layout.push(A, &[0, 200, 200, 100, 100, 0], &[0, 0, 100, 100, 200, 200])
+}
+
+/// Oracle: construct-from-answer (DRC-041). An L via 100 clear of its host
+/// left and right of every vertical edge, and flush with it above and below,
+/// has the limit on both sides along x, so it passes. Held to every side, as
+/// a non-rectangle once was, it read 0.
+#[test]
+fn an_l_shaped_inner_with_the_limit_along_one_axis_passes() {
+    let mut layout = LayoutBuilder::new(2);
+    l_via(&mut layout);
+    layout.rect(B, -100, 0, 300, 200);
+    let (store, _ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &asymmetric_table(100));
+
+    assert_clean(&sink.runs, &sink.out, RULE);
+}
+
+/// Oracle: construct-from-answer (DRC-041). The host clears the L via by 100
+/// all round but for a notch from its top over `x` 150..250 down to `y` 199.
+/// The via's concave top edge (`y` 100, `x` 100..200) reads 99 up to the
+/// notch and its upper arm's right edge (`x` 100) 50, so `x` measures 50 and
+/// `y` 99: 99 under a requirement of 100, reported in the strip above the
+/// concave edge, at `(150, 149)`. A bounding-box reading sees 100 on every
+/// side and passes it.
+#[test]
+fn an_l_shaped_inner_is_measured_edge_by_edge_on_its_better_axis() {
+    let mut layout = LayoutBuilder::new(2);
+    let via = l_via(&mut layout);
+    let host = layout.push(
+        B,
+        &[-100, 300, 300, 250, 250, 150, 150, -100],
+        &[-100, -100, 300, 300, 199, 199, 300, 300],
+    );
+    let (store, ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &asymmetric_table(100));
+
+    assert_only_violation(
+        &sink.out,
+        &Violation {
+            rule: RULE,
+            layer: A,
+            severity: Severity::Error,
+            at: point(150, 149),
+            measured: Measurement::Length(dbu(99)),
+            limit: Measurement::Length(dbu(100)),
+            shapes: (ids.of(via), Some(ids.of(host))),
+        },
+    );
+}
+
+/// Oracle: construct-from-answer (DRC-043, LEF `ENCLOSURE ... WIDTH`). A
+/// 3000 plate with a 500 tab off its right side; one via 40 into the plate's
+/// corner, one 10 from the tab's top edge. A 2000 square fits around the
+/// first and no 1000 square around the second, so a rule from 2000 holds only
+/// the first (40 under 50) and one below 1000 only the second (10 under 50).
+/// Without a band both are held.
+#[test]
+fn a_wire_band_holds_only_the_inner_shapes_on_wires_of_its_widths() {
+    let mut layout = LayoutBuilder::new(2);
+    let corner = layout.rect(A, 40, 40, 240, 240);
+    let tab_via = layout.rect(A, 3_400, 1_150, 3_600, 1_490);
+    layout.rect(B, 0, 0, 3_000, 3_000);
+    layout.rect(B, 3_000, 1_000, 3_800, 1_500);
+    let (store, ids) = layout.finish();
+    let banded = |from: i64, below: Option<i64>| {
+        vec![(
+            RULE,
+            Rule::MinEnclosure {
+                outer: B,
+                inner: A,
+                limit: dbu(50),
+                wire: WireBand {
+                    from: dbu(from),
+                    below: below.map(dbu),
+                },
+            },
+        )]
+    };
+    for (from, below, held, measured) in [(2_000, None, corner, 40), (0, Some(1_000), tab_via, 10)]
+    {
+        let mut sink = Sink::default();
+        sink.run(&store, &banded(from, below));
+        assert_eq!(sink.out.len(), 1, "from {from}, below {below:?}");
+        assert_eq!(sink.out.shape_a[0], ids.of(held));
+        assert_eq!(sink.out.measured[0], Measurement::Length(dbu(measured)));
+        assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
+    }
+    let mut sink = Sink::default();
+    sink.run(&store, &banded(0, None));
+    assert_eq!(sink.out.len(), 2);
 }
 
 /// A host's hole is not host. A via 100 clear of the pad's outer edge but 20
@@ -760,4 +862,149 @@ fn ihp_lu_a_the_middle_of_a_well_tied_at_both_ends_is_too_far() {
     assert_eq!(sink.out.measured[0], Measurement::Length(dbu(21_000)));
     assert_eq!(sink.out.at[0].x, dbu(23_000));
     assert_eq!(sink.out.shape_a[0], ids.of(well));
+}
+
+// ------------------------------------------------------------- gate_corner
+
+/// Oracle: construct-from-answer (sky130 poly.11, poly.10). An L-shaped A
+/// whose concave corner (500, 500) lies inside B turns on B: one `bend` at
+/// the corner. The same A over a B whose own inner corner is elsewhere
+/// covers no inner corner of B. Bent above B, the shared area is a
+/// rectangle and neither form finds anything.
+#[test]
+fn a_bend_is_a_concave_corner_of_a_inside_b() {
+    let table = |of_reference: bool| {
+        vec![(
+            RULE,
+            Rule::GateCorner {
+                layer: A,
+                reference: B,
+                of_reference,
+            },
+        )]
+    };
+    let l = |y: i64| -> (Vec<i64>, Vec<i64>) {
+        (
+            vec![400, 500, 500, 1_200, 1_200, 400],
+            vec![-200, -200, y, y, y + 100, y + 100],
+        )
+    };
+    let mut layout = LayoutBuilder::new(2);
+    let poly = layout.shape(A, &l(500));
+    let diff = layout.rect(B, 0, 0, 1_000, 1_000);
+    let (store, ids) = layout.finish();
+    let mut sink = Sink::default();
+    sink.run(&store, &table(false));
+    assert_only_violation(
+        &sink.out,
+        &Violation {
+            rule: RULE,
+            layer: A,
+            severity: Severity::Error,
+            at: point(500, 500),
+            measured: Measurement::Count(1),
+            limit: Measurement::Count(0),
+            shapes: (ids.of(poly), Some(ids.of(diff))),
+        },
+    );
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
+    sink.run(&store, &table(true));
+    assert_clean(&sink.runs, &sink.out, RULE);
+
+    let mut layout = LayoutBuilder::new(2);
+    layout.shape(A, &l(1_100));
+    layout.rect(B, 0, 0, 1_000, 1_000);
+    let (store, _) = layout.finish();
+    for of_reference in [false, true] {
+        sink.run(&store, &table(of_reference));
+        assert_clean(&sink.runs, &sink.out, RULE);
+    }
+}
+
+// ----------------------------------------------------------- max_enclosure
+
+/// Oracle: construct-from-answer (sky130 npc.5, 95 nm). A cut `[0, 100]^2`
+/// in a host 50 past it but 96 on the right reaches 96: one finding on the
+/// host, at the centre of the 1 nm strip past 95, `x` 195..196. Two cuts 191
+/// apart under one host reach 95.5 midway, reported as 96; 190 apart, 95,
+/// clean.
+#[test]
+fn a_maximum_enclosure_measures_the_furthest_reach_of_the_host() {
+    let table = vec![(
+        RULE,
+        Rule::MaxEnclosure {
+            outer: B,
+            inner: A,
+            limit: dbu(95),
+        },
+    )];
+    let mut layout = LayoutBuilder::new(2);
+    layout.rect(A, 0, 0, 100, 100);
+    let host = layout.rect(B, -50, -50, 196, 150);
+    let (store, ids) = layout.finish();
+    let mut sink = Sink::default();
+    sink.run(&store, &table);
+    assert_only_violation(
+        &sink.out,
+        &Violation {
+            rule: RULE,
+            layer: B,
+            severity: Severity::Error,
+            at: point(195, 50),
+            measured: Measurement::Length(dbu(96)),
+            limit: Measurement::Length(dbu(95)),
+            shapes: (ids.of(host), None),
+        },
+    );
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
+
+    for (gap, reach) in [(190, None), (191, Some(96))] {
+        let mut layout = LayoutBuilder::new(2);
+        layout.rect(A, 0, 0, 100, 100);
+        layout.rect(A, 100 + gap, 0, 200 + gap, 100);
+        layout.rect(B, -50, -50, 250 + gap, 150);
+        let (store, _) = layout.finish();
+        sink.run(&store, &table);
+        let want: Vec<Measurement> = reach
+            .map(|r| Measurement::Length(dbu(r)))
+            .into_iter()
+            .collect();
+        assert_eq!(sink.out.measured, want, "two cuts {gap} apart");
+    }
+}
+
+// -------------------------------------------------------------- full_width
+
+/// Oracle: construct-from-answer (ASAP7 V1.M2.AUX.2). A 100 via in a 100
+/// wide horizontal wire, 1 short of its top edge: along y it reads 0 below
+/// and 1 above, along x 500 and 900, so the better axis reads 1, reported in
+/// the 1 nm strip above the via at `(50, 99)`. Spanning the wire, it passes.
+#[test]
+fn a_via_must_span_its_wire_along_one_axis() {
+    let table = vec![(RULE, Rule::FullWidth { outer: B, inner: A })];
+    let mut layout = LayoutBuilder::new(2);
+    let via = layout.rect(A, 0, 0, 100, 99);
+    let wire = layout.rect(B, -500, 0, 1_000, 100);
+    let (store, ids) = layout.finish();
+    let mut sink = Sink::default();
+    sink.run(&store, &table);
+    assert_only_violation(
+        &sink.out,
+        &Violation {
+            rule: RULE,
+            layer: A,
+            severity: Severity::Error,
+            at: point(50, 99),
+            measured: Measurement::Length(dbu(1)),
+            limit: Measurement::Length(dbu(0)),
+            shapes: (ids.of(via), Some(ids.of(wire))),
+        },
+    );
+
+    let mut layout = LayoutBuilder::new(2);
+    layout.rect(A, 0, 0, 100, 100);
+    layout.rect(B, -500, 0, 1_000, 100);
+    let (store, _) = layout.finish();
+    sink.run(&store, &table);
+    assert_clean(&sink.runs, &sink.out, RULE);
 }

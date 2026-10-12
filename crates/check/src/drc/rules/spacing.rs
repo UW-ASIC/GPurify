@@ -7,8 +7,8 @@
 //! shapes) have no gap and are skipped.
 
 use super::{
-    gap_midpoint, join_nested, label_pairs_into, owners_of, pair_distances_into, rects_ring_dist2,
-    ring_segs, seg_bbox, LayerRects, SortedRects, Verdict, REFUSED,
+    gap_midpoint, join_nested, label_pairs_into, mid, owners_of, pair_distances_into,
+    rects_ring_dist2, ring_segs, seg_bbox, LayerRects, SortedRects, Verdict, REFUSED,
 };
 use crate::drc::rules::width::wide_rects_into;
 use crate::drc::ruleset::{is_end_of_line, prl_holds, ClassTable, SpacingTable};
@@ -318,6 +318,107 @@ pub(crate) fn min_spacing_diff(
         if d2 < limit2 {
             let found = (d2, whole_at(store, pair, d2));
             out.push(spacing_violation(rule, a_layer, pair, found, limit));
+        }
+    }
+    (Outcome::Ran, s.pairs.len() as u64)
+}
+
+/// The least gap between an edge of `a` and an edge of `b` that are parallel,
+/// face each other across it (each on the other's outward side; a ring has
+/// its material on the left of travel) and overlap in projection by a
+/// positive length, with the point midway between them at the middle of
+/// that overlap; `None` when no edges face.
+fn facing_gap(store: &GeometryStore, a: PolyId, b: PolyId) -> Option<(Dbu, Point)> {
+    let (axs, ays) = store.poly_verts(a);
+    let (bxs, bys) = store.poly_verts(b);
+    let mut best: Option<(Dbu, Point)> = None;
+    for ea in ring_segs(axs, ays) {
+        for eb in ring_segs(bxs, bys) {
+            let vertical = ea.a.x == ea.b.x;
+            if vertical != (eb.a.x == eb.b.x) {
+                continue;
+            }
+            // Position across the edge, its outward sign, and its span.
+            let read = |e: Seg| {
+                if vertical {
+                    (
+                        e.a.x,
+                        (e.b.y - e.a.y).raw().signum(),
+                        e.a.y.min(e.b.y),
+                        e.a.y.max(e.b.y),
+                    )
+                } else {
+                    (
+                        e.a.y,
+                        -(e.b.x - e.a.x).raw().signum(),
+                        e.a.x.min(e.b.x),
+                        e.a.x.max(e.b.x),
+                    )
+                }
+            };
+            let ((pa, na, la, ha), (pb, nb, lb, hb)) = (read(ea), read(eb));
+            let (lo, hi) = (la.max(lb), ha.min(hb));
+            let ahead = |from: Dbu, sign: i64, to: Dbu| (to - from).raw().signum() == sign;
+            if hi <= lo || !ahead(pa, na, pb) || !ahead(pb, nb, pa) {
+                continue;
+            }
+            let gap = Dbu::new_unchecked((pb - pa).raw().abs());
+            if best.is_some_and(|(least, _)| least <= gap) {
+                continue;
+            }
+            let (across, along) = (mid(pa, pb), mid(lo, hi));
+            let at = if vertical {
+                Point {
+                    x: across,
+                    y: along,
+                }
+            } else {
+                Point {
+                    x: along,
+                    y: across,
+                }
+            };
+            best = Some((gap, at));
+        }
+    }
+    best
+}
+
+/// Two-layer spacing in `KLayout`'s projection metric (sky130 lvtn.3b as its
+/// own deck writes it): each pair within `limit` measures its least facing
+/// gap, 0 when the shapes touch, overlap or nest. `examined` counts the
+/// pairs whose boxes come within `limit`.
+pub(crate) fn projection_spacing(
+    store: &GeometryStore,
+    rule: StrId,
+    (a_layer, b_layer): (LayerId, LayerId),
+    limit: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    if s.validated.get(store, a_layer).is_none() || s.validated.get(store, b_layer).is_none() {
+        return REFUSED;
+    }
+    SpatialIndex::build_into(store, a_layer, &mut s.index_a);
+    SpatialIndex::build_into(store, b_layer, &mut s.index_b);
+    cross_layer_pairs_into(store, &s.index_a, &s.index_b, limit, &mut s.pairs);
+    pair_distances_into(store, &s.pairs, limit, &mut s.dists);
+    s.holes.build(store, [a_layer, b_layer]);
+    join_nested(store, &s.holes, &s.pairs, &mut s.dists);
+    for (&pair, &d2) in s.pairs.iter().zip(&s.dists) {
+        let found = if d2.raw() == 0 {
+            Some((Dbu::new_unchecked(0), whole_at(store, pair, d2)))
+        } else {
+            facing_gap(store, pair.0, pair.1)
+        };
+        if let Some((gap, at)) = found.filter(|&(gap, _)| gap < limit) {
+            out.push(spacing_violation(
+                rule,
+                a_layer,
+                pair,
+                (gap.mul_wide(gap), at),
+                limit,
+            ));
         }
     }
     (Outcome::Ran, s.pairs.len() as u64)

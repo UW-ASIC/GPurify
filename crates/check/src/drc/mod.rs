@@ -16,7 +16,7 @@
 pub mod rules;
 pub mod ruleset;
 
-pub use ruleset::{Rule, RuleSet, SpacingQuery, StepKind};
+pub use ruleset::{CutClassTable, Rule, RuleSet, SpacingQuery, StepKind, WireBand};
 
 use gpurify_geom::connectivity::ComponentLabel;
 use gpurify_geom::index::SpatialIndex;
@@ -100,7 +100,8 @@ pub enum DrcError {
     /// table fails its kind's check
     /// ([`ClassTable::is_valid_tips`](ruleset::ClassTable::is_valid_tips),
     /// [`ClassTable::is_valid_two_widths`](ruleset::ClassTable::is_valid_two_widths)),
-    /// or its forbidden range starts above its end.
+    /// its forbidden range starts above its end, or its cut-class table
+    /// fails [`CutClassTable::is_valid`].
     #[error("rule {0}: its table or range is not well formed")]
     BadTable(String),
 }

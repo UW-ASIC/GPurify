@@ -167,6 +167,153 @@ fn a_one_line_rule_lowers_to_the_engine_kind_and_grid_units() {
     );
 }
 
+/// Oracle: `docs/deck.md`'s spelling of each check ledger H added, and the
+/// engine kind and parameters each lowers to: the cut-spacing forms, the
+/// cut-class table, LEF MINIMUMCUT and MAXVIASTACK, the gate-shape pair, the
+/// maximum, non-coincident and wire-banded enclosures, and contains' maximum
+/// and exact counts.
+#[test]
+fn the_overlay_and_cut_checks_lower_to_their_engine_kinds() {
+    let (deck, strings) = ok("rule c2c space(mcon, center) >= 300nm\n\
+         rule adj adjacent_space(mcon; cuts: 3, within: 250nm) >= 220nm\n\
+         rule adjc adjacent_space(mcon, center; cuts: 3, within: 300nm) >= 300nm\n\
+         rule ccs cut_class_space(licon; short: [170nm, 190nm], long: [170nm, 2000nm],\n\
+             space: [[170nm, 170nm, 510nm, 510nm], [170nm, 170nm, 510nm, 510nm],\n\
+                     [510nm, 510nm, 350nm, 510nm], [510nm, 510nm, 510nm, 510nm]])\n\
+         rule mc min_cuts(mcon, met1, li; width: 1um) >= 2\n\
+         rule mcw min_cuts(mcon, met1, li; width: 1um, within: 300nm) >= 2\n\
+         rule vs via_stack(licon, mcon) <= 1\n\
+         rule bend bend(poly, diff)\n\
+         rule cov covers_corner(poly, diff)\n\
+         rule maxe enclosure(licon, li) <= 95nm\n\
+         rule nce enclosure(licon, li, noncoincident) >= 380nm\n\
+         rule we enclosure(mcon, met1; width: 1um) >= 20nm\n\
+         rule wb enclosure(mcon, met1, opposite; below: 1um) >= 50nm\n\
+         rule wwb enclosure(mcon, met1; width: 1um, below: 2um) >= 20nm\n\
+         rule most contains(diff, licon) <= 1\n\
+         rule exact contains(diff, licon) == 2\n\
+         rule fw full_width(mcon, met1)\n\
+         rule ps space(licon, poly, projection) >= 235nm\n");
+    let got = rules(&deck, &strings);
+    let expect = |id: &str, kind: &str, layers: &[&str], params: &[&str]| {
+        let row = got
+            .iter()
+            .find(|r| r.0 == id)
+            .unwrap_or_else(|| panic!("{id} missing"));
+        assert_eq!(row.1, kind, "{id}");
+        assert_eq!(row.2, layers, "{id}");
+        assert_eq!(row.3, params, "{id}");
+    };
+    expect(
+        "c2c",
+        "cut_spacing",
+        &["mcon"],
+        &["limit=300dbu", "center=true"],
+    );
+    expect(
+        "adj",
+        "cut_spacing",
+        &["mcon"],
+        &[
+            "adjacent=#3",
+            "within=250dbu",
+            "limit=220dbu",
+            "center=false",
+        ],
+    );
+    expect(
+        "adjc",
+        "cut_spacing",
+        &["mcon"],
+        &[
+            "adjacent=#3",
+            "within=300dbu",
+            "limit=300dbu",
+            "center=true",
+        ],
+    );
+    let ccs = got.iter().find(|r| r.0 == "ccs").expect("ccs");
+    assert_eq!(
+        (ccs.1.as_str(), ccs.2.as_slice()),
+        ("cut_class_spacing", &["licon".to_owned()][..])
+    );
+    assert_eq!(
+        ccs.3[..4],
+        [
+            "class_short=170dbu",
+            "class_short=190dbu",
+            "class_long=170dbu",
+            "class_long=2000dbu"
+        ]
+    );
+    assert_eq!(ccs.3.len(), 4 + 16, "two classes and a 4 x 4 table");
+    expect(
+        "mc",
+        "minimum_cut",
+        &["mcon", "met1", "li"],
+        &["width=1000dbu", "min_count=#2"],
+    );
+    expect(
+        "mcw",
+        "minimum_cut",
+        &["mcon", "met1", "li"],
+        &["width=1000dbu", "within=300dbu", "min_count=#2"],
+    );
+    expect("vs", "via_stack", &["licon", "mcon"], &["max_height=#1"]);
+    expect(
+        "bend",
+        "gate_corner",
+        &["poly", "diff"],
+        &["of_reference=false"],
+    );
+    expect(
+        "cov",
+        "gate_corner",
+        &["poly", "diff"],
+        &["of_reference=true"],
+    );
+    // Enclosures take the outer layer first.
+    expect("maxe", "max_enclosure", &["li", "licon"], &["limit=95dbu"]);
+    expect(
+        "nce",
+        "noncoincident_enclosure",
+        &["li", "licon"],
+        &["limit=380dbu"],
+    );
+    expect(
+        "we",
+        "min_enclosure",
+        &["met1", "mcon"],
+        &["wire_width=1000dbu", "limit=20dbu"],
+    );
+    expect(
+        "wb",
+        "asymmetric_enclosure",
+        &["met1", "mcon"],
+        &["wire_below=1000dbu", "min_one_side=50dbu"],
+    );
+    expect(
+        "wwb",
+        "min_enclosure",
+        &["met1", "mcon"],
+        &["wire_width=1000dbu", "wire_below=2000dbu", "limit=20dbu"],
+    );
+    expect(
+        "most",
+        "must_contain",
+        &["diff", "licon"],
+        &["max_count=#1"],
+    );
+    expect("exact", "must_contain", &["diff", "licon"], &["count=#2"]);
+    expect("fw", "full_width", &["met1", "mcon"], &[]);
+    expect(
+        "ps",
+        "projection_spacing",
+        &["licon", "poly"],
+        &["limit=235dbu"],
+    );
+}
+
 /// gf180 M1.4 "Metal1 minimum density 30 % over the entire die", and a
 /// windowed row whose die is a named boundary layer.
 ///

@@ -58,7 +58,7 @@ pub(crate) fn forbidden(
 }
 
 /// Rectangles of `figures`, CSR by figure.
-fn rects_of(figures: &ValidatedLayer) -> (Vec<Bbox>, Vec<u32>) {
+pub(super) fn rects_of(figures: &ValidatedLayer) -> (Vec<Bbox>, Vec<u32>) {
     let (mut rects, mut start) = (Vec::new(), Vec::new());
     decompose_into(figures, &mut rects, &mut start);
     (rects, start)
@@ -66,7 +66,10 @@ fn rects_of(figures: &ValidatedLayer) -> (Vec<Bbox>, Vec<u32>) {
 
 /// Per inner figure, the outer figure covering all of it, if one does. Outer
 /// figures share no area, so an inner figure fully covered lies in exactly one.
-fn hosts(inner: &(Vec<Bbox>, Vec<u32>), outer: &(Vec<Bbox>, Vec<u32>)) -> Vec<Option<u32>> {
+pub(super) fn hosts(
+    inner: &(Vec<Bbox>, Vec<u32>),
+    outer: &(Vec<Bbox>, Vec<u32>),
+) -> Vec<Option<u32>> {
     let labelled = outer
         .1
         .windows(2)
@@ -96,7 +99,7 @@ fn hosts(inner: &(Vec<Bbox>, Vec<u32>), outer: &(Vec<Bbox>, Vec<u32>)) -> Vec<Op
 }
 
 /// A point on figure `figure`'s material: the centre of its first rectangle.
-fn inside_point(rects: &(Vec<Bbox>, Vec<u32>), figure: usize) -> Point {
+pub(super) fn inside_point(rects: &(Vec<Bbox>, Vec<u32>), figure: usize) -> Point {
     let r = rects.0[rects.1[figure] as usize];
     Point {
         x: mid(r.xlo, r.xhi),
@@ -104,16 +107,15 @@ fn inside_point(rects: &(Vec<Bbox>, Vec<u32>), figure: usize) -> Point {
     }
 }
 
-/// Each merged `outer` figure must hold at least `min_count` merged `inner`
-/// figures entirely (licon.16 "every tap must enclose at least one licon").
-/// One that straddles the outer's edge is not held. `examined` counts outer
-/// figures.
+/// Each merged `outer` figure must hold at least `min_count` and at most
+/// `max_count` merged `inner` figures entirely (licon.16 "every tap must
+/// enclose at least one licon"; rpm.1g "only 1 licon is allowed"). One that
+/// straddles the outer's edge is not held. `examined` counts outer figures.
 pub(crate) fn must_contain(
     store: &GeometryStore,
     rule: StrId,
-    outer: LayerId,
-    inner: LayerId,
-    min_count: u32,
+    (outer, inner): (LayerId, LayerId),
+    (min_count, max_count): (u32, u32),
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
@@ -131,17 +133,22 @@ pub(crate) fn must_contain(
     s.rects_a.build(store, outer, drawn);
     let owners = owners_of(&outer_figures, &s.rects_a);
     for (figure, &count) in held.iter().enumerate() {
-        if count < min_count {
-            out.push(Violation {
-                rule,
-                layer: outer,
-                severity: Severity::Error,
-                at: inside_point(&outer_rects, figure),
-                measured: Measurement::Count(count),
-                limit: Measurement::Count(min_count),
-                shapes: (owners[figure], None),
-            });
-        }
+        let broken = if count < min_count {
+            min_count
+        } else if count > max_count {
+            max_count
+        } else {
+            continue;
+        };
+        out.push(Violation {
+            rule,
+            layer: outer,
+            severity: Severity::Error,
+            at: inside_point(&outer_rects, figure),
+            measured: Measurement::Count(count),
+            limit: Measurement::Count(broken),
+            shapes: (owners[figure], None),
+        });
     }
     (Outcome::Ran, held.len() as u64)
 }

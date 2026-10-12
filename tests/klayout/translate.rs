@@ -10,7 +10,7 @@
 //! Each rule writes JSON lines tagged with its id (see `PRELUDE`), and a
 //! [`Mirror`] says how those lines are compared with `GPurify`'s findings.
 
-use gpurify::check::drc::{Rule, RuleSet};
+use gpurify::check::drc::{Rule, RuleSet, WireBand};
 use gpurify::check::report::LimitSense;
 use gpurify::geom::LayerId;
 use gpurify_ingest::deck::{Deck, DerivedOp};
@@ -226,6 +226,169 @@ def sq_dist(p, a, b)
   t, l2 = (p.x - a.x) * dx + (p.y - a.y) * dy, dx * dx + dy * dy
   q = t <= 0 ? a : t >= l2 ? b : nil
   q ? (p.x - q.x)**2 + (p.y - q.y)**2 : Rational(((p.x - a.x) * dy - (p.y - a.y) * dx)**2, l2)
+end
+# The squared distance between two polygons, boundary to boundary: 0 when they
+# touch, overlap or nest, else the least from a vertex of one to an edge of the
+# other, exact.
+def poly_d2(p, q)
+  return 0 unless (RBA::Region.new(p).sized(1) & RBA::Region.new(q)).is_empty?
+  ds = []
+  p.each_edge { |e| q.each_point_hull { |v| ds << sq_dist(v, e.p1, e.p2) } }
+  q.each_edge { |e| p.each_point_hull { |v| ds << sq_dist(v, e.p1, e.p2) } }
+  ds.min
+end
+# LEF cut spacing over the drawn cuts of `layer`, by index into `raw:`: a cut's
+# neighbours are the others closer than `within`; a pair closer than `lim`
+# fails when either cut has at least `n` neighbours. Centre to centre (box
+# centres, whole at x2) or boundary to boundary.
+def cut_spacing(rule, layer, lim, n, within, center)
+  ps = layer.data.each.to_a
+  d2 = lambda do |p, q|
+    next poly_d2(p, q) unless center
+    a, b = p.bbox.center, q.bbox.center
+    (a.x - b.x)**2 + (a.y - b.y)**2
+  end
+  m = ps.size
+  dd = {}
+  count = Array.new(m, 0)
+  (0...m).each do |i|
+    ((i + 1)...m).each do |j|
+      dd[[i, j]] = d2.call(ps[i], ps[j])
+      if dd[[i, j]] < within * within
+        count[i] += 1
+        count[j] += 1
+      end
+    end
+  end
+  dd.each do |(i, j), d|
+    put({ rule: rule, rows: [i, j] }) if d < lim * lim && (count[i] >= n || count[j] >= n)
+  end
+end
+# LEF58 cut-class spacing over the drawn cuts of `layer`, by index into `raw:`:
+# a cut's class is the [short, long] pair of `cls` its box matches; `tbl` holds
+# two rows and columns per class (END, SIDE). Apart along y, a cut faces with
+# its SIDE when wider than tall; along x, when taller than wide; apart along
+# both, the larger cell; touching or overlapping, the class pair's largest.
+def cut_class_spacing(rule, layer, cls, tbl)
+  bs = layer.data.each.to_a.map(&:bbox)
+  klass = bs.map { |b| cls.index([b.width, b.height].minmax) }
+  bs.each_with_index do |a, i|
+    ((i + 1)...bs.size).each do |j|
+      b = bs[j]
+      next if klass[i].nil? || klass[j].nil?
+      cell = lambda { |p, q| tbl[2 * klass[i] + (p ? 1 : 0)][2 * klass[j] + (q ? 1 : 0)] }
+      apart_x = b.left > a.right || a.left > b.right
+      apart_y = b.bottom > a.top || a.bottom > b.top
+      need = if apart_x || apart_y
+        [apart_y ? cell.(a.width > a.height, b.width > b.height) : 0,
+         apart_x ? cell.(a.height > a.width, b.height > b.width) : 0].max
+      else
+        [[false, false], [false, true], [true, false], [true, true]].map { |p, q| cell.(p, q) }.max
+      end
+      dx = [b.left - a.right, a.left - b.right, 0].max
+      dy = [b.bottom - a.top, a.bottom - b.top, 0].max
+      put({ rule: rule, rows: [i, j] }) if dx * dx + dy * dy < need * need
+    end
+  end
+end
+# LEF MINIMUMCUT over the drawn cuts of `cuts`: a via is the cuts joining one
+# figure of `wide` to one of `other` (the first each overlaps), split into
+# groups closer than `within` (nil: one group); a group with a cut on the part
+# of `wide` where a square T + 1 fits (x2) and fewer than `n` cuts reports
+# every cut, with the count.
+def minimum_cut(rule, cuts, wide, other, t, n, within)
+  part = wide.data.merged.sized(-t).sized(t)
+  wf = wide.data.merged.each.to_a
+  of = other.data.merged.each.to_a
+  first = lambda { |figs, c| figs.index { |f| !(RBA::Region.new(f) & RBA::Region.new(c)).is_empty? } }
+  vias = Hash.new { |h, k| h[k] = [] }
+  cuts.data.each do |c|
+    w = first.(wf, c)
+    vias[[w, first.(of, c)]] << c unless w.nil?
+  end
+  vias.each_value do |cs|
+    group = (0...cs.size).to_a
+    root = lambda { |i| group[i] == i ? i : (group[i] = root.(group[i])) }
+    cs.each_index do |i|
+      ((i + 1)...cs.size).each do |j|
+        a, b = cs[i].bbox, cs[j].bbox
+        dx = [b.left - a.right, a.left - b.right, 0].max
+        dy = [b.bottom - a.top, a.bottom - b.top, 0].max
+        group[root.(j)] = root.(i) if within.nil? || dx * dx + dy * dy < within * within
+      end
+    end
+    cs.each_index.group_by { |i| root.(i) }.each_value do |members|
+      held = members.any? { |i| !(part & RBA::Region.new(cs[i])).is_empty? }
+      next if !held || members.size >= n
+      members.each { |i| put({ rule: rule }.merge(poly(cs[i])).merge({ v: members.size })) }
+    end
+  end
+end
+# Each merged `outer` figure holding merged `inner` figures (covering them
+# entirely) that reaches past their union sized by `lim` (square corners).
+def max_enclosure(rule, outer, inner, lim)
+  held = inner.data.merged.each.to_a
+  outer.data.merged.each do |o|
+    r = RBA::Region.new(o)
+    mine = held.select { |p| (RBA::Region.new(p) - r).is_empty? }
+    next if mine.empty?
+    put({ rule: rule }.merge(poly(o))) unless (r - RBA::Region.new(mine).sized(lim)).is_empty?
+  end
+end
+# LEF MAXVIASTACK over raw cut layers, bottom to top: a cut stacks on a cut
+# of the layer before whose box it overlaps with positive area; each cut at
+# height `max + 1` of a taller chain, with the tallest chain through it.
+def via_stack(rule, layers, max)
+  cuts = layers.map { |l| l.data.each.to_a }
+  over = lambda { |a, b| a.left < b.right && b.left < a.right && a.bottom < b.top && b.bottom < a.top }
+  chain = lambda do |order, step|
+    h = cuts.map { |cs| [1] * cs.size }
+    order.each do |i|
+      p = i - step
+      next if p < 0 || p >= cuts.size
+      cuts[i].each_with_index do |c, k|
+        hs = cuts[p].each_index.select { |j| over.(cuts[p][j].bbox, c.bbox) }.map { |j| h[p][j] }
+        h[i][k] = hs.max + 1 unless hs.empty?
+      end
+    end
+    h
+  end
+  down = chain.((0...cuts.size).to_a, 1)
+  up = chain.((0...cuts.size).to_a.reverse, -1)
+  cuts.each_with_index do |cs, i|
+    cs.each_with_index do |c, k|
+      put({ rule: rule }.merge(poly(c)).merge({ v: down[i][k] + up[i][k] - 1 })) if down[i][k] == max + 1
+    end
+  end
+end
+# Each merged `inner` figure a merged `outer` figure covers, unless one axis
+# of its edges all read 0 straight out to the nearest host edge facing them
+# (projection). KLayout hulls are clockwise: the material is on the right of
+# travel, so an edge faces to its left.
+def full_width(rule, outer, inner)
+  hosts = outer.data.merged.each.to_a
+  inner.data.merged.each do |p|
+    h = hosts.find { |o| (RBA::Region.new(p) - RBA::Region.new(o)).is_empty? }
+    next if h.nil?
+    he = []
+    h.each_edge { |e| he << e }
+    most = [0, 0]
+    p.each_edge do |e|
+      vertical = e.x1 == e.x2
+      lo, hi = vertical ? [e.y1, e.y2].minmax : [e.x1, e.x2].minmax
+      at = vertical ? e.x1 : e.y1
+      sign = vertical ? (e.y2 > e.y1 ? -1 : 1) : (e.x2 > e.x1 ? 1 : -1)
+      runs = he.select { |f| (f.x1 == f.x2) == vertical }.filter_map do |f|
+        flo, fhi = vertical ? [f.y1, f.y2].minmax : [f.x1, f.x2].minmax
+        fat = vertical ? f.x1 : f.y1
+        d = (fat - at) * sign
+        d if flo < hi && fhi > lo && d >= 0
+      end
+      axis = vertical ? 0 : 1
+      most[axis] = [most[axis], runs.min || 2**60].max
+    end
+    put({ rule: rule }.merge(poly(p))) if most.min > 0
+  end
 end
 # The figures of `layer` whose narrowest Euclidean width, squared, lies in
 # [lo, hi) (nil: open). `width` resolves only whole units, and a neck between
@@ -537,6 +700,24 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 .expect("a String");
                 exact("min_spacing_diff", Key::Pair(na, nb, false), Value::Length)
             }
+            Rule::ProjectionSpacing { a, b, limit } => {
+                let (na, nb) = (fig(a, &mut reads), fig(b, &mut reads));
+                writeln!(
+                    body,
+                    "emit({q}, {a}.separation({b}, {}, projection, transparent)) ; emit({q}, {a} & {b})",
+                    lim(limit),
+                    a = var(a),
+                    b = var(b)
+                )
+                .expect("a String");
+                approx(
+                    "projection_spacing",
+                    Compare::KlayoutWithin,
+                    Key::Pair(na, nb, false),
+                    Value::Ignore,
+                    vec![],
+                )
+            }
             Rule::EolSpacing {
                 layer,
                 eol_width,
@@ -696,34 +877,67 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 outer,
                 inner,
                 limit,
+                wire,
             } => {
                 fig(outer, &mut reads);
                 let name = fig(inner, &mut reads);
                 writeln!(
                     body,
-                    "emit({q}, {o}.enclosing({i}, {}, euclidian, transparent)) ; emit({q}, {i}.not_inside({o}))",
+                    "i = {} ; emit({q}, {o}.enclosing(i, {}, euclidian, transparent)) ; emit({q}, i.not_inside({o}))",
+                    banded(var(inner), &var(outer), wire),
+                    lim(limit),
+                    o = var(outer),
+                )
+                .expect("a String");
+                exact("min_enclosure", Key::FigRow(name, 1), Value::Length)
+            }
+            Rule::FullWidth { outer, inner } => {
+                fig(outer, &mut reads);
+                let name = fig(inner, &mut reads);
+                writeln!(body, "full_width({q}, {}, {})", var(outer), var(inner))
+                    .expect("a String");
+                exact("full_width", Key::FigRow(name, 0), Value::Ignore)
+            }
+            Rule::NoncoincidentEnclosure {
+                outer,
+                inner,
+                limit,
+            } => {
+                fig(outer, &mut reads);
+                let name = fig(inner, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {o}.enclosing({i}, {}, euclidian, transparent, without_touching_edges)) ; \
+                     emit({q}, {i}.not_inside({o}))",
                     lim(limit),
                     o = var(outer),
                     i = var(inner)
                 )
                 .expect("a String");
-                exact("min_enclosure", Key::FigRow(name, 1), Value::Length)
+                approx(
+                    "noncoincident_enclosure",
+                    Compare::KlayoutWithin,
+                    Key::FigRow(name.clone(), 1),
+                    Value::Ignore,
+                    vec![],
+                )
             }
             Rule::AsymmetricEnclosure {
                 outer,
                 inner,
                 min_one_side,
+                wire,
             } => {
                 fig(outer, &mut reads);
                 let name = fig(inner, &mut reads);
                 writeln!(
                     body,
-                    "c = enclosed({o}, projection) < {} ; \
-                     emit({q}, {i}.drc(if_all(c.first_edges.angle == 90, c.first_edges.angle == 0))) ; \
-                     emit({q}, {i}.not_inside({o}))",
+                    "i = {} ; c = enclosed({o}, projection) < {} ; \
+                     emit({q}, i.drc(if_all(c.first_edges.angle == 90, c.first_edges.angle == 0))) ; \
+                     emit({q}, i.not_inside({o}))",
+                    banded(var(inner), &var(outer), wire),
                     lim(min_one_side),
                     o = var(outer),
-                    i = var(inner)
                 )
                 .expect("a String");
                 approx(
@@ -733,6 +947,23 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                     Value::Ignore,
                     vec![name],
                 )
+            }
+            Rule::MaxEnclosure {
+                outer,
+                inner,
+                limit,
+            } => {
+                let name = fig(outer, &mut reads);
+                fig(inner, &mut reads);
+                writeln!(
+                    body,
+                    "max_enclosure({q}, {}, {}, {})",
+                    var(outer),
+                    var(inner),
+                    lim(limit)
+                )
+                .expect("a String");
+                exact("max_enclosure", Key::FigAt(name), Value::Ignore)
             }
             Rule::MinExtension {
                 layer,
@@ -755,6 +986,26 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                     Value::Length,
                     vec![],
                 )
+            }
+            Rule::GateCorner {
+                layer,
+                reference,
+                of_reference,
+            } => {
+                layers.reads(layer, &mut reads);
+                layers.reads(reference, &mut reads);
+                // `corners(90)` marks each concave corner with a 2 x 2 box
+                // around it; two corners' boxes overlap only where they are
+                // one point.
+                writeln!(
+                    body,
+                    "emit({q}, ({a} & {b}).corners(90) & {}.corners(90))",
+                    var(if of_reference { reference } else { layer }),
+                    a = var(layer),
+                    b = var(reference)
+                )
+                .expect("a String");
+                exact("gate_corner", Key::Point, Value::Ignore)
             }
             Rule::Overlap { a, b, limit } => {
                 fig(a, &mut reads);
@@ -849,6 +1100,31 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                     vec![],
                 )
             }
+            Rule::MinimumCut {
+                cut,
+                wide,
+                other,
+                width,
+                within,
+                min_count,
+            } => {
+                layers.reads(cut, &mut reads);
+                layers.reads(wide, &mut reads);
+                layers.reads(other, &mut reads);
+                writeln!(
+                    body,
+                    "minimum_cut({q}, {}.dup.raw, {}, {}, {}, {min_count}, {})",
+                    var(cut),
+                    var(wide),
+                    var(other),
+                    // A `width + 1` square fits where sizing by `width`
+                    // at x2 leaves material.
+                    width.raw(),
+                    within.map_or("nil".to_owned(), |w| lim(w).to_string())
+                )
+                .expect("a String");
+                exact("minimum_cut", Key::Row(None), Value::Count)
+            }
             Rule::ViaArraySpacing {
                 layer,
                 array_threshold,
@@ -891,6 +1167,68 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                     vec![],
                 )
             }
+            Rule::CutSpacing {
+                layer,
+                center,
+                adjacent,
+                within,
+                limit,
+            } => {
+                layers.reads(layer, &mut reads);
+                let name = layers.name(layer);
+                writeln!(
+                    body,
+                    "emit({raw}, {v}.dup.raw) ; cut_spacing({q}, {v}.dup.raw, {}, {adjacent}, {}, {center})",
+                    lim(limit),
+                    lim(within),
+                    raw = rb(&format!("raw:{name}")),
+                    v = var(layer)
+                )
+                .expect("a String");
+                exact("cut_spacing", Key::RowPair(name), Value::Ignore)
+            }
+            Rule::ViaStack { stack, max_height } => {
+                let cuts: Vec<String> = set.stacks[stack as usize]
+                    .iter()
+                    .map(|&layer| {
+                        layers.reads(layer, &mut reads);
+                        format!("{}.dup.raw", var(layer))
+                    })
+                    .collect();
+                writeln!(body, "via_stack({q}, [{}], {max_height})", cuts.join(", "))
+                    .expect("a String");
+                exact("via_stack", Key::Row(None), Value::Count)
+            }
+            Rule::CutClassSpacing { layer, table } => {
+                layers.reads(layer, &mut reads);
+                let name = layers.name(layer);
+                let table = &set.cut_tables[table as usize];
+                let classes: Vec<String> = table
+                    .short
+                    .iter()
+                    .zip(&table.long)
+                    .map(|(&s, &l)| format!("[{}, {}]", lim(s), lim(l)))
+                    .collect();
+                let side = 2 * table.short.len();
+                let rows: Vec<String> = table
+                    .space
+                    .chunks(side)
+                    .map(|row| {
+                        let cells: Vec<String> = row.iter().map(|&c| lim(c).to_string()).collect();
+                        format!("[{}]", cells.join(", "))
+                    })
+                    .collect();
+                writeln!(
+                    body,
+                    "emit({raw}, {v}.dup.raw) ; cut_class_spacing({q}, {v}.dup.raw, [{}], [{}])",
+                    classes.join(", "),
+                    rows.join(", "),
+                    raw = rb(&format!("raw:{name}")),
+                    v = var(layer)
+                )
+                .expect("a String");
+                exact("cut_class_spacing", Key::RowPair(name), Value::Ignore)
+            }
             Rule::MultiPatterning { .. } => (
                 "multi_patterning",
                 Verdict::None("KLayout has no mask colouring"),
@@ -915,19 +1253,31 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 outer,
                 inner,
                 min_count,
+                max_count,
             } => {
                 let name = fig(outer, &mut reads);
                 fig(inner, &mut reads);
-                writeln!(
-                    body,
-                    // `covering` drops an outer figure that an inner one
-                    // straddles, whatever else it holds: count only inners
-                    // that some outer figure holds.
-                    "emit({q}, {o}.not_covering({i}.inside({o}), {min_count})) {{ |p| {{ v: {i}.data.merged.inside(RBA::Region.new(p)).count }} }}",
-                    o = var(outer),
-                    i = var(inner)
-                )
-                .expect("a String");
+                // `covering` drops an outer figure that an inner one
+                // straddles, whatever else it holds: count only inners that
+                // some outer figure holds. Too few and too many are disjoint.
+                let (o, i) = (var(outer), var(inner));
+                let held =
+                    format!("{{ |p| {{ v: {i}.data.merged.inside(RBA::Region.new(p)).count }} }}");
+                if min_count > 0 {
+                    writeln!(
+                        body,
+                        "emit({q}, {o}.not_covering({i}.inside({o}), {min_count})) {held}"
+                    )
+                    .expect("a String");
+                }
+                if max_count < u32::MAX {
+                    writeln!(
+                        body,
+                        "emit({q}, {o}.covering({i}.inside({o}), {})) {held}",
+                        u64::from(max_count) + 1
+                    )
+                    .expect("a String");
+                }
                 exact("must_contain", Key::FigAt(name), Value::Count)
             }
             Rule::MustBeInside { inner, outer } => {
@@ -1447,6 +1797,24 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
 }
 
 type Spec = (&'static str, Verdict, Compare, Key, Value, Vec<String>);
+
+/// The inner layer `inner` restricted to an enclosure's wire band: the shapes
+/// inside the part of `outer` at least `from` wide (`sized(-(w - 1))` and back
+/// at x2, as for wide spacing) and not inside the part `below` wide.
+fn banded(inner: String, outer: &str, wire: WireBand) -> String {
+    let wide = |w: gpurify::geom::Dbu| {
+        let t = w.raw() - 1;
+        format!("{outer}.sized(-{t}).sized({t})")
+    };
+    let mut out = inner;
+    if wire.from.raw() > 0 {
+        out = format!("{out}.inside({})", wide(wire.from));
+    }
+    if let Some(below) = wire.below {
+        out = format!("{out}.not_inside({})", wide(below));
+    }
+    out
+}
 
 /// Lengths doubled for the ×2 layout, as a Ruby list's items.
 fn doubled(lengths: &[gpurify::geom::Dbu]) -> String {

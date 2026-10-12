@@ -8,17 +8,20 @@
 //! skipped. Extension and overlap measure the figures of the area the merged
 //! layers share, so shapes that only touch are never measured.
 
+use super::presence::{hosts, inside_point, rects_of};
+use super::width::{rects_layer, wide_rects_into};
 use super::{
-    centre, merged, mid, owners_of, rects_ring_dist2, ring_segs, SortedRects, Verdict, REFUSED,
+    centre, gap_midpoint, merged, mid, owners_of, rects_ring_dist2, ring_segs, SortedRects,
+    Verdict, REFUSED,
 };
-use crate::drc::Scratch;
+use crate::drc::{Scratch, WireBand};
 use crate::erc::rules::supply::untied_points;
 use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
 };
-use gpurify_geom::boolean::{intersection_into, union_into};
+use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
-use gpurify_geom::ops::{isqrt, Point};
+use gpurify_geom::ops::{isqrt, seg_seg_dist2, Point, Seg};
 use gpurify_geom::rects::{clipped_area, covered_area, decompose_into};
 use gpurify_geom::width::{narrowest_facing, narrowest_neck, poly_edges};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, PolygonRef, ValidatedLayer};
@@ -43,13 +46,10 @@ fn lesser(a: (Dbu, Side), b: (Dbu, Side)) -> (Dbu, Side) {
     }
 }
 
-/// The larger of two sides, the first on a tie.
-fn greater(a: (Dbu, Side), b: (Dbu, Side)) -> (Dbu, Side) {
-    if a.0 >= b.0 {
-        a
-    } else {
-        b
-    }
+/// The widest margin the domain holds, 2^41: no real one exceeds it. Built by
+/// `Sub`, as every margin is, since `new_unchecked` asserts 2^40.
+fn far() -> Dbu {
+    Dbu::new_unchecked(MAX_ABS_DBU) - Dbu::new_unchecked(-MAX_ABS_DBU)
 }
 
 /// How far the host reaches past a rectangular `inner` on each side, read
@@ -57,10 +57,7 @@ fn greater(a: (Dbu, Side), b: (Dbu, Side)) -> (Dbu, Side) {
 /// holes included, facing that side. Exact for any rectilinear host that
 /// contains `inner`.
 fn strips(inner: Bbox, host: PolygonRef<'_>) -> [(Dbu, Side); 4] {
-    // The widest margin the domain holds, 2^41: no real one exceeds it. Built
-    // by `Sub`, as every margin is, since `new_unchecked` asserts 2^40.
-    let far = Dbu::new_unchecked(MAX_ABS_DBU) - Dbu::new_unchecked(-MAX_ABS_DBU);
-    let [mut l, mut r, mut b, mut t] = [far; 4];
+    let [mut l, mut r, mut b, mut t] = [far(); 4];
     for ring in std::iter::once(host.outer()).chain(host.holes()) {
         let (xs, ys) = ring.coords();
         for e in ring_segs(xs, ys) {
@@ -107,29 +104,124 @@ fn boundary_dist2(inner: &[Bbox], host: PolygonRef<'_>) -> i128 {
         .fold(i128::MAX, i128::min)
 }
 
-/// A contained inner polygon's enclosure in `host` and the side to report.
-/// All sides: the euclidean distance to the host's boundary. Asymmetric: the
-/// better axis's worse side, `max(min(left, right), min(bottom, top))`, which
-/// needs a rectangular inner; any other inner falls back to all sides (fails
-/// closed). `None` for the side means "not a rectangle, report at the centre".
-fn enclosure_of(
-    inner: &[Bbox],
-    inner_box: Bbox,
-    host: PolygonRef<'_>,
-    asymmetric: bool,
-) -> (Dbu, Option<Side>) {
-    let boxed = inner.len() == 1;
-    if boxed && asymmetric {
-        let [l, r, b, t] = strips(inner_box, host);
-        let (value, side) = greater(lesser(l, r), lesser(b, t));
-        return (value, Some(side));
+/// How an enclosure rule reads an inner polygon in its host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mode {
+    /// The Euclidean distance to the host's boundary (`min_enclosure`).
+    EverySide,
+    /// The better axis of straight-out readings (`asymmetric_enclosure`).
+    Opposite,
+    /// Facing parallel edges, coincident ones exempt
+    /// (`noncoincident_enclosure`).
+    NonCoincident,
+    /// The better axis's widest straight-out reading, which must be 0
+    /// (`full_width`).
+    FullWidth,
+}
+
+/// The least Euclidean distance between an edge of `inner` and a parallel
+/// edge of `host` facing the same way at or beyond it, over the pairs that
+/// do not touch, and the middle of the gap between that pair's boxes; `None`
+/// when every such pair touches (an inner polygon whose every edge lies on
+/// its host's boundary).
+fn apart_enclosure(inner: PolygonRef<'_>, host: PolygonRef<'_>) -> Option<(DbuArea, Point)> {
+    let mut best: Option<(DbuArea, Point)> = None;
+    for (a, b) in poly_edges(inner) {
+        let (side, e) = (outward(a, b), Seg { a, b });
+        for (c, d) in poly_edges(host) {
+            if outward(c, d) != side {
+                continue;
+            }
+            let beyond = match side {
+                Side::Left => c.x <= a.x,
+                Side::Right => c.x >= a.x,
+                Side::Bottom => c.y <= a.y,
+                Side::Top => c.y >= a.y,
+            };
+            let d2 = seg_seg_dist2(e, Seg { a: c, b: d });
+            if !beyond || d2.raw() == 0 || best.is_some_and(|(least, _)| least <= d2) {
+                continue;
+            }
+            let boxes = (
+                Bbox::point(a.x, a.y).include(b.x, b.y),
+                Bbox::point(c.x, c.y).include(d.x, d.y),
+            );
+            best = Some((d2, gap_midpoint(boxes.0, boxes.1)));
+        }
     }
-    let value = isqrt(DbuArea::new(saturate(boundary_dist2(inner, host))));
-    let side = boxed.then(|| {
+    best
+}
+
+/// A contained inner polygon's enclosure in `host` and where to report it
+/// (`None`: at the centre of its box).
+///
+/// Non-coincident: [`apart_enclosure`], reported in the middle of the gap
+/// of the pair that measured it; past every limit when every pair touches.
+///
+/// All sides: the euclidean distance to the host's boundary, reported in the
+/// strip on the least enclosed side of a rectangle.
+///
+/// Opposite: each edge of the polygon, holes included, is read straight out
+/// from its outside to the nearest host edge facing it ([`strips`]); the
+/// vertical edges enclose it along x by the least of theirs, the horizontal
+/// edges along y, and the polygon measures its better axis,
+/// `max(min(vertical), min(horizontal))`, x on a tie. For a rectangle that
+/// is `max(min(left, right), min(bottom, top))`. Reported in the strip past
+/// the least enclosed edge of that axis: left before right and bottom
+/// before top on a tie, then the first in ring order.
+fn enclosure_of(
+    inner: PolygonRef<'_>,
+    rects: &[Bbox],
+    host: PolygonRef<'_>,
+    mode: Mode,
+) -> (Dbu, Option<Point>) {
+    if mode == Mode::NonCoincident {
+        return apart_enclosure(inner, host).map_or_else(
+            || (far(), None),
+            |(d2, at)| (isqrt(DbuArea::new(saturate(d2.raw()))), Some(at)),
+        );
+    }
+    if mode == Mode::FullWidth {
+        // Per axis (vertical edges, horizontal edges): the most enclosed edge.
+        let mut most: [Option<(Dbu, Side, Bbox)>; 2] = [None; 2];
+        for (a, b) in poly_edges(inner) {
+            let edge = Bbox::point(a.x, a.y).include(b.x, b.y);
+            let side = outward(a, b);
+            let (run, _) = strips(edge, host)[side as usize];
+            let axis = &mut most[usize::from(a.y == b.y)];
+            if axis.is_none_or(|(d, s, _)| (run, Reverse(side)) > (d, Reverse(s))) {
+                *axis = Some((run, side, edge));
+            }
+        }
+        let edges = "a validated polygon has edges along both axes";
+        let (x, y) = (most[0].expect(edges), most[1].expect(edges));
+        let (run, side, edge) = if x.0 <= y.0 { x } else { y };
+        return (run, Some(side_midpoint(edge, run, side)));
+    }
+    if mode == Mode::Opposite {
+        // Per axis (vertical edges, horizontal edges): the least enclosed edge.
+        let mut least: [Option<(Dbu, Side, Bbox)>; 2] = [None; 2];
+        for (a, b) in poly_edges(inner) {
+            let edge = Bbox::point(a.x, a.y).include(b.x, b.y);
+            let side = outward(a, b);
+            let (run, _) = strips(edge, host)[side as usize];
+            let axis = &mut least[usize::from(a.y == b.y)];
+            if axis.is_none_or(|(d, s, _)| (run, side) < (d, s)) {
+                *axis = Some((run, side, edge));
+            }
+        }
+        let edges = "a validated polygon has edges along both axes";
+        let (x, y) = (least[0].expect(edges), least[1].expect(edges));
+        let (run, side, edge) = if x.0 >= y.0 { x } else { y };
+        return (run, Some(side_midpoint(edge, run, side)));
+    }
+    let value = isqrt(DbuArea::new(saturate(boundary_dist2(rects, host))));
+    let inner_box = inner.bbox();
+    let at = (rects.len() == 1).then(|| {
         let [l, r, b, t] = strips(inner_box, host);
-        lesser(lesser(l, r), lesser(b, t)).1
+        side_midpoint(inner_box, value, lesser(lesser(l, r), lesser(b, t)).1)
     });
-    (value, side)
+    (value, at)
 }
 
 /// `isqrt` takes at most `MAX_ABS_DBU²`; a larger distance saturates there.
@@ -160,6 +252,22 @@ fn side_midpoint(inner: Bbox, margin: Dbu, side: Side) -> Point {
     }
 }
 
+/// The part of `drawn` at least `width` wide, indexed for coverage; `None`
+/// for no width. `Err` is a failed boolean.
+fn wide_part(
+    drawn: &ValidatedLayer,
+    width: Option<Dbu>,
+) -> Result<Option<SortedRects<()>>, BooleanError> {
+    let Some(width) = width else {
+        return Ok(None);
+    };
+    let mut rects = Vec::new();
+    wide_rects_into(drawn, width, &mut rects)?;
+    Ok(Some(SortedRects::new(
+        rects.into_iter().map(|r| (r, ())).collect(),
+    )))
+}
+
 /// Below the most negative real margin (`-2 * MAX_ABS_DBU`): seeds the host fold.
 const UNHOSTED: i64 = -(1 << 42);
 
@@ -188,19 +296,18 @@ fn pair_layers(
     true
 }
 
-/// Min enclosure (every side) or asymmetric enclosure (two opposite sides),
+/// Min enclosure (every side, or apart from coincident edges) or asymmetric
+/// enclosure (two opposite sides),
 /// per inner polygon on its best host: a figure of the merged outer layer, so
 /// a ring drawn as abutting bands hosts a ring inside it. A host holds the
 /// inner only if it covers all of its area (holes and concave notches count).
-/// `examined` counts inner polygons.
-#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
+/// Only the inner polygons `wire` selects are held. `examined` counts them.
 pub(crate) fn enclosure(
     store: &GeometryStore,
     rule: StrId,
-    outer: LayerId,
-    inner_layer: LayerId,
-    limit: Dbu,
-    asymmetric: bool,
+    (outer, inner_layer): (LayerId, LayerId),
+    (limit, wire): (Dbu, WireBand),
+    mode: Mode,
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
@@ -217,15 +324,22 @@ pub(crate) fn enclosure(
         rect_start: merged_start,
         ..
     } = s;
-    let drawn = validated.get(store, inner_layer).expect("validated above");
-    inner_rects.build(store, inner_layer, drawn);
-    let inner_boxes = drawn.bboxes().to_vec();
     let hosts = validated.get(store, outer).expect("validated above");
     host_rects.build(store, outer, hosts);
     let host_first = store.polys_on_layer(outer).start;
     if union_into(hosts, &ValidatedLayer::default(), merged).is_err() {
         return REFUSED;
     }
+    // The parts of the outer layer at least `from` and `below` wide.
+    let (Ok(from), Ok(below)) = (
+        wide_part(hosts, Some(wire.from).filter(|w| w.raw() > 0)),
+        wide_part(hosts, wire.below),
+    ) else {
+        return REFUSED;
+    };
+    let drawn = validated.get(store, inner_layer).expect("validated above");
+    inner_rects.build(store, inner_layer, drawn);
+    let inner_boxes = drawn.bboxes();
     decompose_into(merged, merged_rects, merged_start);
     let figure_rects = |f: u32| {
         &merged_rects[merged_start[f as usize] as usize..merged_start[f as usize + 1] as usize]
@@ -245,11 +359,20 @@ pub(crate) fn enclosure(
         .collect();
 
     let limit = Measurement::Length(limit);
+    let mut examined = 0u64;
     for poly in 0..u32::try_from(inner_rects.len()).expect("a layer indexes polygons with a u32") {
         let inner = inner_rects.row[poly as usize];
         let inner_box = inner_boxes[poly as usize];
         let mine = inner_rects.of(poly);
         let area = covered_area(mine);
+        let on = |wide: &SortedRects<()>| {
+            let covered = mine.iter().flat_map(|&r| wide.overlapping(r));
+            covered.fold(DbuArea::new(0), |sum, (clip, ())| sum + clip.area()) == area
+        };
+        if from.as_ref().is_some_and(|wide| !on(wide)) || below.as_ref().is_some_and(on) {
+            continue;
+        }
+        examined += 1;
         let lo = pairs.partition_point(|&(a, _)| a < inner);
         let hi = pairs.partition_point(|&(a, _)| a <= inner);
         // Best host; `Reverse` breaks a tie toward the lowest row.
@@ -267,21 +390,40 @@ pub(crate) fn enclosure(
             if covered != area {
                 continue;
             }
-            let (value, side) = enclosure_of(mine, inner_box, merged.get(figure), asymmetric);
-            acc = acc.max((value.raw(), Reverse(host.0), side));
+            let (value, at) = enclosure_of(drawn.get(poly), mine, merged.get(figure), mode);
+            // A full-width reading is a maximum: the best host has the least.
+            let score = if mode == Mode::FullWidth {
+                -value.raw()
+            } else {
+                value.raw()
+            };
+            acc = acc.max((score, Reverse(host.0), at));
         }
-        let (best, Reverse(host), side) = acc;
+        let (best, Reverse(host), at) = acc;
+        let hosted = best > UNHOSTED;
+        if mode == Mode::FullWidth {
+            // An unhosted inner is `must_be_inside`'s; a host spanned is met.
+            if !hosted || best == 0 {
+                continue;
+            }
+            let measured = Measurement::Length(Dbu::new_unchecked((-best).min(MAX_ABS_DBU)));
+            out.push(Violation {
+                rule,
+                layer: inner_layer,
+                severity: Severity::Error,
+                at: at.unwrap_or_else(|| centre(inner_box)),
+                measured,
+                limit: Measurement::Length(Dbu::new_unchecked(0)),
+                shapes: (inner, Some(PolyId(host))),
+            });
+            continue;
+        }
         let measured = Measurement::Length(Dbu::new_unchecked(best.clamp(0, MAX_ABS_DBU)));
         if !measured.violates(limit, LimitSense::Minimum) {
             continue;
         }
-        let hosted = best >= 0;
-        let at = match side {
-            Some(side) if hosted => side_midpoint(
-                inner_box,
-                Dbu::new_unchecked(best.clamp(0, MAX_ABS_DBU)),
-                side,
-            ),
+        let at = match at {
+            Some(at) if hosted => at,
             _ => centre(inner_box),
         };
         out.push(Violation {
@@ -294,7 +436,96 @@ pub(crate) fn enclosure(
             shapes: (inner, hosted.then_some(PolyId(host))),
         });
     }
-    (Outcome::Ran, inner_rects.len() as u64)
+    (Outcome::Ran, examined)
+}
+
+/// The part of `host` (its rectangles) that `held` (rectangles) grown by
+/// `by` with square corners does not cover, or `Err` for a failed boolean.
+fn beyond(host: &[Bbox], held: &[Bbox], by: i64) -> Result<ValidatedLayer, BooleanError> {
+    let grow = |v: Dbu, d: i64| Dbu::new_unchecked((v.raw() + d).clamp(-MAX_ABS_DBU, MAX_ABS_DBU));
+    let grown: Vec<Bbox> = held
+        .iter()
+        .map(|r| Bbox {
+            xlo: grow(r.xlo, -by),
+            ylo: grow(r.ylo, -by),
+            xhi: grow(r.xhi, by),
+            yhi: grow(r.yhi, by),
+        })
+        .collect();
+    let mut out = ValidatedLayer::default();
+    subtraction_into(&rects_layer(host)?, &rects_layer(&grown)?, &mut out)?;
+    Ok(out)
+}
+
+/// Max enclosure: each merged outer figure holding inner figures must lie
+/// inside their union grown by `limit` (square corners). One violation per
+/// offending figure, at its part beyond the limit, measuring the least whole
+/// growth that covers it (a binary search over growths). `examined` counts
+/// the outer figures that hold an inner one.
+pub(crate) fn max_enclosure(
+    store: &GeometryStore,
+    rule: StrId,
+    (outer, inner): (LayerId, LayerId),
+    limit: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let (Some(inner_figures), Some(outer_figures)) =
+        (merged(store, inner, s), merged(store, outer, s))
+    else {
+        return REFUSED;
+    };
+    let (inner_rects, outer_rects) = (rects_of(&inner_figures), rects_of(&outer_figures));
+    let figure = |rects: &(Vec<Bbox>, Vec<u32>), f: usize| -> Vec<Bbox> {
+        rects.0[rects.1[f] as usize..rects.1[f + 1] as usize].to_vec()
+    };
+    // Each outer figure's held inner rectangles.
+    let mut held: Vec<Vec<Bbox>> = vec![Vec::new(); outer_figures.len()];
+    for (i, host) in hosts(&inner_rects, &outer_rects).into_iter().enumerate() {
+        if let Some(host) = host {
+            held[host as usize].extend(figure(&inner_rects, i));
+        }
+    }
+    let drawn = s.validated.get(store, outer).expect("merged above");
+    s.rects_a.build(store, outer, drawn);
+    let owners = owners_of(&outer_figures, &s.rects_a);
+    let mut examined = 0u64;
+    for (f, mine) in held.iter().enumerate().filter(|(_, mine)| !mine.is_empty()) {
+        examined += 1;
+        let host = figure(&outer_rects, f);
+        let Ok(excess) = beyond(&host, mine, limit.raw()) else {
+            return REFUSED;
+        };
+        if excess.is_empty() {
+            continue;
+        }
+        // The least growth that covers the host: past `limit`, and at most
+        // the host's own span, which covers it from any point inside it.
+        let span = host.iter().fold(Bbox::EMPTY, |acc, &r| acc.union(r));
+        let (mut lo, mut hi) = (
+            limit.raw(),
+            (span.xhi - span.xlo).raw().max((span.yhi - span.ylo).raw()),
+        );
+        while hi - lo > 1 {
+            let at = lo + (hi - lo) / 2;
+            match beyond(&host, mine, at) {
+                Ok(left) if left.is_empty() => hi = at,
+                Ok(_) => lo = at,
+                Err(_) => return REFUSED,
+            }
+        }
+        let (rects, start) = rects_of(&excess);
+        out.push(Violation {
+            rule,
+            layer: outer,
+            severity: Severity::Error,
+            at: inside_point(&(rects, start), 0),
+            measured: Measurement::Length(Dbu::new_unchecked(hi)),
+            limit: Measurement::Length(limit),
+            shapes: (owners[f], None),
+        });
+    }
+    (Outcome::Ran, examined)
 }
 
 /// The side of a gate edge `a -> b` the gate does not lie on: material is on
@@ -443,6 +674,75 @@ pub(crate) fn min_extension(
                 measured: Measurement::Length(measured),
                 limit: Measurement::Length(limit),
                 shapes: (line_row, Some(ref_row)),
+            });
+        }
+    }
+    (Outcome::Ran, gates.len() as u64)
+}
+
+/// Every concave corner of `poly`, holes included, into `out`: a right turn
+/// where the material lies on the left of travel. A corner a figure meets
+/// itself at is two.
+fn concave_corners(poly: PolygonRef<'_>, out: &mut Vec<Point>) {
+    for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+        let (xs, ys) = ring.coords();
+        let n = xs.len();
+        for i in 0..n {
+            let at = |k: usize| (i128::from(xs[k].raw()), i128::from(ys[k].raw()));
+            let ((px, py), (vx, vy), (nx, ny)) = (at((i + n - 1) % n), at(i), at((i + 1) % n));
+            if (vx - px) * (ny - vy) - (vy - py) * (nx - vx) < 0 {
+                out.push(Point { x: xs[i], y: ys[i] });
+            }
+        }
+    }
+}
+
+/// A gate's shape (sky130 poly.10, poly.11): each concave corner of the area
+/// the merged layers share that is a concave corner of `layer` (a bend) or,
+/// with `of_reference`, of `reference` (an inner corner covered). Reported
+/// at the corner on the lowest drawn rows under its gate. `examined` counts
+/// gates.
+pub(crate) fn gate_corner(
+    store: &GeometryStore,
+    rule: StrId,
+    (layer, reference): (LayerId, LayerId),
+    of_reference: bool,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let (Some(lines), Some(refs)) = (merged(store, layer, s), merged(store, reference, s)) else {
+        return REFUSED;
+    };
+    let mut gates = ValidatedLayer::default();
+    if intersection_into(&lines, &refs, &mut gates).is_err() {
+        return REFUSED;
+    }
+    let mut corners = Vec::new();
+    let of = if of_reference { &refs } else { &lines };
+    for f in 0..u32::try_from(of.len()).expect("a layer indexes polygons with a u32") {
+        concave_corners(of.get(f), &mut corners);
+    }
+    corners.sort_unstable();
+    let drawn = s.validated.get(store, layer).expect("merged above");
+    s.rects_a.build(store, layer, drawn);
+    let drawn = s.validated.get(store, reference).expect("merged above");
+    s.rects_b.build(store, reference, drawn);
+    let owners = owners_of(&gates, &s.rects_a)
+        .into_iter()
+        .zip(owners_of(&gates, &s.rects_b));
+    let mut own = Vec::new();
+    for (g, (a_row, b_row)) in (0..).zip(owners) {
+        own.clear();
+        concave_corners(gates.get(g), &mut own);
+        for &at in own.iter().filter(|p| corners.binary_search(p).is_ok()) {
+            out.push(Violation {
+                rule,
+                layer,
+                severity: Severity::Error,
+                at,
+                measured: Measurement::Count(1),
+                limit: Measurement::Count(0),
+                shapes: (a_row, Some(b_row)),
             });
         }
     }
