@@ -76,6 +76,7 @@ fn supply_intent() -> IntentMap {
             dynamic: None,
             rms_current_ua: None,
             peak_current_ua: None,
+            frequency_mhz: None,
         },
     );
     map

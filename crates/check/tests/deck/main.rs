@@ -6,6 +6,7 @@ mod custom;
 mod errors;
 mod esd_kinds;
 mod kinds;
+mod path_and_ac_kinds;
 mod printer;
 mod query;
 

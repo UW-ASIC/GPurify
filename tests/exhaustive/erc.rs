@@ -2452,6 +2452,14 @@ fn em_current_density(depth: Depth) -> Vec<Fixture> {
 /// - random ladders (as `em_current_density`'s), each load drawing its
 ///   share of a peak current, every edge's current Ohm's law along the
 ///   series ladder (closed form), swept between edges; `em_rms` skipped.
+/// - a two-by-two table (LEF `FREQUENCY 100 300 ; WIDTH 0.5 1.5 ;
+///   TABLEENTRIES 1 2 3 4` in mA/µm, values made up: no public deck has
+///   one), interpolated by hand: a 1 µm rail at 200 MHz sits midway on
+///   both axes, 2.5 mA/µm, so 2500 µA; a 2 µm rail at 50 MHz is past the
+///   widest width and below the lowest frequency, held at 2 mA/µm, so
+///   4000 µA; each swept a part in a thousand either side. With no
+///   `frequency_mhz` on the net a two-frequency table cannot pick its row
+///   and the row is refused.
 fn em_ac(depth: Depth) -> Vec<Fixture> {
     let mut out = Vec::new();
     let ac_intent = |key: &str, current: f64| {
@@ -2465,8 +2473,8 @@ fn em_ac(depth: Depth) -> Vec<Fixture> {
     };
     let rows = |rms: f64, peak: f64| {
         rail_deck(&format!(
-            "rule rms em_rms(met1; max_density: {rms}uA/um, max_current_per_cut: 1000uA, narrow: none)\n\
-             rule pk em_peak(met1; max_density: {peak}uA/um, max_current_per_cut: 1000uA, narrow: none)"
+            "rule rms em_rms(met1; frequency: [100MHz], width: [0um], density: [[{rms}uA/um]], max_current_per_cut: 1000uA)\n\
+             rule pk em_peak(met1; frequency: [100MHz], width: [0um], density: [[{peak}uA/um]], max_current_per_cut: 1000uA)"
         ))
     };
     let mut layout = Layout::default();
@@ -2491,6 +2499,48 @@ fn em_ac(depth: Depth) -> Vec<Fixture> {
         f.intent = Some(ac_intent("rms_current_ua", current));
         out.push(f);
     }
+    let table = rail_deck(
+        "rule rms em_rms(met1; frequency: [100MHz, 300MHz], width: [500nm, 1500nm], \
+         density: [[1mA/um, 2mA/um], [3mA/um, 4mA/um]], max_current_per_cut: 1000uA)",
+    );
+    for (name, width, frequency, allowed) in [
+        ("midway", 1000, Some(200.0), 2500.0),
+        ("held", 2000, Some(50.0), 4000.0),
+    ] {
+        let mut layout = Layout::default();
+        rail(&mut layout, "VDD", 20_000, 0, width, &[18_000]);
+        for current in [allowed * 0.999, allowed * 1.001] {
+            let frequency = frequency.map_or(String::new(), |f| format!(r#","frequency_mhz":{f}"#));
+            let mut f = Fixture::new(
+                &format!("erc/em_rms/table/{name}/{}", side(allowed, current)),
+                &["ERC-E7"],
+                &table,
+                ERC,
+            )
+            .layout(layout.clone())
+            .expect(Expect::rule(
+                "rms",
+                if current > allowed {
+                    vec![microamps(current).at(10_000, width / 2)]
+                } else {
+                    Vec::new()
+                },
+            ));
+            f.intent = Some(intent(
+                &[("core", 1800.0)],
+                &[("VDD", "core", "power")],
+                &[format!(
+                    r#"{{"net":"VDD","budget_current_ua":1,"rms_current_ua":{current}{frequency}}}"#
+                )],
+            ));
+            out.push(f);
+        }
+    }
+    let mut no_frequency = Fixture::new("erc/em_rms/table/no_frequency", &["ERC-E7"], &table, ERC)
+        .layout(layout.clone())
+        .expect(Expect::outcome("rms", Want::Refused));
+    no_frequency.intent = Some(ac_intent("rms_current_ua", 1000.0));
+    out.push(no_frequency);
     let mut rng = Rng::new(0xe_0007);
     let cases = match depth {
         Depth::Merge => 10,

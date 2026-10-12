@@ -90,12 +90,12 @@ pub struct RuleSet {
     pub ir_drop: electrical::IrDropTable,
     /// `em_current_density` rows: [`electrical::EmCurrentDensityTable`].
     pub em_current_density: electrical::EmCurrentDensityTable,
-    /// `em_rms` rows: [`electrical::EmCurrentDensityTable`], checked by
+    /// `em_rms` rows: [`electrical::EmAcTable`], checked by
     /// [`electrical::check_em_ac`] against the RMS current.
-    pub em_rms: electrical::EmCurrentDensityTable,
-    /// `em_peak` rows: [`electrical::EmCurrentDensityTable`], checked by
+    pub em_rms: electrical::EmAcTable,
+    /// `em_peak` rows: [`electrical::EmAcTable`], checked by
     /// [`electrical::check_em_ac`] against the peak current.
-    pub em_peak: electrical::EmCurrentDensityTable,
+    pub em_peak: electrical::EmAcTable,
     /// `electromigration` rows: [`electrical::ElectromigrationTable`].
     pub electromigration: electrical::ElectromigrationTable,
     /// `dynamic_ir_drop` rows: [`electrical::DynamicIrDropTable`].
@@ -375,6 +375,24 @@ impl Row<'_> {
             if key == name {
                 match value {
                     ParamValue::Length(length) => out.push(length),
+                    _ => return Err(self.wrong_type(param)),
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every number named by a repeated `param`, in deck order; empty when
+    /// absent.
+    fn numbers(&self, param: &'static str) -> Result<Vec<f64>, ErcError> {
+        let Some(name) = self.strings.get(param) else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for &(key, value) in self.rules.params_of(self.spec) {
+            if key == name {
+                match value {
+                    ParamValue::Ratio(number) if number.is_finite() => out.push(number),
                     _ => return Err(self.wrong_type(param)),
                 }
             }
@@ -693,7 +711,29 @@ impl RuleSet {
                     table.current_exponent.push(exponent);
                     close_csr(&mut table.layer_start, table.layer.len());
                 }
-                "em_current_density" | "em_rms" | "em_peak" => {
+                "em_rms" | "em_peak" => {
+                    let layers = row.layers_from(1)?;
+                    let frequency = row.numbers("frequency")?;
+                    let width = row.lengths("width")?;
+                    let density = row.numbers("density")?;
+                    let per_cut = Qty::new(row.number("max_current_per_cut")?);
+                    let table = if kind == "em_rms" {
+                        &mut set.em_rms
+                    } else {
+                        &mut set.em_peak
+                    };
+                    row.head(&mut table.head)?;
+                    table.layer.extend_from_slice(layers);
+                    close_csr(&mut table.layer_start, table.layer.len());
+                    table.frequency.extend(frequency);
+                    close_csr(&mut table.frequency_start, table.frequency.len());
+                    table.width.extend(width);
+                    close_csr(&mut table.width_start, table.width.len());
+                    table.density.extend(density.into_iter().map(Qty::new));
+                    close_csr(&mut table.density_start, table.density.len());
+                    table.max_current_per_cut.push(per_cut);
+                }
+                "em_current_density" => {
                     let layers = row.layers_from(1)?;
                     let max_density = Qty::new(row.number("max_density")?);
                     let per_cut = Qty::new(row.number("max_current_per_cut")?);
@@ -702,11 +742,7 @@ impl RuleSet {
                         Some(width) => Some((width, Qty::new(row.number("narrow_current")?))),
                         None => None,
                     };
-                    let table = match kind {
-                        "em_rms" => &mut set.em_rms,
-                        "em_peak" => &mut set.em_peak,
-                        _ => &mut set.em_current_density,
-                    };
+                    let table = &mut set.em_current_density;
                     row.head(&mut table.head)?;
                     table.layer.extend_from_slice(layers);
                     table.max_density.extend(layers.iter().map(|_| max_density));
@@ -1377,12 +1413,51 @@ impl RuleSet {
                 c.positive("activation_energy_ev", t.activation_energy_ev[r])?;
                 c.positive("current_exponent", t.current_exponent[r])?;
             }
-            "em_current_density" | "em_rms" | "em_peak" => {
-                let t = match kind {
-                    "em_rms" => &self.em_rms,
-                    "em_peak" => &self.em_peak,
-                    _ => &self.em_current_density,
+            "em_rms" | "em_peak" => {
+                let t = if kind == "em_rms" {
+                    &self.em_rms
+                } else {
+                    &self.em_peak
                 };
+                let (frequencies, widths, density) = (
+                    &t.frequency[span(&t.frequency_start)],
+                    &t.width[span(&t.width_start)],
+                    &t.density[span(&t.density_start)],
+                );
+                let bad = |why| ErcError::BadTable {
+                    rule: c.rule.to_owned(),
+                    why,
+                };
+                for &f in frequencies {
+                    c.positive("frequency", f)?;
+                }
+                for &w in widths {
+                    if w.raw() < 0 {
+                        return Err(c.non_positive("width"));
+                    }
+                }
+                for d in density {
+                    c.positive("density", d.raw())?;
+                }
+                c.positive("max_current_per_cut", t.max_current_per_cut[r].raw())?;
+                if frequencies.windows(2).any(|pair| pair[0] >= pair[1])
+                    || widths.windows(2).any(|pair| pair[0] >= pair[1])
+                {
+                    return Err(bad(
+                        "an AC current table's frequencies and widths rise strictly",
+                    ));
+                }
+                if frequencies.is_empty()
+                    || widths.is_empty()
+                    || density.len() != frequencies.len() * widths.len()
+                {
+                    return Err(bad(
+                        "an AC current table has one density per frequency and width",
+                    ));
+                }
+            }
+            "em_current_density" => {
+                let t = &self.em_current_density;
                 for at in span(&t.layer_start) {
                     c.positive("max_density", t.max_density[at].raw())?;
                     c.positive("max_current_per_cut", t.max_current_per_cut[at].raw())?;

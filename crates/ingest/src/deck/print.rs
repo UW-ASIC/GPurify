@@ -789,9 +789,10 @@ impl Printer<'_> {
                 (dim, ParamValue::Ratio(number_value)) => {
                     let unit = match dim {
                         Dim::Voltage | Dim::VoltageList => "mV",
+                        Dim::Frequency | Dim::FrequencyList => "MHz",
                         Dim::Field => "V/um",
                         Dim::Current => "uA",
-                        Dim::CurrentPerWidth => "A/m",
+                        Dim::CurrentPerWidth | Dim::CurrentPerWidthRows => "A/m",
                         Dim::Resistance => "ohm",
                         Dim::Temperature => "K",
                         Dim::Energy => "eV",
@@ -838,9 +839,11 @@ impl Printer<'_> {
                 let other = other.first().ok_or_else(missing)?;
                 Ok(format!("{} x {}", one(values[0])?, one(other)?))
             }
-            Dim::AngleList | Dim::LengthList | Dim::VoltageList | Dim::OptLengthList => {
-                Ok(format!("[{}]", list(&values)?.join(", ")))
-            }
+            Dim::AngleList
+            | Dim::LengthList
+            | Dim::VoltageList
+            | Dim::OptLengthList
+            | Dim::FrequencyList => Ok(format!("[{}]", list(&values)?.join(", "))),
             Dim::LengthPairList(second) => {
                 let others = stated(second);
                 if values.len() != others.len() {
@@ -870,6 +873,16 @@ impl Printer<'_> {
                     })
                     .collect::<Result<Vec<_>, PrintError>>()?;
                 Ok(format!("[{}]", points.join(", ")))
+            }
+            Dim::CurrentPerWidthRows => {
+                // One row per frequency, one cell per width.
+                let columns = stated("width").len().max(1);
+                let cells = list(&values)?;
+                let rows: Vec<String> = cells
+                    .chunks(columns)
+                    .map(|row| format!("[{}]", row.join(", ")))
+                    .collect();
+                Ok(format!("[{}]", rows.join(", ")))
             }
             Dim::LengthRows => {
                 // A spacing table has a column per run; a table without runs

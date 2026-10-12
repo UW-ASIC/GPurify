@@ -798,30 +798,39 @@ pub fn check_em_current_density(
 }
 
 /// RMS and peak current density: deck kinds `em_rms` and `em_peak`, written
-/// as [`EmCurrentDensityTable`]'s `em_current_density(layers..; ..)`.
+/// `em_rms(layers..; frequency: [freq, ..], width: [len, ..], density:
+/// [[current per width, ..], ..], max_current_per_cut: current)`.
 ///
 /// LEF/DEF 5.8 states a layer's AC limits as `ACCURRENTDENSITY RMS` and
-/// `ACCURRENTDENSITY PEAK` (mA per µm of drawn width, or per cut), beside
-/// the DC `DCCURRENTDENSITY AVERAGE` that `em_current_density` checks; the
-/// sky130 tech LEF states RMS limits of 6.1 mA/µm on met1 and met2, 14.9 on
-/// met3 and met4 and 22.34 on met5. A row is [`EmCurrentDensityTable`]'s
-/// check against the RMS (`em_rms`) or the peak (`em_peak`) current of each
-/// wire and cut of the supply grid.
+/// `ACCURRENTDENSITY PEAK`: a table of current per µm of drawn width, one
+/// row per `FREQUENCY` and one column per `WIDTH`, interpolated linearly
+/// between the stated points; beside them the DC `DCCURRENTDENSITY AVERAGE`
+/// that [`EmCurrentDensityTable`] checks. The sky130 tech LEF states single
+/// RMS values (6.1 mA/µm on met1 and met2, 14.9 on met3 and met4, 22.34 on
+/// met5). A row is that table: `frequency` rising strictly, `width` rising
+/// from 0 or more, `density` one row per frequency and one cell per width;
+/// a one-entry table is a single value. A wire segment on a listed layer
+/// may carry its width times the table at its width and its net's
+/// frequency (the intent's `frequency_mhz`), each axis interpolated linearly
+/// between the points either side and held at its end value beyond them; a
+/// via cut on a listed cut layer `max_current_per_cut`. The values are
+/// deck-supplied: no public deck states a table with more than one entry.
 ///
-/// Those currents come from the intent's `rms_current_ua` and
-/// `peak_current_ua` per net, shared among the net's device terminals as its
-/// budget is. Every load is taken to draw one waveform, in phase, scaled by
-/// its share, the model the budget already makes; on the linear resistive
-/// grid a wire's current is then that waveform scaled by its DC solution's
-/// share, so its RMS (peak) is the DC solve with the RMS (peak) loads,
-/// exactly.
+/// The current is the RMS (`em_rms`) or peak (`em_peak`) current of each
+/// wire and cut of the supply grid. Those come from the intent's
+/// `rms_current_ua` and `peak_current_ua` per net, shared among the net's
+/// device terminals as its budget is. Every load is taken to draw one
+/// waveform, in phase, scaled by its share, the model the budget already
+/// makes; on the linear resistive grid a wire's current is then that
+/// waveform scaled by its DC share, so its RMS (peak) is the DC solve with
+/// the RMS (peak) loads, exactly.
 ///
 /// # Limits
 ///
-/// LEF's tables by frequency and width are not read: a row states one
-/// density per layer (and `narrow`'s one band), as for a single-entry
-/// table. Loads that switch out of phase, or with different waveforms, have
-/// a smaller RMS than this sum, so the check errs strict.
+/// Loads that switch out of phase, or with different waveforms, have a
+/// smaller RMS than this sum, so the check errs strict. Only supply nets
+/// carry current, as for every grid rule. LEF's per-cut tables by
+/// `CUTAREA` are one value per cut layer here.
 ///
 /// Catalog: ERC-E7 in the [check catalog]. Defined by [LEF/DEF 5.8]
 /// `ACCURRENTDENSITY PEAK | AVERAGE | RMS`; the [sky130] tech LEF's RMS
@@ -831,11 +840,69 @@ pub fn check_em_current_density(
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [LEF/DEF 5.8]: https://coriolis.lip6.fr/doc/lefdef/lefdefref/lefdefref.pdf
 /// [sky130]: https://github.com/google/skywater-pdk-libs-sky130_fd_sc_hd/blob/main/tech/sky130_fd_sc_hd__nom.tlef
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct EmAcTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// `layer[layer_start[i] .. layer_start[i + 1]]` are row `i`'s layers.
+    pub layer_start: Vec<u32>,
+    /// Limited layers, metal or cut, CSR by `layer_start`.
+    pub layer: Vec<LayerId>,
+    /// `frequency[frequency_start[i] .. frequency_start[i + 1]]`, CSR.
+    pub frequency_start: Vec<u32>,
+    /// The table's frequencies, MHz, rising strictly within a row.
+    pub frequency: Vec<f64>,
+    /// `width[width_start[i] .. width_start[i + 1]]`, CSR.
+    pub width_start: Vec<u32>,
+    /// The table's widths, rising strictly within a row.
+    pub width: Vec<Dbu>,
+    /// `density[density_start[i] .. density_start[i + 1]]`, CSR: row `i`'s
+    /// cells, one row per frequency, one cell per width.
+    pub density_start: Vec<u32>,
+    /// Current per width, A/m.
+    pub density: Vec<Qty<CurrentDensity, { prefix::BASE }>>,
+    /// Per row: a via cut's limit, µA.
+    pub max_current_per_cut: Vec<Qty<Current, { prefix::MICRO }>>,
+}
+
+/// Linear interpolation of `values` over the rising `points` at `at`, held
+/// at the end values beyond them.
+fn interpolate(points: &[f64], values: &[f64], at: f64) -> f64 {
+    let after = points.partition_point(|&p| p <= at);
+    match (after.checked_sub(1), points.get(after)) {
+        (Some(lo), Some(&hi)) => {
+            let t = (at - points[lo]) / (hi - points[lo]);
+            values[lo] + (values[after] - values[lo]) * t
+        }
+        (Some(lo), None) => values[lo],
+        (None, _) => values[0],
+    }
+}
+
+/// A row's table at `(frequency, width)`: each frequency row interpolated
+/// at the width, then those across the frequency.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "a width in database units is far below 2^53"
+)]
+fn table_density(frequencies: &[f64], widths: &[Dbu], density: &[f64], f: f64, w: Dbu) -> f64 {
+    let widths: Vec<f64> = widths.iter().map(|w| w.raw() as f64).collect();
+    let by_frequency: Vec<f64> = density
+        .chunks(widths.len())
+        .map(|row| interpolate(&widths, row, w.raw() as f64))
+        .collect();
+    interpolate(frequencies, &by_frequency, f)
+}
+
+/// Runs every `em_rms` or `em_peak` row ([`EmAcTable`]) over the supply grid
+/// loaded with those currents (`power`, and `intent` its loads and
+/// frequencies).
 ///
-/// Runs every row of an `em_rms` or `em_peak` table over the supply grid
-/// loaded with those currents. `examined`, violations and outcomes are
-/// [`check_em_current_density`]'s, with `power` and `intent` the AC grid and
-/// its intent; every row is skipped when no net states the current.
+/// `examined` counts grid segments and cuts on the row's layers. A violation
+/// reports as [`check_em_current_density`]'s, against the table's allowed
+/// current. Skipped and refused as [`check_ir_drop`] is, skipped too when no
+/// net states the current; a row whose table has several frequencies is
+/// refused when a net it examines states no `frequency_mhz`.
 ///
 /// # Panics
 ///
@@ -844,11 +911,80 @@ pub fn check_em_ac(
     power: Power<'_>,
     intent: &IntentMap,
     grid: Grid,
-    table: &EmCurrentDensityTable,
+    table: &EmAcTable,
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
-    check_em_current_density(power, intent, grid, table, out, runs);
+    let Some(solved) = solved_or_fill(power, intent, &table.head, out, runs) else {
+        return;
+    };
+    let (network, solution) = (solved.grid, solved.solution);
+    let span = |start: &[u32], row: usize| start[row] as usize..start[row + 1] as usize;
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let (rule, severity) = (table.head.rule[row], table.head.severity[row]);
+        let layers = &table.layer[span(&table.layer_start, row)];
+        let frequencies = &table.frequency[span(&table.frequency_start, row)];
+        let widths = &table.width[span(&table.width_start, row)];
+        let density: Vec<f64> = table.density[span(&table.density_start, row)]
+            .iter()
+            .map(|d| d.raw())
+            .collect();
+        let mut examined = 0u64;
+        let mut outcome = Outcome::Ran;
+        for edge in 0..network.edge_count() {
+            if !layers.contains(&network.edge_layer[edge]) {
+                continue;
+            }
+            let (from, to) = (
+                network.edge_from[edge] as usize,
+                network.edge_to[edge] as usize,
+            );
+            let width = network.edge_width[edge];
+            let allowed = match network.edge_kind[edge] {
+                EdgeKind::Via => table.max_current_per_cut[row],
+                EdgeKind::Metal => {
+                    let frequency = match (frequencies, intent.limits_of(network.node_net[from])) {
+                        ([only], _) => *only,
+                        (_, limits) => {
+                            let Some(f) = limits.frequency_mhz else {
+                                outcome = Outcome::Refused;
+                                break;
+                            };
+                            f
+                        }
+                    };
+                    let per_width = table_density(frequencies, widths, &density, frequency, width);
+                    allowed_current(
+                        EdgeKind::Metal,
+                        width,
+                        grid,
+                        Qty::new(per_width),
+                        Qty::new(0.0),
+                        None,
+                    )
+                }
+                EdgeKind::Device => continue,
+            };
+            examined += 1;
+            let current =
+                Qty::<Current, { prefix::MICRO }>::new(solution.branch_current[edge].raw().abs());
+            let (measured, limit) = (Measurement::Current(current), Measurement::Current(allowed));
+            if !measured.violates(limit, LimitSense::Maximum) {
+                continue;
+            }
+            out.push(Violation {
+                rule,
+                layer: network.edge_layer[edge],
+                severity,
+                at: network.node_at[from],
+                measured,
+                limit,
+                shapes: (network.node_poly[from], Some(network.node_poly[to])),
+            });
+        }
+        record_run(runs, out, before, rule, outcome, examined);
+    }
 }
 
 /// Black's derating of a limit characterised at `reference` to `operating`:
