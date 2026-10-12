@@ -553,8 +553,8 @@ kinds! {
     /// `via_stack(cuts..) <= max_height`, the cut layers bottom to top.
     via_stack(cuts: many) [] { max_height: u32 = "max_height" }
     /// [`Rule::StackSpacing`](crate::drc::Rule::StackSpacing):
-    /// `stack_space(a, b; same_net) >= limit`.
-    stack_spacing(a: one, b: one) [] { same_net: bool = "same_net", limit: Dbu = "limit" }
+    /// `stack_space(a, b, metal; same_net) >= limit`.
+    stack_spacing(a: one, b: one, metal: one) [] { same_net: bool = "same_net", limit: Dbu = "limit" }
     /// [`Rule::MaxCutSpacing`](crate::drc::Rule::MaxCutSpacing):
     /// `max_space(cut[, others]) <= limit`.
     max_cut_spacing(cut: one, others: opt) [] { limit: Dbu = "limit" }

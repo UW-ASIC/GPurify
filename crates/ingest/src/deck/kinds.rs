@@ -756,14 +756,22 @@ pub(crate) const KINDS: &[Kind] = &[
     ),
     // LEF `SPACING cutSpacing [SAMENET] LAYER second STACK`: cuts on two
     // layers spaced unless one net's cuts are stacked (one covering the
-    // other): `stack_space(via2, via1) >= 200nm`, `same_net: true` for
+    // other), the cuts' nets read off the metal both land on:
+    // `stack_space(via2, via1, met2) >= 200nm`, `same_net: true` for
     // `SAMENET`.
-    drc("stack_space", Cmp::Ge, "stack_spacing", &[0, 1], LIMIT, &[]),
     drc(
         "stack_space",
         Cmp::Ge,
         "stack_spacing",
-        &[0, 1],
+        &[0, 1, 2],
+        LIMIT,
+        &[],
+    ),
+    drc(
+        "stack_space",
+        Cmp::Ge,
+        "stack_spacing",
+        &[0, 1, 2],
         LIMIT,
         &[p("same_net", "same_net", Dim::Bool)],
     ),

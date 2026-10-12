@@ -259,7 +259,7 @@ fn the_overlay_and_cut_checks_lower_to_their_engine_kinds() {
         &["mcon", "met1", "li"],
         &["width=1000dbu", "within=300dbu", "min_count=#2"],
     );
-    expect("vs", "via_stack", &["licon", "mcon"], &["max_height=#1"]);
+    expect("vs", "via_stack", &["licon", "mcon"], &["max_height=#1", "single=false"]);
     expect(
         "bend",
         "gate_corner",

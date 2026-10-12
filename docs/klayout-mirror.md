@@ -313,7 +313,7 @@ explains (kind 30).
 | 67 | critical_area | `critical_area(L; radius) <= a` | POINT | EXACT | exact | — |
 | 68 | min_step_adjacent | `min_step(L; adjacent \| between_eol ..) >= l` | — | NONE | reported as not mirrored | — |
 | 69 | max_cut_spacing | `max_space(C[, A]) <= l` | ROW | EXACT (scripted) | exact | — |
-| 70 | stack_spacing | `stack_space(A, B[; same_net]) >= l` | — | NONE | reported as not mirrored | — |
+| 70 | stack_spacing | `stack_space(A, B, M[; same_net]) >= l` | — | NONE | reported as not mirrored | — |
 
 44 kinds are EXACT (six scripted over KLayout's polygons), 16 APPROX and ten NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without

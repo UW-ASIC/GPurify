@@ -56,8 +56,8 @@ rule msa min_step(m; adjacent: 60nm, except_rectangle: true) >= 50nm
 rule msa.eol min_step(m; adjacent: 30nm, adjacent_eol: 120nm, except_rectangle: false) >= 50nm
 rule msa.between min_step(m; between_eol: 120nm) >= 50nm
 rule vs.single via_stack(m, v, m2, v2, r, single) <= 2
-rule ss stack_space(v2, v; same_net: true) >= 200nm
-rule ss.all stack_space(v2, v) >= 200nm
+rule ss stack_space(v2, v, m2; same_net: true) >= 200nm
+rule ss.all stack_space(v2, v, m2) >= 200nm
 rule mcs max_space(v) <= 2000nm
 rule mcs.cls max_space(thin, v) <= 2000nm
 rule odd.none forbidden(odd)
@@ -174,8 +174,8 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
         min_step_adjacent(m, nm(50), StepNeighbour::BetweenEol(nm(120))),
     );
     d.rule("vs.single", via_stack(&[m, v, m2, v2, r], 2).single_cut());
-    d.rule("ss", stack_spacing(v2, v, true, nm(200)));
-    d.rule("ss.all", stack_spacing(v2, v, false, nm(200)));
+    d.rule("ss", stack_spacing(v2, v, m2, true, nm(200)));
+    d.rule("ss.all", stack_spacing(v2, v, m2, false, nm(200)));
     d.rule("mcs", max_cut_spacing(v, None, nm(2000)));
     d.rule("mcs.cls", max_cut_spacing(thin, Some(v.into()), nm(2000)));
     d.rule("odd.none", forbidden(odd));

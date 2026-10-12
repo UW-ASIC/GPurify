@@ -1133,8 +1133,9 @@ pub enum Rule {
     /// Cuts on two layers closer than `limit`, unless they are one net's
     /// stacked cuts.
     ///
-    /// Deck: `stack_space(A, B) >= len`, or `stack_space(A, B; same_net:
-    /// true) >= len` for same-net cuts only, kind `stack_spacing`: LEF
+    /// Deck: `stack_space(A, B, M) >= len`, or `stack_space(A, B, M;
+    /// same_net: true) >= len` for same-net cuts only, kind `stack_spacing`:
+    /// LEF
     /// `SPACING cutSpacing [SAMENET] LAYER secondLayer STACK` on cut layer
     /// `A`, "same-net cuts on two different layers can be stacked if they
     /// are aligned. If the cuts are not the same size, the smaller cut must
@@ -1145,15 +1146,16 @@ pub enum Rule {
     /// rows of each layer, as drawn; a pair of a cut on `A` and one on `B`
     /// on one net whose boxes cover one another (equal boxes are aligned
     /// centres) is stacked and legal; every other pair the rule holds needs
-    /// `limit`, boundary to boundary, overlap reading 0. Nets are as
-    /// extracted, so both layers must be conductors or cuts the deck
-    /// connects.
+    /// `limit`, boundary to boundary, overlap reading 0. A cut has no net of
+    /// its own: it takes the net of the shape of `M`, the metal both cut
+    /// layers land on, that it overlaps (the lowest net among several); a
+    /// cut on no `M` shape is on no net, so it stacks with nothing.
     ///
     /// One violation per offending pair, on `A`, at the midpoint of its
     /// measured points, as [`Rule::NetSpacing`] across two layers.
     /// `examined` counts the pairs the rule holds, stacked ones included.
-    /// Records [`Outcome::Refused`] without extracted nets, or when a shape
-    /// on either layer carries no net.
+    /// Records [`Outcome::Refused`] without extracted nets, or when a layer
+    /// fails validation.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-065. Rules: LEF `SPACING ... LAYER ... STACK`.
@@ -1162,6 +1164,9 @@ pub enum Rule {
         a: LayerId,
         /// The second cut layer.
         b: LayerId,
+        /// The metal both cut layers land on, whose shapes give the cuts their
+        /// nets.
+        metal: LayerId,
         /// Whether only same-net pairs are held (`SAMENET`).
         same_only: bool,
         /// The spacing a pair that is not stacked needs, in grid units;
@@ -3314,10 +3319,11 @@ impl RuleSet {
                     }
                 }
                 "stack_spacing" => {
-                    let (a, b) = two(spec)?;
+                    layers(spec, 3)?;
                     Rule::StackSpacing {
-                        a,
-                        b,
+                        a: layer(spec, 0),
+                        b: layer(spec, 1),
+                        metal: layer(spec, 2),
                         same_only: optional(spec, "same_net").is_some() && flag(spec, "same_net")?,
                         limit: length(spec, "limit")?,
                     }
@@ -4149,6 +4155,7 @@ impl RuleSet {
                     Rule::StackSpacing {
                         a,
                         b,
+                        metal,
                         same_only,
                         limit,
                     } => match nets {
@@ -4156,7 +4163,7 @@ impl RuleSet {
                             store,
                             nets,
                             id,
-                            (a, b),
+                            (a, b, metal),
                             same_only,
                             limit,
                             s,
@@ -4297,14 +4304,9 @@ impl RuleSet {
                     Rule::CutClass { layer, classes } => {
                         width::cut_class(store, id, layer, &self.classes[classes as usize], s, out)
                     }
-                    Rule::EdgeWidth { layer, limit } => edge::facing(
-                        store,
-                        id,
-                        layer,
-                        (limit, Dbu::new_unchecked(0)),
-                        true,
-                        out,
-                    ),
+                    Rule::EdgeWidth { layer, limit } => {
+                        edge::facing(store, id, layer, (limit, Dbu::new_unchecked(0)), true, out)
+                    }
                     Rule::EdgeFacingSpace { layer, limit, prl } => {
                         edge::facing(store, id, layer, (limit, prl), false, out)
                     }
@@ -4918,7 +4920,6 @@ impl Rule {
                 layer, boundary, ..
             } => [Some(layer), boundary, None],
             Rule::MinSpacingDiff { a, b, .. }
-            | Rule::StackSpacing { a, b, .. }
             | Rule::ProjectionSpacing { a, b, .. }
             | Rule::DensityBalance { a, b, .. }
             | Rule::Overlap { a, b, .. }
@@ -4972,6 +4973,7 @@ impl Rule {
             // Raw rows, never validated: nothing to forget.
             Rule::OffGrid { .. } | Rule::ViaStack { .. } => [None, None, None],
             Rule::MaxCutSpacing { cut, others, .. } => [Some(cut), others, None],
+            Rule::StackSpacing { a, b, metal, .. } => [Some(a), Some(b), Some(metal)],
         }
     }
 }
