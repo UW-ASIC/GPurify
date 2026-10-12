@@ -64,7 +64,7 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 |---|---:|---:|---:|---:|---:|---:|
 | DRC | 31 | 4 | 36 | 35 | 0 | 0 |
 | LVS | 17 | 1 | 16 | 14 | 0 | 0 |
-| ERC | 27 | 2 | 14 | 38 | 0 | 0 |
+| ERC | 28 | 2 | 15 | 36 | 0 | 0 |
 | PEX | 4 | 0 | 3 | 9 | 0 | 0 |
 | Flow | 0 | 0 | 2 | 8 | 0 | 0 |
 
@@ -327,7 +327,9 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-E4 | Temperature derating (Black / Arrhenius) | implemented | GF:14.2.2; Black1969; JEP122; JESD63 | SE:GF formula vs table (1.6% rounding); MR; SY |
 | ERC-E5 | Lifetime target and percentile | implemented | GF:14.2; IHP:2.15; JESD202 | SE; MR; SY |
 | ERC-E6 | Blech short-length immortality | implemented | Blech1976 | CF; MR; SY |
+| ERC-E11 | Dynamic / vectorless IR | partial | RH; VOL; MP; TOT; Najm2003; WH | CF; NV; MR; SY |
 | ERC-E12 | Stress voiding / slotting | partial | JEP139; JESD214; GF:14.6 | FR; MR; SY |
+| ERC-E13 | Thermal-aware / statistical EM, self-heating | implemented | RH; TOT; VOL; Banerjee1999; Black1969; JEP122; JESD63; Kitchin1995 | CF; SE; MR; SY |
 | ERC-F1 | Static voltage propagation, conditional on gate voltage | partial | CAL:WP 81822; SKY:hv.X.1; patents P5,P9 | SE:Siemens WP; SY |
 | ERC-F2 | Gate-oxide overstress | implemented | GF:14.1.4.2; SKY:hv; TR22:4.1; CAL | FR; CF; SY |
 | ERC-F3 | Junction / drain-source overstress | implemented | SKY:hv; IHP:process spec | FR; SY |
