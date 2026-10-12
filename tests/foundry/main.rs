@@ -22,7 +22,6 @@
 //! test. Run in the oracle shell:
 //! `nix develop .#oracles --command cargo test --test foundry -- --ignored --test-threads=1`.
 
-use gpurify::check::drc::RuleSet;
 use gpurify::check::report::{Outcome, Violations};
 use gpurify::engine::pipeline::{load, Inputs};
 use gpurify::geom::Grid;
@@ -333,7 +332,7 @@ fn ours(deck: &str, gds: &Path, pairs: &[(u16, u16)], dir: &Path) -> Result<Ours
         intent: None,
     })
     .map_err(|e| format!("GPurify refused the layout: {e}"))?;
-    let rules = RuleSet::from_deck(&loaded.deck, &loaded.strings).expect("the DRC set builds");
+    let rules = &loaded.deck.drc;
     let (mut out, mut runs) = (Violations::default(), Vec::new());
     rules.run(&loaded.store, &mut out, &mut runs);
     let name = |id| loaded.strings.resolve(id).to_owned();
