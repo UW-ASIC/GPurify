@@ -141,6 +141,8 @@
 //! | `esd_path(pad[, source]; clamps, current, clamp_resistance, max_resistance, clamp_it2, max_density, max_current_per_cut, max_voltage)` | `esd_path` | [`erc::RuleSet::esd_path`] | under a forced current, a pin-to-supply discharge path (or a guard ring's path to its supply) too resistive, a pin rising too high, or a clamp, wire or cut too small for its share | ERC-C2, ERC-C6, ERC-C7, ERC-C8, ERC-C14, ERC-D4 |
 //! | `floating_gate(; labels_are_ports)` | `floating_gate` | [`erc::RuleSet::floating_gate`] | a net that only reaches gates | ERC-G1 |
 //! | `fanout(; max)` | `fanout` | [`erc::RuleSet::fanout`] | a net driving more than `max` transistor gates | ERC-H4 |
+//! | `supply_path(; both)` | `supply_path` | [`erc::RuleSet::supply_path`] | a net whose path through MOS channels and resistors reaches no supply, or with `both` misses power or ground | ERC-G9 |
+//! | `gate_path(; ground, max_devices)` | `gate_path` | [`erc::RuleSet::gate_path`] | a transistor gate whose shortest path to ground (or power) passes more than `max_devices` devices | ERC-H3 |
 //! | `floating_well(well, tap)` | `floating_well` | [`erc::RuleSet::floating_well`] | a well with no tap | DRC-085, ERC-G2 |
 //! | `latchup_victim(aggressor, region, tap; within, max_distance, pad)` | `latchup_victim` | [`erc::RuleSet::latchup_victim`] | a region near an injecting (pad-connected) junction too far from a tap | ERC-D5 |
 //! | `missing_tie(region, tap; max_distance)` | `missing_tie` | [`erc::RuleSet::missing_tie`] | a region too far from a tap | ERC-D1 |

@@ -1080,6 +1080,18 @@ impl CompiledDeck {
             let row = Row::new("fanout", &[]).value("max_gates", ParamValue::Count(t.max_gates[r]));
             file(&t.head, r, row);
         }
+        let t = &erc.supply_path;
+        for r in 0..t.head.len() {
+            let row = Row::new("supply_path", &[]).value("both", ParamValue::Flag(t.both[r]));
+            file(&t.head, r, row);
+        }
+        let t = &erc.gate_path;
+        for r in 0..t.head.len() {
+            let row = Row::new("gate_path", &[])
+                .value("ground", ParamValue::Flag(t.ground[r]))
+                .value("max_devices", ParamValue::Count(t.max_devices[r]));
+            file(&t.head, r, row);
+        }
         for r in 0..erc.undriven_gate.head.len() {
             file(&erc.undriven_gate.head, r, Row::new("undriven_gate", &[]));
         }

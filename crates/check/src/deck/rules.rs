@@ -736,6 +736,9 @@ kinds! {
     /// [`ModelLimitTable`](crate::erc::rules::domain::ModelLimitTable):
     /// `gate_oxide(; models, max)`, `max_voltage` in mV.
     gate_oxide() [] { models: &[&str] = "model", max_voltage: f64 = "max_voltage" }
+    /// [`GatePathTable`](crate::erc::rules::topology::GatePathTable):
+    /// `gate_path(; ground, max_devices)`.
+    gate_path() [] { ground: bool = "ground", max_devices: u32 = "max_devices" }
     /// [`GuardRingTable`](crate::erc::rules::latchup::GuardRingTable):
     /// `guard_ring(target, ring; max_space, min_width, pad, near, within, clear)`,
     /// `near` and `within` both stated or both `None`.
@@ -801,6 +804,9 @@ kinds! {
     /// [`SupplyShortTable`](crate::erc::rules::supply::SupplyShortTable):
     /// `supply_short(tap_a, tap_b[, within])`.
     supply_short(tap_a: one, tap_b: one, within: opt) [] {}
+    /// [`SupplyPathTable`](crate::erc::rules::topology::SupplyPathTable):
+    /// `supply_path(; both)`.
+    supply_path() [] { both: bool = "both" }
     /// [`TieAreaTable`](crate::erc::rules::latchup::TieAreaTable):
     /// `tie_area(region, contact, channel; min_ratio)`, a fraction.
     tie_area(region: one, contact: one, channel: one) [] { min_ratio: f64 = "min_ratio" }

@@ -1,4 +1,4 @@
-//! The forty-four tables, the deck parser that fills them, and the dispatcher.
+//! The forty-six tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
@@ -55,6 +55,10 @@ pub struct RuleSet {
     pub unconnected_pin: topology::UnconnectedPinTable,
     /// `fanout` rows: [`topology::FanoutTable`].
     pub fanout: topology::FanoutTable,
+    /// `supply_path` rows: [`topology::SupplyPathTable`].
+    pub supply_path: topology::SupplyPathTable,
+    /// `gate_path` rows: [`topology::GatePathTable`].
+    pub gate_path: topology::GatePathTable,
 
     /// `supply_short` rows: [`supply::SupplyShortTable`].
     pub supply_short: supply::SupplyShortTable,
@@ -983,6 +987,22 @@ impl RuleSet {
                     row.head(&mut table.head)?;
                     table.max_gates.push(max_gates);
                 }
+                "supply_path" => {
+                    row.layers(0)?;
+                    let both = row.flag("both", false)?;
+                    let table = &mut set.supply_path;
+                    row.head(&mut table.head)?;
+                    table.both.push(both);
+                }
+                "gate_path" => {
+                    row.layers(0)?;
+                    let ground = row.flag("ground", true)?;
+                    let max_devices = row.count("max_devices")?;
+                    let table = &mut set.gate_path;
+                    row.head(&mut table.head)?;
+                    table.ground.push(ground);
+                    table.max_devices.push(max_devices);
+                }
                 "floating_well" => {
                     let layers = row.layers(2)?;
                     let table = &mut set.floating_well;
@@ -1225,6 +1245,8 @@ impl RuleSet {
             "hv_tag" => &self.hv_tag.head,
             "mixed_tag" => &self.mixed_tag.head,
             "fanout" => &self.fanout.head,
+            "supply_path" => &self.supply_path.head,
+            "gate_path" => &self.gate_path.head,
             "undriven_gate" => &self.undriven_gate.head,
             "missing_isolation" => &self.missing_isolation.head,
             other => unreachable!("{other} is not an ERC kind"),
@@ -1540,6 +1562,8 @@ impl RuleSet {
             &self.multiple_drivers.head,
             &self.unconnected_pin.head,
             &self.fanout.head,
+            &self.supply_path.head,
+            &self.gate_path.head,
             &self.supply_short.head,
             &self.soft_connection.head,
             &self.missing_tie.head,
@@ -1632,6 +1656,8 @@ impl RuleSet {
         );
         topology::check_unconnected_pin(design, facts, &self.unconnected_pin, out, runs);
         topology::check_fanout(design, &self.fanout, out, runs);
+        topology::check_supply_path(design, facts, intent, &self.supply_path, out, runs);
+        topology::check_gate_path(design, intent, &self.gate_path, out, runs);
 
         supply::check_supply_short(design, &self.supply_short, scratch, out, runs);
         supply::check_soft_connection(design, &self.soft_connection, scratch, out, runs);
