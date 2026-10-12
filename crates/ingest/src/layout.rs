@@ -1645,8 +1645,9 @@ pub mod gds {
         /// [`LayoutError::TooManyPolygons`]. Then
         /// [`LayoutError::UnknownLayer`] (under [`UnknownLayers::Reject`]),
         /// [`LayoutError::UnsupportedTransform`] or
-        /// [`LayoutError::CoordinateOutOfRange`] while placing, and
-        /// [`LayoutError::Derived`] while computing derived layers.
+        /// [`LayoutError::CoordinateOutOfRange`] while placing. A derived layer
+        /// that cannot be computed is marked, not an error
+        /// ([`GeometryStore::mark_uncomputed`]).
         pub fn flatten<D: AsRef<LayerTable> + ?Sized>(
             &self,
             deck: &D,
