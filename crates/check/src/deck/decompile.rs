@@ -2,7 +2,7 @@
 //! would read it into, so the deck can be printed or overridden.
 
 use super::CompiledDeck;
-use crate::drc::{Rule, StepKind};
+use crate::drc::{Rule, StepKind, StepNeighbour};
 use crate::erc::rules::antenna::AntennaMeasure;
 use crate::report::LimitSense;
 use crate::report::Severity;
@@ -547,6 +547,27 @@ impl CompiledDeck {
                     row = row.length("length_sum", sum);
                 }
                 row
+            }
+            Rule::MinStepAdjacent {
+                layer,
+                limit,
+                neighbour,
+            } => {
+                let row = one(layer).length("limit", limit);
+                match neighbour {
+                    StepNeighbour::Adjacent {
+                        length,
+                        eol,
+                        except_rectangle,
+                    } => {
+                        let mut row = row.length("adjacent", length);
+                        if let Some(eol) = eol {
+                            row = row.length("adjacent_eol", eol);
+                        }
+                        row.value("except_rectangle", ParamValue::Flag(except_rectangle))
+                    }
+                    StepNeighbour::BetweenEol(eol) => row.length("between_eol", eol),
+                }
             }
             Rule::TipSpacingTable { layer, table } => {
                 let mut row = one(layer);

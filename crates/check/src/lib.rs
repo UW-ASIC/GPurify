@@ -88,6 +88,7 @@
 //! | `count(L) >= n`, `count(L) <= n` | `count` | [`drc::Rule::Count`] | too few or too many shapes on `L` in the whole layout | DRC-091, DRC-095 |
 //! | `size(L; allowed: [w x h, ..])` | `cut_class` | [`drc::Rule::CutClass`] | a cut whose size is none of the listed classes | DRC-014 |
 //! | `min_step(L; max_edges: n \| corner: .., length_sum: ..) >= len` | `min_step` | [`drc::Rule::MinStep`] | a run of short edges LEF `MINSTEP` rejects: too many in a row, or at a corner or step | DRC-020 |
+//! | `min_step(L; adjacent: .., except_rectangle: .. \| between_eol: ..) >= len` | `min_step_adjacent` | [`drc::Rule::MinStepAdjacent`] | a short edge beside a short edge or end of line, or two either side of a short end of line (`LEF58_MINSTEP`) | DRC-020 |
 //! | `interior_angle([L]) >= deg` | `min_interior_angle` | [`drc::Rule::MinInteriorAngle`] | a drawn corner whose angle inside its shape is under the limit: an acute angle | DRC-003 |
 //! | `valid([L])` | `polygon_validity` | [`drc::Rule::PolygonValidity`] | a drawn polygon that crosses itself or encloses no area | DRC-004 |
 //! | `width(L; allowed: [w, ..])`, `.., open_last: true)` | `allowed_width` | [`drc::Rule::AllowedWidth`] | a shape whose width is none of the listed widths (or, open, under the last) | DRC-015, DRC-090 |

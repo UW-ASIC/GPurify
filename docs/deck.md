@@ -318,6 +318,8 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `edge_length(L) >= len` | An edge shorter than the limit. |
 | `min_step(L; max_edges: n) >= len` | More than `n` edges shorter than the limit in a row: LEF `MINSTEP .. MAXEDGES`. |
 | `min_step(L; corner: outside, length_sum: len \| none) >= len` | Two or more edges shorter than the limit in a row at an outside (convex) corner, the two long edges either side turning left: LEF `MINSTEP .. OUTSIDECORNER`, its default. `corner: inside` is a concave corner (`INSIDECORNER`); `corner: step` one or more short edges between long edges running the same way (`STEP`). With `length_sum`, a run passes while its total length is at most that (`LENGTHSUM`). An end of line is no corner and no step. |
+| `min_step(L; adjacent: len, except_rectangle: bool) >= len` | An edge shorter than the limit with an edge before or after it shorter than `adjacent`, as OpenROAD's TritonRoute reads `LEF58_MINSTEP .. MINADJACENTLENGTH`; with `except_rectangle: true` a rectangle is not checked (`EXCEPTRECTANGLE`). `min_step(L; adjacent: len, adjacent_eol: len, except_rectangle: bool) >= len` also rejects an end of line (an edge with both corners convex) shorter than `adjacent_eol` beside it (`NOADJACENTEOL`). |
+| `min_step(L; between_eol: len) >= len` | An edge shorter than the limit, then an end of line shorter than `between_eol`, then another edge shorter than the limit, along a shape's boundary: `LEF58_MINSTEP .. NOBETWEENEOL`. |
 | `notch(L) >= len` | A gap narrower than the limit between two parts of the same shape. |
 | `space(L) >= len` | Two shapes on one layer closer than the limit. |
 | `space(A, B) >= len` | A shape on `A` closer than the limit to a shape on `B`. |

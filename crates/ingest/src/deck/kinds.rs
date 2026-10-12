@@ -334,6 +334,41 @@ pub(crate) const KINDS: &[Kind] = &[
             opt("length_sum", "length_sum", Dim::Length),
         ],
     ),
+    // LEF58_MINSTEP's qualifiers as OpenROAD's TritonRoute checks them: a
+    // short edge beside a short edge (MINADJACENTLENGTH, with NOADJACENTEOL
+    // an end of line too, EXCEPTRECTANGLE), or two short edges either side of
+    // a short end of line (NOBETWEENEOL).
+    drc(
+        "min_step",
+        Cmp::Ge,
+        "min_step_adjacent",
+        &[0],
+        LIMIT,
+        &[
+            p("adjacent", "adjacent", Dim::Length),
+            p("except_rectangle", "except_rectangle", Dim::Bool),
+        ],
+    ),
+    drc(
+        "min_step",
+        Cmp::Ge,
+        "min_step_adjacent",
+        &[0],
+        LIMIT,
+        &[
+            p("adjacent", "adjacent", Dim::Length),
+            p("adjacent_eol", "adjacent_eol", Dim::Length),
+            p("except_rectangle", "except_rectangle", Dim::Bool),
+        ],
+    ),
+    drc(
+        "min_step",
+        Cmp::Ge,
+        "min_step_adjacent",
+        &[0],
+        LIMIT,
+        &[p("between_eol", "between_eol", Dim::Length)],
+    ),
     // A set of legal widths, `width(L; allowed: [350nm, 690nm])` (sky130
     // rpm.1b-1f): each merged figure's narrowest width is one of them.
     drc(

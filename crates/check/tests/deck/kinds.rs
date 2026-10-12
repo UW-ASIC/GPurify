@@ -9,13 +9,13 @@ use gpurify_check::deck::rules::{
     allowed_width, aspect_ratio, asymmetric_enclosure, convex_corner_spacing, count, cut_class,
     cut_class_spacing, cut_spacing, edge_facing_space, edge_width, eol_keep_out,
     eol_within_spacing, exact_pitch, forbidden, forbidden_spacing, full_width, gate_corner,
-    max_enclosure, min_enclosure, min_interior_angle, min_step, minimum_cut, must_contain,
-    noncoincident_enclosure, polygon_validity, projection_spacing, region_density, span_length,
-    tip_spacing_table, total_area, two_width_spacing_table, via_stack,
+    max_enclosure, min_enclosure, min_interior_angle, min_step, min_step_adjacent, minimum_cut,
+    must_contain, noncoincident_enclosure, polygon_validity, projection_spacing, region_density,
+    span_length, tip_spacing_table, total_area, two_width_spacing_table, via_stack,
 };
 use gpurify_check::deck::{compile, Bound, CompiledDeck, DeckBuilder};
 use gpurify_check::drc::ruleset::EolParallel;
-use gpurify_check::drc::{StepKind, WireBand};
+use gpurify_check::drc::{StepKind, StepNeighbour, WireBand};
 use gpurify_geom::{Dbu, DbuArea, StrTable};
 use gpurify_ingest::deck::StackSource;
 
@@ -49,6 +49,9 @@ rule vd valid()
 rule ms.edges min_step(m; max_edges: 2) >= 50nm
 rule ms.inside min_step(m; corner: inside, length_sum: 100nm) >= 50nm
 rule ms.step min_step(m; corner: step, length_sum: none) >= 60nm
+rule msa min_step(m; adjacent: 60nm, except_rectangle: true) >= 50nm
+rule msa.eol min_step(m; adjacent: 30nm, adjacent_eol: 120nm, except_rectangle: false) >= 50nm
+rule msa.between min_step(m; between_eol: 120nm) >= 50nm
 rule odd.none forbidden(odd)
 rule tip tip_space_table(m; length: [0nm, 100nm], space: [[60nm, 70nm], [70nm, 80nm]])
 rule tw two_width_table(m; width: [0nm, 200nm], prl: [none, 300nm], space: [[50nm, 60nm], [60nm, 90nm]])
@@ -140,6 +143,23 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
         min_step(m, nm(50), StepKind::InsideCorner, Some(nm(100))),
     );
     d.rule("ms.step", min_step(m, nm(60), StepKind::Step, None));
+    let adjacent = |length, eol, except_rectangle| StepNeighbour::Adjacent {
+        length,
+        eol,
+        except_rectangle,
+    };
+    d.rule(
+        "msa",
+        min_step_adjacent(m, nm(50), adjacent(nm(60), None, true)),
+    );
+    d.rule(
+        "msa.eol",
+        min_step_adjacent(m, nm(50), adjacent(nm(30), Some(nm(120)), false)),
+    );
+    d.rule(
+        "msa.between",
+        min_step_adjacent(m, nm(50), StepNeighbour::BetweenEol(nm(120))),
+    );
     d.rule("odd.none", forbidden(odd));
     d.rule(
         "tip",

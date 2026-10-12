@@ -60,6 +60,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         allowed_width_open_last(depth),
         min_edge_length(depth),
         min_step(depth),
+        min_step_adjacent(depth),
         edge_length_of_edges(depth),
         notch(depth),
         min_spacing(depth),
@@ -963,6 +964,199 @@ fn allowed_width(depth: Depth) -> Vec<Fixture> {
         &["DRC-015"],
         "rule aw width(met1; allowed: [100nm])",
         &["aw"],
+    ));
+    out
+}
+
+/// `LEF58_MINSTEP`'s qualifiers (`min_step_adjacent`, DRC-020), as `OpenROAD`
+/// `TritonRoute` reads them, each short edge (under 50) judged by its
+/// neighbours in ring order, one finding per offending short edge at the
+/// centre of the box of it and the edges judged with it (its neighbours, or
+/// the end of line and short edge after it):
+/// - `adj`: `min_step(met1; adjacent: 60nm, except_rectangle: false) >=
+///   50nm` (`MINADJACENTLENGTH 0.06`), an edge before or after shorter
+///   than 60;
+/// - `adj.rect`: the same with `except_rectangle: true` (`EXCEPTRECTANGLE`);
+/// - `eol`: `min_step(met1; adjacent: 30nm, adjacent_eol: 120nm,
+///   except_rectangle: false) >= 50nm` (`NOADJACENTEOL 0.12`), also an end
+///   of line (both corners convex) shorter than 120 before or after it;
+/// - `between`: `min_step(met1; between_eol: 120nm) >= 50nm`
+///   (`NOBETWEENEOL 0.12`), a short edge, an end of line under 120 and a
+///   short edge in a row.
+///
+/// Oracle: `TritonRoute`'s `checkMetalShape_lef58MinStep_minAdjLength` and
+/// `_noBetweenEol`, every length by construction and swept one step either
+/// side of its limit:
+/// - a bump 40 high on a bar, its top swept around 60: each 40 side offends
+///   `adj` while the top is under 60, and `eol` always (the top is an end of
+///   line under 120); the side, the top and the other side are one
+///   `between` finding;
+/// - a bump 40 wide, its height swept around 50: its top (40) offends `adj`
+///   beside sides under 60; below 50 the sides are short too and offend
+///   `adj`, `eol` (beside the top's end of line) and `between`;
+/// - a 40 x 56 rectangle: its 40 ends offend `adj` beside 56 sides and `eol`
+///   beside the sides' ends of line, `EXCEPTRECTANGLE` exempts it, and each
+///   end starts a `between` row;
+/// - a tab 40 wide on a bar's end, its end of line swept around 120: the
+///   tab's 40 top offends `eol` only while that end is under 120;
+/// - a tip 40 long on a bar's end, its end swept around 120: under 120 its
+///   two 40 sides offend `eol` and make one `between` row.
+fn min_step_adjacent(depth: Depth) -> Vec<Fixture> {
+    let deck = one_layer_deck(
+        "rule adj min_step(met1; adjacent: 60nm, except_rectangle: false) >= 50nm\n\
+         rule adj.rect min_step(met1; adjacent: 60nm, except_rectangle: true) >= 50nm\n\
+         rule eol min_step(met1; adjacent: 30nm, adjacent_eol: 120nm, except_rectangle: false) >= 50nm\n\
+         rule between min_step(met1; between_eol: 120nm) >= 50nm",
+    );
+    let mut cases = Vec::new();
+    let mut case = |name: String, layout: Layout, mut rows: [Vec<Finding>; 4]| {
+        // Pinned findings first: the harness pairs greedily, so an unpinned
+        // one must not take a pinned one's match.
+        for row in &mut rows {
+            row.sort_by_key(|finding| finding.at.is_none());
+        }
+        let [adj, rect, eol, between] = rows;
+        cases.push(fixture(
+            &format!("min_step_adjacent/{name}"),
+            &["DRC-020"],
+            &deck,
+            layout,
+            vec![
+                ("adj", adj),
+                ("adj.rect", rect),
+                ("eol", eol),
+                ("between", between),
+            ],
+        ));
+    };
+    // A bump `w` wide and `h` high on a 1000 x 200 bar, from x = l to r.
+    let bump = |w: i64, h: i64| {
+        let l = 500 - w / 2;
+        let r = l + w;
+        let layout = Layout::default().polygon(
+            "met1",
+            &[
+                (0, 0),
+                (1000, 0),
+                (1000, 200),
+                (r, 200),
+                (r, 200 + h),
+                (l, 200 + h),
+                (l, 200),
+                (0, 200),
+            ],
+        );
+        (layout, l, r)
+    };
+    for t in sweep(depth, 60) {
+        let (layout, l, r) = bump(t, 40);
+        // The right side's box runs from the top's far end to the bar's right
+        // corner, the left side's from the bar's left corner to the top's far
+        // end; both 200 to 240 high.
+        let sides = vec![
+            pin(Finding::length(40), l + 1000, 440),
+            pin(Finding::length(40), r, 440),
+        ];
+        let adj = if t < 60 { sides.clone() } else { Vec::new() };
+        case(
+            format!("bump_top/{}", side(t, 60)),
+            layout,
+            [
+                adj.clone(),
+                adj,
+                sides,
+                vec![pin(Finding::length(40), l + r, 440)],
+            ],
+        );
+    }
+    for h in sweep(depth, 50).into_iter().filter(|&h| h > 0) {
+        let (layout, l, r) = bump(40, h);
+        let mut adj = vec![pin(Finding::length(40), l + r, 400 + h)];
+        let (mut eol, mut between) = (Vec::new(), Vec::new());
+        if h < 50 {
+            let sides = [
+                pin(Finding::length(h), l + 1000, 400 + h),
+                pin(Finding::length(h), r, 400 + h),
+            ];
+            adj.extend(sides);
+            eol.extend(sides);
+            between.push(pin(Finding::length(h), l + r, 400 + h));
+        }
+        case(
+            format!("bump_height/{}", side(h, 50)),
+            layout,
+            [adj.clone(), adj, eol, between],
+        );
+    }
+    let ends = || {
+        vec![
+            Finding::length(40).at(20, 28),
+            Finding::length(40).at(20, 28),
+        ]
+    };
+    case(
+        "rectangle".into(),
+        met1(&[[0, 0, 40, 56]]),
+        [ends(), vec![], ends(), ends()],
+    );
+    for e in sweep(depth, 120) {
+        let eol = if e < 120 {
+            vec![Finding::length(40).at(1020, 100)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("tab_end/{}", side(e, 120)),
+            Layout::default().polygon(
+                "met1",
+                &[
+                    (0, 0),
+                    (1040, 0),
+                    (1040, e),
+                    (1000, e),
+                    (1000, 200),
+                    (0, 200),
+                ],
+            ),
+            [vec![], vec![], eol, vec![]],
+        );
+    }
+    for e in sweep(depth, 120) {
+        let (eol, between) = if e < 120 {
+            (
+                vec![
+                    pin(Finding::length(40), 2040, 100 + e),
+                    pin(Finding::length(40), 2040, 500),
+                ],
+                vec![pin(Finding::length(40), 2040, 200 + e)],
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        case(
+            format!("tip/{}", side(e, 120)),
+            Layout::default().polygon(
+                "met1",
+                &[
+                    (0, 0),
+                    (1000, 0),
+                    (1000, 100),
+                    (1040, 100),
+                    (1040, 100 + e),
+                    (1000, 100 + e),
+                    (1000, 400),
+                    (0, 400),
+                ],
+            ),
+            [vec![], vec![], eol, between],
+        );
+    }
+    let mut out = every_placement(cases);
+    out.push(vacuous(
+        "min_step_adjacent",
+        &["DRC-020"],
+        "rule adj min_step(met1; adjacent: 60nm, except_rectangle: false) >= 50nm",
+        &["adj"],
     ));
     out
 }
