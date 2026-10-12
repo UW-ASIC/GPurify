@@ -221,7 +221,7 @@ impl LayerExpr {
     /// negative.
     #[must_use]
     pub fn sized(self, by: Dbu) -> Self {
-        self.call(DerivedOp::Sized(by), None, None)
+        self.call(DerivedOp::Sized(by, by), None, None)
     }
 
     /// `.interacting(other)`.
@@ -977,18 +977,6 @@ impl<'s> DeckBuilder<'s> {
                 .any(|slot| slot.id() == id && !matches!(slot, Slot::Removed(_)))
     }
 
-    /// A row only an ERC kind may be: `warning` on a DRC rule is refused, as
-    /// the parser refuses it.
-    #[track_caller]
-    fn check_row(&mut self, id: &str, row: &RuleRow) {
-        if row.warning && super::rules::DRC_KINDS.contains(&row.kind) {
-            self.refuse(format!(
-                "{id}: `warning` is not legal on `{}`: DRC rules are errors",
-                row.kind
-            ));
-        }
-    }
-
     #[track_caller]
     fn check_id(&mut self, id: &str) -> bool {
         if !is_rule_id(id) {
@@ -1007,7 +995,6 @@ impl<'s> DeckBuilder<'s> {
     /// layers declared so far, as the parser makes one.
     #[track_caller]
     pub fn rule(&mut self, id: &str, row: RuleRow) {
-        self.check_row(id, &row);
         if self.check_id(id) {
             let mut derived = std::mem::take(&mut self.derived);
             let rule = self.lower_rule(id, row, &mut derived);
@@ -1057,7 +1044,6 @@ impl<'s> DeckBuilder<'s> {
     /// [`remove`](Self::remove)d before is replaced in its place.
     #[track_caller]
     pub fn add(&mut self, id: &str, row: RuleRow) {
-        self.check_row(id, &row);
         if let Some(slot) = self
             .rules
             .iter_mut()
@@ -1080,7 +1066,6 @@ impl<'s> DeckBuilder<'s> {
     /// custom rule, which is [`remove`](Self::remove)d and stated again.
     #[track_caller]
     pub fn replace(&mut self, id: &str, row: RuleRow) {
-        self.check_row(id, &row);
         if self.custom.iter().any(|rule| rule.id == id) {
             self.refuse(format!(
                 "replace of custom rule `{id}`: remove it and state the new one"

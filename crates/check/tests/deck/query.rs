@@ -49,6 +49,7 @@ fn limits(
         stacks: deck.drc.stacks.clone(),
         class_tables: deck.drc.class_tables.clone(),
         span_tables: deck.drc.span_tables.clone(),
+        warnings: Vec::new(),
         first_derived: None,
     };
     let mut out = Violations::default();

@@ -82,7 +82,11 @@ impl CompiledDeck {
         }
         let mut rows: HashMap<StrId, Row> = HashMap::new();
         for &(id, rule) in &self.drc.rules {
-            rows.insert(id, self.drc_row(rule));
+            let mut row = self.drc_row(rule);
+            if self.drc.warnings.contains(&id) {
+                row = row.value("warning", ParamValue::Flag(true));
+            }
+            rows.insert(id, row);
         }
         self.erc_rows(strings, &mut rows);
         let mut order: Vec<StrId> = self
@@ -334,6 +338,40 @@ impl CompiledDeck {
             } => one(layer)
                 .value("colors", ParamValue::Count(colors.into()))
                 .length("color_spacing", color_spacing),
+            Rule::AnchoredPatterning {
+                layer,
+                anchors,
+                colors,
+                color_spacing,
+            } => {
+                let mut layers = vec![layer];
+                layers.extend(anchors.into_iter().flatten());
+                Row::new(rule.kind(), &layers)
+                    .value("colors", ParamValue::Count(colors.into()))
+                    .length("color_spacing", color_spacing)
+            }
+            Rule::CriticalArea {
+                layer,
+                radius,
+                limit,
+            } => one(layer)
+                .length("radius", radius)
+                .value("limit", ParamValue::Area(limit)),
+            Rule::DensityBalance {
+                a,
+                b,
+                boundary,
+                window,
+                step,
+                limit,
+            } => {
+                let mut layers = vec![a, b];
+                layers.extend(boundary);
+                Row::new(rule.kind(), &layers)
+                    .length("window", window)
+                    .length("step", step)
+                    .number("limit", limit)
+            }
             Rule::Forbidden { layer } => one(layer),
             // `==` as `count`, else the bound stated.
             Rule::MustContain {

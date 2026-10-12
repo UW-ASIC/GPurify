@@ -231,21 +231,18 @@ fn every_parser_refusal_has_a_builder_twin() {
         assert_eq!(at, line, "{built}: reported at the wrong call");
     }
 
-    // `warning` on a DRC rule: the parser names the deck spelling, the
-    // builder the kind.
-    let parsed = parser_refusal(&text("rule a warning width(m) >= 10nm\n"));
+    // `warning` on a DRC rule, a recommended rule (DRC-110): the parser and
+    // the builder both take it.
+    assert!(compile(
+        &text("rule a warning width(m) >= 10nm\n"),
+        grid(),
+        &mut StrTable::default()
+    )
+    .is_ok());
     let mut strings = StrTable::default();
     let (mut d, m, _) = start(&mut strings);
     d.rule("a", min_width(m, nm(10)).warning());
-    let (built, _) = builder_refusal(d.finish().unwrap_err());
-    assert!(
-        parsed.contains("`warning` is not legal on `width`"),
-        "{parsed}"
-    );
-    assert!(
-        built.contains("`warning` is not legal on `min_width`"),
-        "{built}"
-    );
+    assert!(d.finish().is_ok());
 
     // A value a kind cannot hold is refused by the same typed check.
     let mut strings = StrTable::default();

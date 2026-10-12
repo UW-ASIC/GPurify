@@ -433,7 +433,35 @@ impl Printer<'_> {
             DerivedOp::And => fold("and"),
             DerivedOp::Or => fold("or"),
             DerivedOp::Not => fold("not"),
-            DerivedOp::Sized(by) => call("sized", Some(self.length(i128::from(by.raw()))?)),
+            DerivedOp::Sized(dx, dy) if dx == dy => {
+                call("sized", Some(self.length(i128::from(dx.raw()))?))
+            }
+            DerivedOp::Sized(dx, dy) => call(
+                "sized",
+                Some(format!(
+                    "{}, {}",
+                    self.length(i128::from(dx.raw()))?,
+                    self.length(i128::from(dy.raw()))?
+                )),
+            ),
+            DerivedOp::Overlapping => call("overlapping", layer_argument()?),
+            DerivedOp::Covering(true) => call("covering", layer_argument()?),
+            DerivedOp::Covering(false) => call("not_covering", layer_argument()?),
+            DerivedOp::Extended {
+                begin,
+                end,
+                outside,
+                inside,
+            } => call(
+                "extended",
+                Some(format!(
+                    "begin: {}, end: {}, out: {}, in: {}",
+                    self.length(i128::from(begin.raw()))?,
+                    self.length(i128::from(end.raw()))?,
+                    self.length(i128::from(outside.raw()))?,
+                    self.length(i128::from(inside.raw()))?
+                )),
+            ),
             DerivedOp::Interacting(true) => call("interacting", layer_argument()?),
             DerivedOp::Interacting(false) => call("not_interacting", layer_argument()?),
             DerivedOp::Inside => call("inside", layer_argument()?),
