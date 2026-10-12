@@ -539,7 +539,11 @@ mod tests {
             ),
             (
                 "system s.json",
-                "system requires a system netlist (--reference)",
+                "system requires one system netlist (--reference)",
+            ),
+            (
+                "system s.json --reference a --reference b",
+                "system requires one system netlist (--reference)",
             ),
             (
                 "system s.json --reference r --intent i",
