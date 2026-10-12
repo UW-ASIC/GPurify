@@ -835,6 +835,7 @@ impl RuleSet {
                     table.min_width.push(min_width);
                     table.pad.push(pad);
                     table.near.push(near);
+                    table.clear.push(row.opt_layer("clear")?);
                 }
                 "guard_ring_bias" => {
                     let layers = row.layers(1)?;

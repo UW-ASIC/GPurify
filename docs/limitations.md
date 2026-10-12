@@ -303,7 +303,6 @@ says which foundry manual, standard or tool defines each one.
 | ERC-C13 | System-level ESD | partial | gpurify system: system.esd_iec holds each package pin the system names as exposed to both rails through clamps of the models it names as system-rated. System robustness itself (board TVS, residual pulse, soft failures, powered latch-up) needs simulation, not a layout (WP3 Part I 6.3.1; TR18-01:7) |
 | ERC-C14 | ESD layout rules on recognised devices (clamp distance to pad, minimum ESD-path metal width) | missing | Numeric limits are NDA |
 | ERC-D5 | Voltage-aware aggressor/victim | partial | Aggressors are chosen by pad connection or layer, not by the voltage the intent propagates; the whole victim polygon is held to the limit |
-| ERC-D7 | Native-device guard ring | partial | LU.5's "no other NCOMP, NWELL in between" the device and its ring is not checked |
 | ERC-D9 | PMOS/NMOS devices sharing one well | missing | Named as a Calibre PERC layout check without a public definition of which sharing is illegal |
 | ERC-E7 | RMS / Joule heating / peak limits | missing | Public limits exist: LEF 5.8's ACCURRENTDENSITY tables by frequency and width, and the sky130 tech LEF's RMS limits (6.1 mA/um met1-met2, 14.9 met3-met4, 22.34 met5, Tj 90 C). The intent states only a DC current budget per net, so no RMS or peak current reaches a check |
 | ERC-E9 | PDN integrity (floating stripes, unconnected instances) | partial | Flags unconnected conductors; PDN-specific checks (floating stripes, instance supply terminals) are missing |

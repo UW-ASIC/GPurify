@@ -338,7 +338,7 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-D4 | Guard-ring resistance / current under injection | implemented | TR18-02:2.3; JESD78:Table 1; CAL | CF; MR; SY |
 | ERC-D5 | Voltage-aware aggressor/victim | partial | TR18-02:2.2.3; GF:IO.1,IO.3; CAL | FR; CF; SY; MR |
 | ERC-D6 | HV latch-up between isolated pockets | expressible | TR18-02:3.3; GF:14.3.4 | SY; MR |
-| ERC-D7 | Native-device guard ring | partial | GF:LU.5 | FR; SY; MR |
+| ERC-D7 | Native-device guard ring | implemented | GF:LU.5 | FR; SY; MR |
 | ERC-D8 | Forward-biased diode marked and ringed | implemented | GF:14.3.2,14.3.3 | SY; MR |
 | ERC-E3 | Width-banded absolute current for narrow lines | implemented | IHP:2.15 | SE:IHP 2.15; FR; MR; SY |
 | ERC-E4 | Temperature derating (Black / Arrhenius) | implemented | GF:14.2.2; Black1969; JEP122; JESD63 | SE:GF formula vs table (1.6% rounding); MR; SY |

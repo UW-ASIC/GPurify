@@ -909,6 +909,9 @@ impl CompiledDeck {
                     .value("near", ParamValue::Layer(near))
                     .length("within", within);
             }
+            if let Some(clear) = t.clear[r] {
+                row = row.value("clear", ParamValue::Layer(clear));
+            }
             file(&t.head, r, row);
         }
         let t = &erc.guard_ring_bias;

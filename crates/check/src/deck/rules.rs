@@ -737,7 +737,7 @@ kinds! {
     /// `gate_oxide(; models, max)`, `max_voltage` in mV.
     gate_oxide() [] { models: &[&str] = "model", max_voltage: f64 = "max_voltage" }
     /// [`GuardRingTable`](crate::erc::rules::latchup::GuardRingTable):
-    /// `guard_ring(target, ring; max_space, min_width, pad, near, within)`,
+    /// `guard_ring(target, ring; max_space, min_width, pad, near, within, clear)`,
     /// `near` and `within` both stated or both `None`.
     guard_ring(target: one, ring: one) [] {
         max_space: Option<Dbu> = "max_space",
@@ -745,6 +745,7 @@ kinds! {
         pad: Option<LayerRef> = "pad",
         near: Option<LayerRef> = "near",
         within: Option<Dbu> = "within",
+        clear: Option<LayerRef> = "clear",
     }
     /// [`GuardRingBiasTable`](crate::erc::rules::latchup::GuardRingBiasTable):
     /// `guard_ring_bias(ring; power)`.

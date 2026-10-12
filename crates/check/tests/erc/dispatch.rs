@@ -327,6 +327,7 @@ fn every_kind() -> RuleSet {
             min_width: vec![None],
             pad: vec![None],
             near: vec![None],
+            clear: vec![None],
         },
         forward_diode: latchup::ForwardDiodeTable {
             head: head(id_of("forward_diode")),

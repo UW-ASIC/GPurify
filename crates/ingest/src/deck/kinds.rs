@@ -1126,6 +1126,7 @@ pub(crate) const KINDS: &[Kind] = &[
             opt("pad", "pad", Dim::Layer),
             opt("near", "near", Dim::Layer),
             opt("within", "within", Dim::Length),
+            opt("clear", "clear", Dim::Layer),
         ],
     ),
     erc(
