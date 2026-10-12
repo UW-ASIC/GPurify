@@ -1296,7 +1296,7 @@ pub enum Rule {
     /// is a thin line beside a wide part too short to run past the column's
     /// length (IHP M1.e "at least one line is wider than 0.3 um and the
     /// parallel run is more than 1.0 um", SG13G2 layout rules 5.16; as
-    /// IHP's 5_16_metal1.drc measures it, projected from the wide part).
+    /// IHP's `5_16_metal1.drc` measures it, projected from the wide part).
     ///
     /// One violation per pair, at its highest failing row, with `limit` that
     /// row's cell and `measured` the distance that row measured, at the
