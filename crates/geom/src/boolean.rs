@@ -25,10 +25,6 @@ mod octilinear;
 /// Why a boolean could not be computed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum BooleanError {
-    /// An operation that measures rectangles was given a layer with an edge
-    /// at 45 degrees ([`crate::derive::with_width_into`]).
-    #[error("input is not rectilinear; this operation measures rectilinear geometry only")]
-    NotRectilinear,
     /// A raw ring given to [`canonical_rings_into`] has an edge that is not
     /// horizontal, vertical or at 45 degrees.
     #[error("input is not octilinear; only edges at multiples of 45 degrees are supported")]

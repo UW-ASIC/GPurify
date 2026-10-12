@@ -370,7 +370,10 @@ fn derive_layers_into(
                         with_area_into(a, lo..=hi, &mut folded);
                         Ok(())
                     }
-                    DerivedOp::WithWidth(lo, hi) => with_width_into(a, lo..=hi, &mut folded),
+                    DerivedOp::WithWidth(lo, hi) => {
+                        with_width_into(a, lo..=hi, &mut folded);
+                        Ok(())
+                    }
                     DerivedOp::Rectangles { square, keep } => {
                         rectangles_into(a, square, keep, &mut folded);
                         Ok(())

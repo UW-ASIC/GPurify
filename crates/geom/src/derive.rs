@@ -7,8 +7,7 @@
 //! polygon, overlaps kept), or merged edges. Semantics follow `KLayout`'s
 //! merged-polygon definitions. Exact on rectilinear and octilinear layers, but
 //! where a boolean snaps a vertex that falls between grid points
-//! ([`crate::boolean::union_into`]); [`with_width_into`] measures rectilinear
-//! layers only.
+//! ([`crate::boolean::union_into`]).
 
 use crate::bbox::Bbox;
 use crate::boolean::{subtraction_into, union_into, BooleanError};
@@ -18,7 +17,7 @@ use crate::ops::{segments_intersect, Point, Seg};
 use crate::rects::decompose_into;
 use crate::store::GeometryStoreBuilder;
 use crate::view::{validate_layer_into, validate_layer_with, Angles, PolygonRef, ValidatedLayer};
-use crate::width::{narrowest_width2, FacingScratch};
+use crate::width::{narrowest_pair2, narrowest_width2, FacingScratch};
 use crate::{narrow, Dbu};
 use std::ops::RangeInclusive;
 
@@ -251,22 +250,27 @@ pub fn with_area_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mut
 ///
 /// # Errors
 ///
-/// [`BooleanError::NotRectilinear`] for a layer with an edge at 45 degrees,
-/// whose width this does not yet measure.
-pub fn with_width_into(
-    a: &ValidatedLayer,
-    range: RangeInclusive<i128>,
-    out: &mut ValidatedLayer,
-) -> Result<(), BooleanError> {
-    if !a.is_rectilinear() {
-        return Err(BooleanError::NotRectilinear);
-    }
+/// On a layer with 45-degree edges the width is
+/// [`crate::width::narrowest_pair2`]'s, whose square can be a half unit: it
+/// is in the range when its floor is at least the lower bound and its
+/// ceiling at most the upper, which is exact for inclusive bounds. A strict
+/// bound the deck turned inclusive (`> n` as `>= n² + 1`) misses a width
+/// whose square is exactly `n² + ½` (`99/√2` against `> 70nm`).
+pub fn with_width_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mut ValidatedLayer) {
     let mut scratch = FacingScratch::default();
+    let far = Dbu::new_unchecked(crate::MAX_ABS_DBU);
     let keep: Vec<bool> = (0..narrow(a.len()))
-        .map(|idx| range.contains(&narrowest_width2(a.get(idx), &mut scratch).raw()))
+        .map(|idx| {
+            let poly = a.get(idx);
+            if a.is_rectilinear() {
+                return range.contains(&narrowest_width2(poly, &mut scratch).raw());
+            }
+            narrowest_pair2(poly, true, far).is_some_and(|(twice, _)| {
+                twice / 2 >= *range.start() && (twice + 1) / 2 <= *range.end()
+            })
+        })
         .collect();
     a.select_into(&keep, out);
-    Ok(())
 }
 
 /// `KLayout` `with_bbox_max` (`longer`) or `with_bbox_min`: polygons whose

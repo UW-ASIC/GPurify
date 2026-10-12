@@ -50,14 +50,20 @@ impl Found {
 /// Parse `rules` under one layer `met1`, draw `rings` on it, round trip
 /// through GDSII, extract, and run the DRC stage.
 fn run(rules: &str, rings: &[Vec<(i64, i64)>]) -> Found {
-    let deck = format!("grid 1nm\nlayer met1 = gds(68, 20)\n{rules}");
+    let on_met1: Vec<(&str, Vec<(i64, i64)>)> = rings.iter().map(|r| ("met1", r.clone())).collect();
+    run_on(rules, &on_met1)
+}
+
+/// [`run`] with `met2` declared too, each ring drawn on the layer it names.
+fn run_on(rules: &str, rings: &[(&str, Vec<(i64, i64)>)]) -> Found {
+    let deck = format!("grid 1nm\nlayer met1 = gds(68, 20)\nlayer met2 = gds(69, 20)\n{rules}");
     let mut strings = StrTable::default();
     let deck = parse_deck(&deck, grid(), &mut strings).unwrap_or_else(|why| panic!("{why}"));
-    let met1 = deck.layers.id(&strings, "met1").expect("declared");
     let mut layout = LayoutBuilder::new(deck.layers.len());
-    for ring in rings {
+    for (name, ring) in rings {
+        let layer = deck.layers.id(&strings, name).expect("declared");
         let (xs, ys): (Vec<i64>, Vec<i64>) = ring.iter().copied().unzip();
-        layout.push(met1, &xs, &ys);
+        layout.push(layer, &xs, &ys);
     }
     let (base, _) = layout.finish();
     let mut bytes = Vec::new();
@@ -314,4 +320,33 @@ fn the_45_degree_kinds_are_invariant_under_the_symmetries_of_the_grid() {
         let moved: Vec<Vec<(i64, i64)>> = rings.iter().map(|r| symmetric(r, t)).collect();
         assert_eq!(measured(&run(rules, &moved)), base, "symmetry {t}");
     }
+}
+
+/// N-f2-3: a 45-degree shape feeding derived layers no longer refuses the
+/// whole layout. Two derived layers are computed from a right triangle on
+/// met1 (`sized`, `with_width`): `width` and `forbidden` on them run, a kind
+/// not yet proved on 45-degree edges (maximum width) refuses alone, and a
+/// rule on met2 reports as it would without the triangle.
+///
+/// Oracle: hand-derived. The triangle grown by the 10 square has no acute
+/// corner (its tips gain a vertical or horizontal side), and every width is
+/// over 5; the triangle's acute tips make its width 0, so `with_width(< 1nm)`
+/// holds it, area `100·100/2 = 5000`; the met2 bar is 50 wide against 100.
+#[test]
+fn a_45_degree_shape_scopes_its_refusal_to_the_rules_that_read_it() {
+    let found = run_on(
+        "layer fat = met1.sized(10nm)\nlayer slim = met1.with_width(< 1nm)\n\
+         rule wf width(fat) >= 5nm\nrule mf width(fat) <= 1000nm\n\
+         rule fs forbidden(slim)\nrule w2 width(met2) >= 100nm",
+        &[
+            ("met1", vec![(0, 0), (100, 0), (0, 100)]),
+            ("met2", vec![(500, 0), (550, 0), (550, 1000), (500, 1000)]),
+        ],
+    );
+    assert_eq!(found.outcome("wf"), Outcome::Ran);
+    assert!(found.of("wf").is_empty());
+    assert_eq!(found.outcome("mf"), Outcome::Refused);
+    assert_eq!(found.of("fs"), [(area(5000), area(0))]);
+    assert_eq!(found.outcome("w2"), Outcome::Ran);
+    assert_eq!(found.of("w2"), [(len(50), len(100))]);
 }

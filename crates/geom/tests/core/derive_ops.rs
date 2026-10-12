@@ -437,9 +437,9 @@ fn with_width_selects_on_the_narrowest_width() {
     ]);
     // The range is on the squared width: `>= 3` is `9..`, `<= 2` is `..=4`.
     let mut got = ValidatedLayer::default();
-    with_width_into(&l, 9..=i128::MAX, &mut got).expect("rectilinear");
+    with_width_into(&l, 9..=i128::MAX, &mut got);
     assert_eq!(boxes(&got), [(20, 0, 23, 10)], "the L is 2 wide at its arm");
-    with_width_into(&l, 0..=4, &mut got).expect("rectilinear");
+    with_width_into(&l, 0..=4, &mut got);
     assert_eq!(boxes(&got), [(0, 0, 10, 10)]);
 }
 
@@ -455,13 +455,13 @@ fn with_width_counts_the_diagonal_neck_width_measures() {
     // would put it in `<= 2` and out of `> 2` (F65).
     let plates = rects(&[(0, 0, 10, 10), (8, 8, 18, 18)]);
     let mut got = ValidatedLayer::default();
-    with_width_into(&plates, 5..=i128::MAX, &mut got).expect("rectilinear");
+    with_width_into(&plates, 5..=i128::MAX, &mut got);
     assert_eq!(boxes(&got), [(0, 0, 18, 18)], "the neck is wider than 2");
-    with_width_into(&plates, 0..=9, &mut got).expect("rectilinear");
+    with_width_into(&plates, 0..=9, &mut got);
     assert_eq!(boxes(&got), [(0, 0, 18, 18)], "the neck is at most 3");
-    with_width_into(&plates, 0..=4, &mut got).expect("rectilinear");
+    with_width_into(&plates, 0..=4, &mut got);
     assert!(got.is_empty(), "the neck is not at most 2");
-    with_width_into(&plates, 9..=i128::MAX, &mut got).expect("rectilinear");
+    with_width_into(&plates, 9..=i128::MAX, &mut got);
     assert!(got.is_empty(), "nothing is 3 wide at the neck");
 }
 

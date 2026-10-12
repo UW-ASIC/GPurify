@@ -7,13 +7,15 @@
 use super::{centre, merged, mid, owners_of, seg_bbox, SortedRects, Verdict, REFUSED};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
-use gpurify_geom::ops::Point;
+use gpurify_geom::ops::{isqrt, Point};
 use gpurify_geom::rects::{covered_area, decompose_into};
 use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_ingest::StrId;
 
 /// Every shape on the layer, as drawn, and every edge of an edge layer.
 /// A shape reports its area, an edge its length. `examined` counts both.
+/// 45-degree shapes and edges included: a half-unit area and an edge's
+/// `k·√2` are reported floored.
 pub(crate) fn forbidden(
     store: &GeometryStore,
     rule: StrId,
@@ -21,7 +23,7 @@ pub(crate) fn forbidden(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let Some(drawn) = s.validated.get(store, layer) else {
+    let Some(drawn) = s.validated.get_octilinear(store, layer) else {
         return REFUSED;
     };
     let polys = u32::try_from(drawn.len()).expect("a layer indexes polygons with a u32");
@@ -49,7 +51,9 @@ pub(crate) fn forbidden(
             layer,
             severity: Severity::Error,
             at: centre(b),
-            measured: Measurement::Length((b.xhi - b.xlo) + (b.yhi - b.ylo)),
+            measured: Measurement::Length(isqrt(
+                (b.xhi - b.xlo).mul_wide(b.xhi - b.xlo) + (b.yhi - b.ylo).mul_wide(b.yhi - b.ylo),
+            )),
             limit: Measurement::Length(Dbu::new_unchecked(0)),
             shapes: (PolyId(u32::MAX), None),
         });

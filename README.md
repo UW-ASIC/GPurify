@@ -258,8 +258,8 @@ what.
 
 This is a working tool that has not been proven against foundry signoff on
 production silicon. Do not tape out on its verdict alone. On a layout with
-45-degree edges only width, notch, space, area, hole area and edge length are
-measured (the other rules refuse such a layer), several rules measure less than
+45-degree edges only width, notch, space, area, hole area, edge length and
+forbidden shapes are measured (the other rules refuse such a layer), several rules measure less than
 a foundry deck does, and the
 shipped decks are incomplete. [docs/limitations.md](docs/limitations.md) lists
 every known gap.

@@ -4632,9 +4632,10 @@ fn directional(depth: Depth) -> Vec<Fixture> {
 // ------------------------------------------------------------ integrity
 
 /// Layer validity (DRC-004, DRC-002): a rule that reads a layer holding a
-/// self-crossing, zero-area or non-rectilinear ring records `Refused`, and
-/// the run does not pass. `off_grid` and `angle` read raw rows and never
-/// refuse: they run, and `angle` flags the diagonal.
+/// self-crossing or zero-area ring records `Refused`, and the run does not
+/// pass. A 45-degree ring is valid: `width` measures it (DRC-038, H12) and
+/// `forbidden` reports it with its area. `off_grid` and `angle` read raw rows
+/// and never refuse: they run, and `angle` flags the diagonal.
 fn validity(_depth: Depth) -> Vec<Fixture> {
     let deck = one_layer_deck(
         "rule w width(met1) >= 100nm\nrule f forbidden(met1)\n\
@@ -4673,12 +4674,23 @@ fn validity(_depth: Depth) -> Vec<Fixture> {
             &[(0, 0), (1000, 0), (500, 0)],
             Vec::new(),
         ),
-        refused(
-            "diagonal",
-            &["DRC-002", "DRC-004"],
-            &[(0, 0), (1000, 0), (0, 1000)],
-            vec![count(0)],
-        ),
+        // One acute (45-degree) tip, at (2000, 0): width 0 there; the other
+        // corners are 90 and 135 degrees.
+        Fixture::new("validity/diagonal", &["DRC-002", "DRC-038"], &deck, DRC)
+            .layout(
+                Layout::default()
+                    .rect("met1", 5000, 5000, 6000, 6000)
+                    .polygon("met1", &[(0, 0), (2000, 0), (1000, 1000), (0, 1000)]),
+            )
+            .expect(Expect::rule("w", vec![Finding::length(0).at(2000, 0)]))
+            // The square 1000 x 1000, the trapezoid (2000 + 1000) / 2 x 1000.
+            .expect(Expect::rule(
+                "f",
+                vec![Finding::area(1_000_000), Finding::area(1_500_000)],
+            ))
+            .expect(Expect::clean("g"))
+            .expect(Expect::rule("an", vec![count(0)]))
+            .expect(Expect::Passes(false)),
     ])
 }
 

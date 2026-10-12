@@ -199,10 +199,10 @@ Every result keeps its vertices on the grid and its edges at multiples of 45°:
 - `.with_length` measures a 45° edge exactly (`k` grid steps long is
   `k·√2`), and `.inside_part` / `.outside_part` end a part cut between grid
   points at the last grid point inside it.
-- `.with_width` refuses a layer with a 45° edge.
+- `.with_width` measures a 45° shape as `width` does (below).
 
-Of the checks, `width`, `notch`, `space`, `area`, `hole_area` and
-`edge_length` measure 45° shapes; every other check refuses a layer with a
+Of the checks, `width`, `notch`, `space`, `area`, `hole_area`,
+`edge_length` and `forbidden` measure 45° shapes; every other check refuses a layer with a
 45° edge. `width` is the distance between facing edges, measured square to
 them, a neck between two inside corners measured corner to corner, and 0 at a
 corner sharper than 90°; two edges that only converge, such as a chamfer and
