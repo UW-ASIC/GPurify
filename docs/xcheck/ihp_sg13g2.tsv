@@ -84,8 +84,8 @@ PWB.f	PWB.f PWellBlock.f	PWB.f	agrees
 PWB.f1	PWB.f1 PWellBlock.f1	PWB.f1	agrees	
 NBL.a	NBL.a	NBL.a	agrees	
 NBL.b NBL.b.notch	NBL.b	NBL.b	agrees	
-NBL.e	NBL.e	NBL.e	differs	Unrelated is another net to the foundry (nets with props_ne); the deck reads it as not touching nBuLay (wells are not nets here), so a same-net Activ tied to the well through Metal1 at 0.99 um is flagged.
-NBL.f	NBL.f	NBL.f	differs	Unrelated is another net to the foundry (nets with props_ne); the deck reads it as not touching nBuLay (wells are not nets here), so a same-net Activ tied to the well through Metal1 at 0.99 um is flagged.
+NBL.e	NBL.e	NBL.e	differs	Documented implementation difference: [LR] §5.3 (PDF p. 22) NBL.e reads 'Min. nBuLay space to unrelated N+Activ' and does not define 'unrelated'. The foundry deck reads it as another net (nets with props_ne); the deck, whose wells are not nets, reads it as Activ not touching nBuLay, so the PASS cell's same-net Activ tied to the well through Metal1 at 0.99 um is flagged.
+NBL.f	NBL.f	NBL.f	differs	Documented implementation difference, as NBL.e: [LR] §5.3 (PDF p. 22) NBL.f 'unrelated P+Activ' is not defined; the foundry deck reads another net, the deck Activ not touching nBuLay.
 NBLB.a	NBLB.a	NBLB.a	agrees	
 NBLB.b NBLB.b.notch	NBLB.b	NBLB.b	agrees	
 NBLB.c	NBLB.c	NBLB.c	agrees	
@@ -125,7 +125,7 @@ GFil.g	GFil.g	GFil.g	not_comparable	IHP's density cells stack one top cell per r
 GFil.j	GFil.j	GFil.j	agrees	
 pSD.a	pSD.a	pSD.a	agrees	
 pSD.b pSD.b.notch	pSD.b	pSD.b	agrees	
-pSD.c	pSD.c	pSD.c	differs	The deck leaves Activ that crosses a pSD edge to pSD.e/f (abutted ties, waiting); the unit cell's FAIL is an L-shaped Activ half under pSD.
+pSD.c	pSD.c	pSD.c	differs	Documented implementation difference: [LR] §5.10 (PDF p. 29) pSD.c holds P+Activ in NWell 0.18 um inside pSD, while pSD.e/pSD.f and Fig. 5.10 allow an Activ that crosses the pSD edge (an abutted tie), whose P+ part meets the pSD edge; the manual does not say which crossing Activ is a tie. The foundry deck holds every crossing Activ to pSD.c, the deck leaves it to pSD.e/f (waiting); the unit cell's FAIL is an L-shaped Activ half under pSD.
 pSD.c1	pSD.c1	pSD.c1	agrees	
 pSD.d	pSD.d	pSD.d	agrees	
 pSD.d1	pSD.d1	pSD.d1	agrees	
@@ -133,10 +133,10 @@ pSD.i	pSD.i	pSD.i	agrees
 pSD.i1	pSD.i1	pSD.i1	agrees	
 pSD.j	pSD.j	pSD.j	agrees	
 pSD.j1	pSD.j1	pSD.j1	agrees	
-pSD.k	pSD.k	pSD.k	differs	Both decks flag the 0.62 x 0.36 um pSD of sg13g2_fill_1 (0.22 um2 < 0.25): the fill cell is clean only abutted to its neighbours.
+pSD.k	pSD.k	pSD.k	differs	Not a deck difference: both decks flag the 0.62 x 0.36 um pSD of sg13g2_fill_1 (0.22 um2 < 0.25, [LR] §5.10 pSD.k, PDF p. 29); the fill cell is clean only abutted to its neighbours, so the clean-cell oracle does not hold for it.
 pSD.l	pSD.l	pSD.l	agrees	
-pSD.m	pSD.m	pSD.m	differs	The unit cell draws the Rsil body on PolyRes and RES without GatPoly; the deck's resistor bodies are GatPoly under PolyRes ([LVS] res_derivations), so it sees no resistor there.
-pSD.n	pSD.n	pSD.n	differs	As pSD.m, for the Rppd body.
+pSD.m	pSD.m	pSD.m	differs	Foundry-deck reading, not the manual's: [LR] §5.10 (PDF p. 29) pSD.m names n-type poly resistors, whose body [LR] Rsil.a and Rppd.a (§6.2, PDF pp. 51-52) give as GatPoly, and the layer table (PDF p. 12) gives PolyRes as a marker for net resistors. The foundry deck takes GatPoly or PolyRes as resistor poly (GatPoly_res), and the unit cell draws the Rsil body on PolyRes and RES with no GatPoly, which the deck, as the manual, sees as no resistor.
+pSD.n	pSD.n	pSD.n	differs	As pSD.m, for the Rppd body: [LR] pSD.n (§5.10, PDF p. 29) and Rppd.a (§6.2, PDF p. 52) make the body GatPoly; the unit cell draws it on PolyRes alone.
 nSDB.a	nSDB.a	nSDB.a	agrees	
 nSDB.b nSDB.b.notch	nSDB.b	nSDB.b	agrees	
 nSDB.c	nSDB.c	nSDB.c	agrees	
@@ -345,8 +345,8 @@ Slt.g.M5	Slt.g.M5	Slt.g.M5	agrees
 Slt.g.TM1	Slt.g.TM1	Slt.g.TM1	agrees	
 Slt.h4	Slt.h4	Slt.h4	agrees	
 LBE.a	LBE.a	LBE.a	agrees	
-LBE.b	LBE.b	LBE.b	differs	The foundry reads the maximum width as the larger side of the shape's box; GPurify's width <= reads the part where a 1500 um square fits, so a long thin LBE passes.
-LBE.b2	LBE.b2	LBE.b2	differs	The foundry deck flags its own PASS cell (an LBE of at least 30000 um2); GPurify passes it.
+LBE.b	LBE.b	LBE.b	differs	Documented implementation difference: [LR] §9.1 (PDF p. 73) LBE.b 'Max. LBE width 1500' does not say what the width of a non-square LBE is (Fig. 9.2 marks a and b on one dimension). The foundry deck reads the longer side of the shape's box; the deck's width <= reads the part where a 1500 um square fits, so a long thin LBE passes.
+LBE.b2	LBE.b2	LBE.b2	differs	Foundry-deck bug: [LR] §9.1 (PDF p. 73) LBE.b2 is 'Min. LBE area 30000 um2', but sg13g2_maximal.drc selects LBE.ext_with_area(< 250000.0 um2), LBE.b1's number, so it flags its own PASS cell (an LBE of at least 30000 um2); the deck passes it.
 LBE.c LBE.c.notch	LBE.c	LBE.c	agrees	
 LBE.e.dfPad	LBE.e.dfPad	LBE.e.dfPad	agrees	
 LBE.e.Passiv	LBE.e.Passiv	LBE.e.Passiv	agrees	
