@@ -1395,7 +1395,6 @@ Each operation runs on merged operands at the default coherence (a3).
 | `A and B`, `or`, `not` | Exact booleans of the validated operands; the result is merged | `A & B`, `A \| B`, `A - B` ([L] "and"/"or"/"not") | Only the corner model (a3) |
 | `.sized(len)` | Minkowski sum with a square; erosion is the complement of growing the complement (`sized_into`) | `.sized(len)` (default `square_limit`, [L] "sized") | Identical on rectilinear shapes (v T10) |
 | `.sized(dx, dy)` | Minkowski sum with the box `[-dx, dx] x [-dy, dy]`, or erosion by it; one axis grown and the other shrunk is refused | `.sized(dx, dy)` | Fixtures `derived/sized_xy/*` |
-| `.rectangles()`, `.squares()`, `.non_rectangles()`, `.non_squares()` | A merged figure whose area is its box's (no hole, no notch); equal sides for squares (`rectangles_into`) | the methods of those names | Fixture `derived/shape_class` |
 | `.covering(L)` / `.not_covering(L)` | Holds a whole figure of L, touching from inside allowed (`covering_into`) | `.covering(L)` / `.not_covering(L)` | Fixture `derived/covering_overlapping` |
 | `.overlapping(L)` | Shares area with L; touching is not overlapping (`overlapping_into`) | `.overlapping(L)` | `.not_overlapping(L)` is `.outside(L)` |
 | `.interacting(L)` / `.not_interacting(L)` | Touch or overlap; a shared corner counts (`polys_meet`) | `.interacting(L)` / `.not_interacting(L)` | Same (v T11) |
