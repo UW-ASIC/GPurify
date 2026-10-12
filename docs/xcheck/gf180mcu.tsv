@@ -595,9 +595,9 @@ PRES.6	PRES.6	PRES.6	agrees
 -	SB.15a	SB.15a	ours_missing	left out (deck note)
 -	SB.15b	SB.15b	ours_missing	left out (deck note)
 -	SB.16	SB.16	ours_missing	left out (deck note)
-V1.3c	V1.3c	V1.3c	agrees	
+V1.3c	V1.3c	V1.3c	differs	GPurify holds a via on Metal1 narrower than 0.34 um to 0.06 um on both ends of one axis (as CO.6a); the foundry reads only an end of line. The via of via1.gds's V1.3d fail structure sits on an L-shaped Metal1 corner, and GPurify flags it under V1.3c with its marker inside the neighbouring V1.3c pass box (x 227899 of 227590-227920), so the pass box reads flagged.
 -	V1.3d	V1.3d	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
-V1.4b	V1.4b	V1.4b	agrees	
+V1.4b	V1.4b	V1.4b	differs	GPurify holds a via on Metal2 narrower than 0.34 um to 0.06 um on both ends of one axis (as CO.6a); the foundry reads only an end of line. The via of via1.gds's V1.4c fail structure sits on an L-shaped Metal2 corner, and GPurify flags it under V1.4b with its marker inside the neighbouring V1.4b pass box (x 227899 of 227590-227920), so the pass box reads flagged.
 -	V1.4c	V1.4c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
 V2.3c	V2.3c	V2.3c	agrees	
 -	V2.3d	V2.3d	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
