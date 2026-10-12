@@ -9,10 +9,10 @@
 //! |---|---|---|
 //! | `def.fill_outside_die` | a `FILLS` shape not wholly inside the `DIEAREA` | IC Validator's "fill outside boundary"; DEF `DIEAREA` (LEF/DEF 5.8 p. 245) |
 //! | `def.component_outside_die` | a placed component whose `SIZE` box is not wholly inside the `DIEAREA` | IC Validator's block/pad-ring checks; DEF `COMPONENTS` placement (p. 244) |
-//! | `def.component_overlap` | two placed components whose boxes overlap in area, `COVER` macros (bumps over the core) aside | IC Validator's "block/pad-ring overlap"; LEF `CLASS COVER` (p. 120) |
-//! | `def.off_site` | a placed `CORE` component whose placement point is no site of any `ROW` | DEF `ROW … DO … STEP` (p. 300): a row's sites are `origin + k·step`; LEF `CLASS CORE` cells are placed in rows |
-//! | `def.pin_off_track` | a placed DEF pin whose shape's centre is on no routing track of its layer | IC Validator's "ports off grid"; DEF `TRACKS` (p. 332) |
-//! | `def.off_manufacturing_grid` | a shape vertex that is not a multiple of the LEF `MANUFACTURINGGRID` | LEF `MANUFACTURINGGRID`: "all shapes … must be on the manufacturing grid" (p. 125) |
+//! | `def.component_overlap` | two placed components whose boxes overlap in area, `COVER` macros (bumps over the core) aside | IC Validator's "block/pad-ring overlap"; LEF `CLASS COVER`: "the MACRO SIZE statement does not affect the placers" (p. 114) |
+//! | `def.off_site` | a placed `CORE` component whose placement point is no site of any `ROW` | DEF `ROW … DO … STEP` (p. 299): a row's sites are `origin + k·step`; LEF `CLASS CORE` cells are placed in rows |
+//! | `def.pin_off_track` | a placed DEF pin whose shape's centre is on no routing track of its layer | IC Validator's "ports off grid"; DEF `TRACKS` (p. 336) |
+//! | `def.off_manufacturing_grid` | a shape vertex that is not a multiple of the LEF `MANUFACTURINGGRID` | LEF `MANUFACTURINGGRID`: "shapes and cells are placed in locations that snap to the manufacturing grid" (p. 148) |
 //!
 //! A check with nothing to examine (no rows, no tracks for a pin's layer,
 //! no manufacturing grid) runs and examines nothing; one whose input is
