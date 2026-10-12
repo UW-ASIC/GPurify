@@ -56,6 +56,8 @@ pub struct NetVoltage {
     pub nominal_hi: Vec<f64>,
     /// Bit `d` set when a power supply of domain `d` reaches the net.
     pub power: Vec<u64>,
+    /// Bit `d` set when a ground supply of domain `d` reaches the net.
+    pub ground: Vec<u64>,
 }
 
 impl NetVoltage {
@@ -81,6 +83,15 @@ impl NetVoltage {
         }
     }
 
+    /// The ground-domain mask of `net`; zero for `NetId::NONE`.
+    pub fn ground_of(&self, net: NetId) -> u64 {
+        if net == NetId::NONE {
+            0
+        } else {
+            self.ground[net.idx()]
+        }
+    }
+
     /// Every column emptied and refilled with `count` unreached nets.
     fn reset(&mut self, count: usize) {
         for column in [&mut self.lo, &mut self.nominal_lo] {
@@ -91,8 +102,10 @@ impl NetVoltage {
             column.clear();
             column.resize(count, f64::NEG_INFINITY);
         }
-        self.power.clear();
-        self.power.resize(count, 0);
+        for column in [&mut self.power, &mut self.ground] {
+            column.clear();
+            column.resize(count, 0);
+        }
     }
 
     /// Row `net` as one value.
@@ -103,6 +116,7 @@ impl NetVoltage {
             nominal_lo: self.nominal_lo[net],
             nominal_hi: self.nominal_hi[net],
             power: self.power[net],
+            ground: self.ground[net],
         }
     }
 
@@ -118,6 +132,7 @@ impl NetVoltage {
         self.nominal_lo[net] = new.nominal_lo;
         self.nominal_hi[net] = new.nominal_hi;
         self.power[net] = new.power;
+        self.ground[net] = new.ground;
         true
     }
 }
@@ -130,6 +145,7 @@ struct Range {
     nominal_lo: f64,
     nominal_hi: f64,
     power: u64,
+    ground: u64,
 }
 
 impl Range {
@@ -140,6 +156,7 @@ impl Range {
         nominal_lo: f64::INFINITY,
         nominal_hi: f64::NEG_INFINITY,
         power: 0,
+        ground: 0,
     };
 
     fn union(self, other: Range) -> Range {
@@ -149,6 +166,7 @@ impl Range {
             nominal_lo: self.nominal_lo.min(other.nominal_lo),
             nominal_hi: self.nominal_hi.max(other.nominal_hi),
             power: self.power | other.power,
+            ground: self.ground | other.ground,
         }
     }
 }
@@ -340,9 +358,10 @@ pub fn propagate_into(
                 continue;
             }
             let nominal = intent.supply_voltage[row].raw();
-            let (volts, power) = match intent.supply_role[row] {
-                SupplyRole::Power => (nominal, 1u64 << intent.supply_domain[row].0),
-                SupplyRole::Ground => (0.0, 0),
+            let bit = 1u64 << intent.supply_domain[row].0;
+            let (volts, power, ground) = match intent.supply_role[row] {
+                SupplyRole::Power => (nominal, bit, 0),
+                SupplyRole::Ground => (0.0, 0, bit),
             };
             out.widen(
                 net.idx(),
@@ -352,6 +371,7 @@ pub fn propagate_into(
                     nominal_lo: nominal,
                     nominal_hi: nominal,
                     power,
+                    ground,
                 },
             );
         }

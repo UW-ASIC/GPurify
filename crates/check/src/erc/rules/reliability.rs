@@ -143,7 +143,8 @@ pub struct HvDomainTable {
 /// No shipped deck carries this rule: no manual states a pad guard-ring width
 /// and tap distance in this form (ERC-D2). The tap distance is a
 /// bounding-box measure: a closed ring around a tap reads zero. The pad check
-/// proves a clamp path exists, not its resistance or current capacity.
+/// proves a clamp path exists; `esd_path` measures it under a forced
+/// current.
 ///
 /// Catalog: ERC-C1, ERC-D2 (partial) in the [check catalog]. Defined by
 /// [ESDA TR18.0-01] §4.5.2-4.5.4; [Khazhinsky 2012]; [ESDA TR18.0-02]
@@ -483,7 +484,7 @@ pub fn check_esd_latchup(
 /// drawn row under it, its narrowest band)`, ascending by row: facing edges
 /// across material and diagonal necks between concave corners, the measure of
 /// DRC `width`. `None` when the layer will not validate or merge.
-fn narrow_rings(
+pub(crate) fn narrow_rings(
     design: Design<'_>,
     layer: LayerId,
     limit: Dbu,
@@ -537,7 +538,7 @@ fn domain_spread(
 /// (`rects[start[p] .. start[p + 1]]`, holes left out), covers all of
 /// `inner`: its area inside `inner` is all of `inner`'s. Exact, so isolation
 /// drawn on `inner`'s own edges covers it.
-fn encloses(rects: &[Bbox], start: &[u32], inner: Bbox) -> bool {
+pub(crate) fn encloses(rects: &[Bbox], start: &[u32], inner: Bbox) -> bool {
     start
         .windows(2)
         .any(|span| clipped_area(&rects[span[0] as usize..span[1] as usize], inner) == inner.area())

@@ -2,8 +2,10 @@
 //!
 //! Data in: the store, nets, devices, intent, the process stack.
 //! Data out: the supply grid ([`PowerGrid`], solved by [`solve_into`] into a
-//! [`PowerSolution`]) and per-net networks ([`NetNetworks`], probed by
-//! [`effective_resistance_into`]).
+//! [`PowerSolution`]), per-net networks ([`NetNetworks`], probed by
+//! [`effective_resistance_into`]), and forced-current stress networks across
+//! nets ([`StressGrid`], built by [`extract_stress_into`] and solved by
+//! [`solve_into`]).
 //!
 //! A polygon is a chain of resistors along its long bounding-box axis, tapped
 //! wherever something connects and once at its own centre (so an unconnected
@@ -14,7 +16,7 @@
 use crate::erc::centre;
 use crate::erc::facts::IntentMap;
 use crate::topology::net::{intra_layer_edges_into, via_cuts_into};
-use crate::topology::{csr_run, DeviceTable, NetId, NetTable};
+use crate::topology::{csr_run, DeviceId, DeviceTable, NetId, NetTable};
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::ops::Point;
 use gpurify_geom::{prefix, Current, Dbu, Grid, Qty, Resistance, Voltage, MAX_ABS_DBU};
@@ -78,8 +80,8 @@ pub struct Process<'a> {
     pub connectivity: &'a Connectivity,
 }
 
-/// What an edge models: metal (limited per width) or one via cut (limited per
-/// cut).
+/// What an edge models: metal (limited per width), one via cut (limited per
+/// cut), or a device conducting between two nets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EdgeKind {
     /// A run along one conductor, or the touch between two: limited per unit
@@ -87,6 +89,10 @@ pub enum EdgeKind {
     Metal,
     /// One cut of a via: limited per cut.
     Via,
+    /// A device's on-resistance between two of its terminals' nets: an ESD
+    /// clamp in a stress network ([`extract_stress_into`]), rated by its own
+    /// size, never per width or per cut. The supply grid has none.
+    Device,
 }
 
 /// The supply grid, `SoA`: node columns, the fixed-voltage pads, edge columns.
@@ -929,9 +935,7 @@ pub fn extract_into(
         out.node_load[node] = out.node_load[node] + share;
     }
 
-    // The anchor: no input marks pads, and supply enters from the top, so the
-    // centre tap of the rail's highest-layer, then widest, then lowest-index
-    // shape. A missing `height_nm` reads as the substrate.
+    // The anchor: no input marks pads, and supply enters from the top.
     for supply in 0..intent.supply_net.len() {
         let (from, to) = (
             supply_start[supply] as usize,
@@ -940,21 +944,7 @@ pub fn extract_into(
         if to == from {
             continue;
         }
-        let mut anchor = from;
-        let mut best = (f64::NEG_INFINITY, i128::MIN);
-        for (offset, &poly) in shape[from..to].iter().enumerate() {
-            let height = process
-                .stack
-                .height_nm
-                .get(store.poly_layer(poly).idx())
-                .copied()
-                .unwrap_or(0.0);
-            let key = (height, store.poly_bbox(poly).area().raw());
-            if key > best {
-                best = key;
-                anchor = from + offset;
-            }
-        }
+        let anchor = from + feed_shape(store, process, &shape[from..to]);
         let host = store.poly_bbox(shape[anchor]);
         let (lo, hi) = taps.chain_of(u32::try_from(anchor).expect("a shape index is a u32"));
         let at = lo
@@ -976,6 +966,272 @@ pub fn extract_into(
         &mut ChainProfile::default(),
         |edge| out.push_edge(edge),
     );
+    Ok(())
+}
+
+/// The index in `shapes` of a supply's feed point: supply enters from the top,
+/// so its highest-layer, then widest, then lowest-index shape. A missing
+/// `height_nm` reads as the substrate. `shapes` is not empty.
+fn feed_shape(store: &GeometryStore, process: Process<'_>, shapes: &[PolyId]) -> usize {
+    let mut anchor = 0;
+    let mut best = (f64::NEG_INFINITY, i128::MIN);
+    for (offset, &poly) in shapes.iter().enumerate() {
+        let height = process
+            .stack
+            .height_nm
+            .get(store.poly_layer(poly).idx())
+            .copied()
+            .unwrap_or(0.0);
+        let key = (height, store.poly_bbox(poly).area().raw());
+        if key > best {
+            best = key;
+            anchor = offset;
+        }
+    }
+    anchor
+}
+
+/// One forced-current stress for [`extract_stress_into`]: the nets a
+/// discharge path spans, where a current is forced in and where it leaves,
+/// and the devices that carry it from net to net.
+#[derive(Debug, Clone, Copy)]
+pub struct Stress<'a> {
+    /// The nets the network spans, ascending, without repeats.
+    pub nets: &'a [NetId],
+    /// The polygon the current enters at; its net is one of `nets`. It taps
+    /// its net's conducting shape nearest its box centre, at that centre.
+    pub source: PolyId,
+    /// The current forced in at `source`, µA.
+    pub current: Qty<Current, { prefix::MICRO }>,
+    /// The net the current leaves by, one of `nets`.
+    pub sink: NetId,
+    /// The sink's pins, each tapped as `source` is and held at 0 mV. Empty
+    /// holds the sink's feed point instead, the centre of its highest, then
+    /// widest, shape (as [`extract_into`] anchors a supply).
+    pub pins: &'a [PolyId],
+    /// The devices that conduct between nets. Each joins every pair of the
+    /// distinct nets of `nets` its terminals touch, at its attach point on
+    /// each (the shape nearest its marker's centre); one touching fewer than
+    /// two adds nothing.
+    pub devices: &'a [DeviceId],
+    /// The resistance one device puts between two of its nets, Ω; positive.
+    pub device_resistance: Qty<Resistance, { prefix::BASE }>,
+}
+
+/// A stress network built by [`extract_stress_into`] and solved by
+/// [`solve_into`]: every node's voltage is its rise above the held pins.
+#[derive(Debug, Default)]
+pub struct StressGrid {
+    /// The network. Its metal and via edges come first, as in the supply
+    /// grid; its last `device.len()` edges are [`EdgeKind::Device`].
+    pub grid: PowerGrid,
+    /// The node the current enters at.
+    pub entry: u32,
+    /// The device each device edge models, in edge order.
+    pub device: Vec<DeviceId>,
+}
+
+/// A tap request on the shape of `shapes` nearest `at`, at `at`; `None` when
+/// `shapes` is empty.
+// ponytail: rebuilds the nearest-shape index per query; a stress has a few
+// pins and clamps.
+fn tap_nearest(
+    store: &GeometryStore,
+    shapes: &[PolyId],
+    offset: usize,
+    at: Point,
+    index: &mut TapIndex,
+    taps: &mut TapTable,
+) -> Option<u32> {
+    if shapes.is_empty() {
+        return None;
+    }
+    TapIndex::build_into(store, shapes, index);
+    let local = index.nearest(at) as usize;
+    let host = store.poly_bbox(shapes[local]);
+    Some(taps.push(
+        u32::try_from(offset + local).expect("a shape index is a u32"),
+        tap_on(host, Bbox::point(at.x, at.y)),
+    ))
+}
+
+/// Build the network a forced current flows through; `out` is cleared and
+/// refilled. The nets are chains of resistors as in [`extract_into`]; each
+/// device in `stress.devices` adds `device_resistance` between its attach
+/// points on every two path nets it touches. The entry node draws
+/// `-current` (an injection), the held nodes sit at 0 mV, and every node's
+/// nominal is 0 mV, so after [`solve_into`] a node's voltage is the stress
+/// voltage there.
+///
+/// # Errors
+///
+/// [`PowerError::NoSheetResistance`] as [`extract_into`] returns it, with
+/// `out` left empty.
+///
+/// # Panics
+///
+/// Panics if `stress.source` is not on a net of `stress.nets`, or the source
+/// net or the sink has no conducting shape.
+pub fn extract_stress_into(
+    store: &GeometryStore,
+    nets: &NetTable,
+    devices: &DeviceTable,
+    process: Process<'_>,
+    stress: Stress<'_>,
+    out: &mut StressGrid,
+) -> Result<(), PowerError> {
+    out.grid = PowerGrid::default();
+    out.device.clear();
+    out.entry = 0;
+    let conductor = conductor_mask(process.connectivity, store.layer_count());
+    let sheet = sheet_resistances(process, store.layer_count())?;
+
+    // Every path net's conducting shapes, grouped by net.
+    let mut shape: Vec<PolyId> = Vec::new();
+    let mut net_of_shape: Vec<NetId> = Vec::new();
+    let mut net_start: Vec<usize> = vec![0];
+    for &net in stress.nets {
+        shape.extend(
+            conducting(store, &conductor, nets.polys_of(net))
+                .filter(|&poly| !nets.holes.is_hole(poly)),
+        );
+        net_of_shape.resize(shape.len(), net);
+        net_start.push(shape.len());
+    }
+    let run_of = |net: NetId| {
+        let row = stress
+            .nets
+            .binary_search(&net)
+            .expect("a stressed polygon's net is a path net");
+        (net_start[row], net_start[row + 1])
+    };
+
+    let mut shape_of_poly = vec![NONE; store.poly_count()];
+    for (index, &poly) in shape.iter().enumerate() {
+        shape_of_poly[poly.idx()] = u32::try_from(index).expect("a shape index is a u32");
+    }
+    let mut links = Connections::default();
+    connections_into(store, process.connectivity, &mut links);
+    let both_noded = |&(a, b, _, _): &Link| {
+        shape_of_poly[a as usize] != NONE && shape_of_poly[b as usize] != NONE
+    };
+    links.metal.retain(both_noded);
+    links.via.retain(both_noded);
+
+    let mut taps = TapTable::default();
+    for (index, &poly) in shape.iter().enumerate() {
+        let host = store.poly_bbox(poly);
+        taps.push(
+            u32::try_from(index).expect("a shape index is a u32"),
+            tap_on(host, host),
+        );
+    }
+    let shape_of = |poly: u32| shape_of_poly[poly as usize];
+    let metal_req = taps.push_links(store, &links.metal, shape_of);
+    let via_req = taps.push_links(store, &links.via, shape_of);
+
+    let mut index = TapIndex::default();
+    let mut tap_at = |net: NetId, at: Point, taps: &mut TapTable| {
+        let (from, to) = run_of(net);
+        tap_nearest(store, &shape[from..to], from, at, &mut index, taps)
+    };
+    let source = store.poly_bbox(stress.source);
+    let entry_req = tap_at(nets.net_of(stress.source), centre(source), &mut taps)
+        .expect("the source net has a conducting shape");
+    let mut held_req: Vec<u32> = Vec::new();
+    for &pin in stress.pins {
+        held_req.extend(tap_at(stress.sink, centre(store.poly_bbox(pin)), &mut taps));
+    }
+    if stress.pins.is_empty() {
+        let (from, to) = run_of(stress.sink);
+        assert!(to > from, "the sink net has a conducting shape");
+        let anchor = from + feed_shape(store, process, &shape[from..to]);
+        let host = store.poly_bbox(shape[anchor]);
+        held_req.push(taps.push(
+            u32::try_from(anchor).expect("a shape index is a u32"),
+            tap_on(host, host),
+        ));
+    }
+    // Per device: its attach request on each path net it touches.
+    let mut attach: Vec<(DeviceId, Vec<u32>)> = Vec::new();
+    let mut touched: Vec<NetId> = Vec::new();
+    for &device in stress.devices {
+        touched.clear();
+        touched.extend(
+            devices
+                .terminals_of(device)
+                .0
+                .iter()
+                .copied()
+                .filter(|net| stress.nets.binary_search(net).is_ok()),
+        );
+        touched.sort_unstable();
+        touched.dedup();
+        if touched.len() < 2 {
+            continue;
+        }
+        let marker = centre(store.poly_bbox(devices.marker[device.0 as usize]));
+        let requests: Vec<u32> = touched
+            .iter()
+            .filter_map(|&net| tap_at(net, marker, &mut taps))
+            .collect();
+        attach.push((device, requests));
+    }
+
+    taps.finish(shape.len());
+    let grid = &mut out.grid;
+    for i in 0..taps.node_shape.len() {
+        let owner = taps.node_shape[i] as usize;
+        let poly = shape[owner];
+        grid.node_poly.push(poly);
+        grid.node_net.push(net_of_shape[owner]);
+        grid.node_nominal.push(Qty::new(0.0));
+        grid.node_load.push(Qty::new(0.0));
+        grid.node_layer.push(store.poly_layer(poly));
+        grid.node_at
+            .push(tap_point(store.poly_bbox(poly), taps.node_along[i]));
+    }
+    out.entry = taps.req_node[entry_req as usize];
+    // An injection is a negative load.
+    grid.node_load[out.entry as usize] = Qty::new(-stress.current.raw());
+    grid.source_node.extend(
+        held_req
+            .iter()
+            .map(|&request| taps.req_node[request as usize]),
+    );
+    grid.source_node.sort_unstable();
+    grid.source_node.dedup();
+    grid.source_voltage
+        .resize(grid.source_node.len(), Qty::new(0.0));
+
+    push_edges(
+        store,
+        process,
+        &sheet,
+        &shape,
+        &taps,
+        [(&links.metal, metal_req), (&links.via, via_req)],
+        &mut ChainProfile::default(),
+        |edge| grid.push_edge(edge),
+    );
+    let one = Dbu::new_unchecked(1);
+    for (device, requests) in &attach {
+        let layer = store.poly_layer(devices.marker[device.0 as usize]);
+        for (k, &a) in requests.iter().enumerate() {
+            for &b in &requests[k + 1..] {
+                grid.push_edge(Edge {
+                    from: taps.req_node[a as usize],
+                    to: taps.req_node[b as usize],
+                    ohms: stress.device_resistance.raw(),
+                    width: one,
+                    length: one,
+                    layer,
+                    kind: EdgeKind::Device,
+                });
+                out.device.push(*device);
+            }
+        }
+    }
     Ok(())
 }
 

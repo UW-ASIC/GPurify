@@ -559,8 +559,9 @@ struct LayerLimits<'a> {
 /// The current one edge may carry: density times width for metal, or the
 /// narrow band's current for metal at most its width wide; the per-cut limit
 /// for a via (one cut per edge). A zero width allows nothing unless a narrow
-/// band covers it.
-fn allowed_current(
+/// band covers it. A device edge is rated by its own size, not here: it is
+/// allowed any current.
+pub(crate) fn allowed_current(
     kind: EdgeKind,
     width: Dbu,
     grid: Grid,
@@ -576,6 +577,7 @@ fn allowed_current(
                 .to::<{ prefix::MICRO }>()
         }
         (EdgeKind::Via, _) => max_current_per_cut,
+        (EdgeKind::Device, _) => Qty::new(f64::INFINITY),
     }
 }
 

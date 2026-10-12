@@ -10,12 +10,12 @@ use crate::erc::facts::{IntentMap, NetFacts, RoleMask};
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{first_vertex, push_net_violations, record_run, skip_rows, Design, Scratch};
 use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
-use crate::topology::{extract_nets_into, NetId};
+use crate::topology::{extract_nets_into, DeviceId, NetId, TerminalRole};
 use gpurify_geom::ops::{isqrt, point_seg_dist2, winding_of, Point, Seg, Winding};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, RingRef};
-use gpurify_geom::{Dbu, DbuArea};
-use gpurify_ingest::deck::Connectivity;
+use gpurify_geom::{Dbu, DbuArea, Qty};
+use gpurify_ingest::deck::{Connectivity, DeviceKind};
 use gpurify_ingest::intent::SupplyRole;
 use gpurify_ingest::StrId;
 
@@ -95,8 +95,9 @@ pub struct SoftConnectionTable {
 ///
 /// # Limits
 ///
-/// A tap distance conditional on neighbouring well spacing (ERC-D1a) and a
-/// minimum tie area (ERC-D1b) are missing. A point inside a tap measures its
+/// A tap distance conditional on neighbouring well spacing is
+/// [`ConditionalTieTable`]'s, a minimum tie area [`TieAreaTable`]'s. A point
+/// inside a tap measures its
 /// distance to the tap's edge, not zero, and a region polygon's hole is
 /// measured as if filled (both over-report only).
 ///
@@ -111,6 +112,8 @@ pub struct SoftConnectionTable {
 /// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
 /// [ASAP7]: https://github.com/The-OpenROAD-Project/asap7_pdk_r1p7/blob/main/docs/asap7_drm_201207a.pdf
 /// [ESDA TR18.0-02]: https://www.esda.org/store/standards/product/307/esd-tr18-0-02-20/
+/// [`ConditionalTieTable`]: crate::erc::rules::latchup::ConditionalTieTable
+/// [`TieAreaTable`]: crate::erc::rules::latchup::TieAreaTable
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct MissingTieTable {
     /// Rule id and severity per row.
@@ -152,15 +155,20 @@ pub struct TieHighLowTable {
 /// A row flags a pad net with no chain of clamp devices to both a power and a
 /// ground supply. A pad net is any net with a polygon on the `pad` layer. The
 /// path is a clamp from the pad to a declared supply, then any chain of clamps
-/// between supplies (rail clamps). A clamp is any device of a listed model,
-/// through any of its terminals; a signal net other than the pad is not a
-/// path. Needs design intent, for which nets are the rails.
+/// between supplies (rail clamps). A clamp is a device of a listed model,
+/// through any of its terminals, except a diode between a supply and the pad
+/// (or a signal) wired forward-biased: its anode held above its cathode, the
+/// pad sitting between ground and every power supply (`reverse_biased`).
+/// Such a diode conducts in operation and is no clamp. A signal net other than the
+/// pad is not a path. Needs design intent, for which nets are the rails.
 ///
 /// # Limits
 ///
-/// Only the path's existence is checked: a clamp is any device of a listed
-/// model however it is wired, and the path's resistance, current capacity and
-/// device sizing (ERC-C2 to ERC-C8) are not checked.
+/// Only the path's existence is checked; [`EsdPathTable`] measures it under
+/// a forced current. A transistor clamp is taken as wired whatever its gate
+/// is tied to, and a diode between two supplies whichever way round.
+///
+/// [`EsdPathTable`]: crate::erc::rules::esd::EsdPathTable
 ///
 /// Catalog: ERC-C1 in the [check catalog]. Defined by [ESDA TR18.0-01]
 /// §4.5.2-4.5.4; [Khazhinsky 2012]. Source tags are in [check-sources.md].
@@ -182,9 +190,8 @@ pub struct EsdTopologicalTable {
 }
 
 /// How many of the two rail kinds (power, ground) `pad` reaches through
-/// devices of the `clamps` models: a clamp from the pad to a supply, then any
-/// chain of clamps between supplies (rail clamps). Another signal net is not a
-/// path. `seen` and `stack` are scratch.
+/// devices of the `clamps` models ([`clamp_reach_into`]). `seen` and `stack`
+/// are scratch.
 pub(crate) fn clamp_rails(
     design: Design<'_>,
     intent: &IntentMap,
@@ -193,25 +200,52 @@ pub(crate) fn clamp_rails(
     seen: &mut Vec<bool>,
     stack: &mut Vec<NetId>,
 ) -> u32 {
+    let mut reached = Vec::new();
+    clamp_reach_into(design, intent, clamps, pad, seen, stack, &mut reached);
+    let has = |role| {
+        reached.iter().any(|&net| {
+            intent
+                .supply_net
+                .binary_search(&net)
+                .is_ok_and(|row| intent.supply_role[row] == role)
+        })
+    };
+    u32::from(has(SupplyRole::Power)) + u32::from(has(SupplyRole::Ground))
+}
+
+/// Every net `pad` reaches through devices of the `clamps` models, into
+/// `reached` (cleared): `pad` first, then each declared supply in visit order.
+/// The path is a clamp from the pad to a supply, then any chain of clamps
+/// between supplies (rail clamps); another signal net is not a path, and a
+/// diode clamp wired forward-biased carries nothing ([`reverse_biased`]).
+/// `seen` (indexed by net: every net touched, signal nets included) and
+/// `stack` are scratch.
+pub(crate) fn clamp_reach_into(
+    design: Design<'_>,
+    intent: &IntentMap,
+    clamps: &[StrId],
+    pad: NetId,
+    seen: &mut Vec<bool>,
+    stack: &mut Vec<NetId>,
+    reached: &mut Vec<NetId>,
+) {
     let devices = design.devices;
     // ponytail: O(nets) reset per pad net; pads are few.
     seen.clear();
     seen.resize(design.nets.net_count(), false);
     stack.clear();
+    reached.clear();
     stack.push(pad);
     seen[pad.idx()] = true;
-    let (mut power, mut ground) = (false, false);
     while let Some(net) = stack.pop() {
-        match intent.supply_net.binary_search(&net) {
-            Ok(row) => match intent.supply_role[row] {
-                SupplyRole::Power => power = true,
-                SupplyRole::Ground => ground = true,
-            },
-            Err(_) if net != pad => continue,
-            Err(_) => {}
+        if net != pad && intent.supply_net.binary_search(&net).is_err() {
+            continue;
         }
+        reached.push(net);
         for &device in devices.devices_on(net) {
-            if !clamps.contains(&devices.model[device.0 as usize]) {
+            if !clamps.contains(&devices.model[device.0 as usize])
+                || !reverse_biased(design, intent, device)
+            {
                 continue;
             }
             for &next in devices.terminals_of(device).0 {
@@ -222,7 +256,35 @@ pub(crate) fn clamp_rails(
             }
         }
     }
-    u32::from(power) + u32::from(ground)
+}
+
+/// False for a pad diode its declared supplies forward-bias, which conducts
+/// in operation and is no clamp: a diode between a supply and another net (a
+/// pad, a signal) whose anode (`Pin(0)`) sits above its cathode (`Pin(1)`),
+/// the other net sitting strictly between ground and every power supply. So
+/// an anode on a power supply, or a cathode on a ground supply, is wired the
+/// wrong way round. A diode between two supplies is taken as wired: a deck
+/// may model a rail clamp (IHP's `nmoscl`) as a two-pin device whose first
+/// pin is the power side, and anti-parallel pairs between grounds run both
+/// ways. A diode between two other nets, and any device that is not a diode,
+/// are taken as wired.
+pub(crate) fn reverse_biased(design: Design<'_>, intent: &IntentMap, device: DeviceId) -> bool {
+    let devices = design.devices;
+    if devices.kind[device.0 as usize] != DeviceKind::Diode {
+        return true;
+    }
+    let (on, roles) = devices.terminals_of(device);
+    let pin = |k: u8| {
+        on.iter()
+            .zip(roles)
+            .find(|&(_, &role)| role == TerminalRole::Pin(k))
+            .map(|(&net, _)| intent.nominal_voltage(net).map(Qty::raw))
+    };
+    match (pin(0), pin(1)) {
+        (Some(Some(anode)), Some(None)) => anode <= 0.0,
+        (Some(None), Some(Some(cathode))) => cathode > 0.0,
+        _ => true,
+    }
 }
 
 /// One bit-or of `bit` per polygon on `layers` into its net's slot of
@@ -612,13 +674,31 @@ pub fn check_missing_tie(
 /// `MAX_ABS_DBU`.
 pub(crate) fn untied_points(
     store: &GeometryStore,
-    (region, tap): (LayerId, LayerId),
+    layers: (LayerId, LayerId),
     limit: Dbu,
     tap_layer: &mut ValidatedLayer,
     mut each: impl FnMut(PolyId, Point, DbuArea),
 ) -> Option<u64> {
+    untied_points_by(
+        store,
+        layers,
+        |_| Some(limit),
+        tap_layer,
+        |poly, at, worst, _| each(poly, at, worst),
+    )
+}
+
+/// [`untied_points`] with each region polygon's own limit from `limit_of`,
+/// `None` leaving the polygon out (not counted); `each` also receives the
+/// limit the polygon was held to.
+pub(crate) fn untied_points_by(
+    store: &GeometryStore,
+    (region, tap): (LayerId, LayerId),
+    mut limit_of: impl FnMut(PolyId) -> Option<Dbu>,
+    tap_layer: &mut ValidatedLayer,
+    mut each: impl FnMut(PolyId, Point, DbuArea, Dbu),
+) -> Option<u64> {
     validate_layer_into(store, tap, tap_layer).ok()?;
-    let limit2 = limit.mul_wide(limit);
 
     // Holes too: a ring-shaped tap ties along its inner boundary.
     let mut taps: Vec<Seg> = Vec::new();
@@ -645,6 +725,10 @@ pub(crate) fn untied_points(
         if winding_of(xs, ys) == Some(Winding::Clockwise) {
             continue;
         }
+        let Some(limit) = limit_of(poly) else {
+            continue;
+        };
+        let limit2 = limit.mul_wide(limit);
         examined += 1;
         let Some((&x0, &y0)) = xs.first().zip(ys.first()) else {
             continue;
@@ -658,7 +742,7 @@ pub(crate) fn untied_points(
             furthest_from_taps(xs, ys, store.poly_bbox(poly), limit2, &grid, &mut stack)
         };
         if worst > limit2 {
-            each(poly, at, worst);
+            each(poly, at, worst, limit);
         }
     }
     Some(examined)
@@ -787,7 +871,7 @@ fn push_ring_edges(ring: RingRef<'_>, out: &mut Vec<Seg>) {
 
 /// The closed edge from vertex `i` of a ring to the next one, wrapping.
 #[inline]
-fn ring_edge(xs: &[Dbu], ys: &[Dbu], i: usize) -> Seg {
+pub(crate) fn ring_edge(xs: &[Dbu], ys: &[Dbu], i: usize) -> Seg {
     let next = (i + 1) - xs.len() * usize::from(i + 1 == xs.len());
     Seg {
         a: Point { x: xs[i], y: ys[i] },
@@ -802,7 +886,7 @@ fn ring_edge(xs: &[Dbu], ys: &[Dbu], i: usize) -> Seg {
 /// often sits on an edge). Even-odd ray cast toward +x, exact in `i128`.
 /// Deliberately not folded with `topology::inside_ring`, which excludes the
 /// boundary.
-fn point_in_region(xs: &[Dbu], ys: &[Dbu], p: Point) -> bool {
+pub(crate) fn point_in_region(xs: &[Dbu], ys: &[Dbu], p: Point) -> bool {
     if xs.len() < 3 {
         return false;
     }

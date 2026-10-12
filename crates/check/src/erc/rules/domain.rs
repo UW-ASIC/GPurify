@@ -385,19 +385,19 @@ fn csr<'a>(start: &[u32], column: &'a [StrId], row: usize) -> &'a [StrId] {
 }
 
 /// The net on the first terminal with `role`, or `NetId::NONE`.
-fn terminal(nets: &[NetId], roles: &[TerminalRole], role: TerminalRole) -> NetId {
+pub(crate) fn terminal(nets: &[NetId], roles: &[TerminalRole], role: TerminalRole) -> NetId {
     roles
         .iter()
         .position(|&r| r == role)
         .map_or(NetId::NONE, |at| nets[at])
 }
 
-fn device_id(index: usize) -> DeviceId {
+pub(crate) fn device_id(index: usize) -> DeviceId {
     DeviceId(u32::try_from(index).expect("a device table indexes with u32"))
 }
 
 /// One violation at a device's marker polygon.
-fn push_device(
+pub(crate) fn push_device(
     design: Design<'_>,
     device: usize,
     rule: StrId,
