@@ -404,7 +404,7 @@ fn ours(fixture: &Fixture) -> Ours {
             (rule, m) => panic!("{}: unexpected {rule} {m:?}", fixture.name),
         }
     }
-    for (id, outcome) in &ran.rows {
+    for (id, outcome, _) in &ran.rows {
         assert_eq!(
             *outcome,
             gpurify::check::report::Outcome::Ran,
