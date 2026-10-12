@@ -103,6 +103,7 @@ impl CompiledDeck {
             .collect();
         source.extraction = (self.extraction != gpurify_ingest::deck::Extraction::default())
             .then_some(self.extraction);
+        source.pex_models = self.pex_models.clone();
         let name = |layer: LayerId| strings.resolve(self.layers.name(layer)).to_owned();
         // The sheets as written, at the nominal temperature, with their
         // coefficients, rather than at the operating one with none.

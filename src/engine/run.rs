@@ -755,8 +755,45 @@ fn pex_network(
         gpurify_extract::quasistatic::overlay(&mut network, &solved);
     }
 
+    gpurify_extract::fill::treat(&mut network, &fill_nets(loaded, extracted))
+        .map_err(|why| why.to_string())?;
     gpurify_extract::reduce::reduce(&mut network, loaded.deck.extraction);
     Ok(network)
+}
+
+/// Every net drawn only on `pex_fill` layers, with its treatment: the
+/// first fill layer it is on, in deck order.
+fn fill_nets(
+    loaded: &Loaded,
+    extracted: &Extracted,
+) -> std::collections::BTreeMap<gpurify_check::topology::NetId, gpurify_extract::fill::Treatment> {
+    let fill: Vec<(LayerId, gpurify_extract::fill::Treatment)> = (loaded.deck.pex_models.fill)
+        .iter()
+        .filter_map(|(name, treatment)| {
+            Some((loaded.deck.layers.id(&loaded.strings, name)?, *treatment))
+        })
+        .collect();
+    let mut out = std::collections::BTreeMap::new();
+    if fill.is_empty() {
+        return out;
+    }
+    for net in 0..extracted.nets.net_count() {
+        let net = gpurify_check::topology::NetId(u32::try_from(net).expect("a NetId"));
+        let polys = extracted.nets.polys_of(net);
+        let treatment = |poly: &gpurify_geom::PolyId| {
+            let layer = loaded.store.poly_layer(*poly);
+            fill.iter().find(|(on, _)| *on == layer).map(|&(_, t)| t)
+        };
+        if !polys.is_empty() && polys.iter().all(|p| treatment(p).is_some()) {
+            let first = fill
+                .iter()
+                .find(|(on, _)| polys.iter().any(|p| loaded.store.poly_layer(*p) == *on))
+                .map(|&(_, t)| t)
+                .expect("every poly is on a fill layer");
+            out.insert(net, first);
+        }
+    }
+    out
 }
 
 /// A layer as the deck names it; the id for a layer past the deck's table.

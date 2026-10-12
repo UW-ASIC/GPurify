@@ -1,4 +1,4 @@
-//! SoC integration checks on a DEF design (catalog FLOW-003): what a
+//! System-on-chip integration checks on a DEF design (catalog FLOW-003): what a
 //! placed-and-routed block must satisfy beyond its shapes' design rules.
 //! They run with DRC when the layout is a DEF.
 //!
@@ -103,10 +103,13 @@ fn on_boundary(ring: &[Pt], (x, y): Pt) -> bool {
     })
 }
 
+/// A box `(xlo, ylo, xhi, yhi)`.
+type Box4 = (i64, i64, i64, i64);
+
 /// Every placed component's box `(xlo, ylo, xhi, yhi)` and its macro's
 /// class, by component index; `None` for an unplaced one or an unknown
 /// macro.
-fn component_boxes(design: &Design) -> Vec<Option<((i64, i64, i64, i64), &str)>> {
+fn component_boxes(design: &Design) -> Vec<Option<(Box4, &str)>> {
     design
         .def
         .components
@@ -263,7 +266,7 @@ pub fn check(design: &Design, strings: &StrTable, out: &mut Violations, runs: &m
                 found.push(((x0, y0), Measurement::Count(0), Measurement::Count(1)));
                 continue;
             }
-            match on_track(&shape.layer, ((x0 + x1) / 2, (y0 + y1) / 2)) {
+            match on_track(&shape.layer, (x0.midpoint(x1), y0.midpoint(y1))) {
                 None => {}
                 Some(on) => {
                     examined += 1;

@@ -210,6 +210,7 @@
 //! | PEX-008 | Reduction modes (C-only, RC, RCC, thresholds) | implemented | [`reduce`]: the deck's `extraction` type and coupling threshold |
 //! | PEX-009 | PEX netlist diff and qualification | implemented | [`compare`], net by net; [`foreign`] reads another tool's SPEF or DSPF, nets linked by name; `gpurify compare` on the command line |
 //! | PEX-010 | SPEF output | implemented | `gpurify::export::parasitic::write_spef` |
+//! | PEX-012 | Metal-fill treatment | partial | [`fill`]: the deck's `pex_fill`, floating (Kron reduction), grounded or ignored; no virtual fill |
 //!
 //! [limitations.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/limitations.md)
 //! says what each partial row lacks.
@@ -218,6 +219,7 @@ pub mod analytical;
 pub mod compare;
 mod conductor;
 pub mod field;
+pub mod fill;
 pub mod foreign;
 pub mod network;
 pub mod quasistatic;

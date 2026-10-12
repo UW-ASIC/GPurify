@@ -56,6 +56,8 @@ pub struct DeckSource {
     pub stages: Vec<(String, Vec<String>)>,
     /// The `waive` lines, each a rule id and a layer, in deck order.
     pub waivers: Vec<(String, String)>,
+    /// The parasitic models beyond the stack (`pex_fill`, …).
+    pub pex_models: super::PexModels,
 }
 
 /// One `corner` line: `corner <corner> <layer> <key> <value> ..`.
@@ -373,6 +375,7 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
         }
     };
 
+    let pex_models = check_pex_models(&doc.pex_models, &layers, &connectivity, strings)?;
     Ok(Deck {
         layers,
         rules,
@@ -388,7 +391,39 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
         corners,
         stages,
         waivers,
+        pex_models,
     })
+}
+
+/// The models, checked: each `pex_fill` names a conductor once.
+///
+/// # Errors
+///
+/// [`DeckError::Malformed`] for a layer the deck lacks or that carries no
+/// net, or one stated twice.
+fn check_pex_models(
+    models: &super::PexModels,
+    layers: &LayerTable,
+    connectivity: &super::Connectivity,
+    strings: &StrTable,
+) -> Result<super::PexModels, DeckError> {
+    for (at, (layer, _)) in models.fill.iter().enumerate() {
+        let id = layer_of(layers, strings, layer, "pex_fill")?;
+        if !connectivity.conductors.contains(&id) {
+            return Err(DeckError::Malformed(format!(
+                "pex_fill {layer}: not a `connect conductors` layer, so it holds no net"
+            )));
+        }
+        if models.fill[..at]
+            .iter()
+            .any(|(earlier, _)| earlier == layer)
+        {
+            return Err(DeckError::Malformed(format!(
+                "pex_fill {layer}: stated twice"
+            )));
+        }
+    }
+    Ok(models.clone())
 }
 
 /// The stages, each rule id resolved to its stage.
