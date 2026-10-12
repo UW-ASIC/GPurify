@@ -68,6 +68,11 @@ const PROVED_BY_TEST: &[(&str, &str)] = &[
         "DRC-038",
         "tests/drc_octilinear.rs::two_45_degree_bars_are_as_far_apart_as_their_lines",
     ),
+    // A malformed database is refused by the reader, before any run.
+    (
+        "DRC-124",
+        "crates/ingest/src/layout.rs::each_layout_input_exception_is_refused_by_name_or_read_as_stated",
+    ),
     // Live DRC is a library consumer's loop, not a run of the CLI.
     (
         "FLOW-005",
