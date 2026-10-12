@@ -142,6 +142,7 @@
 //! | `floating_gate(; labels_are_ports)` | `floating_gate` | [`erc::RuleSet::floating_gate`] | a net that only reaches gates | ERC-G1 |
 //! | `fanout(; max)` | `fanout` | [`erc::RuleSet::fanout`] | a net driving more than `max` transistor gates | ERC-H4 |
 //! | `supply_path(; both)` | `supply_path` | [`erc::RuleSet::supply_path`] | a net whose path through MOS channels and resistors reaches no supply, or with `both` misses power or ground | ERC-G9 |
+//! | `combinational_loop()` | `combinational_loop` | [`erc::RuleSet::combinational_loop`] | a cycle of channel-connected components, each driving the next through a gate | ERC-G8 |
 //! | `gate_path(; ground, max_devices)` | `gate_path` | [`erc::RuleSet::gate_path`] | a transistor gate whose shortest path to ground (or power) passes more than `max_devices` devices | ERC-H3 |
 //! | `floating_well(well, tap)` | `floating_well` | [`erc::RuleSet::floating_well`] | a well with no tap | DRC-085, ERC-G2 |
 //! | `latchup_victim(aggressor, region, tap; within, max_distance, pad)` | `latchup_victim` | [`erc::RuleSet::latchup_victim`] | a region near an injecting (pad-connected) junction too far from a tap | ERC-D5 |

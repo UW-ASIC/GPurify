@@ -898,3 +898,231 @@ pub fn check_gate_path(
         record_run(runs, out, before, rule, Outcome::Ran, gates.len() as u64);
     }
 }
+
+/// A combinational loop: deck kind `combinational_loop`, written
+/// `combinational_loop()`.
+///
+/// The transistor netlist is cut into channel-connected components
+/// (Bryant, ICCAD '91: "each consisting of a set of storage nodes connected
+/// by the source-drain terminals of transistors"): nets joined through MOS
+/// source and drain pins, never through a declared supply, which is an
+/// input, not a storage node. A transistor belongs to the component of its
+/// channel's non-supply ends. A component drives another when one of its
+/// nets is the gate of a transistor in the other. A loop is a cycle of that
+/// relation: a strongly connected set of two or more components, or one
+/// component driving itself. This is [Yosys `check`]'s "found logic loop", a
+/// cycle in the combinational dependency graph, with the component as the
+/// cell. Needs design intent, for which nets are the supplies.
+///
+/// # Limits
+///
+/// Every cycle is reported: a latch, a register's keeper or an SRAM cell
+/// (cross-coupled inverters) is a loop, as Yosys reports a latch built from
+/// gates, and so is a transistor whose gate is on its own drain (a diode-
+/// connected device). Only MOS channels make components; a resistor or a
+/// pass device of another kind does not join them.
+///
+/// Catalog: ERC-G8 in the [check catalog]. Defined by [Yosys `check`]
+/// (logic loops); [Bryant 1991] (channel-connected components and their
+/// rank order). Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [Yosys `check`]: https://yosyshq.readthedocs.io/projects/yosys/en/latest/cmd/index_passes_status.html
+/// [Bryant 1991]: https://www.cs.cmu.edu/~bryant/pubdir/iccad91.pdf
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct CombinationalLoopTable {
+    /// Rule id and severity per row. Rows differ only in id and severity.
+    pub head: RuleHead,
+}
+
+/// Runs every [`CombinationalLoopTable`] row.
+///
+/// `examined` counts channel-connected components. A loop is one violation
+/// at the first vertex of the lowest-numbered polygon of its lowest net, on
+/// its layer, measuring the components in the loop against 0. Every row is
+/// skipped when no design intent was given or it declares no supply this
+/// layout has.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_combinational_loop(
+    design: Design<'_>,
+    intent: &IntentMap,
+    table: &CombinationalLoopTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if intent.supply_net.is_empty() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
+    let count = design.nets.net_count();
+    let rail = |net: NetId| intent.supply_net.binary_search(&net).is_ok();
+    let devices = design.devices;
+    // Per MOS: its gate net and its channel's non-rail ends.
+    let mut gate_of: Vec<Option<u32>> = Vec::new();
+    let mut ends_of: Vec<Vec<u32>> = Vec::new();
+    for device in 0..devices.len() {
+        if devices.kind[device] != DeviceKind::Mos {
+            continue;
+        }
+        let id = DeviceId(u32::try_from(device).expect("a device id is a u32"));
+        let (nets, roles) = devices.terminals_of(id);
+        let mut gate = None;
+        let mut ends = Vec::new();
+        for (&net, &role) in nets.iter().zip(roles) {
+            if net == NetId::NONE || net.idx() >= count {
+                continue;
+            }
+            match role {
+                TerminalRole::Gate if gate.is_none() => gate = Some(net.0),
+                TerminalRole::Source | TerminalRole::Drain if !rail(net) => ends.push(net.0),
+                _ => {}
+            }
+        }
+        gate_of.push(gate);
+        ends_of.push(ends);
+    }
+    let joins: Vec<(u32, u32)> = ends_of
+        .iter()
+        .filter_map(|ends| match ends[..] {
+            [a, b] => Some((a, b)),
+            _ => None,
+        })
+        .collect();
+    let mut labels = Vec::new();
+    components_into(
+        u32::try_from(count).expect("a net count fits a u32"),
+        &joins,
+        &mut labels,
+    );
+    // Components are the labels of channel ends; number them densely.
+    let mut component = vec![u32::MAX; count];
+    let mut components = 0u32;
+    for ends in &ends_of {
+        for &net in ends {
+            let root = labels[net as usize].0 as usize;
+            if component[root] == u32::MAX {
+                component[root] = components;
+                components += 1;
+            }
+        }
+    }
+    let of_net = |net: u32| {
+        let c = component[labels[net as usize].0 as usize];
+        (c != u32::MAX && !rail(NetId(net))).then_some(c)
+    };
+    // Driver component -> driven component, deduplicated, CSR.
+    let mut arcs: Vec<(u32, u32)> = gate_of
+        .iter()
+        .zip(&ends_of)
+        .filter_map(|(&gate, ends)| {
+            let from = of_net(gate?)?;
+            let to = of_net(*ends.first()?)?;
+            Some((from, to))
+        })
+        .collect();
+    arcs.sort_unstable();
+    arcs.dedup();
+    let n = components as usize;
+    let scc = strongly_connected(n, &arcs);
+    let mut size = vec![0u32; n];
+    for &s in &scc {
+        size[s as usize] += 1;
+    }
+    let mut looping: Vec<bool> = size.iter().map(|&k| k > 1).collect();
+    for &(a, b) in &arcs {
+        if a == b {
+            looping[scc[a as usize] as usize] = true;
+        }
+    }
+    // The lowest net of each looping component group.
+    let mut lowest = vec![u32::MAX; n];
+    for net in 0..u32::try_from(count).expect("a net count fits a u32") {
+        if let Some(c) = of_net(net) {
+            let s = scc[c as usize] as usize;
+            lowest[s] = lowest[s].min(net);
+        }
+    }
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let rule = table.head.rule[row];
+        for s in (0..n).filter(|&s| looping[s]) {
+            push_net_violations(
+                design,
+                &[lowest[s]],
+                rule,
+                table.head.severity[row],
+                Measurement::Count(size[s]),
+                Measurement::Count(0),
+                out,
+            );
+        }
+        record_run(runs, out, before, rule, Outcome::Ran, u64::from(components));
+    }
+}
+
+/// Kosaraju's strongly connected components of a graph on `n` nodes given
+/// as sorted, deduplicated arcs: each node's component, numbered by the
+/// order the second pass finds them.
+fn strongly_connected(n: usize, arcs: &[(u32, u32)]) -> Vec<u32> {
+    let csr = |pairs: &mut Vec<(u32, u32)>| {
+        pairs.sort_unstable();
+        let mut start = vec![0usize; n + 1];
+        for &(a, _) in pairs.iter() {
+            start[a as usize + 1] += 1;
+        }
+        for i in 0..n {
+            start[i + 1] += start[i];
+        }
+        let to: Vec<u32> = pairs.iter().map(|&(_, b)| b).collect();
+        (start, to)
+    };
+    let (fwd_start, fwd) = csr(&mut arcs.to_vec());
+    let (rev_start, rev) = csr(&mut arcs.iter().map(|&(a, b)| (b, a)).collect());
+    // First pass: finishing order, iteratively.
+    let mut order = Vec::with_capacity(n);
+    let mut seen = vec![false; n];
+    for root in 0..n {
+        if seen[root] {
+            continue;
+        }
+        seen[root] = true;
+        let mut stack = vec![(root, fwd_start[root])];
+        while let Some(&mut (node, ref mut next)) = stack.last_mut() {
+            if *next < fwd_start[node + 1] {
+                let to = fwd[*next] as usize;
+                *next += 1;
+                if !seen[to] {
+                    seen[to] = true;
+                    stack.push((to, fwd_start[to]));
+                }
+            } else {
+                order.push(node);
+                stack.pop();
+            }
+        }
+    }
+    // Second pass on the reversed graph, in reverse finishing order.
+    let mut scc = vec![u32::MAX; n];
+    let mut found = 0u32;
+    for &root in order.iter().rev() {
+        if scc[root] != u32::MAX {
+            continue;
+        }
+        scc[root] = found;
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            for &to in &rev[rev_start[node]..rev_start[node + 1]] {
+                if scc[to as usize] == u32::MAX {
+                    scc[to as usize] = found;
+                    stack.push(to as usize);
+                }
+            }
+        }
+        found += 1;
+    }
+    scc
+}

@@ -310,7 +310,6 @@ says which foundry manual, standard or tool defines each one.
 | ERC-E12 | Stress voiding / slotting | partial | cheesing requires a slot in wide shapes, and the slot geometry (IHP Slt.*, gf180 MSLOT.*) is DRC width, enclosure and spacing; JEP139 and JESD214 are stress-migration test methods that state no layout rule, so the stress-voiding rules beyond slotting (vias landing on wide metal) have no public limit |
 | ERC-F4 | HCI susceptibility flag | missing | — |
 | ERC-F14 | Power-intent supply connectivity (power switches, always-on and retention cells on the supplies the UPF declares) | missing | Needs UPF input; IEEE 1801 not read (check-sources.md §5) |
-| ERC-G8 | Combinational loops | missing | Digital only, optional |
 | ERC-H2 | Analog constraints (symmetry, common centroid, matching, orientation, dummies, WPE, STI) | missing | Overlaps Philis's own properties |
 | ERC-H3 | Netlist path checks (gate to ground within N devices; net types) | partial | gate_path: a MOS gate whose shortest path to ground (or power) through MOS source/drain and resistor pins passes more than max_devices devices, or none (P12: every transistor gate must have an electrical path to ground that passes through no more than three other devices). P12 states the rule as an example and does not define how devices are counted; one per device passed is its plain reading. Net types beyond the intent power and ground (P12 by name pattern, attached device, type sets) are not modelled |
 

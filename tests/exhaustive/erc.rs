@@ -87,6 +87,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(topology_enumerations(depth));
     out.extend(topology_cases());
     out.extend(path_through_resistor());
+    out.extend(combinational_loop());
     out.extend(esd(depth));
     out.extend(esd_wiring());
     out.extend(esd_path());
@@ -3057,7 +3058,7 @@ pex pad thickness 100nm height 500nm sheet 0.01ohm dielectric 3.9 area_cap 1aF/u
 ";
 
 /// Every rule a [`Board`] is checked against, and whether it needs intent.
-const TOPO_RULES: [(&str, &str, bool); 24] = [
+const TOPO_RULES: [(&str, &str, bool); 25] = [
     ("fg", "floating_gate(; labels_are_ports: false)", false),
     ("fgp", "floating_gate(; labels_are_ports: true)", false),
     ("md1", "multiple_drivers(; max: 1)", true),
@@ -3072,6 +3073,7 @@ const TOPO_RULES: [(&str, &str, bool); 24] = [
     ("sp2", "supply_path(; both: true)", true),
     ("gp0", "gate_path(; ground: true, max_devices: 0)", true),
     ("gp1", "gate_path(; ground: false, max_devices: 1)", true),
+    ("cl", "combinational_loop()", true),
     ("ug", "undriven_gate()", true),
     ("iso", "missing_isolation(; isolation: [\"pfet\"])", true),
     (
@@ -3102,8 +3104,8 @@ const TOPO_CATALOG: &[&str] = &["ERC-G1", "ERC-G6", "ERC-E9", "ERC-H4"];
 /// The rows a board with intent proves too: the kinds the rails orient,
 /// propagation and the voltage kinds.
 const VOLTAGE_CATALOG: &[&str] = &[
-    "ERC-G3", "ERC-G7", "ERC-G9", "ERC-H3", "ERC-F1", "ERC-F2", "ERC-F3", "ERC-F6", "ERC-F9",
-    "ERC-F10",
+    "ERC-G3", "ERC-G7", "ERC-G8", "ERC-G9", "ERC-H3", "ERC-F1", "ERC-F2", "ERC-F3", "ERC-F6",
+    "ERC-F9", "ERC-F10",
 ];
 
 /// The voltage limits of a board's `gate_oxide`, `drain_source` and
@@ -3697,6 +3699,61 @@ impl Board {
                 .collect();
             out.push(Expect::rule(id, findings));
         }
+        // combinational_loop: components are the non-rail nets joined by
+        // transistors with both channel ends off the rails; a transistor
+        // whose channel touches a component belongs to it, and its gate's
+        // component (when the gate is a channel end) drives it. A loop is a
+        // set of components each reaching every other by that relation, of
+        // two or more, or one driving itself; it measures its components.
+        let mut comp: [usize; NETS] = std::array::from_fn(|n| n);
+        loop {
+            let mut changed = false;
+            for d in self.devs.iter().filter(|d| !rail(d.s) && !rail(d.d)) {
+                let low = comp[d.s].min(comp[d.d]);
+                for n in 0..NETS {
+                    if (comp[n] == comp[d.s] || comp[n] == comp[d.d]) && comp[n] != low {
+                        comp[n] = low;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let end = |n: usize| !rail(n) && self.devs.iter().any(|d| d.s == n || d.d == n);
+        let mut drives = [[false; NETS]; NETS];
+        for d in &self.devs {
+            let to = [d.s, d.d].into_iter().find(|&n| !rail(n));
+            if let (Some(to), true) = (to, end(d.g)) {
+                drives[comp[d.g]][comp[to]] = true;
+            }
+        }
+        for k in 0..NETS {
+            for i in 0..NETS {
+                for j in 0..NETS {
+                    drives[i][j] |= drives[i][k] && drives[k][j];
+                }
+            }
+        }
+        let roots: Vec<usize> = (0..NETS).filter(|&n| end(n) && comp[n] == n).collect();
+        let mut done = [false; NETS];
+        let mut loops = Vec::new();
+        for &c in &roots {
+            if done[c] || !drives[c][c] {
+                continue;
+            }
+            let members: Vec<usize> = roots
+                .iter()
+                .copied()
+                .filter(|&o| o == c || drives[c][o] && drives[o][c])
+                .collect();
+            for &m in &members {
+                done[m] = true;
+            }
+            loops.push(count(members.len() as u32));
+        }
+        out.push(Expect::rule("cl", loops));
         // tie_high_low: a rail that reaches a gate.
         out.push(Expect::rule(
             "thl",
@@ -5242,6 +5299,59 @@ fn path_through_resistor() -> Vec<Fixture> {
         &[],
     ));
     every_placement(&[f])
+}
+
+/// `combinational_loop` (ERC-G8) on CMOS inverters between VDD and VSS,
+/// hand-derived: each inverter's output net is a channel-connected
+/// component of its own, driven by the component holding its input.
+///
+/// - a chain A -> B -> C: no cycle, clean;
+/// - a ring of three, A -> B -> C -> A: one loop of 3 components;
+/// - two cross-coupled inverters (a latch), A -> B -> A: one loop of 2;
+/// - an nfet with its gate on its own drain A (diode-connected): A drives
+///   itself, one loop of 1.
+fn combinational_loop() -> Vec<Fixture> {
+    let labels = ["VDD", "VSS", "A", "B", "C"];
+    let (vdd, vss, a, b, c) = (0, 1, 2, 3, 4);
+    let inverter = |input: usize, output: usize| {
+        [
+            dev(Model::Pfet, input, vdd, output),
+            dev(Model::Nfet, input, vss, output),
+        ]
+    };
+    let cases: [(&str, Vec<Dev>, Vec<Finding>); 4] = [
+        ("chain", [inverter(a, b), inverter(b, c)].concat(), vec![]),
+        (
+            "ring3",
+            [inverter(a, b), inverter(b, c), inverter(c, a)].concat(),
+            vec![count(3)],
+        ),
+        (
+            "latch",
+            [inverter(a, b), inverter(b, a)].concat(),
+            vec![count(2)],
+        ),
+        ("diode", vec![dev(Model::Nfet, a, vss, a)], vec![count(1)]),
+    ];
+    let deck = format!("{TOPO_PROCESS}rule cl combinational_loop()\n");
+    let mut out = Vec::new();
+    for (name, devs, findings) in cases {
+        let mut f = Fixture::new(
+            &format!("erc/combinational_loop/{name}"),
+            &["ERC-G8"],
+            &deck,
+            ERC,
+        )
+        .layout(circuit(&labels, &devs, &[]))
+        .expect(Expect::rule("cl", findings));
+        f.intent = Some(intent(
+            &[("d", 1800.0)],
+            &[("VDD", "d", "power"), ("VSS", "d", "ground")],
+            &[],
+        ));
+        out.extend(every_placement(&[f]));
+    }
+    out
 }
 
 /// Nets of the domain fixtures: two 1.8 V domains and a third ground.
