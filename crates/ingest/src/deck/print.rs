@@ -292,6 +292,16 @@ impl Printer<'_> {
         for (layer, treatment) in &source.pex_models.fill {
             let _ = writeln!(out, "pex_fill {layer} {}", treatment.word());
         }
+        for tsv in &source.pex_models.tsv {
+            let _ = writeln!(
+                out,
+                "pex_tsv {} length {}nm liner {}nm liner_k {}",
+                tsv.layer,
+                number(tsv.length_nm)?,
+                number(tsv.liner_nm)?,
+                number(tsv.liner_k)?
+            );
+        }
         for device in &source.pex_models.device {
             let _ = writeln!(
                 out,
