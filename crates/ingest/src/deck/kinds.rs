@@ -1099,6 +1099,7 @@ pub(crate) const KINDS: &[Kind] = &[
             p("clamps", "clamp", Dim::Models),
             opt("resistors", "resistor", Dim::Models),
             opt("rated", "rated", Dim::Models),
+            opt("min_series", "min_series", Dim::Resistance),
         ],
     ),
     erc(

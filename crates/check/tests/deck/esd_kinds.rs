@@ -32,7 +32,7 @@ rule gc esd_ground_coupling(; diodes: [\"dio\"])
 rule xd esd_cross_domain(; diodes: [\"dio\"], local: none)
 rule xd.local esd_cross_domain(; diodes: [\"dio\"], local: [\"dio\"])
 rule par esd_parasitic(pad, diff; min_spacing: 5um)
-rule exp esd_exposed(pad; clamps: [\"dio\"], resistors: none, rated: [\"dio\"])
+rule exp esd_exposed(pad; clamps: [\"dio\"], resistors: none, rated: [\"dio\"], min_series: none)
 rule grb guard_ring_bias(ring; power: false)
 rule ta tie_area(well, cont, gate; min_ratio: 3%)
 rule gr guard_ring(diff, ring; max_space: 15um, min_width: 2um, pad: pad, near: none, within: none, clear: none)
@@ -101,7 +101,7 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     d.rule("xd", esd_cross_domain(&["dio"], &[]));
     d.rule("xd.local", esd_cross_domain(&["dio"], &["dio"]));
     d.rule("par", esd_parasitic(pad, diff, um(5)));
-    d.rule("exp", esd_exposed(pad, &["dio"], &[], &["dio"]));
+    d.rule("exp", esd_exposed(pad, &["dio"], &[], &["dio"], None));
     d.rule("grb", guard_ring_bias(ring, false));
     d.rule("ta", tie_area(well, cont, gate, 0.03));
     d.rule(

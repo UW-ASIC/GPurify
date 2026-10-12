@@ -364,6 +364,7 @@ fn every_kind() -> RuleSet {
             resistor: Vec::new(),
             rated_start: vec![0, 0],
             rated: Vec::new(),
+            min_series: vec![None],
         },
         esd_cross_domain: esd::EsdCrossDomainTable {
             head: head(id_of("esd_cross_domain")),

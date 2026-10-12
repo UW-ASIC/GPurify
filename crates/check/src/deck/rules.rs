@@ -705,11 +705,13 @@ kinds! {
     /// `esd_cross_domain(; diodes, local: models | none)`.
     esd_cross_domain() [] { diodes: &[&str] = "diode", local: &[&str] = "local" }
     /// [`EsdExposedTable`](crate::erc::rules::esd::EsdExposedTable):
-    /// `esd_exposed(pad; clamps, resistors: models | none, rated: models | none)`.
+    /// `esd_exposed(pad; clamps, resistors: models | none, rated: models | none,
+    /// min_series: resistance | none)`, in ohms.
     esd_exposed(pad: one) [] {
         clamps: &[&str] = "clamp",
         resistors: &[&str] = "resistor",
         rated: &[&str] = "rated",
+        min_series: Option<f64> = "min_series",
     }
     /// [`EsdGroundCouplingTable`](crate::erc::rules::esd::EsdGroundCouplingTable):
     /// `esd_ground_coupling(; diodes)`.
