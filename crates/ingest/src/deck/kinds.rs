@@ -373,6 +373,8 @@ pub(crate) const KINDS: &[Kind] = &[
         None,
         &[p("allowed", "width", Dim::LengthList)],
     ),
+    // The layer's box starts at the origin (sky130 x.19, the seal ring).
+    drc("origin", Cmp::Absent, "origin", &[0], None, &[]),
     // A protrusion narrower than the limit from a wire at least `wide` wide
     // (LEF `PROTRUSIONWIDTH width1 LENGTH 0 WIDTH width2`).
     drc(

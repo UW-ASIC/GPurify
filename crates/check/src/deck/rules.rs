@@ -555,6 +555,8 @@ kinds! {
         side: Dbu = "side",
         forward: Dbu = "forward",
     }
+    /// [`Rule::Origin`](crate::drc::Rule::Origin): `origin(layer)`.
+    origin(layer: one) [] {}
     /// [`Rule::ProtrusionWidth`](crate::drc::Rule::ProtrusionWidth):
     /// `protrusion_width(layer; wide) >= limit`.
     protrusion_width(layer: one) [] { wide: Dbu = "wide", limit: Dbu = "limit" }

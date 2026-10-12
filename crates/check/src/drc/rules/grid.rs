@@ -6,10 +6,10 @@
 //! offending vertex (off-grid) or edge (angle, at the vertex it leaves).
 
 use super::{ring_segs, Verdict};
-use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
-use gpurify_geom::ops::Point;
+use crate::report::{Measurement, Outcome, Severity, SkipReason, Violation, Violations};
+use gpurify_geom::ops::{isqrt, Point};
 use gpurify_geom::view::ring_defect;
-use gpurify_geom::{Dbu, GeometryStore, LayerId, PolyId};
+use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::StrId;
 
 /// Chebyshev distance from `(x, y)` to the nearest `pitch` lattice point; zero
@@ -271,4 +271,36 @@ mod tests {
             }
         }
     }
+}
+
+/// sky130 x.19: the lower-left corner of the box of every row on `layer` is
+/// the origin, or one violation there measuring its distance from the origin.
+/// `examined` counts rows; an empty layer is skipped.
+pub(crate) fn origin(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    out: &mut Violations,
+) -> Verdict {
+    let rows = store.polys_on_layer(layer);
+    if rows.is_empty() {
+        return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
+    }
+    let b = rows
+        .clone()
+        .map(|row| store.poly_bbox(PolyId(row)))
+        .fold(Bbox::EMPTY, Bbox::union);
+    if b.xlo.raw() != 0 || b.ylo.raw() != 0 {
+        let (x, y) = (i128::from(b.xlo.raw()), i128::from(b.ylo.raw()));
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: Point { x: b.xlo, y: b.ylo },
+            measured: Measurement::Length(isqrt(DbuArea::new(x * x + y * y))),
+            limit: Measurement::Length(Dbu::new_unchecked(0)),
+            shapes: (PolyId(rows.start), None),
+        });
+    }
+    (Outcome::Ran, u64::from(rows.end - rows.start))
 }
