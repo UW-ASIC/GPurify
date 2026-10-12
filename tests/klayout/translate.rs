@@ -2108,6 +2108,14 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 Value::Ignore,
                 vec![],
             ),
+            Rule::DfmScore { .. } => (
+                "dfm_score",
+                Verdict::None("a score over another check's findings; the check itself is mirrored"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
             Rule::EolKeepOut { .. } => (
                 "eol_keep_out",
                 Verdict::None("KLayout has no end-of-line keep-out box"),

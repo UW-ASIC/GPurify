@@ -253,6 +253,8 @@ const DENSITY: &[Param] = &[
 ];
 const DENSITY_LIMIT: Option<Param> = Some(p("", "limit", Dim::Fraction));
 const COUNT: Option<Param> = Some(p("", "limit", Dim::Count));
+/// The checks a DFM score reads, in the order of the engine's index.
+const DFM_CHECKS: &[&str] = &["space", "width", "enclosure"];
 /// MINSTEP's corner kinds, in the order of the engine's index.
 const STEP_CORNERS: &[&str] = &["outside", "inside", "step"];
 /// A voltage-dependent spacing table: the step voltages and the spacing from
@@ -587,6 +589,26 @@ pub(crate) const KINDS: &[Kind] = &[
             &[0, 1],
             DENSITY_LIMIT,
             DENSITY,
+        )
+    },
+    // A DFM score over a recommended rule's findings, each 0 at the required
+    // value and 1 at the recommended one, combined with a failure rate:
+    // `dfm_score(met1; check: space, required: 180nm, recommended: 220nm,
+    // rate: 1%) >= 0.99`. An enclosure takes the outer layer second.
+    Kind {
+        more: true,
+        ..drc(
+            "dfm_score",
+            Cmp::Ge,
+            "dfm_score",
+            &[0],
+            DENSITY_LIMIT,
+            &[
+                p("check", "check", Dim::Word(DFM_CHECKS)),
+                p("required", "required", Dim::Length),
+                p("recommended", "recommended", Dim::Length),
+                p("rate", "rate", Dim::Fraction),
+            ],
         )
     },
     // A deck-supplied pattern found wherever the layer matches it, in any of

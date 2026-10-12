@@ -48,7 +48,7 @@
 //! [`DeckBuilder::finish`]: super::DeckBuilder::finish
 
 use super::builder::{LayerExpr, LayerRef};
-use crate::drc::ruleset::EolParallel;
+use crate::drc::ruleset::{DfmCheck, EolParallel};
 use crate::drc::{StepKind, WireBand};
 use gpurify_geom::{Dbu, DbuArea};
 use gpurify_ingest::deck::ParamValue;
@@ -241,6 +241,18 @@ impl Arg for (u32, Dbu) {
     }
 }
 
+/// The check a DFM score reads, by its index.
+impl Arg for DfmCheck {
+    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
+        let at: u32 = match self {
+            DfmCheck::Space => 0,
+            DfmCheck::Width => 1,
+            DfmCheck::Enclosure => 2,
+        };
+        at.put(name, params);
+    }
+}
+
 /// LEF `MINSTEP`'s variant: `max_edges`, or a `corner` by its index.
 impl Arg for StepKind {
     fn put(self, _: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
@@ -401,6 +413,17 @@ kinds! {
     density_balance(a: one, b: one, boundary: opt) [] {
         window: Dbu = "window",
         step: Dbu = "step",
+        limit: f64 = "limit",
+    }
+    /// [`Rule::DfmScore`](crate::drc::Rule::DfmScore):
+    /// `dfm_score(layer[, outer]; check, required, recommended, rate) >=
+    /// limit`; `outer` only for [`DfmCheck::Enclosure`], `rate` and `limit`
+    /// fractions.
+    dfm_score(layer: one, outer: opt) [] {
+        check: DfmCheck = "check",
+        required: Dbu = "required",
+        recommended: Dbu = "recommended",
+        rate: f64 = "rate",
         limit: f64 = "limit",
     }
     /// [`Rule::PatternMatch`](crate::drc::Rule::PatternMatch):

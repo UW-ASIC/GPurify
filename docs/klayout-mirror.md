@@ -320,8 +320,9 @@ explains (kind 30).
 | 71 | cover_density | `cover_density(L, C[, d]; window, step, cover, density, inclusive)` | POINT | EXACT (scripted) | exact | new |
 | 72 | cut_area_change | `cut_area_change(pre, post, lower, upper; cuts, change)` | POINT | EXACT (scripted) | exact | new |
 | 73 | pattern_match | `pattern(L; window, shapes, ignore)` | POINT | EXACT (scripted) | exact | new |
+| 74 | dfm_score | `dfm_score(L[, outer]; check, required, recommended, rate) >= s` | — | NONE | reported as not mirrored (a score over a mirrored check's findings) | — |
 
-49 kinds are EXACT (eleven scripted over KLayout's polygons), 16 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
+49 kinds are EXACT (eleven scripted over KLayout's polygons), 16 APPROX and nine NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`, and between two layers (`space(A, B; nets: ..)`), which is not mirrored. `examined` is GPurify-only; KLayout has no equivalent.
 

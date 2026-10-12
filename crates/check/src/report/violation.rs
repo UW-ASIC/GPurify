@@ -115,6 +115,18 @@ impl Violations {
         self.shape_b.extend_from_slice(&other.shape_b);
     }
 
+    /// Drops every row from `len` on.
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.rule.truncate(len);
+        self.layer.truncate(len);
+        self.severity.truncate(len);
+        self.at.truncate(len);
+        self.measured.truncate(len);
+        self.limit.truncate(len);
+        self.shape_a.truncate(len);
+        self.shape_b.truncate(len);
+    }
+
     /// The row at `index`, gathered from every column.
     ///
     /// # Panics
