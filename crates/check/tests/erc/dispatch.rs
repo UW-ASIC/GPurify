@@ -44,7 +44,7 @@ fn id_of(kind: &str) -> StrId {
 }
 
 /// The kinds that cannot answer their question without design intent.
-const INTENT_GATED: [&str; 27] = [
+const INTENT_GATED: [&str; 29] = [
     "dielectric_field",
     "domain_crossing",
     "drain_source",
@@ -60,6 +60,7 @@ const INTENT_GATED: [&str; 27] = [
     "esd_topological",
     "forward_diode",
     "gate_oxide",
+    "gate_path",
     "guard_ring_bias",
     "hv_domain",
     "hv_tag",
@@ -68,6 +69,7 @@ const INTENT_GATED: [&str; 27] = [
     "missing_level_shifter",
     "multiple_drivers",
     "reliability",
+    "supply_path",
     "tie_high_low",
     "undriven_gate",
     "voltage_spacing",
@@ -119,6 +121,15 @@ fn every_kind() -> RuleSet {
         fanout: topology::FanoutTable {
             head: head(id_of("fanout")),
             max_gates: vec![4],
+        },
+        supply_path: topology::SupplyPathTable {
+            head: head(id_of("supply_path")),
+            both: vec![true],
+        },
+        gate_path: topology::GatePathTable {
+            head: head(id_of("gate_path")),
+            ground: vec![true],
+            max_devices: vec![3],
         },
         unconnected_pin: topology::UnconnectedPinTable {
             head: head(id_of("unconnected_pin")),

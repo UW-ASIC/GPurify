@@ -194,6 +194,7 @@ PathFinder-SC; `PEG` Cadence Pegasus/PVS/Assura; `VOL` Voltus; `QNT` Quantus;
 - vendor product pages and datasheets;
 - white papers and vendor engineering blogs;
 - the open FreePDK45 SVRF decks;
+- `ICsprout55`: the Apache-2.0 ICsprout 55 nm open PDK's Calibre LVS deck, whose `ERC PATHCHK` statements carry their meaning in comments ("Nodes with a path to ground but not power", "Nodes without a path to both power and ground") (https://github.com/openecos-projects/icsprout55-pdk/blob/main/pv/LVS/ICsprout_CalLVS_55LLULP1233_REV1_0_OS.lvs);
 - PVconverter, a BSD-licensed SVRF→PVS translator whose keyword table shows real SVRF statement names (https://github.com/kiwa3927/PVconverter); a `CAL:<STATEMENT>` source in capitals (e.g. `CAL:ERC PATHCHK`, `CAL:LVS ISOLATE OPENS`) is a statement name from its token table `src/public/token/rcsTokenTypes.h`, which shows the check exists, not its semantics;
 - `SRC:datasheet`: the Synopsys StarRC datasheet (CS1038890626, 04/2023), its process-modelling and productivity lists (https://www.synopsys.com/content/dam/synopsys/implementation&signoff/datasheets/starrc-ds.pdf);
 - `QNT:RFIC`: Cadence's RFIC design page on Quantus substrate modelling (https://www.cadence.com/en_US/home/explore/rfic-design.html);
@@ -363,7 +364,9 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-G2 | Floating well | implemented | SKY:nwell.4 | FR; SY; MR |
 | ERC-G4 | Supply short (n-tie + p-tie, VDD-GND) | implemented | CAL | SY; MR |
 | ERC-G7 | Gate tied directly to a rail | implemented | CAL (weak sourcing) | SY; NV; MR |
+| ERC-G9 | Path check: nets with no path to power or ground | implemented | CAL:ERC PATHCHK,LVS PATHCHK; ICsprout55; P12 | SY; NV; MR |
 | ERC-H1 | Static leakage / HiZ / floating in power-down | implemented | IA | SY; NV |
+| ERC-H3 | Netlist path checks (gate to ground within N devices; net types) | partial | CAL:patent P12; P9 | SY; NV; MR |
 | ERC-H4 | Fanout limits | implemented | ICV; GF:14.1.4.1 | SY; NV |
 | PEX-009 | PEX netlist diff / qualification | partial | SIL:PEX Certify | CF; MR; SY |
 | PEX-010 | SPEF output | implemented | IEEE1481 | CF; SE; MR; golden |

@@ -86,6 +86,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(grid_outcomes());
     out.extend(topology_enumerations(depth));
     out.extend(topology_cases());
+    out.extend(path_through_resistor());
     out.extend(esd(depth));
     out.extend(esd_wiring());
     out.extend(esd_path());
@@ -3056,7 +3057,7 @@ pex pad thickness 100nm height 500nm sheet 0.01ohm dielectric 3.9 area_cap 1aF/u
 ";
 
 /// Every rule a [`Board`] is checked against, and whether it needs intent.
-const TOPO_RULES: [(&str, &str, bool); 20] = [
+const TOPO_RULES: [(&str, &str, bool); 24] = [
     ("fg", "floating_gate(; labels_are_ports: false)", false),
     ("fgp", "floating_gate(; labels_are_ports: true)", false),
     ("md1", "multiple_drivers(; max: 1)", true),
@@ -3067,6 +3068,10 @@ const TOPO_RULES: [(&str, &str, bool); 20] = [
     ("ssw", "supply_short(ntap, ptap, nwpm)", false),
     ("soft", "soft_connection(well)", false),
     ("fo", "fanout(; max: 1)", false),
+    ("sp1", "supply_path(; both: false)", true),
+    ("sp2", "supply_path(; both: true)", true),
+    ("gp0", "gate_path(; ground: true, max_devices: 0)", true),
+    ("gp1", "gate_path(; ground: false, max_devices: 1)", true),
     ("ug", "undriven_gate()", true),
     ("iso", "missing_isolation(; isolation: [\"pfet\"])", true),
     (
@@ -3097,7 +3102,8 @@ const TOPO_CATALOG: &[&str] = &["ERC-G1", "ERC-G6", "ERC-E9", "ERC-H4"];
 /// The rows a board with intent proves too: the kinds the rails orient,
 /// propagation and the voltage kinds.
 const VOLTAGE_CATALOG: &[&str] = &[
-    "ERC-G3", "ERC-G7", "ERC-F1", "ERC-F2", "ERC-F3", "ERC-F6", "ERC-F9", "ERC-F10",
+    "ERC-G3", "ERC-G7", "ERC-G9", "ERC-H3", "ERC-F1", "ERC-F2", "ERC-F3", "ERC-F6", "ERC-F9",
+    "ERC-F10",
 ];
 
 /// The voltage limits of a board's `gate_oxide`, `drain_source` and
@@ -3615,6 +3621,78 @@ impl Board {
                     group.sort_unstable();
                     group.dedup();
                     (group.len() > max).then(|| count(group.len() as u32))
+                })
+                .collect();
+            out.push(Expect::rule(id, findings));
+        }
+        // supply_path: from each non-rail net a device terminal reaches,
+        // walk source to drain through every transistor, stopping at rails
+        // (a rail ends the path and gives it its role). `sp1` flags a net
+        // that reaches no rail, measuring 0 against 1; `sp2` one that misses
+        // power or ground, measuring the roles reached against 2.
+        let (mut sp1, mut sp2) = (Vec::new(), Vec::new());
+        for n in 0..NETS {
+            let (g, s, d, b) = terminals(n);
+            if rail(n) || !(g || s || d || b) {
+                continue;
+            }
+            let (mut seen, mut walk, mut roles) = ([false; NETS], vec![n], [false; 2]);
+            while let Some(at) = walk.pop() {
+                if seen[at] {
+                    continue;
+                }
+                seen[at] = true;
+                if let Some(supply) = self.supply(at) {
+                    roles[usize::from(!supply.power)] = true;
+                    continue;
+                }
+                for u in self.devs.iter().filter(|u| u.s == at || u.d == at) {
+                    walk.push(far(u, at));
+                }
+            }
+            let found = roles.iter().filter(|&&r| r).count() as u32;
+            if found == 0 {
+                sp1.push(count(0));
+            }
+            if found < 2 {
+                sp2.push(count(found));
+            }
+        }
+        out.push(Expect::rule("sp1", sp1));
+        out.push(Expect::rule("sp2", sp2));
+        // gate_path: the fewest transistors a walk from a gate's net through
+        // sources and drains passes to reach a rail of the asked role, rails
+        // of the other role passed like any net. More than `max` measures
+        // that count; no walk at all measures 0 against 1.
+        for (id, ground, max) in [("gp0", true, 0u32), ("gp1", false, 1)] {
+            let mut dist = [u32::MAX; NETS];
+            let mut frontier: Vec<usize> = (0..NETS)
+                .filter(|&n| self.supply(n).is_some_and(|s| s.power != ground))
+                .collect();
+            for &n in &frontier {
+                dist[n] = 0;
+            }
+            let mut step = 0;
+            while !frontier.is_empty() {
+                step += 1;
+                let mut next = Vec::new();
+                for &at in &frontier {
+                    for u in self.devs.iter().filter(|u| u.s == at || u.d == at) {
+                        let to = far(u, at);
+                        if dist[to] == u32::MAX {
+                            dist[to] = step;
+                            next.push(to);
+                        }
+                    }
+                }
+                frontier = next;
+            }
+            let findings = (0..NETS)
+                .filter(|&n| self.devs.iter().any(|d| d.g == n))
+                .filter_map(|n| match dist[n] {
+                    u32::MAX => Some(count(0)),
+                    d if d > max => Some(count(d)),
+                    _ => None,
                 })
                 .collect();
             out.push(Expect::rule(id, findings));
@@ -5117,6 +5195,53 @@ fn circuit_pins(labels: &[&str], devs: &[Dev], pins: &[(&str, usize, usize)]) ->
         l = l.label("m2txt", -900, ty + 200, name);
     }
     l
+}
+
+/// `supply_path` (ERC-G9) and `gate_path` (ERC-H3) through a resistor and
+/// not through a diode, hand-derived. Nets VDD, VSS, A, B, G, C: an nfet
+/// pulls A to VSS (gate G), a resistor joins A to B, a diode joins B to C,
+/// and a second nfet has its gate on B and both channel ends on VSS. So A
+/// and B reach ground and never power (B through the resistor and the
+/// pull-down, two devices), C reaches nothing (a diode passes no path), and
+/// G is a gate alone.
+///
+/// - `supply_path(; both: false)`: G and C, 0 roles against 1.
+/// - `supply_path(; both: true)`: A and B 1 role, G and C 0, against 2.
+/// - `gate_path(; ground: true, max_devices: 1)`: B's path passes 2
+///   devices; G has none (0 against 1).
+/// - with `max_devices: 2`: only G.
+fn path_through_resistor() -> Vec<Fixture> {
+    let labels = ["VDD", "VSS", "A", "B", "G", "C"];
+    let (vss, a, b, g, c) = (1, 2, 3, 4, 5);
+    let devs = [dev(Model::Nfet, g, vss, a), dev(Model::Nfet, b, vss, vss)];
+    let layout = circuit_pins(&labels, &devs, &[("mkres", a, b), ("mkdi", b, c)]);
+    let deck = format!(
+        "{}rule sp1 supply_path(; both: false)\n\
+         rule sp2 supply_path(; both: true)\n\
+         rule gp1 gate_path(; ground: true, max_devices: 1)\n\
+         rule gp2 gate_path(; ground: true, max_devices: 2)\n",
+        diode_process()
+    );
+    let mut f = Fixture::new(
+        "erc/supply_path/through_resistor",
+        &["ERC-G9", "ERC-H3"],
+        &deck,
+        ERC,
+    )
+    .layout(layout)
+    .expect(Expect::rule("sp1", vec![count(0), count(0)]))
+    .expect(Expect::rule(
+        "sp2",
+        vec![count(1), count(1), count(0), count(0)],
+    ))
+    .expect(Expect::rule("gp1", vec![count(2), count(0)]))
+    .expect(Expect::rule("gp2", vec![count(0)]));
+    f.intent = Some(intent(
+        &[("d", 1800.0)],
+        &[("VDD", "d", "power"), ("VSS", "d", "ground")],
+        &[],
+    ));
+    every_placement(&[f])
 }
 
 /// Nets of the domain fixtures: two 1.8 V domains and a third ground.

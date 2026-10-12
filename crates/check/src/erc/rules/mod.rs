@@ -1,4 +1,4 @@
-//! The forty-four rule tables and their transforms, grouped by what they need.
+//! The forty-six rule tables and their transforms, grouped by what they need.
 //!
 //! Each ERC kind is one table type, one row per deck rule of that kind, and one
 //! `check_*` function that runs every row. [`RuleSet`](crate::erc::RuleSet)
@@ -8,7 +8,7 @@
 //!
 //! | Module | Kinds | Reads |
 //! |---|---|---|
-//! | [`topology`] | `floating_gate`, `floating_well`, `multiple_drivers`, `unconnected_pin`, `fanout` | nets, devices, geometry; `multiple_drivers` also the intent |
+//! | [`topology`] | `floating_gate`, `floating_well`, `multiple_drivers`, `unconnected_pin`, `fanout`, `supply_path`, `gate_path` | nets, devices, geometry; `multiple_drivers`, `supply_path` and `gate_path` also the intent |
 //! | [`supply`] | `supply_short`, `soft_connection`, `missing_tie`, `tie_high_low`, `esd_topological`, `mixed_tag` | nets, devices, geometry; `tie_high_low` and `esd_topological` also the intent |
 //! | [`antenna`] | `antenna`, `antenna_electrical`, `density_cmp` | geometry, the deck's connectivity, the die box |
 //! | [`electrical`] | `p2p_resistance`, `ir_drop`, `dynamic_ir_drop`, `em_current_density`, `electromigration`, `em_thermal` | per-net resistor networks, the solved supply grid; `em_thermal` also the deck's layer heights |

@@ -18,6 +18,8 @@ use gpurify_geom::rects::{clipped_area, covered_area, decompose_into};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::DbuArea;
 use gpurify_geom::{LayerId, PolyId};
+use gpurify_ingest::deck::DeviceKind;
+use gpurify_ingest::intent::SupplyRole;
 
 /// A floating gate: deck kind `floating_gate`, written
 /// `floating_gate(; labels_are_ports: bool)`.
@@ -93,7 +95,7 @@ pub fn check_fanout(
     let devices = design.devices;
     let mut gates = vec![0u32; design.nets.net_count()];
     for device in 0..devices.len() {
-        if devices.kind[device] != gpurify_ingest::deck::DeviceKind::Mos {
+        if devices.kind[device] != DeviceKind::Mos {
             continue;
         }
         let id = DeviceId(u32::try_from(device).expect("a device id is a u32"));
@@ -593,5 +595,306 @@ pub fn check_unconnected_pin(
             }
         }
         record_run(runs, out, before, rule, Outcome::Ran, examined);
+    }
+}
+
+/// A net with no path to the supplies: deck kind `supply_path`, written
+/// `supply_path(; both: bool)`.
+///
+/// A path is the set of nets joined through MOS source and drain pins and
+/// resistor pins, never through a gate, a bulk, a diode, a capacitor or a
+/// bipolar: Mentor's programmable-ERC patent calls this "the default path
+/// definition in LVS" ("paths that lead through source/drain pins of MOS,
+/// and positive/negative pins of resistor devices"). A declared supply
+/// breaks a path: the path ends there and carries the supply's role, power
+/// or ground (the patent's `-break`, its examples `init_5` and `init_6`), so
+/// a pull-up and a pull-down meeting at a net make one path that reaches
+/// both rails, and the rails do not join the paths beyond them. With
+/// `both: false` a row flags a net whose path reaches no supply at all (the
+/// patent's `check_1`, "no path to Power and no path to Ground"); with
+/// `both: true`, one whose path misses power or misses ground (`check_2`,
+/// Calibre's `PATHCHK GROUND && !POWER` and `POWER && !GROUND` together).
+/// Supplies themselves are not examined, nor is a net no device terminal
+/// reaches (a stray shape is [`UnconnectedPinTable`]'s). Needs design intent,
+/// for which nets are power and ground.
+///
+/// # Limits
+///
+/// Only the intent's power and ground are net types: the patent's other net
+/// types (by name pattern or by attached device) and Calibre's `LABELED` are
+/// not read. Whether Calibre's own `PATHCHK` breaks at supplies, and what its
+/// `NOFLOAT` option excludes, is not public; the breaking is the patent's.
+///
+/// Catalog: ERC-G9 in the [check catalog]. Defined by Calibre `ERC PATHCHK`
+/// (the open [ICsprout55] PDK's Calibre LVS deck: "Nodes with a path to
+/// ground but not power", "Nodes without a path to both power and
+/// ground"); [US20100306720A1] (paths, breaks, `check_1` and `check_2`).
+/// Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [US20100306720A1]: https://patents.google.com/patent/US20100306720A1/en
+/// [ICsprout55]: https://github.com/openecos-projects/icsprout55-pdk/blob/main/pv/LVS/ICsprout_CalLVS_55LLULP1233_REV1_0_OS.lvs
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct SupplyPathTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// Per row: a net needs a path to both power and ground, not just one.
+    pub both: Vec<bool>,
+}
+
+/// A transistor gate too many devices from a rail: deck kind `gate_path`,
+/// written `gate_path(; ground: bool, max_devices: count)`.
+///
+/// "Every transistor gate in the design must have an electrical path to
+/// ground that passes through no more than three other devices"
+/// ([US20100306720A1], the kind of rule its programmable checks are written
+/// for), with three replaced by `max_devices`, and ground by power when
+/// `ground` is false. The path runs through MOS source and drain pins and
+/// resistor pins, as [`SupplyPathTable`]'s does, but no supply breaks it: it
+/// ends at the first declared supply of the asked role and may pass any
+/// other net. A path's length is the devices it passes, so a gate on a
+/// ground net has 0, one an inverter drives has 1 (its pull-down), and one
+/// behind a two-high stack 2; the shortest path counts. A row flags every
+/// gate net whose shortest path passes more than `max_devices` devices, or
+/// that has no path at all. Each net carrying a MOS gate is examined once.
+/// Needs design intent, for which nets are power and ground.
+///
+/// # Limits
+///
+/// The patent states the rule as an example and does not define how a
+/// device is counted; one per device a path passes is its plain reading.
+/// Net types beyond the intent's power and ground are not read.
+///
+/// Catalog: ERC-H3 (partial) in the [check catalog]. Defined by
+/// [US20100306720A1]. Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [US20100306720A1]: https://patents.google.com/patent/US20100306720A1/en
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct GatePathTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// Per row: the path ends at a ground (`true`) or a power supply.
+    pub ground: Vec<bool>,
+    /// Per row: the most devices a gate's shortest path may pass.
+    pub max_devices: Vec<u32>,
+}
+
+/// Every two-net pair a path may cross: a MOS's source and drain, a
+/// resistor's two pins. A device with an end on no net is left out.
+fn path_edges(design: Design<'_>) -> Vec<(u32, u32)> {
+    let devices = design.devices;
+    let mut edges = Vec::new();
+    for device in 0..devices.len() {
+        let conducts = |role: TerminalRole| match devices.kind[device] {
+            DeviceKind::Mos => matches!(role, TerminalRole::Source | TerminalRole::Drain),
+            DeviceKind::Resistor => matches!(role, TerminalRole::Pin(_)),
+            _ => false,
+        };
+        let id = DeviceId(u32::try_from(device).expect("a device id is a u32"));
+        let (nets, roles) = devices.terminals_of(id);
+        let mut ends = nets
+            .iter()
+            .zip(roles)
+            .filter(|&(_, &role)| conducts(role))
+            .map(|(&net, _)| net);
+        if let (Some(a), Some(b), None) = (ends.next(), ends.next(), ends.next()) {
+            if a != NetId::NONE && b != NetId::NONE {
+                edges.push((a.0, b.0));
+            }
+        }
+    }
+    edges
+}
+
+/// Runs every [`SupplyPathTable`] row.
+///
+/// `examined` counts the nets, supplies aside, that a device terminal
+/// reaches. A violation sits at the first vertex of the net's
+/// lowest-numbered polygon, on its layer, measuring the supply roles its
+/// path reaches (0 or 1) against those needed (1, or 2 with `both`). Every
+/// row is skipped when no design intent was given or it declares no supply
+/// this layout has.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_supply_path(
+    design: Design<'_>,
+    facts: &NetFacts,
+    intent: &IntentMap,
+    table: &SupplyPathTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if intent.supply_net.is_empty() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
+    let count = u32::try_from(facts.len()).expect("a net count fits a u32");
+    let role = |net: u32| intent.supply(NetId(net)).map(|(role, _)| role);
+    let edges: Vec<(u32, u32)> = path_edges(design)
+        .into_iter()
+        .filter(|&(a, b)| a < count && b < count)
+        .collect();
+    // Paths joined away from the supplies; each edge onto a supply marks
+    // its path with that supply's role.
+    let inner: Vec<(u32, u32)> = edges
+        .iter()
+        .copied()
+        .filter(|&(a, b)| role(a).is_none() && role(b).is_none())
+        .collect();
+    let mut labels = Vec::new();
+    components_into(count, &inner, &mut labels);
+    // Per path: bit 0 a path to power, bit 1 a path to ground.
+    let mut reach = vec![0u8; count as usize];
+    for &(a, b) in &edges {
+        for (from, to) in [(a, b), (b, a)] {
+            let bit = match (role(from), role(to)) {
+                (None, Some(SupplyRole::Power)) => 1,
+                (None, Some(SupplyRole::Ground)) => 2,
+                _ => continue,
+            };
+            reach[labels[from as usize].0 as usize] |= bit;
+        }
+    }
+    let examined: Vec<u32> = (0..count)
+        .filter(|&net| role(net).is_none() && facts.is_device_connected(NetId(net)))
+        .collect();
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let rule = table.head.rule[row];
+        let need = if table.both[row] { 2 } else { 1 };
+        for found in 0..need {
+            let flagged: Vec<u32> = examined
+                .iter()
+                .copied()
+                .filter(|&net| reach[labels[net as usize].0 as usize].count_ones() == found)
+                .collect();
+            push_net_violations(
+                design,
+                &flagged,
+                rule,
+                table.head.severity[row],
+                Measurement::Count(found),
+                Measurement::Count(need),
+                out,
+            );
+        }
+        record_run(runs, out, before, rule, Outcome::Ran, examined.len() as u64);
+    }
+}
+
+/// Runs every [`GatePathTable`] row.
+///
+/// `examined` counts the nets carrying a MOS gate. A violation sits at the
+/// first vertex of the gate net's lowest-numbered polygon, on its layer,
+/// measuring the devices its shortest path passes against `max_devices`, or,
+/// with no path at all, the paths found, 0, against 1. Every row is skipped
+/// when no design intent was given or it declares no supply this layout has.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_gate_path(
+    design: Design<'_>,
+    intent: &IntentMap,
+    table: &GatePathTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if intent.supply_net.is_empty() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
+    let count = design.nets.net_count();
+    let devices = design.devices;
+    let mut gate_net = vec![false; count];
+    for device in 0..devices.len() {
+        if devices.kind[device] != DeviceKind::Mos {
+            continue;
+        }
+        let id = DeviceId(u32::try_from(device).expect("a device id is a u32"));
+        let (nets, roles) = devices.terminals_of(id);
+        for (&net, &role) in nets.iter().zip(roles) {
+            if role == TerminalRole::Gate && net != NetId::NONE && net.idx() < count {
+                gate_net[net.idx()] = true;
+            }
+        }
+    }
+    let gates: Vec<u32> = (0u32..)
+        .zip(&gate_net)
+        .filter(|&(_, &gate)| gate)
+        .map(|(net, _)| net)
+        .collect();
+    // Undirected adjacency, CSR by net.
+    let edges: Vec<(u32, u32)> = path_edges(design)
+        .into_iter()
+        .filter(|&(a, b)| (a as usize) < count && (b as usize) < count)
+        .collect();
+    let mut start = vec![0u32; count + 1];
+    for &(a, b) in &edges {
+        start[a as usize + 1] += 1;
+        start[b as usize + 1] += 1;
+    }
+    for i in 0..count {
+        start[i + 1] += start[i];
+    }
+    let mut fill = start.clone();
+    let mut adjacent = vec![0u32; start[count] as usize];
+    for &(a, b) in &edges {
+        for (from, to) in [(a, b), (b, a)] {
+            adjacent[fill[from as usize] as usize] = to;
+            fill[from as usize] += 1;
+        }
+    }
+    let mut dist = vec![u32::MAX; count];
+    let mut queue = std::collections::VecDeque::new();
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let rule = table.head.rule[row];
+        let want = if table.ground[row] {
+            SupplyRole::Ground
+        } else {
+            SupplyRole::Power
+        };
+        // Breadth first from every supply of the asked role: devices passed.
+        dist.fill(u32::MAX);
+        queue.clear();
+        for (net, &role) in intent.supply_net.iter().zip(&intent.supply_role) {
+            if role == want && net.idx() < count {
+                dist[net.idx()] = 0;
+                queue.push_back(net.0);
+            }
+        }
+        while let Some(at) = queue.pop_front() {
+            let span = start[at as usize] as usize..start[at as usize + 1] as usize;
+            for &to in &adjacent[span] {
+                if dist[to as usize] == u32::MAX {
+                    dist[to as usize] = dist[at as usize] + 1;
+                    queue.push_back(to);
+                }
+            }
+        }
+        let max = table.max_devices[row];
+        for &net in &gates {
+            let (measured, limit) = match dist[net as usize] {
+                u32::MAX => (0, 1),
+                d if d > max => (d, max),
+                _ => continue,
+            };
+            push_net_violations(
+                design,
+                &[net],
+                rule,
+                table.head.severity[row],
+                Measurement::Count(measured),
+                Measurement::Count(limit),
+                out,
+            );
+        }
+        record_run(runs, out, before, rule, Outcome::Ran, gates.len() as u64);
     }
 }

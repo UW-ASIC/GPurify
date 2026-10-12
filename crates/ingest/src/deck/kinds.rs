@@ -1111,6 +1111,16 @@ pub(crate) const KINDS: &[Kind] = &[
     erc("floating_well", &[0, 1], false, &[]),
     erc("fanout", &[], false, &[p("max", "max_gates", Dim::Count)]),
     erc(
+        "gate_path",
+        &[],
+        false,
+        &[
+            p("ground", "ground", Dim::Bool),
+            p("max_devices", "max_devices", Dim::Count),
+        ],
+    ),
+    erc("supply_path", &[], false, &[p("both", "both", Dim::Bool)]),
+    erc(
         "forward_diode",
         &[0],
         false,
