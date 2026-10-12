@@ -1353,8 +1353,8 @@ pub fn check_pex_case_field_solved(case: &PexCase) -> Vec<String> {
         return failed;
     };
     let resistance = case.kind.contains("resistance");
-    let derived = case.asserts.iter().any(|claim| claim == "value")
-        && case.provenance != "underivable";
+    let derived =
+        case.asserts.iter().any(|claim| claim == "value") && case.provenance != "underivable";
     if resistance && derived {
         let agrees = (got - want).abs() <= case.tol;
         if agrees == case.expect_mismatch {
