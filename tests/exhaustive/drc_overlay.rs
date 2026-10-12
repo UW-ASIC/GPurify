@@ -3327,9 +3327,15 @@ fn tap_distance() -> Vec<Fixture> {
 }
 
 /// A short between two labelled nets (DRC-086): a DRC run reports it as one
-/// `lvs.net_seed_conflict` row (testing-plan F14), so the run does not pass.
-/// Shorted on one shape, and through two abutting shapes; two labels naming
-/// one net and two separate labelled shapes pass.
+/// `lvs.net_seed_conflict` row (testing-plan F14), so the run does not pass,
+/// and where it runs as `lvs.short_path`, one row per step between the
+/// polygons joining the two labelled shapes. Shorted on one shape (one row,
+/// 1 of 1), through two abutting shapes (one step) and through a chain of
+/// three (two steps); two labels naming one net and two separate labelled
+/// shapes pass.
+///
+/// Oracle: the steps counted by hand from the drawn chain (`check_layout`'s
+/// rustdoc: the fewest polygons joining the two labelled ones).
 fn labelled_short() -> Vec<Fixture> {
     let deck = new_deck(
         &["met1", "lbl"],
@@ -3338,11 +3344,15 @@ fn labelled_short() -> Vec<Fixture> {
          connect label lbl names met1\n\
          rule w width(met1) >= 100nm\n",
     );
-    let refused = |name: &str, layout: Layout| {
+    let refused = |name: &str, layout: Layout, steps: &[u32]| {
         Fixture::new(&format!("labelled_short/{name}"), &["DRC-086"], &deck, DRC)
             .layout(layout)
             .expect(Expect::clean("w"))
             .expect(Expect::rule("lvs.net_seed_conflict", vec![Finding::any()]))
+            .expect(Expect::rule(
+                "lvs.short_path",
+                steps.iter().map(|&k| count(k)).collect(),
+            ))
             .expect(Expect::Passes(false))
     };
     let passes = |name: &str, layout: Layout| {
@@ -3358,6 +3368,7 @@ fn labelled_short() -> Vec<Fixture> {
         refused(
             "one_shape",
             named(Layout::default().rect("met1", 0, 0, 2000, 500), "A", "B"),
+            &[1],
         ),
         refused(
             "abutting_shapes",
@@ -3368,6 +3379,19 @@ fn labelled_short() -> Vec<Fixture> {
                 "A",
                 "B",
             ),
+            &[1],
+        ),
+        refused(
+            "chain_of_three",
+            named(
+                Layout::default()
+                    .rect("met1", 0, 0, 700, 500)
+                    .rect("met1", 700, 0, 1300, 500)
+                    .rect("met1", 1300, 0, 2000, 500),
+                "A",
+                "B",
+            ),
+            &[1, 2],
         ),
         passes(
             "same_name",
