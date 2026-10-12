@@ -7,7 +7,7 @@ use crate::erc::rules::antenna::AntennaMeasure;
 use crate::report::LimitSense;
 use crate::report::Severity;
 use gpurify_geom::{LayerId, StrId, StrTable};
-use gpurify_ingest::deck::{DeckSource, ParamSource, ParamValue, RuleSource};
+use gpurify_ingest::deck::{DeckSource, LvsSrc, ParamSource, ParamValue, RuleSource};
 use std::collections::HashMap;
 
 /// One rule's row as it is filed, in engine names.
@@ -66,6 +66,7 @@ impl CompiledDeck {
             self.temperature.map(gpurify_geom::Qty::raw),
             strings,
         );
+        source.lvs = LvsSrc::from_controls(&self.lvs, &source.devices, strings);
         let name = |layer: LayerId| strings.resolve(self.layers.name(layer)).to_owned();
         // The sheets as written, at the nominal temperature, with their
         // coefficients, rather than at the operating one with none.

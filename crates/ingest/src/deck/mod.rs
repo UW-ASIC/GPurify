@@ -726,6 +726,25 @@ pub struct LvsTolerance {
     /// The absolute part, in the parameter's SI unit (metres, square
     /// metres, ohms, farads, or a count), zero or more.
     pub absolute: f64,
+    /// The absolute part as the deck states it, in the deck's unit for the
+    /// parameter ([`absolute_unit`]), so the deck prints back exactly.
+    pub stated: f64,
+}
+
+/// The unit an absolute tolerance on `param` is written in, and the factor
+/// from it to SI: a length in nm, an area in nm², a resistance in ohms, a
+/// capacitance in aF, a count. A parameter not listed has no known unit, so
+/// it takes a relative tolerance only.
+#[must_use]
+pub fn absolute_unit(param: &str) -> Option<(&'static str, f64)> {
+    match param {
+        "w" | "l" | "ps" | "pd" | "pe" | "perim" => Some(("nm", 1e-9)),
+        "area" | "as" | "ad" | "ae" => Some(("nm2", 1e-18)),
+        "r" => Some(("ohm", 1.0)),
+        "c" => Some(("aF", 1e-18)),
+        "m" | "nf" => Some(("", 1.0)),
+        _ => None,
+    }
 }
 
 /// Per-layer process parameters, for parasitic extraction, indexed by [`LayerId`].
@@ -869,7 +888,8 @@ fn build_lvs(
             model: strings.intern(&row.model),
             param: strings.intern(&row.param),
             relative: row.relative,
-            absolute: row.absolute,
+            absolute: row.absolute * absolute_unit(&row.param).map_or(1.0, |(_, to_si)| to_si),
+            stated: row.absolute,
         });
     }
     Ok(lvs)
@@ -879,30 +899,90 @@ fn build_lvs(
 /// [`DeckSource::lvs`], which [`lower`] resolves to [`LvsControls`].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LvsSrc {
-    tolerance: Vec<ToleranceSrc>,
+    pub(crate) tolerance: Vec<ToleranceSrc>,
     /// `(model, parameter)`, the parameter lowercase.
-    ignore_parameter: Vec<(String, String)>,
-    asymmetric: Vec<String>,
+    pub(crate) ignore_parameter: Vec<(String, String)>,
+    pub(crate) asymmetric: Vec<String>,
     /// `(model, pin, pin)`, the pins as written.
-    permute: Vec<(String, String, String)>,
-    ignore: Vec<String>,
-    ignore_shorted: Vec<String>,
-    ports_by_name: bool,
+    pub(crate) permute: Vec<(String, String, String)>,
+    pub(crate) ignore: Vec<String>,
+    pub(crate) ignore_shorted: Vec<String>,
+    pub(crate) ports_by_name: bool,
     /// `(model, parameter, min, max)`, the parameter lowercase.
-    range: Vec<(String, String, Option<LvsLimit>, Option<LvsLimit>)>,
+    pub(crate) range: Vec<(String, String, Option<LvsLimit>, Option<LvsLimit>)>,
     /// `lvs topology`, once: `Some(true)` relaxed, `Some(false)` strict.
-    topology: Option<bool>,
-    connect_implicit: Vec<String>,
-    connect_explicit: Vec<Vec<String>>,
+    pub(crate) topology: Option<bool>,
+    pub(crate) connect_implicit: Vec<String>,
+    pub(crate) connect_explicit: Vec<Vec<String>>,
 }
 
-/// `lvs tolerance "model" param relative r absolute a`, converted to SI.
+/// `lvs tolerance "model" param relative r absolute a`, the absolute part
+/// in the deck's unit ([`absolute_unit`]).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ToleranceSrc {
-    model: String,
-    param: String,
-    relative: f64,
-    absolute: f64,
+    pub(crate) model: String,
+    pub(crate) param: String,
+    pub(crate) relative: f64,
+    pub(crate) absolute: f64,
+}
+
+impl LvsSrc {
+    /// The statements that [`lower`] resolves to `controls`, for a deck
+    /// whose devices are `devices`: what a compiled deck decompiles to.
+    #[must_use]
+    pub fn from_controls(
+        controls: &LvsControls,
+        devices: &[DeviceSource],
+        strings: &StrTable,
+    ) -> Self {
+        let name = |id: StrId| strings.resolve(id).to_owned();
+        Self {
+            tolerance: controls
+                .tolerance
+                .iter()
+                .map(|row| ToleranceSrc {
+                    model: name(row.model),
+                    param: name(row.param),
+                    relative: row.relative,
+                    absolute: row.stated,
+                })
+                .collect(),
+            ignore_parameter: controls
+                .ignore_parameter
+                .iter()
+                .map(|&(model, param)| (name(model), name(param)))
+                .collect(),
+            asymmetric: controls.asymmetric.iter().map(|&id| name(id)).collect(),
+            permute: controls
+                .permute
+                .iter()
+                .map(|&(model, a, b)| {
+                    let model = name(model);
+                    let kind = devices
+                        .iter()
+                        .find(|device| device.model == model)
+                        .map_or(DeviceKind::Mos, |device| device.kind);
+                    let pin = |at: u8| pin_names(kind)[usize::from(at)].to_owned();
+                    (model, pin(a), pin(b))
+                })
+                .collect(),
+            ignore: controls.ignore.iter().map(|&id| name(id)).collect(),
+            ignore_shorted: controls.ignore_shorted.iter().map(|&id| name(id)).collect(),
+            ports_by_name: controls.ports_by_name,
+            range: controls
+                .range
+                .iter()
+                .map(|row| (name(row.model), name(row.param), row.min, row.max))
+                .collect(),
+            topology: controls.relaxed.then_some(true),
+            connect_implicit: controls.connect_implicit.clone(),
+            connect_explicit: controls
+                .connect_explicit
+                .iter()
+                .map(|group| group.iter().map(|&id| name(id)).collect())
+                .collect(),
+        }
+    }
 }
 
 /// Layer-table tests, and the fixture the layout tests borrow.

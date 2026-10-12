@@ -13,7 +13,8 @@
 
 use super::kinds::{Cmp, Dim, Kind, Param, KINDS};
 use super::{
-    DeckSource, DerivedOp, DerivedSource, DeviceKind, ParamSource, ParamValue, RuleSource,
+    absolute_unit, DeckSource, DerivedOp, DerivedSource, DeviceKind, LvsLimit, ParamSource,
+    ParamValue, RuleSource,
 };
 use gpurify_geom::{DbuArea, Grid};
 use std::collections::HashMap;
@@ -37,8 +38,9 @@ pub enum PrintError {
 /// The text states `grid` as the deck's grid, its drawn layers, ignored
 /// pairs, derived layers and rules in declaration order (each rule where its
 /// first inline layer was made, every other after the layers), then its
-/// connectivity, devices and parasitic stack. `for` loops and `let` bindings
-/// are not reconstructed: a loop's rules are written one by one.
+/// connectivity, devices, `lvs` statements and parasitic stack. `for` loops
+/// and `let` bindings are not reconstructed: a loop's rules are written
+/// one by one.
 ///
 /// # Errors
 ///
@@ -246,6 +248,7 @@ impl Printer<'_> {
         }
         self.connectivity(&mut out);
         self.devices(&mut out)?;
+        self.lvs(&mut out)?;
         for (layer, row) in &source.pex {
             let _ = write!(
                 out,
@@ -321,6 +324,67 @@ impl Printer<'_> {
                 }
             }
             out.push('\n');
+        }
+        Ok(())
+    }
+
+    /// The `lvs` statements, a kind at a time, each kind in deck order.
+    fn lvs(&self, out: &mut String) -> Result<(), PrintError> {
+        let lvs = &self.source.lvs;
+        for row in &lvs.tolerance {
+            let _ = write!(out, "lvs tolerance {} {}", quoted(&row.model)?, row.param);
+            if row.relative > 0.0 || row.absolute == 0.0 {
+                let _ = write!(out, " relative {}", number(row.relative)?);
+            }
+            if row.absolute > 0.0 {
+                let (unit, _) = absolute_unit(&row.param).ok_or_else(|| {
+                    PrintError::Unprintable(format!("`{}` takes no absolute tolerance", row.param))
+                })?;
+                let _ = write!(out, " absolute {}{unit}", number(row.absolute)?);
+            }
+            out.push('\n');
+        }
+        for (model, param) in &lvs.ignore_parameter {
+            let _ = writeln!(out, "lvs ignore_parameter {} {param}", quoted(model)?);
+        }
+        for model in &lvs.asymmetric {
+            let _ = writeln!(out, "lvs asymmetric {}", quoted(model)?);
+        }
+        for (model, a, b) in &lvs.permute {
+            let _ = writeln!(out, "lvs permute {} {a} {b}", quoted(model)?);
+        }
+        for model in &lvs.ignore {
+            let _ = writeln!(out, "lvs ignore {}", quoted(model)?);
+        }
+        for model in &lvs.ignore_shorted {
+            let _ = writeln!(out, "lvs ignore_shorted {}", quoted(model)?);
+        }
+        if lvs.ports_by_name {
+            out.push_str("lvs ports_by_name\n");
+        }
+        for (model, param, min, max) in &lvs.range {
+            let _ = write!(out, "lvs range {} {param}", quoted(model)?);
+            for (cmp, limit) in [(">=", min), ("<=", max)] {
+                let Some(limit) = limit else { continue };
+                let value = match *limit {
+                    LvsLimit::Length(length) => self.length(i128::from(length.raw()))?,
+                    LvsLimit::Area(area) => self.area(area)?,
+                    LvsLimit::Count(count) => count.to_string(),
+                };
+                let _ = write!(out, " {cmp} {value}");
+            }
+            out.push('\n');
+        }
+        if let Some(relaxed) = lvs.topology {
+            let policy = if relaxed { "relaxed" } else { "strict" };
+            let _ = writeln!(out, "lvs topology {policy}");
+        }
+        for pattern in &lvs.connect_implicit {
+            let _ = writeln!(out, "lvs connect_implicit {}", quoted(pattern)?);
+        }
+        for group in &lvs.connect_explicit {
+            let names: Result<Vec<_>, _> = group.iter().map(|name| quoted(name)).collect();
+            let _ = writeln!(out, "lvs connect_explicit {}", names?.join(" "));
         }
         Ok(())
     }

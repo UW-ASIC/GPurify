@@ -477,6 +477,7 @@ lvs tolerance \"nfet\" m absolute 1
         param: strings.get(param).expect("interned"),
         relative,
         absolute,
+        stated: 0.0,
     };
     let want = [
         row("nfet", "w", 0.01, 0.0),
