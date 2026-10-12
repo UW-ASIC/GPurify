@@ -42,11 +42,11 @@
 //! | `size(L) == w x h` | `cut_size` | [`drc::Rule::CutSize`] | a cut that is not exactly that rectangle | DRC-013, DRC-014 |
 //! | `edge_length(L) >= len` | `min_edge_length` | [`drc::Rule::MinEdgeLength`] | an edge shorter than the limit | DRC-020, DRC-038 |
 //! | `notch(L) >= len` | `notch` | [`drc::Rule::Notch`] | a gap inside one shape narrower than the limit | DRC-024, DRC-038 |
-//! | `space(L) >= len` | `min_spacing` | [`drc::Rule::MinSpacing`] | two shapes on one layer closer than the limit | DRC-023, DRC-037, DRC-038, DRC-060 |
-//! | `space(A, B) >= len` | `min_spacing_diff` | [`drc::Rule::MinSpacingDiff`] | a shape on A closer than the limit to one on B | DRC-038, DRC-047, DRC-065, DRC-073, ERC-C11 |
+//! | `space(L) >= len` | `min_spacing` | [`drc::Rule::MinSpacing`] | two shapes on one layer closer than the limit | DRC-023, DRC-037, DRC-038, DRC-060, DRC-064 |
+//! | `space(A, B) >= len` | `min_spacing_diff` | [`drc::Rule::MinSpacingDiff`] | a shape on A closer than the limit to one on B | DRC-038, DRC-047, DRC-064, DRC-065, DRC-073, ERC-C11 |
 //! | `space(A, B, projection) >= len` | `projection_spacing` | [`drc::Rule::ProjectionSpacing`] | facing edges of A and B too close | DRC-055 |
 //! | `eol_space(L; eol_width: len) >= len` | `eol_spacing` | [`drc::Rule::EolSpacing`] | too little space at an end of line | DRC-029, DRC-031 |
-//! | `prl_space(L; prl: len) >= len` | `prl_spacing` | [`drc::Rule::PrlSpacing`] | shapes running side by side for `prl`, too close | DRC-026 |
+//! | `prl_space(L; prl: len) >= len` | `prl_spacing` | [`drc::Rule::PrlSpacing`] | shapes running side by side for `prl`, too close | DRC-026, DRC-064 |
 //! | `corner_space(L) >= len` | `corner_to_corner` | [`drc::Rule::CornerToCorner`] | two shapes whose corners are too close | DRC-032 |
 //! | `wide_space(L; width: len) >= len` | `wide_dependent_spacing` | [`drc::Rule::WideDependentSpacing`] | too little space from the wide part of a shape | DRC-025 |
 //! | `wide_space(L; width: len, attached: len) >= len` | `attached_wide_spacing` | [`drc::Rule::AttachedWideSpacing`] | the same, also from what is attached to the wide part | DRC-028 |
@@ -104,7 +104,7 @@
 //! | `eol_keep_out(L; eol_width: len, backward: len, side: len, forward: len)` | `eol_keep_out` | [`drc::Rule::EolKeepOut`] | another shape inside an end of line's keep-out box | DRC-030 |
 //! | `two_width_table(L; width: [..], prl: [..], space: [[..]])` | `two_width_spacing_table` | [`drc::Rule::TwoWidthSpacingTable`] | two shapes closer than the cell both their widths select | DRC-027 |
 //! | `span_length(L; x: [..], y: [..])` | `span_length` | [`drc::Rule::SpanLength`] | a span of a shape not on the list of legal spans | DRC-036 |
-//! | `corner_space(L; corner_to_corner: bool, except_eol: len \| none) >= len` | `convex_corner_spacing` | [`drc::Rule::ConvexCornerSpacing`] | facing convex corners closer than the limit, by the larger axis gap, ends of line exempt | DRC-032 |
+//! | `corner_space(L; corner_to_corner: bool, except_eol: len \| none) >= len` | `convex_corner_spacing` | [`drc::Rule::ConvexCornerSpacing`] | facing convex corners closer than the limit, by the larger axis gap, ends of line exempt | DRC-031, DRC-032 |
 //! | `pitch(L, vertical \| horizontal) == len` | `exact_pitch` | [`drc::Rule::ExactPitch`] | neighbouring rectangles whose centres are not exactly the pitch apart | DRC-035 |
 //!
 //! ## Electrical rules

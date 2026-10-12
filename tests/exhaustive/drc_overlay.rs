@@ -85,6 +85,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         selections(),
         shape_class(),
         feature_length(),
+        foundry_expressions(),
         covering_overlapping(),
         sized_xy(),
         edge_operations(),
@@ -5588,6 +5589,168 @@ fn edge_extended() -> Vec<Fixture> {
         }
     }
     out
+}
+
+/// Foundry rules the deck language writes with existing kinds, each the
+/// reading its foundry's public deck codes, with the limit swept one step
+/// either side:
+///
+/// - sky130 difftap.6, "Diff and tap are not allowed to extend beyond their
+///   abutting edge" (DRC-051): the butting edge `tap.edges() and
+///   diff.edges()` lengthened 1 past each end (open_pdks `sky130.lydrc`
+///   extends it 0.01 past both ends and asks whether diff or tap lies
+///   there); a tap the height of its diff is clean, a taller one leaves a
+///   1 x 1 square in the cap, and a shifted one two.
+/// - IHP Rppd.c's maximum, "Min. and max. SalBlock space to Cont 0.20"
+///   (DRC-044): a contact not touching the band 200 either side of a
+///   SalBlock edge (IHP `sg13g2_maximal.drc`: `Rppd_Cont.ext_interacting(
+///   SalBlock.edges.extended(:out => 0.2, :in => 0.2), inverted: true)`); a
+///   100 contact 199, 200 and 201 off the block's side, and one 400 inside
+///   the block.
+/// - ASAP7 M4.S.3, "Minimum tip-to-tip spacing between two M4 layer polygons
+///   that do not share a parallel run length on adjacent tracks" 40
+///   (DRC-031): lines on adjacent tracks are 24 apart (M4.W.1 24 on a
+///   48 track pitch, M4.AUX.2), so the larger axis gap of their facing
+///   corners is the tip-to-tip gap, `corner_space(met4; corner_to_corner:
+///   false, except_eol: none) >= 40nm`; tips 39, 40 and 41 apart, and two
+///   lines sharing a run (no facing corners).
+/// - IHP CntB.b, CntB.b1 and CntB.b2 on bar contacts (DRC-064): "Any Cont
+///   shape not being a square shape is considered a ContBar" (IHP layout
+///   rules §5.15; its deck: `cont.non_squares`), so `cont.non_squares()`
+///   holds bars of any length; two 160 x 1000 bars 279/280 apart (b, 280),
+///   two 160 x 6000 bars 359/360 apart running 6000 (b1, 360 beyond a 5 µm
+///   run), and a bar 219/220 from a square contact (b2, 220).
+fn foundry_expressions() -> Vec<Fixture> {
+    let mut cases = Vec::new();
+    let caps = "(tap.edges() and diff.edges()).extended(begin: 1nm, end: 1nm, out: 1nm, in: 1nm) \
+                not (tap.edges() and diff.edges()).extended(begin: 0nm, end: 0nm, out: 1nm, in: 1nm)";
+    let butt = format!("({caps}) and (diff or tap)");
+    for (name, tap, findings) in [
+        ("flush", (0, 0, 500, 500), vec![]),
+        ("taller", (0, 0, 500, 600), areas(&[1])),
+        ("shifted", (0, 100, 500, 600), areas(&[1, 1])),
+    ] {
+        cases.push(derived(
+            &format!("difftap.6/{name}"),
+            &["DRC-051"],
+            &["diff", "tap"],
+            &[(butt.as_str(), findings)],
+            rects(Layout::default(), "diff", &[(500, 0, 1000, 500)])
+                .rect("tap", tap.0, tap.1, tap.2, tap.3),
+        ));
+    }
+    let far_from_edge = "cont.not_interacting(salblock.edges().extended(begin: 0nm, end: 0nm, \
+                         out: 200nm, in: 200nm))";
+    let block = |layout: Layout| layout.rect("salblock", 0, 0, 1000, 1000);
+    for (g, side) in sweep(200) {
+        cases.push(derived(
+            &format!("rppd.c/{side}"),
+            &["DRC-044"],
+            &["cont", "salblock"],
+            &[(
+                far_from_edge,
+                if g > 200 { areas(&[10_000]) } else { vec![] },
+            )],
+            block(Layout::default()).rect("cont", 1000 + g, 450, 1100 + g, 550),
+        ));
+    }
+    cases.push(derived(
+        "rppd.c/inside",
+        &["DRC-044"],
+        &["cont", "salblock"],
+        &[(far_from_edge, areas(&[10_000]))],
+        block(Layout::default()).rect("cont", 450, 450, 550, 550),
+    ));
+    let s3 = new_deck(
+        &["met4"],
+        "rule M4.S.3 corner_space(met4; corner_to_corner: false, except_eol: none) >= 40nm\n",
+    );
+    for (dx, side) in sweep(40) {
+        let findings = if dx < 40 {
+            vec![Finding::length(dx)]
+        } else {
+            vec![]
+        };
+        cases.push(fixture(
+            &format!("m4.s.3/{side}"),
+            &["DRC-031"],
+            &s3,
+            rects(
+                Layout::default(),
+                "met4",
+                &[(0, 0, 500, 24), (500 + dx, 48, 1000 + dx, 72)],
+            ),
+            &[("M4.S.3", findings)],
+        ));
+    }
+    cases.push(fixture(
+        "m4.s.3/shared_run",
+        &["DRC-031"],
+        &s3,
+        rects(
+            Layout::default(),
+            "met4",
+            &[(0, 0, 500, 24), (400, 48, 900, 72)],
+        ),
+        &[("M4.S.3", vec![])],
+    ));
+    let cntb = new_deck(
+        &["cont"],
+        "layer bar = cont.non_squares()\nlayer sq = cont.squares()\n\
+         rule CntB.b space(bar) >= 280nm\nrule CntB.b1 prl_space(bar; prl: 5001nm) >= 360nm\n\
+         rule CntB.b2 space(bar, sq) >= 220nm\n",
+    );
+    let bars = |gap: i64, long: i64| {
+        rects(
+            Layout::default(),
+            "cont",
+            &[(0, 0, 160, long), (160 + gap, 0, 320 + gap, long)],
+        )
+    };
+    for (gap, side) in sweep(280) {
+        cases.push(fixture(
+            &format!("cntb.b/{side}"),
+            &["DRC-064"],
+            &cntb,
+            bars(gap, 1000),
+            &[
+                ("CntB.b", below(gap, 280)),
+                ("CntB.b1", vec![]),
+                ("CntB.b2", vec![]),
+            ],
+        ));
+    }
+    for (gap, side) in sweep(360) {
+        cases.push(fixture(
+            &format!("cntb.b1/{side}"),
+            &["DRC-064"],
+            &cntb,
+            bars(gap, 6000),
+            &[
+                ("CntB.b", vec![]),
+                ("CntB.b1", below(gap, 360)),
+                ("CntB.b2", vec![]),
+            ],
+        ));
+    }
+    for (gap, side) in sweep(220) {
+        cases.push(fixture(
+            &format!("cntb.b2/{side}"),
+            &["DRC-064"],
+            &cntb,
+            rects(
+                Layout::default(),
+                "cont",
+                &[(0, 0, 160, 1000), (160 + gap, 0, 320 + gap, 160)],
+            ),
+            &[
+                ("CntB.b", vec![]),
+                ("CntB.b1", vec![]),
+                ("CntB.b2", below(gap, 220)),
+            ],
+        ));
+    }
+    every_placement(cases)
 }
 
 /// A feature's length, the longer side of its bounding box (DRC-021: sky130
