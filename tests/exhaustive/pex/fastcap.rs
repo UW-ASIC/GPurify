@@ -726,16 +726,21 @@ fn fastcap_stratified(
     grounded_matrix(&out, conductors, 1.0)
 }
 
-/// PEX-003: every entry of three stratified geometries within
-/// [`STRATIFIED`] of `FastCap`'s multi-dielectric solve: an 8 um `m1`
-/// plate and two coupled 4 x 2 um `m1` plates 1 um apart, the stack 7 up
-/// to `m1`'s top and 3.9 over it, and a 1 um `m1` bar under a crossing
-/// 1 um `m2` bar, 7 up to `m1`'s top, 3.9 to `m2`'s bottom and 5 over it
-/// (two interfaces). Each reference is cut at [`PLATE_PANEL_UM`]: at
-/// [`PANEL_UM`], 0.5 um bars gave `FastCap` 2.0's dielectric solve a
-/// matrix it returned non-physical (a negative self-capacitance) or did
-/// not finish in 20 minutes (Nightly 38233408339), where the coarser,
-/// wider geometries stay inside its reach.
+/// PEX-003: every entry of four stratified geometries within
+/// [`STRATIFIED`] of `FastCap`'s multi-dielectric solve, the stack 7 up to
+/// `m1`'s top and 3.9 over it: an 8 um `m1` plate, two coupled 4 x 2 um
+/// `m1` plates 1 um apart, and a 1 um `m1` bar under a crossing 1 um `m2`
+/// bar; and the plate again under two interfaces, 7 up to `m1`'s top, 3.9
+/// to `m2`'s height and 5 over it. Each reference is cut at
+/// [`PLATE_PANEL_UM`].
+///
+/// These replace narrower cases `FastCap` 2.0's dielectric solve could not
+/// do: at [`PANEL_UM`], 0.5 um bars came back non-physical (negative
+/// self-capacitances) or unfinished in 20 minutes (Nightly 38233408339);
+/// and a conductor whose face lies on an interface above it, the crossing
+/// with `m2` on the 3.9/5 interface, came back non-physical at any mesh
+/// (Nightly 38242834781: a negative `C[1][1]`). Two interfaces are proved
+/// over the plate, which touches only the lower one.
 /// Oracle: differential against `FastCap` 2.0, an independent
 /// multi-dielectric boundary-element solver given the same windows.
 #[test]
@@ -765,8 +770,17 @@ fn fastcap_differential_stratified_dielectrics() {
             PLATE_PANEL_UM,
         ),
         (
-            "crossing",
+            "two_interfaces",
             with(7.0, 3.9, 5.0),
+            Layout::default()
+                .rect("m1", 0, 0, 8_000, 8_000)
+                .label("m1_label", 500, 500, "A"),
+            vec!["A"],
+            PLATE_PANEL_UM,
+        ),
+        (
+            "crossing",
+            with(7.0, 3.9, 3.9),
             Layout::default()
                 .rect("m1", 0, 0, 4_000, 1_000)
                 .rect("m2", 1_500, -1_500, 2_500, 2_500)
@@ -797,6 +811,6 @@ fn fastcap_differential_stratified_dielectrics() {
             }
         }
     }
-    assert_eq!(compared, 9, "every entry compared");
+    assert_eq!(compared, 10, "every entry compared");
     assert!(broken.is_empty(), "{}", broken.join("\n"));
 }
