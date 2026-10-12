@@ -100,6 +100,7 @@
 //! | `forbidden_space(L; min: len, max: len, prl: len)` | `forbidden_spacing` | [`drc::Rule::ForbiddenSpacing`] | facing edges running alongside at a gap in a forbidden range | DRC-033 |
 //! | `eol_space(L; eol_width: len, within: len, parallel: .., end_to_end: ..) >= len` | `eol_within_spacing` | [`drc::Rule::EolWithinSpacing`] | too little space in a LEF end-of-line keep-out, with parallel-edge and end-to-end qualifiers | DRC-029 |
 //! | `eol_keep_out(L; eol_width: len, backward: len, side: len, forward: len)` | `eol_keep_out` | [`drc::Rule::EolKeepOut`] | another shape inside an end of line's keep-out box | DRC-030 |
+//! | `keep_out_zone(L; class: s x l, to: s x l \| none, end_side, end_forward, side_side, side_forward)` | `keep_out_zone` | [`drc::Rule::KeepOutZone`] | another cut inside a cut class's side or end keep-out zone | DRC-126 |
 //! | `two_width_table(L; width: [..], prl: [..], space: [[..]])` | `two_width_spacing_table` | [`drc::Rule::TwoWidthSpacingTable`] | two shapes closer than the cell both their widths select | DRC-027 |
 //! | `span_length(L; x: [..], y: [..])` | `span_length` | [`drc::Rule::SpanLength`] | a span of a shape not on the list of legal spans | DRC-036 |
 //! | `corner_space(L; corner_to_corner: bool, except_eol: len \| none) >= len` | `convex_corner_spacing` | [`drc::Rule::ConvexCornerSpacing`] | facing convex corners closer than the limit, by the larger axis gap, ends of line exempt | DRC-032 |

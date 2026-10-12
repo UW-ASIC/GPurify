@@ -16,7 +16,9 @@ use gpurify_geom::connectivity::components_into;
 use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, Point};
 use gpurify_geom::rects::decompose_into;
-use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer};
+use gpurify_geom::{
+    Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer, MAX_ABS_DBU,
+};
 use gpurify_ingest::StrId;
 
 fn measured_pairs(store: &GeometryStore, layer: LayerId, radius: Dbu, s: &mut Scratch) {
@@ -466,4 +468,100 @@ pub(crate) fn via_stack(
         }
     }
     (Outcome::Ran, cuts.iter().map(|c| c.len() as u64).sum())
+}
+
+/// Whether `b` is a cut of the class `(short, long)`: that size either way
+/// round.
+fn of_class(b: Bbox, (short, long): (Dbu, Dbu)) -> bool {
+    let (w, h) = (b.xhi - b.xlo, b.yhi - b.ylo);
+    w.min(h) == short && w.max(h) == long
+}
+
+/// LEF58 `KEEPOUTZONE` as `OpenROAD`'s detailed router checks it
+/// (`checKeepOutZone_main`): round each cut of `class` (never square), a
+/// side zone (the cut lengthened by `side.1` at each end, widened by
+/// `side.0` each side) and an end zone (lengthened by `end.0`, widened by
+/// `end.1`); every other cut, of class `to` when given, overlapping either
+/// with a positive area is a finding measuring its area inside the two, at
+/// the centre of that area's box. `examined` counts the class's cuts.
+#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
+pub(crate) fn keep_out_zone(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    class: (Dbu, Dbu),
+    to: Option<(Dbu, Dbu)>,
+    end: (Dbu, Dbu),
+    side: (Dbu, Dbu),
+    out: &mut Violations,
+) -> Verdict {
+    let cuts: Vec<(Bbox, PolyId)> = store
+        .polys_on_layer(layer)
+        .map(|row| (store.poly_bbox(PolyId(row)), PolyId(row)))
+        .collect();
+    let others = SortedRects::new(
+        cuts.iter()
+            .copied()
+            .filter(|&(b, _)| to.is_none_or(|to| of_class(b, to)))
+            .collect(),
+    );
+    let at = |v: i64| Dbu::new_unchecked(v.clamp(-MAX_ABS_DBU, MAX_ABS_DBU));
+    let mut examined = 0u64;
+    let mut hits: Vec<(PolyId, Bbox, bool)> = Vec::new();
+    for &(b, cut) in cuts.iter().filter(|&&(b, _)| of_class(b, class)) {
+        examined += 1;
+        let along_x = b.xhi - b.xlo > b.yhi - b.ylo;
+        // Grown by `along` on the cut's long axis and `across` on its short one.
+        let zone = |along: Dbu, across: Dbu| {
+            let (dx, dy) = if along_x {
+                (along.raw(), across.raw())
+            } else {
+                (across.raw(), along.raw())
+            };
+            Bbox {
+                xlo: at(b.xlo.raw() - dx),
+                ylo: at(b.ylo.raw() - dy),
+                xhi: at(b.xhi.raw() + dx),
+                yhi: at(b.yhi.raw() + dy),
+            }
+        };
+        let (side_zone, end_zone) = (zone(side.1, side.0), zone(end.0, end.1));
+        hits.clear();
+        hits.extend(
+            others
+                .overlapping(side_zone)
+                .map(|(part, o)| (o, part, true)),
+        );
+        hits.extend(
+            others
+                .overlapping(end_zone)
+                .map(|(part, o)| (o, part, false)),
+        );
+        hits.retain(|&(o, ..)| o != cut);
+        hits.sort_unstable_by_key(|&(o, _, in_side)| (o, !in_side));
+        for other in hits.chunk_by(|p, q| p.0 == q.0) {
+            // Inside one zone, or inside both less what the two share.
+            let shared = match other {
+                [(_, s, _), (_, e, _)] => s.intersection(*e).map_or(DbuArea::new(0), Bbox::area),
+                _ => DbuArea::new(0),
+            };
+            let area = other
+                .iter()
+                .fold(DbuArea::new(0), |sum, &(_, part, _)| sum + part.area())
+                - shared;
+            let bounds = other
+                .iter()
+                .fold(Bbox::EMPTY, |sum, &(_, part, _)| sum.union(part));
+            out.push(Violation {
+                rule,
+                layer,
+                severity: Severity::Error,
+                at: centre(bounds),
+                measured: Measurement::Area(area),
+                limit: Measurement::Area(DbuArea::new(0)),
+                shapes: (cut, Some(other[0].0)),
+            });
+        }
+    }
+    (Outcome::Ran, examined)
 }

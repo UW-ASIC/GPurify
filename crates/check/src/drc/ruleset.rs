@@ -2091,6 +2091,57 @@ pub enum Rule {
         /// positive.
         forward: Dbu,
     },
+    /// Another cut inside the keep-out zone of a cut of one class.
+    ///
+    /// Deck: `keep_out_zone(L; class: short x long, to: short x long | none,
+    /// end_side: len, end_forward: len, side_side: len, side_forward: len)`,
+    /// kind `keep_out_zone`. A cut is a drawn row of `L` read as its bounding
+    /// box, of a class when that box is the class's size either way round,
+    /// as for [`Rule::CutClassSpacing`]. Round each cut of `class` lie two
+    /// zones: the side zone, the cut lengthened by `side_forward` at each end
+    /// of its long axis and widened by `side_side` on each side; and the end
+    /// zone, the cut lengthened by `end_side` and widened by `end_forward`.
+    /// Another cut, of class `to` when one is given, overlapping either zone
+    /// with a positive area is a violation; touching a zone is not
+    /// (`LEF58_KEEPOUTZONE CUTCLASS c1 [TO c2] ENDEXTENSION endSide
+    /// endForward SIDEEXTENSION sideSide sideForward`, as `OpenROAD`'s
+    /// detailed router builds the zones, `checKeepOutZone_main`, and its
+    /// `odb::Rect::overlaps`, which is strict).
+    ///
+    /// One violation per cut of `class` and other cut in its zones:
+    /// `measured` the area of the other cut inside the two zones against a
+    /// `limit` of 0, at the centre of the bounding box of that area
+    /// (floored). Two cuts of `class` in each other's zones are two
+    /// violations, one each way, as the router checks every via. `shapes` is
+    /// the cut, then the other. `examined` counts cuts of `class`. The layer
+    /// is not validated, so this rule never records `Refused`.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-126. Rules: `LEF58_KEEPOUTZONE` (`OpenROAD` `odb`
+    /// `KeepOutZoneParser`, `drt` `FlexGC_cut.cpp`).
+    ///
+    /// Limits: a square class has no long axis and the router skips it, so
+    /// `class` must be oblong. `EXTENSION side forward` (the form without
+    /// `ENDEXTENSION`), `SPIRALEXTENSION` and `EXCEPTEXACTALIGNED` have a
+    /// grammar but no public semantics (the router reads none of them), and
+    /// are not modelled.
+    KeepOutZone {
+        /// The cut layer, drawn or derived.
+        layer: LayerId,
+        /// The class whose cuts own zones, `(short, long)` in grid units;
+        /// `short < long`.
+        class: (Dbu, Dbu),
+        /// The class of the cuts held out, `(short, long)`; `None` holds out
+        /// every cut.
+        to: Option<(Dbu, Dbu)>,
+        /// The end zone: `(side, forward)`, grown along the cut's long axis
+        /// by `side` and across it by `forward`, in grid units; 0 or more.
+        end: (Dbu, Dbu),
+        /// The side zone: `(side, forward)`, grown across the cut's long
+        /// axis by `side` and along it by `forward`, in grid units; 0 or
+        /// more.
+        side: (Dbu, Dbu),
+    },
     /// Two shapes closer than their cell of a two-width spacing table: the
     /// space depends on the widths of both shapes, and per width on the run
     /// between them.
@@ -3227,6 +3278,7 @@ impl RuleSet {
                         1 => (one(spec)?, None),
                         _ => two(spec).map(|(a, b)| (a, Some(b)))?,
                     };
+
                     Rule::EdgeSpacing {
                         a,
                         b,
@@ -3490,6 +3542,31 @@ impl RuleSet {
                         layer,
                         table: u32::try_from(set.span_tables.len() - 1)
                             .expect("a deck has few tables"),
+                    }
+                }
+                "keep_out_zone" => {
+                    let layer = one(spec)?;
+                    // A class is a size either way round: shorter side first.
+                    let sorted = |a: Dbu, b: Dbu| (a.min(b), a.max(b));
+                    let class = sorted(length(spec, "short")?, length(spec, "long")?);
+                    let to = match optional(spec, "to_short") {
+                        None => None,
+                        Some(_) => {
+                            Some(sorted(length(spec, "to_short")?, length(spec, "to_long")?))
+                        }
+                    };
+                    Rule::KeepOutZone {
+                        layer,
+                        class,
+                        to,
+                        end: (
+                            at_least_zero(spec, "end_side")?,
+                            at_least_zero(spec, "end_forward")?,
+                        ),
+                        side: (
+                            at_least_zero(spec, "side_side")?,
+                            at_least_zero(spec, "side_forward")?,
+                        ),
                     }
                 }
                 "eol_keep_out" => Rule::EolKeepOut {
@@ -3858,6 +3935,13 @@ impl RuleSet {
                         s,
                         out,
                     ),
+                    Rule::KeepOutZone {
+                        layer,
+                        class,
+                        to,
+                        end,
+                        side,
+                    } => via::keep_out_zone(store, id, layer, class, to, end, side, out),
                     Rule::MultiPatterning {
                         layer,
                         colors,
@@ -4343,6 +4427,29 @@ impl Rule {
             Rule::EolKeepOut {
                 eol_width, forward, ..
             } => length(eol_width).and(length(forward)),
+            Rule::KeepOutZone {
+                class: (short, long),
+                to,
+                end,
+                side,
+                ..
+            } => {
+                // An oblong class: a square one has no long axis to grow along.
+                let at_least_zero = |value: Dbu| {
+                    if value.raw() < 0 {
+                        Err(refuse(value.raw()))
+                    } else {
+                        Ok(())
+                    }
+                };
+                length(short)
+                    .and(length(long - short))
+                    .and(to.map_or(Ok(()), |(short, _)| length(short)))
+                    .and(at_least_zero(end.0))
+                    .and(at_least_zero(end.1))
+                    .and(at_least_zero(side.0))
+                    .and(at_least_zero(side.1))
+            }
             Rule::ConvexCornerSpacing {
                 except_eol, limit, ..
             } => except_eol.map_or(Ok(()), length).and(length(limit)),
@@ -4496,6 +4603,7 @@ impl Rule {
             Rule::ForbiddenSpacing { .. } => "forbidden_spacing",
             Rule::EolWithinSpacing { .. } => "eol_within_spacing",
             Rule::EolKeepOut { .. } => "eol_keep_out",
+            Rule::KeepOutZone { .. } => "keep_out_zone",
             Rule::TwoWidthSpacingTable { .. } => "two_width_spacing_table",
             Rule::SpanLength { .. } => "span_length",
             Rule::ConvexCornerSpacing { .. } => "convex_corner_spacing",
@@ -4544,6 +4652,7 @@ impl Rule {
             | Rule::ForbiddenSpacing { layer, .. }
             | Rule::EolWithinSpacing { layer, .. }
             | Rule::EolKeepOut { layer, .. }
+            | Rule::KeepOutZone { layer, .. }
             | Rule::TwoWidthSpacingTable { layer, .. }
             | Rule::SpanLength { layer, .. }
             | Rule::ConvexCornerSpacing { layer, .. }
