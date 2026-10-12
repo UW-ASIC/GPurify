@@ -182,6 +182,7 @@
 //! | `lvs.terminal_count` | [`lvs::check_layout`] | a device with the wrong number of terminals | LVS-004 |
 //! | `lvs.param_range` | [`lvs::check_param_ranges`] | a device parameter outside the range the deck states for its model | LVS-068 |
 //! | `lvs.short_path` | [`lvs::check_net_seed_conflicts`] | a step of the path a short between two labels runs along | LVS-005 |
+//! | `lvs.unpaired_instance` | [`lvs::record_unpaired_instances`] | a reference instance none of whose devices paired, the outermost such | LVS-017 |
 
 pub mod deck;
 pub mod drc;

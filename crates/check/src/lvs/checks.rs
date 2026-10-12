@@ -30,12 +30,13 @@ use gpurify_ingest::{StrId, StrTable};
 /// raises them (`lvs.unpaired_device` is [`Discrepancy::UnpairedDevice`],
 /// `lvs.model_mismatch` [`Discrepancy::ModelMismatch`], and so on), the five
 /// after the first six under [`check_layout`], and `lvs.param_range` under
-/// [`check_param_ranges`], and `lvs.short_path` with `lvs.net_seed_conflict`
-/// ([`check_net_seed_conflicts`]). The crate's
+/// [`check_param_ranges`], `lvs.short_path` with `lvs.net_seed_conflict`
+/// ([`check_net_seed_conflicts`]), and `lvs.unpaired_instance` under
+/// [`record_unpaired_instances`]. The crate's
 /// [rule reference](crate#layout-against-schematic) maps each to its
 /// [catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv)
 /// rows.
-pub const RULE_IDS: [&str; 14] = [
+pub const RULE_IDS: [&str; 15] = [
     "lvs.unpaired_device",
     "lvs.unpaired_net",
     "lvs.terminal_mismatch",
@@ -50,6 +51,7 @@ pub const RULE_IDS: [&str; 14] = [
     "lvs.param_range",
     "lvs.model_mismatch",
     "lvs.short_path",
+    "lvs.unpaired_instance",
 ];
 
 /// Intern every LVS rule id; the report looks them up in a table it only borrows.
@@ -356,6 +358,105 @@ pub fn record_discrepancies(found: &[Discrepancy], strings: &StrTable, out: &mut
             }
         }
         out.push(row);
+    }
+}
+
+/// One instance of the reference a mismatch left without a partner: every
+/// device it placed that the comparison kept is unpaired, as `KLayout`
+/// reports a subcircuit with no counterpart (catalog LVS-017).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnpairedInstance {
+    /// The row of the flattened reference's
+    /// [`placements`](gpurify_ingest::netlist::Netlist::placements).
+    pub placement: u32,
+    /// How many devices it placed, all unpaired.
+    pub devices: u32,
+}
+
+/// The instances of the reference whose every device the comparison kept is
+/// unpaired, each the outermost such: an instance inside a reported one is
+/// not reported again. `found` is a mismatch's discrepancies,
+/// `reference_rows` [`Traced::reference_rows`](crate::lvs::Traced::reference_rows)
+/// of the same comparison, and `placements` the flattened reference's,
+/// whose device rows are the reference graph's
+/// ([`from_reference`](crate::lvs::graph::from_reference) keeps the
+/// netlist's order). An instance placing no device the comparison kept is
+/// never reported: nothing of it could pair.
+///
+/// The flat comparison decides the verdict; this only names, for a
+/// mismatch it found, the instances it left whole and unmatched, so it can
+/// never turn a match into a mismatch or the other way round.
+#[must_use]
+pub fn unpaired_instances(
+    found: &[Discrepancy],
+    reference_rows: &[Vec<u32>],
+    placements: &[gpurify_ingest::netlist::Placement],
+) -> Vec<UnpairedInstance> {
+    let rows = reference_rows
+        .iter()
+        .flatten()
+        .map(|&row| row as usize + 1)
+        .max()
+        .unwrap_or(0)
+        .max(
+            placements
+                .iter()
+                .map(|p| p.devices.end as usize)
+                .max()
+                .unwrap_or(0),
+        );
+    let (mut kept, mut unpaired) = (vec![false; rows], vec![false; rows]);
+    for &row in reference_rows.iter().flatten() {
+        kept[row as usize] = true;
+    }
+    for discrepancy in found {
+        if let Discrepancy::UnpairedDevice {
+            side: crate::lvs::verdict::Side::Reference,
+            device,
+            ..
+        } = *discrepancy
+        {
+            for &row in reference_rows.get(device as usize).into_iter().flatten() {
+                unpaired[row as usize] = true;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut covered = 0u32;
+    for (at, placement) in placements.iter().enumerate() {
+        let range = placement.devices.start as usize..placement.devices.end as usize;
+        if placement.devices.start < covered {
+            continue;
+        }
+        let ours = range.clone().filter(|&row| kept[row]).count();
+        if ours > 0 && range.clone().all(|row| !kept[row] || unpaired[row]) {
+            out.push(UnpairedInstance {
+                placement: narrow(at),
+                devices: narrow(ours),
+            });
+            covered = placement.devices.end;
+        }
+    }
+    out
+}
+
+/// One error row `lvs.unpaired_instance` per instance [`unpaired_instances`]
+/// found, measured its device count against 0, with no layer, location or
+/// shape: the instance is the reference's, and the report names it by its
+/// path and cell beside the row. Records no [`RuleRun`], as
+/// [`record_discrepancies`] records none.
+pub fn record_unpaired_instances(
+    instances: &[UnpairedInstance],
+    strings: &StrTable,
+    out: &mut Violations,
+) {
+    for instance in instances {
+        out.push(graph_violation(
+            rule_id(strings, "lvs.unpaired_instance"),
+            (NO_SHAPE, None),
+            instance.devices,
+            0,
+        ));
     }
 }
 

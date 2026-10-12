@@ -217,6 +217,27 @@ pub struct Netlist {
     pub net_name: Vec<StrId>,
     /// The subcircuit each net belongs to.
     pub net_subckt: Vec<SubcktId>,
+
+    /// What [`Netlist::flatten_top`] expanded, one row per placement below
+    /// the top, in the order it expanded them (a placement before the ones
+    /// inside it); empty on a netlist read from text. Each placement's
+    /// devices, its own and those of every placement inside it, are one
+    /// run of the flattened rows, so a device of the flat comparison can be
+    /// traced back to the instance that placed it (catalog LVS-017).
+    pub placements: Vec<Placement>,
+}
+
+/// One instance [`Netlist::flatten_top`] expanded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placement {
+    /// The instance path, `X1.X2`, interned: the prefix its nets were
+    /// named under.
+    pub path: StrId,
+    /// The placed subcircuit's name.
+    pub cell: StrId,
+    /// The flattened device rows the placement holds, inside placements
+    /// included.
+    pub devices: std::ops::Range<u32>,
 }
 
 impl Netlist {
@@ -234,7 +255,8 @@ impl Netlist {
     /// every leaf device, wired as the hierarchy wires it.
     ///
     /// The result has a single subcircuit, `top` under its own name and with
-    /// its own ports. Its nets are `top`'s, then each instance's internal nets
+    /// its own ports, and records each instance it expanded
+    /// ([`Netlist::placements`]). Its nets are `top`'s, then each instance's internal nets
     /// (those not on a port) under the instance path, `X1.X2.n1`, interned
     /// into `strings`. A device keeps its kind, model and parameters, with its
     /// terminals on the flattened nets. LVS compares devices, not cells, so a
@@ -426,7 +448,15 @@ impl Netlist {
                     out.net_subckt.push(SubcktId(0));
                 }
             }
+            let at = out.placements.len();
+            let first = narrow(out.device_model.len());
+            out.placements.push(Placement {
+                path: strings.intern(&inner),
+                cell: self.subckt_name[callee.0 as usize],
+                devices: first..first,
+            });
             self.expand(callee, hierarchy, map, &inner, strings, out);
+            out.placements[at].devices.end = narrow(out.device_model.len());
         }
     }
 

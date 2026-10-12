@@ -405,3 +405,57 @@ fn a_refused_marker_is_one_terminal_net_row_on_the_marker() {
         (Measurement::Count(2), Measurement::Count(3))
     );
 }
+
+/// Oracle: the definition (`unpaired_instances`' rustdoc), by hand. Four
+/// placements in flattening order: `X0` over rows 1..3, `X1` over 3..5
+/// and `X1.X2` inside it over 4..5, and `X3` over 5..6, whose one row the
+/// deck left out. Reduced device 1 stands for rows 1 and 2, merged. Rows 3
+/// and 4 unpaired name `X1` alone, measured 2, not `X1.X2` again; row 4
+/// alone names only `X1.X2`; device 1 unpaired names `X0` with both its
+/// rows; row 0, placed by no instance, names nothing; `X3`, holding no row
+/// the comparison kept, is never named, and nor is anything for an
+/// unpaired layout device. Breaks if an inner placement is named under an
+/// outer one, a partly paired one is named, or a merged device's rows are
+/// not all read.
+#[test]
+fn an_instance_is_named_when_every_device_it_placed_is_unpaired() {
+    use gpurify_check::lvs::verdict::{Discrepancy, Side};
+    use gpurify_check::lvs::{unpaired_instances, UnpairedInstance};
+    use gpurify_ingest::netlist::Placement;
+    use gpurify_ingest::StrId;
+    let placement = |devices: std::ops::Range<u32>| Placement {
+        path: StrId(0),
+        cell: StrId(0),
+        devices,
+    };
+    let placements = [
+        placement(1..3),
+        placement(3..5),
+        placement(4..5),
+        placement(5..6),
+    ];
+    // Reduced device d stands for these rows; row 5 was left out.
+    let rows = vec![vec![0], vec![1, 2], vec![3], vec![4]];
+    let unpaired = |devices: &[u32]| -> Vec<Discrepancy> {
+        devices
+            .iter()
+            .map(|&device| Discrepancy::UnpairedDevice {
+                side: Side::Reference,
+                device,
+                model: StrId(0),
+            })
+            .collect()
+    };
+    let found = |devices: &[u32]| unpaired_instances(&unpaired(devices), &rows, &placements);
+    let named = |placement, devices| UnpairedInstance { placement, devices };
+    assert_eq!(found(&[2, 3]), [named(1, 2)]);
+    assert_eq!(found(&[3]), [named(2, 1)]);
+    assert_eq!(found(&[1]), [named(0, 2)]);
+    assert!(found(&[0]).is_empty());
+    let layout_side = [Discrepancy::UnpairedDevice {
+        side: Side::Layout,
+        device: 3,
+        model: StrId(0),
+    }];
+    assert!(unpaired_instances(&layout_side, &rows, &placements).is_empty());
+}
