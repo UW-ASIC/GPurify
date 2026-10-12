@@ -30,6 +30,8 @@ layer squares = m.squares()
 layer odd = m.non_rectangles()
 layer long = m.with_bbox_max(> 1000nm)
 layer thin = v.non_squares().with_bbox_min(>= 100nm, < 200nm)
+layer roomy = m.with_rect(300nm x 100nm)
+layer cramped = m.without_rect(200nm x 200nm)
 rule c.min count(m) >= 1
 rule c.max count(m) <= 4
 rule ar aspect_ratio(m) <= 3
@@ -107,6 +109,8 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
         v.non_squares()
             .with_bbox_min(&[Bound::AtLeast(nm(100)), Bound::Below(nm(200))]),
     );
+    d.derived("roomy", m.with_rect(nm(300), nm(100)));
+    d.derived("cramped", m.without_rect(nm(200), nm(200)));
     d.rule("c.min", count(m, 1, false));
     d.rule("c.max", count(m, 4, true));
     d.rule("ar", aspect_ratio(m, 3.0));

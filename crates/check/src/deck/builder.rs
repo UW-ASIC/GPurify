@@ -346,6 +346,20 @@ impl LayerExpr {
         self.ranged(DerivedOp::WithBbox { longer, lo, hi }, fault)
     }
 
+    /// `.with_rect(w x h)`: the shapes that can hold an axis-aligned `w` x `h`
+    /// box, either way round (Calibre `ENCLOSE RECTANGLE`). A side that is
+    /// not positive makes the deck refuse the layer when it builds.
+    #[must_use]
+    pub fn with_rect(self, w: Dbu, h: Dbu) -> Self {
+        self.call(DerivedOp::WithRect { keep: true, w, h }, None, Vec::new())
+    }
+
+    /// `.without_rect(w x h)`: the other shapes.
+    #[must_use]
+    pub fn without_rect(self, w: Dbu, h: Dbu) -> Self {
+        self.call(DerivedOp::WithRect { keep: false, w, h }, None, Vec::new())
+    }
+
     /// `.with_text(texts, "pattern")`: the shapes holding a matching text
     /// drawn on `texts`.
     #[must_use]
@@ -546,6 +560,10 @@ forward! {
     with_bbox_max(bounds: &[Bound<Dbu>]);
     /// [`LayerExpr::with_bbox_min`].
     with_bbox_min(bounds: &[Bound<Dbu>]);
+    /// [`LayerExpr::with_rect`].
+    with_rect(w: Dbu, h: Dbu);
+    /// [`LayerExpr::without_rect`].
+    without_rect(w: Dbu, h: Dbu);
 }
 
 /// A custom rule before its layers are ids.

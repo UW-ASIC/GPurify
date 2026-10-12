@@ -542,6 +542,25 @@ impl Layers<'_> {
                 lo_bound(lo, 2),
                 hi_bound(hi, 2)
             ),
+            // At x2 the box is 2w x 2h and every vertex even: the erosion by
+            // (w - 1, h - 1) keeps area exactly where one fits.
+            DerivedOp::WithRect { keep, w, h } => {
+                let (w, h) = (w.raw() - 1, h.raw() - 1);
+                let room = |x: i64, y: i64| format!("{a}.sized(-{x}, -{y})");
+                let fits = if w == h {
+                    room(w, h)
+                } else {
+                    format!("({} | {})", room(w, h), room(h, w))
+                };
+                format!(
+                    "{a}.{}({fits})",
+                    if keep {
+                        "overlapping"
+                    } else {
+                        "not_overlapping"
+                    }
+                )
+            }
             DerivedOp::Rectangles { square, keep } => format!(
                 "{a}.{}{}",
                 if keep { "" } else { "non_" },

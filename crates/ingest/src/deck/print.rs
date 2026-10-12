@@ -561,6 +561,14 @@ impl Printer<'_> {
                 };
                 call(method, Some(Self::bounds(&row.name, lo, hi, bound)?))
             }
+            DerivedOp::WithRect { keep, w, h } => call(
+                if keep { "with_rect" } else { "without_rect" },
+                Some(format!(
+                    "{} x {}",
+                    self.length(i128::from(w.raw()))?,
+                    self.length(i128::from(h.raw()))?
+                )),
+            ),
             DerivedOp::Extents => call("extents", None),
             DerivedOp::Edges => call("edges", None),
             DerivedOp::WithArea(lo, hi) => {

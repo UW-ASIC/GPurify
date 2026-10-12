@@ -85,6 +85,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         selections(),
         shape_class(),
         feature_length(),
+        enclose_rect(),
         covering_overlapping(),
         sized_xy(),
         edge_operations(),
@@ -5634,6 +5635,58 @@ fn feature_length() -> Vec<Fixture> {
                 areas(&[50_000, 50_000, 90_000, 25_000]),
             ),
             ("a.with_bbox_min(< 100nm)", areas(&[25_000])),
+        ],
+        layout,
+    )])
+}
+
+/// Room for a rectangle (DRC-130, Calibre `ENCLOSE RECTANGLE`):
+/// `with_rect(300nm x 100nm)`, `without_rect(300nm x 100nm)` and
+/// `without_rect(100nm x 100nm)`, each shape reported with its area.
+///
+/// Oracle: boxes fixed by construction, the box's sides swept a grid step:
+/// a 300 x 100 bar (holds it, at the limit), 299 x 100 and 300 x 99 (do not),
+/// a 100 x 300 bar (holds it turned); an L of 50-wide arms in a 300 square
+/// box (a bounding-box reading says it holds); the bar drawn as two abutting
+/// 150 halves (holds, merged); a 400 square ring with 100 walls (its band
+/// holds); two 200 x 60 bars overlapping in a stagger whose box is 300 x 100
+/// (holds no 300 x 100 box, but a 100 square across the overlap).
+fn enclose_rect() -> Vec<Fixture> {
+    let layout = ring(
+        rects(
+            Layout::default(),
+            "a",
+            &[
+                (0, 0, 300, 100),
+                (1000, 0, 1299, 100),
+                (2000, 0, 2300, 99),
+                (3000, 0, 3100, 300),
+                (4000, 0, 4300, 50),
+                (4000, 50, 4050, 300),
+                (5000, 0, 5150, 100),
+                (5150, 0, 5300, 100),
+                (7000, 0, 7200, 60),
+                (7100, 40, 7300, 100),
+            ],
+        ),
+        "a",
+        (6000, 0, 6400, 400),
+        (6100, 100, 6300, 300),
+    );
+    every_placement(vec![derived(
+        "derived/enclose_rect",
+        &["DRC-130"],
+        &["a"],
+        &[
+            (
+                "a.with_rect(300nm x 100nm)",
+                areas(&[30_000, 30_000, 30_000, 120_000]),
+            ),
+            (
+                "a.without_rect(300nm x 100nm)",
+                areas(&[29_900, 29_700, 27_500, 22_000]),
+            ),
+            ("a.without_rect(100nm x 100nm)", areas(&[29_700, 27_500])),
         ],
         layout,
     )])
