@@ -16,7 +16,7 @@ use crate::Design;
 use gpurify_geom::ops::Point;
 use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
-use gpurify_ingest::deck::{LvsControls, LvsLimit, LvsRange};
+use gpurify_ingest::deck::{LvsControls, LvsCount, LvsLimit, LvsRange};
 use gpurify_ingest::{StrId, StrTable};
 
 /// Every rule id LVS reports under, in interning order: one per [`Discrepancy`]
@@ -31,12 +31,13 @@ use gpurify_ingest::{StrId, StrTable};
 /// `lvs.model_mismatch` [`Discrepancy::ModelMismatch`], and so on), the five
 /// after the first six under [`check_layout`], and `lvs.param_range` under
 /// [`check_param_ranges`], `lvs.short_path` with `lvs.net_seed_conflict`
-/// ([`check_net_seed_conflicts`]), and `lvs.unpaired_instance` under
-/// [`record_unpaired_instances`]. The crate's
+/// ([`check_net_seed_conflicts`]), `lvs.unpaired_instance` under
+/// [`record_unpaired_instances`], and `lvs.device_count` under
+/// [`check_device_counts`]. The crate's
 /// [rule reference](crate#layout-against-schematic) maps each to its
 /// [catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv)
 /// rows.
-pub const RULE_IDS: [&str; 15] = [
+pub const RULE_IDS: [&str; 16] = [
     "lvs.unpaired_device",
     "lvs.unpaired_net",
     "lvs.terminal_mismatch",
@@ -52,6 +53,7 @@ pub const RULE_IDS: [&str; 15] = [
     "lvs.model_mismatch",
     "lvs.short_path",
     "lvs.unpaired_instance",
+    "lvs.device_count",
 ];
 
 /// Intern every LVS rule id; the report looks them up in a table it only borrows.
@@ -137,8 +139,8 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 /// # Limits
 ///
 /// - Parameter ranges are [`check_param_ranges`]'s, a row recorded only when
-///   the deck states one. Per-model device counts are not checked (catalog
-///   LVS-068).
+///   the deck states one, and per-model device counts
+///   [`check_device_counts`]'s (catalog LVS-068).
 ///
 /// # Panics
 ///
@@ -247,6 +249,65 @@ pub fn check_param_ranges(
         Outcome::Ran
     };
     record_run(runs, out, before, rule, outcome, examined);
+}
+
+/// The `lvs.device_count` row: the number of layout devices of each model
+/// an `lvs count` row names, held to the row's bounds (catalog LVS-068), as
+/// a foundry limits a device per chip: IHP SG13G2's recommended rules allow
+/// at most 4000 `npn13G2` emitters on a chip, and 800 each of `npn13G2L`
+/// and `npn13G2V`. A count at a bound is legal. Records nothing when
+/// `counts` is empty; otherwise one [`RuleRun`] that examined one model per
+/// row.
+///
+/// A count over its maximum is an error on the marker of the first device
+/// past it (the `max + 1`-th of the model, in device order), measured the
+/// count against the maximum; one under its minimum is an error on the
+/// model's first device, or with no layer, location or shape when the
+/// layout has none, measured the count against the minimum. A device is
+/// one recognised marker: a multi-emitter bipolar counts once, since no
+/// emitter count is extracted (catalog LVS-064).
+///
+/// # Panics
+///
+/// Panics if a device's marker is past `design.store`.
+pub fn check_device_counts(
+    design: Design<'_>,
+    counts: &[LvsCount],
+    strings: &StrTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if counts.is_empty() {
+        return;
+    }
+    let rule = rule_id(strings, "lvs.device_count");
+    let before = out.len();
+    let devices = design.devices;
+    for row in counts {
+        let of_model: Vec<usize> = (0..devices.len())
+            .filter(|&device| devices.model[device] == row.model)
+            .collect();
+        let n = narrow(of_model.len());
+        if let Some(max) = row.max.filter(|&max| n > max) {
+            let marker = devices.marker[of_model[max as usize]];
+            let found = graph_violation(rule, (marker, None), n, max);
+            out.push(on_first_shape(design.store, found));
+        }
+        if let Some(min) = row.min.filter(|&min| n < min) {
+            let found = graph_violation(rule, (NO_SHAPE, None), n, min);
+            out.push(match of_model.first() {
+                Some(&first) => on_first_shape(
+                    design.store,
+                    Violation {
+                        shapes: (devices.marker[first], None),
+                        ..found
+                    },
+                ),
+                None => found,
+            });
+        }
+    }
+    record_run(runs, out, before, rule, Outcome::Ran, counts.len() as u64);
 }
 
 /// The measured parameter an `lvs range` row's name stands for.

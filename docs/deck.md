@@ -767,6 +767,7 @@ lvs connect_explicit "VSS" "GND"
 lvs max_res 1Mohm
 lvs min_caps 10aF
 lvs same_nets "OUT_PAD" "OUT"
+lvs count "npn13G2" <= 4000
 ```
 
 An `lvs` statement changes how LVS compares the devices of one model, which
@@ -879,6 +880,15 @@ device whose every terminal is on one net, as Netgen's `ignore shorted`
 does. The terminals counted are those LVS compares, so where the deck
 extracts no bulk, a transistor with its gate, source and drain on one net
 is a dummy whatever its schematic bulk is.
+
+**`lvs count "model" >= min <= max`** holds the number of layout devices
+of the model to bounds, as a foundry limits a device per chip (IHP
+SG13G2's recommended rules allow 4000 `npn13G2` emitters). Give `>=`,
+`<=` or both, whole numbers; a count at a bound is legal. A count out of
+bounds is reported as `lvs.device_count`, on the first device past the
+maximum, or on the model's first device (or nowhere, when it has none)
+under the minimum. A device is one recognised marker, so a bipolar with
+several emitters counts once. Each model has one row at most.
 
 **`lvs max_res r`** and **`lvs min_caps c`** leave out of the comparison,
 on both sides, every resistor whose resistance is above `r` and every

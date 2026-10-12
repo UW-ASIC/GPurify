@@ -942,6 +942,23 @@ pub struct LvsControls {
     /// `same_nets!` (catalog LVS-032), in deck order, each name once per
     /// side.
     pub same_nets: Vec<(StrId, StrId)>,
+    /// `lvs count "model" >= min <= max`, one row per statement, at most one
+    /// per model: bounds on how many devices of the model the layout holds
+    /// (catalog LVS-068).
+    pub count: Vec<LvsCount>,
+}
+
+/// One `lvs count` statement: the bounds, either or both, on the number of
+/// layout devices of a model, a count at a bound being legal, as a foundry
+/// limits a device per chip (IHP SG13G2's 4000 `npn13G2` emitters).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LvsCount {
+    /// The device model, which a `device` statement declares.
+    pub model: StrId,
+    /// The fewest devices legal, when stated.
+    pub min: Option<u32>,
+    /// The most devices legal, when stated.
+    pub max: Option<u32>,
 }
 
 /// One `lvs range` statement: the bounds a parameter measured on every
@@ -1134,6 +1151,14 @@ fn build_lvs(
     if lvs.min_caps.is_some() {
         strings.intern("c");
     }
+    for &(ref model, min, max) in &declared.count {
+        known(model, "count")?;
+        lvs.count.push(LvsCount {
+            model: strings.intern(model),
+            min,
+            max,
+        });
+    }
     for (layout, reference) in &declared.same_nets {
         lvs.same_nets
             .push((strings.intern(layout), strings.intern(reference)));
@@ -1212,6 +1237,8 @@ pub struct LvsSrc {
     pub(crate) min_caps: Option<f64>,
     /// `lvs same_nets`: `(layout label, reference net)`.
     pub(crate) same_nets: Vec<(String, String)>,
+    /// `lvs count`: `(model, min, max)`.
+    pub(crate) count: Vec<(String, Option<u32>, Option<u32>)>,
 }
 
 /// `lvs tolerance "model" param relative r absolute a`, the absolute part
@@ -1285,6 +1312,11 @@ impl LvsSrc {
                 .same_nets
                 .iter()
                 .map(|&(layout, reference)| (name(layout), name(reference)))
+                .collect(),
+            count: controls
+                .count
+                .iter()
+                .map(|row| (name(row.model), row.min, row.max))
                 .collect(),
         }
     }

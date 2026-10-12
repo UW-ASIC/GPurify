@@ -139,6 +139,7 @@ lvs connect_explicit \"VSS\" \"GND\"
 lvs max_res 1Mohm
 lvs min_caps 10fF
 lvs same_nets \"OUT_PAD\" \"OUT\"
+lvs count \"nfet\" >= 1 <= 4000
 ";
     let mut strings = StrTable::default();
     let deck = compile(text, grid(), &mut strings).expect("the deck compiles");
@@ -154,6 +155,7 @@ lvs same_nets \"OUT_PAD\" \"OUT\"
         "lvs max_res 1e6ohm",
         "lvs min_caps 1e4aF",
         "lvs same_nets \"OUT_PAD\" \"OUT\"",
+        "lvs count \"nfet\" >= 1 <= 4000",
     ] {
         assert!(printed.contains(line), "{line} not in\n{printed}");
     }

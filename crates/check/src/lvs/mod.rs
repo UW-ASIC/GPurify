@@ -212,9 +212,9 @@ mod refine;
 pub mod verdict;
 
 pub use checks::{
-    check_layout, check_net_seed_conflicts, check_param_ranges, intern_rule_ids,
-    record_discrepancies, record_unpaired_instances, unpaired_instances, UnpairedInstance,
-    RULE_IDS,
+    check_device_counts, check_layout, check_net_seed_conflicts, check_param_ranges,
+    intern_rule_ids, record_discrepancies, record_unpaired_instances, unpaired_instances,
+    UnpairedInstance, RULE_IDS,
 };
 pub use compare::{compare, compare_logged, compare_traced, compare_with, CompareOptions, Traced};
 pub use controls::join_must_connect;

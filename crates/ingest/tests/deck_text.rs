@@ -861,8 +861,10 @@ fn lvs_ignore_names_any_model_once() {
 /// a resistance in ohms and `lvs min_caps` a capacitance in aF, each stated
 /// once and positive, and either interns the value name LVS computes it
 /// under; `lvs same_nets` keeps its two names in order, each net named by
-/// one row. Breaks if a unit is mis-scaled, a duplicate or a zero
-/// threshold is accepted, or a net is paired twice.
+/// one row. `lvs count` keeps its whole-number bounds, refusing bounds that
+/// admit nothing, none at all, a fraction or a second row for the model.
+/// Breaks if a unit is mis-scaled, a duplicate or a zero threshold is
+/// accepted, a net is paired twice, or a count bound is misread.
 #[test]
 fn lvs_thresholds_and_same_nets_lower_as_stated() {
     let devices = "device mos poly model \"nfet\" terminals [poly, diff, diff]\n";
@@ -879,6 +881,32 @@ fn lvs_thresholds_and_same_nets_lower_as_stated() {
         "already stated",
     );
     one_error(&format!("{devices}lvs min_caps 0aF\n"), "must be positive");
+    let (deck, strings) = ok(&format!("{devices}lvs count \"nfet\" >= 2 <= 4000\n"));
+    assert_eq!(deck.lvs.count.len(), 1);
+    assert_eq!(
+        (
+            deck.lvs.count[0].model,
+            deck.lvs.count[0].min,
+            deck.lvs.count[0].max
+        ),
+        (strings.get("nfet").expect("interned"), Some(2), Some(4000))
+    );
+    one_error(
+        &format!("{devices}lvs count \"nfet\" <= 1 >= 2\n"),
+        "admits no value",
+    );
+    one_error(
+        &format!("{devices}lvs count \"nfet\"\n"),
+        "needs >=, <= or both",
+    );
+    one_error(
+        &format!("{devices}lvs count \"nfet\" <= 1.5\n"),
+        "whole number",
+    );
+    one_error(
+        &format!("{devices}lvs count \"nfet\" <= 1\nlvs count \"nfet\" >= 1\n"),
+        "already has a count",
+    );
     one_error(&format!("{devices}lvs max_res 1fF\n"), "resistance");
     one_error(
         &format!("{devices}lvs same_nets \"A\" \"a\"\nlvs same_nets \"A\" \"b\"\n"),
