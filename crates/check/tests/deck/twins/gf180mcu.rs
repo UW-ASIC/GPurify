@@ -8,14 +8,16 @@
 #![allow(clippy::unreadable_literal, reason = "values as the deck writes them")]
 
 use gpurify_check::deck::rules::{
-    angle, antenna, antenna_electrical, cut_size, drain_source, edge_min_length,
-    em_current_density, esd_topological, floating_gate, floating_well, forbidden, gate_oxide,
-    global_density, ir_drop, max_distance_to_tap, max_width, min_area, min_enclosed_area,
-    min_enclosure, min_extension, min_spacing, min_spacing_diff, min_width, multiple_drivers,
-    must_be_inside, notch, off_grid, overlap, supply_short, tie_high_low, unconnected_pin,
-    via_array_spacing, wide_dependent_spacing,
+    angle, antenna, antenna_electrical, asymmetric_enclosure, conditional_tie, cut_size,
+    drain_source, edge_enclosure, edge_min_length, edge_width, em_current_density, esd_topological,
+    floating_gate, floating_well, forbidden, gate_corner, gate_oxide, global_density, guard_ring,
+    ir_drop, latchup_victim, max_distance_to_tap, max_width, min_area, min_enclosed_area,
+    min_enclosure, min_extension, min_spacing, min_spacing_diff, min_width, missing_tie,
+    multiple_drivers, must_be_inside, noncoincident_enclosure, notch, off_grid, overlap,
+    supply_short, tie_high_low, unconnected_pin, via_array_spacing, wide_dependent_spacing,
 };
-use gpurify_check::deck::{BuildError, CompiledDeck, DeckBuilder, LayerRef};
+use gpurify_check::deck::{Bound, BuildError, CompiledDeck, DeckBuilder, LayerRef};
+use gpurify_check::drc::WireBand;
 use gpurify_geom::{Dbu, DbuArea, Grid, StrTable};
 use gpurify_ingest::deck::{DeviceKind, DeviceValue, StackSource};
 use std::collections::HashMap;
@@ -2299,6 +2301,309 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     d.rule(
         "DF.11",
         edge_min_length(l["ncomp"].edges().and(l["pcomp"].edges()), nm(300)),
+    );
+
+    // Butted COMP, end-of-line, gate length and guard-ring rules.
+    d.rule("NP.3d", forbidden(l["ncomp"].and(l["pcomp"])));
+    d.rule("NP.3e", forbidden(l["nplus"].and(l["pcomp"])));
+    d.rule("PP.3d", forbidden(l["pcomp"].and(l["ncomp"])));
+    d.rule("PP.3e", forbidden(l["pplus"].and(l["ncomp"])));
+    d.rule(
+        "NP.6",
+        noncoincident_enclosure(
+            l["pcomp"].interacting(l["nplus"]),
+            l["comp"].interacting(l["nplus"]),
+            nm(220),
+        ),
+    );
+    d.rule(
+        "PP.6",
+        noncoincident_enclosure(
+            l["ncomp"].interacting(l["pplus"]),
+            l["comp"].interacting(l["pplus"]),
+            nm(220),
+        ),
+    );
+    l.insert(
+        "ncomp_butted",
+        d.derived(
+            "ncomp_butted",
+            l["ncomp"].interacting(l["pcomp"]).outside(l["pcomp"]),
+        ),
+    );
+    l.insert(
+        "pcomp_butted",
+        d.derived(
+            "pcomp_butted",
+            l["pcomp"].interacting(l["ncomp"]).outside(l["ncomp"]),
+        ),
+    );
+    d.rule(
+        "CO.5a",
+        min_enclosure(
+            l["contact"].interacting(l["ncomp_butted"]),
+            l["ncomp_butted"],
+            nm(100),
+        ),
+    );
+    d.rule(
+        "CO.5b",
+        min_enclosure(
+            l["contact"].interacting(l["pcomp_butted"]),
+            l["pcomp_butted"],
+            nm(100),
+        ),
+    );
+    let narrow = || WireBand {
+        from: nm(0),
+        below: Some(nm(340)),
+    };
+    d.rule(
+        "CO.6a",
+        asymmetric_enclosure(l["contact"], l["metal1"], nm(60)).wire(narrow()),
+    );
+    for (lo_id, hi_id, v, below, above) in [
+        ("V1.3c", "V1.4b", "via1", "metal1", "metal2"),
+        ("V2.3c", "V2.4b", "via2", "metal2", "metal3"),
+        ("V3.3c", "V3.4b", "via3", "metal3", "metal4"),
+        ("V4.3c", "V4.4b", "via4", "metal4", "metal5"),
+        ("V5.3c", "V5.4b", "via5", "metal5", "metaltop"),
+    ] {
+        d.rule(
+            lo_id,
+            asymmetric_enclosure(l[v], l[below], nm(60)).wire(narrow()),
+        );
+        d.rule(
+            hi_id,
+            asymmetric_enclosure(l[v], l[above], nm(60)).wire(narrow()),
+        );
+    }
+    d.rule(
+        "ESD.4a",
+        edge_enclosure(
+            l["ncomp"]
+                .interacting(l["esd"])
+                .edges()
+                .not_interacting(l["pcomp"]),
+            l["esd"],
+            nm(240),
+        ),
+    );
+    d.rule(
+        "ESD.6",
+        edge_enclosure(
+            l["gate"]
+                .edges()
+                .and(l["poly2"].edges())
+                .group()
+                .interacting(l["esd"]),
+            l["esd"],
+            nm(450),
+        ),
+    );
+    d.rule(
+        "ESD.pl",
+        edge_width(
+            l["gate"]
+                .interacting(l["poly2"].overlapping(l["dualgate"]).interacting(l["esd"]))
+                .edges()
+                .and(l["poly2"].edges()),
+            nm(800),
+        ),
+    );
+    d.rule(
+        "NAT.4",
+        edge_width(
+            l["ngate"]
+                .and(l["nat"])
+                .group()
+                .not_interacting(l["v5_xtor"])
+                .not_interacting(l["dualgate"])
+                .edges()
+                .and(l["poly2"].edges()),
+            nm(1800),
+        ),
+    );
+    d.rule(
+        "NAT.5",
+        edge_width(
+            l["ngate"]
+                .and(l["nat"])
+                .group()
+                .overlapping(l["dualgate"])
+                .edges()
+                .and(l["poly2"].edges()),
+            nm(1800),
+        ),
+    );
+    d.rule(
+        "PRES.6",
+        edge_enclosure(
+            l["pres_poly"].edges().inside_part(l["sab"]),
+            l["sab"],
+            nm(280),
+        ),
+    );
+    d.rule(
+        "LRES.6",
+        edge_enclosure(
+            l["lres_poly"].edges().inside_part(l["sab"]),
+            l["sab"],
+            nm(280),
+        ),
+    );
+    d.rule("PL.6", gate_corner(l["poly2"], l["comp"], false));
+    d.rule(
+        "MIMTM.8b",
+        forbidden(l["fusetop"].with_area(&[Bound::Above(nm2(10_000_000_000))])),
+    );
+    l.insert(
+        "dn3_ring",
+        d.derived("dn3_ring", l["pcomp"].holes().not(l["pcomp"])),
+    );
+    d.rule(
+        "DN.3",
+        forbidden(
+            l["dnwell"]
+                .not(l["dn3_ring"])
+                .group()
+                .or(l["dnwell"].inside(
+                    l["dn3_ring"].covering(
+                        l["nat"]
+                            .or(l["ncomp"])
+                            .or(l["nwell"])
+                            .group()
+                            .not_interacting(l["dnwell"]),
+                    ),
+                )),
+        ),
+    );
+
+    // Latch-up.
+    let (bands, limits) = ([nm(1000), nm(2000)], [nm(15000), nm(30000), nm(50000)]);
+    for (id, region, tap, well, other) in [
+        (
+            "LU.1",
+            "pcomp_dn_nolvp",
+            "ntap_dn",
+            "lvpwell_in_dn",
+            "pcomp_dn_nolvp",
+        ),
+        (
+            "LU.2",
+            "ncomp_lvp",
+            "pcomp_lvp",
+            "lvpwell_in_dn",
+            "pcomp_dn_nolvp",
+        ),
+        ("LU.3", "ncomp_psub", "ptap", "nwell_out_dn", "ncomp_psub"),
+        ("LU.4", "pcomp_nw", "ntap", "nwell_out_dn", "ncomp_psub"),
+    ] {
+        d.rule(
+            id,
+            conditional_tie(
+                l[region],
+                l[tap],
+                l[well],
+                l[other],
+                nm(50000),
+                &bands,
+                &limits,
+            ),
+        );
+    }
+    d.rule(
+        "LU.1_MV",
+        missing_tie(l["pcomp_dn_nolvp_hv"], l["ntap_dn"], nm(15000)),
+    );
+    d.rule(
+        "LU.2_MV",
+        missing_tie(l["ncomp_lvp_hv"], l["pcomp_lvp"], nm(15000)),
+    );
+    d.rule(
+        "LU.5",
+        guard_ring(
+            l["nat"],
+            l["pcomp_psub"],
+            None,
+            None,
+            None,
+            Some(l["nwell"]),
+            Some(nm(50000)),
+        ),
+    );
+    let pad = Some(l["pad"]);
+    d.rule(
+        "IO.1",
+        guard_ring(
+            l["ncomp_psub"],
+            l["ntap"],
+            Some(nm(15000)),
+            None,
+            pad,
+            None,
+            None,
+        ),
+    );
+    d.rule(
+        "IO.1b",
+        latchup_victim(
+            l["ncomp_psub"],
+            l["pcomp_in_nw"],
+            l["ntap"],
+            nm(15000),
+            nm(2000),
+            pad,
+        ),
+    );
+    d.rule(
+        "IO.2",
+        guard_ring(
+            l["ncomp_psub"],
+            l["ntap"],
+            None,
+            Some(nm(2000)),
+            pad,
+            None,
+            None,
+        )
+        .warning(),
+    );
+    d.rule(
+        "IO.3",
+        guard_ring(
+            l["pcomp_nw"],
+            l["pcomp_psub"],
+            Some(nm(15000)),
+            None,
+            pad,
+            None,
+            None,
+        ),
+    );
+    d.rule(
+        "IO.3b",
+        latchup_victim(
+            l["pcomp_nw"],
+            l["ncomp_psub"],
+            l["ptap"],
+            nm(10000),
+            nm(5000),
+            pad,
+        ),
+    );
+    d.rule(
+        "IO.4",
+        guard_ring(
+            l["pcomp_nw"],
+            l["pcomp_psub"],
+            None,
+            Some(nm(2000)),
+            pad,
+            None,
+            None,
+        )
+        .warning(),
     );
     d.finish()
 }

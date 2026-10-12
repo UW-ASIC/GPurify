@@ -687,7 +687,109 @@ rule NAT.12 forbidden((poly2 and nat).not_interacting(comp) or (poly2 and nat an
 rule V1.3a inside(via1, metal1)
 rule DF.11 length(ncomp.edges() and pcomp.edges()) >= 300nm
 
-# --- Rules that need a check kind the language does not have yet ---
+
+# --- Butted COMP, end-of-line, gate length and guard-ring rules [DRM 11, 16, 17,
+# 18, 20, 21, 23, 33, 35, 36; PV nplus.rb, pplus.rb, contact.rb, via.rb, esd.rb,
+# nat.rb, pres.rb, lres.rb, poly2.rb, mim_b.rb, dnwell.rb] ---
+# NP.3d/PP.3d "min/max space to a butted P/NCOMP: 0" and NP.3e/PP.3e "space to
+# related P/NCOMP edge adjacent to a butting edge: 0": an implant never covers
+# COMP of the other type [PV: ncomp.and(pcomp), nplus.and(pcomp)].
+rule NP.3d forbidden(ncomp and pcomp)
+rule NP.3e forbidden(nplus and pcomp)
+rule PP.3d forbidden(pcomp and ncomp)
+rule PP.3e forbidden(pplus and ncomp)
+# NP.6/PP.6 "overlap with NCOMP (PCOMP) butted to PCOMP (NCOMP): 0.22": the
+# butted COMP is at least 0.22 um deep, measured from the other COMP's edges
+# to the COMP's own far edges, coincident edges (the butted COMP's shared
+# outline) not measured [PV: comp.interacting(nplus).enclosing(pcomp
+# .interacting(nplus), 0.22, projection)].
+rule NP.6 enclosure(pcomp.interacting(nplus), comp.interacting(nplus), noncoincident) >= 220nm
+rule PP.6 enclosure(ncomp.interacting(pplus), comp.interacting(pplus), noncoincident) >= 220nm
+# CO.5a/b: a contact on butted COMP is inside its own implant's COMP by 0.1 um;
+# a butted COMP is one touching the other type and sharing no area with it
+# [PV: ncomp.interacting(pcomp).not_overlapping(pcomp)].
+layer ncomp_butted = ncomp.interacting(pcomp).outside(pcomp)
+layer pcomp_butted = pcomp.interacting(ncomp).outside(ncomp)
+rule CO.5a enclosure(contact.interacting(ncomp_butted), ncomp_butted) >= 100nm
+rule CO.5b enclosure(contact.interacting(pcomp_butted), pcomp_butted) >= 100nm
+# CO.6a, Vn.3c, Vn.4b "Metal (< 0.34 um) end-of-line overlap: 0.06": a cut on
+# metal narrower than 0.34 um needs 0.06 um on both ends of one axis. On a
+# narrow wire that is its end of line; at a narrow L-shaped corner it is
+# stricter than [PV], which reads only an edge shorter than 0.34 um between
+# two edges at least 0.24 um (0.28 um for Vn) long (ledger CO.6a).
+rule CO.6a enclosure(contact, metal1, opposite; below: 340nm) >= 60nm
+let via_eol = [(V1.3c, V1.4b, via1, metal1, metal2), (V2.3c, V2.4b, via2, metal2, metal3),
+               (V3.3c, V3.4b, via3, metal3, metal4), (V4.3c, V4.4b, via4, metal4, metal5),
+               (V5.3c, V5.4b, via5, metal5, metaltop)]
+for (lo_id, hi_id, v, below, above) in via_eol {
+    rule {lo_id} enclosure(v, below, opposite; below: 340nm) >= 60nm
+    rule {hi_id} enclosure(v, above, opposite; below: 340nm) >= 60nm
+}
+# ESD.4a "extension beyond NCOMP: 0.24", except where the NCOMP butts PCOMP
+# [PV: esd edges not interacting pcomp]; ESD.6 "extension perpendicular to
+# Poly2 gate: 0.45", from the gate's sides on Poly2's edges; ESD.pl "minimum
+# gate length of 5V/6V gate NMOS: 0.8", across the gate between its sides on
+# Poly2's edges, for gates of Poly2 overlapping Dualgate and touching the ESD
+# implant [PV esd.rb].
+rule ESD.4a enclosure(ncomp.interacting(esd).edges().not_interacting(pcomp), esd) >= 240nm
+rule ESD.6 enclosure((gate.edges() and poly2.edges()).interacting(esd), esd) >= 450nm
+rule ESD.pl width(gate.interacting(poly2.overlapping(dualgate).interacting(esd)).edges() and poly2.edges()) >= 800nm
+# NAT.4/NAT.5 "minimum channel length for 3.3V (6.0V) native Vt NMOS: 1.8"
+# [PV nat.rb: the 3.3 V gates touch neither V5_XTOR nor Dualgate, the 6 V
+# gates overlap Dualgate].
+rule NAT.4 width((ngate and nat).not_interacting(v5_xtor).not_interacting(dualgate).edges() and poly2.edges()) >= 1800nm
+rule NAT.5 width((ngate and nat).overlapping(dualgate).edges() and poly2.edges()) >= 1800nm
+# PRES.6/LRES.6 "minimum salicide block overlap of Poly2 resistor in width
+# direction: 0.28": the resistor's sides under SAB, out to SAB's edge (its
+# heads leave the SAB, so their edges are not held) [PV: pres_poly.enclosed(sab, 0.28)].
+rule PRES.6 enclosure(pres_poly.edges().inside_part(sab), sab) >= 280nm
+rule LRES.6 enclosure(lres_poly.edges().inside_part(sab), sab) >= 280nm
+# PL.6 "90 deg bends on the COMP are not allowed": a turn of Poly2 inside
+# COMP. [PV] also flags a Poly2 ending inside COMP (its convex corners), which
+# this deck leaves to PL.4's endcap (ledger PL.6).
+rule PL.6 bend(poly2, comp)
+# MIMTM.8b "maximum single MIM cap area 100 x 100 um2" [PV: with_area above 10000 um2].
+rule MIMTM.8b forbidden(fusetop.with_area(> 10000um2))
+# DN.3 "each DNWELL shall be directly surrounded by PCOMP guard ring": a
+# DNWELL in no hole of a PCOMP ring, or in a ring's hole that also holds
+# NCOMP, Nwell or NAT not touching the DNWELL [PV dnwell.rb dn3_l1, dn3_l2].
+# [PV] also counts a ring only when its hole meets exactly one DNWELL, which
+# no kind counts (ledger DN.3). That the ring is tied to the substrate is LVS's.
+layer dn3_ring = pcomp.holes() not pcomp
+rule DN.3 forbidden((dnwell not dn3_ring) or dnwell.inside(dn3_ring.covering((nat or ncomp or nwell).not_interacting(dnwell))))
+
+# --- Latch-up [DRM 55 LU, 56 IO] ---
+# LU.1-LU.4: the LV column's tap distance from every point of a COMP, by the
+# space x (y) from a well edge to the COMP of the other type within 50 um:
+# 15 um below 1 um, 30 um below 2 um, 50 um from 2 um. The MV column is 15 um
+# whatever the space; LU.3 and LU.4 at MV are DF.14_5V and DF.13_5V above.
+let lu_bands = [1um, 2um]
+let lu_limits = [15um, 30um, 50um]
+rule LU.1 conditional_tie(pcomp_dn_nolvp, ntap_dn, lvpwell_in_dn, pcomp_dn_nolvp; within: 50um, spacing: lu_bands, max_distance: lu_limits)
+rule LU.2 conditional_tie(ncomp_lvp, pcomp_lvp, lvpwell_in_dn, pcomp_dn_nolvp; within: 50um, spacing: lu_bands, max_distance: lu_limits)
+rule LU.3 conditional_tie(ncomp_psub, ptap, nwell_out_dn, ncomp_psub; within: 50um, spacing: lu_bands, max_distance: lu_limits)
+rule LU.4 conditional_tie(pcomp_nw, ntap, nwell_out_dn, ncomp_psub; within: 50um, spacing: lu_bands, max_distance: lu_limits)
+rule LU.1_MV missing_tie(pcomp_dn_nolvp_hv, ntap_dn; max_distance: 15um)
+rule LU.2_MV missing_tie(ncomp_lvp_hv, pcomp_lvp; max_distance: 15um)
+# LU.5: NAT within 50 um of an Nwell is surrounded by a PCOMP substrate ring.
+# "No other NCOMP, NWELL in between" is not checked.
+rule LU.5 guard_ring(nat, pcomp_psub; max_space: none, min_width: none, pad: none, near: nwell, within: 50um)
+# IO.1/IO.3 (a2): COMP on a pad net is surrounded by a guard ring (NCOMP in
+# Nwell for NCOMP in the substrate, substrate PCOMP for PCOMP in Nwell) at most
+# 15 um away; IO.2/IO.4: the ring is at least 2 um wide ("recommended", so a
+# warning). A pad net stands in for Latchup_MK, which marks the same COMP
+# (IO.0, a guideline). IO.1/IO.3 (b): within 15 (10) um of that COMP, every
+# point of the other COMP type is within 2 (5) um of a tap. (a1), "surrounded
+# by a tap without the other COMP in between, except transistors butted to a
+# tap over their full width", is not written.
+rule IO.1 guard_ring(ncomp_psub, ntap; max_space: 15um, min_width: none, pad: pad, near: none, within: none)
+rule IO.1b latchup_victim(ncomp_psub, pcomp_in_nw, ntap; within: 15um, max_distance: 2um, pad: pad)
+rule IO.2 warning guard_ring(ncomp_psub, ntap; max_space: none, min_width: 2um, pad: pad, near: none, within: none)
+rule IO.3 guard_ring(pcomp_nw, pcomp_psub; max_space: 15um, min_width: none, pad: pad, near: none, within: none)
+rule IO.3b latchup_victim(pcomp_nw, ncomp_psub, ptap; within: 10um, max_distance: 5um, pad: pad)
+rule IO.4 warning guard_ring(pcomp_nw, pcomp_psub; max_space: none, min_width: 2um, pad: pad, near: none, within: none)
+
+# --- Rules not written yet ---
 # needs: same/diff-net spacing. Net spacing takes a conductor, and the wells
 # are not conductors in this deck (no well-tap connection):
 #   rule DN.2b space(dnwell; nets: different) >= 5.42um
@@ -701,25 +803,24 @@ rule DF.11 length(ncomp.edges() and pcomp.edges()) >= 300nm
 #   rule LPW.5 must_contain(dnwell, lvpwell.inside(res_mk))
 #   rule MIMTM.7 must_contain(cap_mk, fusetop)
 #   rule NAT.8 must_contain(dualgate, nat_hv)
-#   rule DN.3 (every DNWELL directly surrounded by a PCOMP guard ring tied to substrate)
-# needs: edge checks (butting edges, gate length along the channel, edge-direction enclosure)
-#   rule PL.2_6V gate length >= 700nm (6V n), 550nm (6V p): no 6V marker is declared (PL.2 3.3V/5V are coded above)
-#   rule NAT.4 / NAT.5 native gate length >= 1.8um
-#   rule ESD.pl ESD 5V/6V NMOS gate length >= 800nm
-#   rule NP.3a..3e, PP.3a..3e implant space to opposite COMP, excluding butted edges (0.16 / 0.08um)
-#   rule NP.5b..5dii, PP.5b..5dii implant extension beyond COMP, excluding butting edges
-#   rule NP.6, PP.6 overlap with COMP butted to the opposite COMP (0.22um, projection)
-#   rule CO.5a, CO.5b implant overlap of a contact on butted COMP (0.1um)
-#   rule CO.6a/6b, Vn.3c/3d, Vn.4b/4c conditional end-of-line and adjacent-edge overlap (0.06um)
-#   rule ESD.4a, ESD.6 ESD implant edge extension (0.24 / 0.45um)
-#   rule PRES.6, LRES.6, HRES.9 SAB overlap of the resistor in its width direction (0.28um)
-
+# Expressible, not written: each is conditional on a band from a well edge
+# ([PV] sizes the well by 0.43 um) or on the gate's extension, and needs that
+# band as a layer and its own check against the fd_pv unit structures:
+#   NP.3a..3c, PP.3a..3c (implant space to the other COMP, 0.16 / 0.08 um),
+#   NP.4a/4b, PP.4a/4b (space to the other channel's gate at a butting edge),
+#   NP.5b..5dii, PP.5b..5dii (implant extension beyond COMP), NP.11/12, PP.11/12.
+# CO.6b, Vn.3d, Vn.4c ("if the metal overlaps the cut by < 0.04 um on one side,
+#   the adjacent edges overlap by 0.06 um"): a condition on one side setting
+#   the limit of its neighbours, which no enclosure kind reads.
+# HRES.9: [PV] also flags SAB edges inside the resistor and SAB holes over it,
+#   and its unit structures fail a resistor the SAB encloses by 0.28 um on
+#   every side; the manual's "in width direction" does not say why.
+# PL.2_6V gate length >= 700nm (6V n), 550nm (6V p): no 6V marker is declared
+#   (PL.2 3.3V/5V are coded above).
 # --- Left out ---
 # Not expressible, and not one of the kinds above:
 #   SB.14a/14b (square-metric space 0.56um), SB.15a/15b, SB.16, DV.9, NAT.6, NAT.9,
-#   LU.1..LU.5 (tap distance conditional on the well-to-COMP space x/y),
-#   IO.1..IO.4 (I/O latch-up guard rings: the ring-to-pad-COMP distance is
-#   not what esd_latchup measures), MIMTM.8b (maximum area), MIMTM.11,
+#   MIMTM.11 (total MIM area on one shared bottom plate: total_area is per chip),
 #   MT30.* (30 kA top metal only), ANT.14/ANT.15 (MIM-area antenna: the victim
 #   is FuseTop, which no connect row joins to the MetalTop above it), DE.*, the LDMOS (MDN/MDP), OTP, eFuse,
 #   SRAM and scribe-line sections.

@@ -269,9 +269,9 @@ DF.11	DF.11	DF.11	differs	The deck reads each straight butting edge (an L-shaped
 -	BJT.1	BJT.1	ours_missing	vertical BJT rules: the BJTs are not recognised (deck note)
 -	BJT.2	BJT.2	ours_missing	vertical BJT rules: the BJTs are not recognised (deck note)
 -	BJT.3	BJT.3	ours_missing	vertical BJT rules: the BJTs are not recognised (deck note)
--	CO.5a	CO.5a	ours_missing	contact implant overlap on butted COMP / end-of-line overlap: needs edge checks (deck: waiting)
--	CO.5b	CO.5b	ours_missing	contact implant overlap on butted COMP / end-of-line overlap: needs edge checks (deck: waiting)
--	CO.6a	CO.6a	ours_missing	contact implant overlap on butted COMP / end-of-line overlap: needs edge checks (deck: waiting)
+CO.5a	CO.5a	CO.5a	agrees	
+CO.5b	CO.5b	CO.5b	agrees	
+CO.6a	CO.6a	CO.6a	differs	GPurify holds a contact on Metal1 narrower than 0.34 um to 0.06 um on both ends of one axis (enclosure opposite, below 0.34 um); the foundry reads only an end of line, an edge shorter than 0.34 um between two edges at least 0.24 um long. The contact at the narrow L-shaped Metal1 corner of gf180mcu_fd_sc_mcu7t5v0__oai33_2 (0.05 and 0.055 um on its short sides) is flagged by GPurify only.
 -	CO.6b	CO.6b	ours_missing	contact implant overlap on butted COMP / end-of-line overlap: needs edge checks (deck: waiting)
 -	CO.9	CO.9	ours_missing	contact straddling a butting edge: no forbidden row yet
 -	CUP.2	CUP.2	ours_missing	circuit-under-pad option: left out
@@ -313,7 +313,7 @@ DF.11	DF.11	DF.11	differs	The deck reads each straight butting edge (an L-shaped
 -	DM6.3	DM6.3	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
 -	DM6.8	DM6.8	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
 -	DN.2b	DN.2b	ours_missing	different-net well spacing: wells are not nets in the deck (waiting on net spacing)
--	DN.3	DN.3	ours_missing	DNWELL guard ring: waiting (deck note)
+DN.3	DN.3	DN.3	differs	The foundry counts a PCOMP ring only when its hole meets exactly one DNWELL (interacting(dnwell, 1..1)); GPurify reads any ring whose hole holds the DNWELL, so a DNWELL with no ring of its own inside a larger ring holding several (the unit structures' frame) passes here.
 -	DPF.1	DPF.1	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
 -	DPF.11	DPF.11	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
 -	DPF.14	DPF.14	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
@@ -357,9 +357,9 @@ DF.11	DF.11	DF.11	differs	The deck reads each straight butting edge (an L-shaped
 -	EF.22a	EF.22a	ours_missing	eFuse section: left out
 -	EF.22b	EF.22b	ours_missing	eFuse section: left out
 -	ESD.10	ESD.10	ours_missing	LVS_IO coverage: lvs_io is not declared
--	ESD.4a	ESD.4a	ours_missing	ESD implant edge extension: needs edge checks (deck: waiting)
--	ESD.6	ESD.6	ours_missing	ESD implant edge extension: needs edge checks (deck: waiting)
--	ESD.pl	ESD.pl	ours_missing	ESD gate length: needs channel length (deck: waiting)
+ESD.4a	ESD.4a	ESD.4a	agrees	
+ESD.6	ESD.6	ESD.6	agrees	
+ESD.pl	ESD.pl	ESD.pl	agrees	
 -	GR.1	GR.1	ours_missing	guard-ring rules: left out
 -	GR.11	GR.11	ours_missing	guard-ring rules: left out
 -	GR.2	GR.2	ours_missing	guard-ring rules: left out
@@ -373,7 +373,7 @@ DF.11	DF.11	DF.11	differs	The deck reads each straight butting edge (an L-shaped
 -	LPW.2a_LV	LPW.2a_LV	ours_missing	different-net well spacing: wells are not nets in the deck (waiting on net spacing)
 -	LPW.2a_MV	LPW.2a_MV	ours_missing	different-net well spacing: wells are not nets in the deck (waiting on net spacing)
 -	LPW.5	LPW.5	ours_missing	which layer holds which is not confirmed against the manual (deck: waiting)
--	LRES.6	LRES.6	ours_missing	SAB overlap in the resistor's width direction: needs edge checks (deck: waiting)
+LRES.6	LRES.6	LRES.6	agrees	
 -	LRES.9a	LRES.9a	ours_missing	RES_MK marking rules: left out
 -	LRES.9b	LRES.9b	ours_missing	RES_MK marking rules: left out
 -	LVS_BJT.1	LVS_BJT.1	ours_missing	vertical BJT rules: the BJTs are not recognised (deck note)
@@ -456,7 +456,7 @@ DF.11	DF.11	DF.11	differs	The deck reads each straight butting edge (an L-shaped
 -	MDP.9f	MDP.9f	ours_missing	LDMOS section: left out
 -	MIMTM.11	MIMTM.11	ours_missing	left out (deck note)
 -	MIMTM.7	MIMTM.7	ours_missing	which layer holds which is not confirmed against the manual (deck: waiting)
--	MIMTM.8b	MIMTM.8b	ours_missing	maximum area: no kind (H)
+MIMTM.8b	MIMTM.8b	MIMTM.8b	agrees	
 -	MSLOT1.0	MSLOT1.0	ours_missing	metal slot rules: left out
 -	MSLOT1.1	MSLOT1.1	ours_missing	metal slot rules: left out
 -	MSLOT1.2	MSLOT1.2	ours_missing	metal slot rules: left out
@@ -511,8 +511,8 @@ DF.11	DF.11	DF.11	differs	The deck reads each straight butting edge (an L-shaped
 -	MSLOT6.7	MSLOT6.7	ours_missing	metal slot rules: left out
 -	MSLOT6.8	MSLOT6.8	ours_missing	metal slot rules: left out
 -	MSLOT6.9	MSLOT6.9	ours_missing	metal slot rules: left out
--	NAT.4	NAT.4	ours_missing	native gate length: needs channel length (deck: waiting)
--	NAT.5	NAT.5	ours_missing	native gate length: needs channel length (deck: waiting)
+NAT.4	NAT.4	NAT.4	agrees	
+NAT.5	NAT.5	NAT.5	agrees	
 -	NAT.6	NAT.6	ours_missing	left out (deck note)
 -	NAT.8	NAT.8	ours_missing	which layer holds which is not confirmed against the manual (deck: waiting)
 -	NAT.9	NAT.9	ours_missing	left out (deck note)
@@ -523,8 +523,8 @@ DF.11	DF.11	DF.11	differs	The deck reads each straight butting edge (an L-shaped
 -	NP.3bii	NP.3bii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
 -	NP.3ci	NP.3ci	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
 -	NP.3cii	NP.3cii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
--	NP.3d	NP.3d	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
--	NP.3e	NP.3e	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+NP.3d	NP.3d	NP.3d	agrees	
+NP.3e	NP.3e	NP.3e	agrees	
 -	NP.4a	NP.4a	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
 -	NP.4b	NP.4b	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
 -	NP.5b	NP.5b	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
@@ -532,7 +532,7 @@ DF.11	DF.11	DF.11	differs	The deck reads each straight butting edge (an L-shaped
 -	NP.5cii	NP.5cii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
 -	NP.5di	NP.5di	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
 -	NP.5dii	NP.5dii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
--	NP.6	NP.6	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+NP.6	NP.6	NP.6	agrees	
 -	NW.2b_LV	NW.2b_LV	ours_missing	different-net well spacing: wells are not nets in the deck (waiting on net spacing)
 -	NW.2b_MV	NW.2b_MV	ours_missing	different-net well spacing: wells are not nets in the deck (waiting on net spacing)
 -	O.CO.7	O.CO.7	ours_missing	OTP section: left out
@@ -553,7 +553,7 @@ DF.11	DF.11	DF.11	differs	The deck reads each straight butting edge (an L-shaped
 -	O.SB.9	O.SB.9	ours_missing	OTP section: left out
 -	PL.5b_LV	PL.5b_LV	ours_missing	field poly to its related COMP: the deck holds poly with no gate only (PL.5a)
 -	PL.5b_MV	PL.5b_MV	ours_missing	field poly to its related COMP: the deck holds poly with no gate only (PL.5a)
--	PL.6	PL.6	ours_missing	bends on COMP and 45-degree gates: needs a shape class (H)
+PL.6	PL.6	PL.6	differs	GPurify's bend reads a turn of Poly2 inside COMP (a concave corner); the foundry flags every Poly2 corner inside COMP, so a straight Poly2 ending inside COMP is flagged there only (GPurify leaves it to PL.4's endcap).
 -	PL.7_LV	PL.7_LV	ours_missing	bends on COMP and 45-degree gates: needs a shape class (H)
 -	PL.7_MV	PL.7_MV	ours_missing	bends on COMP and 45-degree gates: needs a shape class (H)
 -	PP.11	PP.11	ours_missing	butting implant near well edge / gate extension: left out
@@ -563,8 +563,8 @@ DF.11	DF.11	DF.11	differs	The deck reads each straight butting edge (an L-shaped
 -	PP.3bii	PP.3bii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
 -	PP.3ci	PP.3ci	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
 -	PP.3cii	PP.3cii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
--	PP.3d	PP.3d	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
--	PP.3e	PP.3e	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+PP.3d	PP.3d	PP.3d	agrees	
+PP.3e	PP.3e	PP.3e	agrees	
 -	PP.4a	PP.4a	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
 -	PP.4b	PP.4b	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
 -	PP.5b	PP.5b	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
@@ -572,8 +572,8 @@ DF.11	DF.11	DF.11	differs	The deck reads each straight butting edge (an L-shaped
 -	PP.5cii	PP.5cii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
 -	PP.5di	PP.5di	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
 -	PP.5dii	PP.5dii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
--	PP.6	PP.6	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
--	PRES.6	PRES.6	ours_missing	SAB overlap in the resistor's width direction: needs edge checks (deck: waiting)
+PP.6	PP.6	PP.6	agrees	
+PRES.6	PRES.6	PRES.6	agrees	
 -	PRES.9a	PRES.9a	ours_missing	RES_MK marking rules: left out
 -	PRES.9b	PRES.9b	ours_missing	RES_MK marking rules: left out
 -	S.CO.3_LV	S.CO.3_LV	ours_missing	SRAM section: left out
@@ -595,25 +595,25 @@ DF.11	DF.11	DF.11	differs	The deck reads each straight butting edge (an L-shaped
 -	SB.15a	SB.15a	ours_missing	left out (deck note)
 -	SB.15b	SB.15b	ours_missing	left out (deck note)
 -	SB.16	SB.16	ours_missing	left out (deck note)
--	V1.3c	V1.3c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V1.3c	V1.3c	V1.3c	agrees	
 -	V1.3d	V1.3d	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
--	V1.4b	V1.4b	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V1.4b	V1.4b	V1.4b	agrees	
 -	V1.4c	V1.4c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
--	V2.3c	V2.3c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V2.3c	V2.3c	V2.3c	agrees	
 -	V2.3d	V2.3d	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
--	V2.4b	V2.4b	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V2.4b	V2.4b	V2.4b	agrees	
 -	V2.4c	V2.4c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
--	V3.3c	V3.3c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V3.3c	V3.3c	V3.3c	agrees	
 -	V3.3d	V3.3d	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
--	V3.4b	V3.4b	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V3.4b	V3.4b	V3.4b	agrees	
 -	V3.4c	V3.4c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
--	V4.3c	V4.3c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V4.3c	V4.3c	V4.3c	agrees	
 -	V4.3d	V4.3d	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
--	V4.4b	V4.4b	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V4.4b	V4.4b	V4.4b	agrees	
 -	V4.4c	V4.4c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
--	V5.3c	V5.3c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V5.3c	V5.3c	V5.3c	agrees	
 -	V5.3d	V5.3d	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
--	V5.4b	V5.4b	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V5.4b	V5.4b	V5.4b	agrees	
 -	V5.4c	V5.4c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
 -	Y.DF.16_LV	Y.DF.16_LV	ours_missing	YMTP section: left out
 -	Y.DF.16_MV	Y.DF.16_MV	ours_missing	YMTP section: left out
@@ -719,3 +719,16 @@ DF.11	DF.11	DF.11	differs	The deck reads each straight butting edge (an L-shaped
 -	well_diode_mk_ACUTE	well_diode_mk_ACUTE	ours_missing	the deck does not declare layer well_diode_mk: a layout drawing it is refused
 -	ymtp_mk_ACUTE	ymtp_mk_ACUTE	ours_missing	the deck does not declare layer ymtp_mk: a layout drawing it is refused
 -	zener_ACUTE	zener_ACUTE	ours_missing	the deck does not declare layer zener: a layout drawing it is refused
+LU.1	LU.1	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+LU.2	LU.2	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+LU.3	LU.3	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+LU.4	LU.4	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+LU.1_MV	LU.1_MV	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+LU.2_MV	LU.2_MV	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+LU.5	LU.5	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+IO.1	IO.1	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+IO.1b	IO.1b	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+IO.2	IO.2	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+IO.3	IO.3	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+IO.3b	IO.3b	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+IO.4	IO.4	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
