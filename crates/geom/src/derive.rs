@@ -284,6 +284,86 @@ pub fn with_bbox_into(
     a.select_into(&keep, out);
 }
 
+/// Calibre `ENCLOSE RECTANGLE` (`keep`) or `NOT ENCLOSE RECTANGLE`: the
+/// polygons of merged `a` that can hold an axis-aligned `w` x `h` box, either
+/// way round, its boundary allowed on theirs ("select all polygons ... that
+/// can fit an X by Y rectangle", the operation as `KLayout`'s forum thread
+/// 2141 states it; its author's emulation tries both orientations by under-
+/// and oversizing). `w` and `h` are positive grid units.
+///
+/// Exact on rectilinear input: a polygon with whole-unit vertices holds a
+/// `w` x `h` box exactly when its erosion by the box `[0, w - 1] x [0, h -
+/// 1]` keeps a positive area, since the intervals its sides bound have whole
+/// ends (a box `w - 1 + e` wide fits only where one `w` wide does).
+///
+/// # Errors
+///
+/// A boolean refuses its input, or growing past the coordinate domain.
+///
+/// # Panics
+///
+/// When `w` or `h` is not positive; the deck refuses both.
+pub fn with_rect_into(
+    a: &ValidatedLayer,
+    w: Dbu,
+    h: Dbu,
+    keep: bool,
+    out: &mut ValidatedLayer,
+) -> Result<(), BooleanError> {
+    let (w, h) = (w.raw(), h.raw());
+    assert!(w > 0 && h > 0, "a box has positive sides");
+    let mut room = ValidatedLayer::default();
+    let mut flags = room_into(a, w, h, &mut room).and_then(|()| overlapping_flags(a, &room))?;
+    if w != h {
+        room_into(a, h, w, &mut room)?;
+        for (flag, turned) in flags.iter_mut().zip(overlapping_flags(a, &room)?) {
+            *flag |= turned;
+        }
+    }
+    for flag in &mut flags {
+        *flag = *flag == keep;
+    }
+    a.select_into(&flags, out);
+    Ok(())
+}
+
+/// The lower-left corners at which a `w` x `h` box fits in `a`, less one unit
+/// each way: `a` minus everything within `[-(w - 1), 0] x [-(h - 1), 0]` of
+/// its complement (taken in a frame reaching `w`, `h` past its extent).
+fn room_into(
+    a: &ValidatedLayer,
+    w: i64,
+    h: i64,
+    out: &mut ValidatedLayer,
+) -> Result<(), BooleanError> {
+    let Some(extent) = a.bboxes().iter().copied().reduce(Bbox::union) else {
+        return merge_into(a, out);
+    };
+    let mut frame = GeometryStoreBuilder::with_capacity(1, 4);
+    push_rect(&mut frame, grown(extent, w, h)?);
+    let mut frame_layer = ValidatedLayer::default();
+    merged(frame, &mut frame_layer)?;
+    let mut outside = ValidatedLayer::default();
+    subtraction_into(&frame_layer, a, &mut outside)?;
+    let (mut rects, mut start) = (Vec::new(), Vec::new());
+    decompose_into(&outside, &mut rects, &mut start);
+    let mut builder = GeometryStoreBuilder::with_capacity(rects.len(), 4 * rects.len());
+    for &r in &rects {
+        let reach = |v: Dbu, by: i64| Dbu::new(v.raw() - by).ok_or(BooleanError::OutOfRange);
+        push_rect(
+            &mut builder,
+            Bbox {
+                xlo: reach(r.xlo, w - 1)?,
+                ylo: reach(r.ylo, h - 1)?,
+                ..r
+            },
+        );
+    }
+    let mut eaten = ValidatedLayer::default();
+    merged(builder, &mut eaten)?;
+    subtraction_into(a, &eaten, out)
+}
+
 /// `KLayout` `rectangles` and `squares` (`keep`), or `non_rectangles` and
 /// `non_squares`: the polygons of `a` that are, or are not, one axis-aligned
 /// box with no hole, and with `square` a box with equal sides. `a` must be

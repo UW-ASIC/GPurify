@@ -568,6 +568,20 @@ pub enum DerivedOp {
         /// The greatest side kept, in grid units.
         hi: i128,
     },
+    /// `with_rect` (`keep`) or `without_rect`: the shapes that can, or
+    /// cannot, hold an axis-aligned box `w` x `h` grid units, either way
+    /// round, the box's boundary allowed on theirs (Calibre `ENCLOSE
+    /// RECTANGLE` as `KLayout` forum thread 2141 states it: "select all
+    /// polygons ... that can fit an X by Y rectangle", both orientations).
+    /// Shapes are read merged. Both sides are positive.
+    WithRect {
+        /// `true` keeps the shapes with room for the box, `false` the others.
+        keep: bool,
+        /// One side of the box, in grid units.
+        w: Dbu,
+        /// The other side, in grid units.
+        h: Dbu,
+    },
     /// `rectangles` (`keep`), `squares` (`keep` and `square`),
     /// `non_rectangles` or `non_squares`: the shapes that are, or are not, one
     /// axis-aligned box with no hole, a square having equal sides, as
@@ -664,6 +678,7 @@ impl DerivedOp {
             | Self::WithWidth(..)
             | Self::Rectangles { .. }
             | Self::WithBbox { .. }
+            | Self::WithRect { .. }
             | Self::WithText { .. }
             | Self::Extended { .. }
             | Self::InCells { .. } => Some(false),

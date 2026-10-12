@@ -258,7 +258,6 @@ says which foundry manual, standard or tool defines each one.
 | DRC-127 | Cell edge-type spacing between placed cells | missing | Spacing by the edge types of neighbouring standard cells (EXCEPTNONFILLERINBETWEEN and other options); needs cell placement, which a flattened layout loses |
 | DRC-128 | Self-aligned multiple patterning (SADP/SAQP mandrel, spacer, cut) legality | missing | Distinct from LELE colouring (DRC-100): legality is a mandrel/non-mandrel assignment plus cut-mask rules |
 | DRC-129 | Inter-die alignment and overlap (bump and pad alignment, rotation, cross-die spacing) | missing | Companion to LVS-073; needs a stack description placing each die |
-| DRC-130 | Shape must contain a rectangle of a given size | missing | No open foundry rule found that states it; the operation is public only as an SVRF statement name |
 
 ### Layout against schematic (LVS)
 

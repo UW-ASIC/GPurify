@@ -794,6 +794,23 @@ impl<'a> Parser<'a> {
                 };
                 (derived, Some(false), None)
             }
+            "with_rect" | "without_rect" => {
+                self.expect("(")?;
+                let value = self.value()?;
+                let Val::Pair(first, second, _) = &value else {
+                    return Err(self.wrong(&value, "a box `w x h`", op));
+                };
+                let (w, h) = (self.length(first, op)?, self.length(second, op)?);
+                if w.raw() <= 0 || h.raw() <= 0 {
+                    return Err(self.err(
+                        value.span(),
+                        &format!("`.{op}` takes a box with positive sides"),
+                    ));
+                }
+                self.expect(")")?;
+                let keep = op == "with_rect";
+                (DerivedOp::WithRect { keep, w, h }, Some(false), None)
+            }
             "with_area" => {
                 let (lo, hi) = self.bounds(op, Dim::Area, false)?;
                 (DerivedOp::WithArea(lo, hi), Some(false), None)

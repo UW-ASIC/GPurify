@@ -550,6 +550,7 @@ fn check_operands(
         | DerivedOp::Extents
         | DerivedOp::Rectangles { .. }
         | DerivedOp::WithBbox { .. }
+        | DerivedOp::WithRect { .. }
         | DerivedOp::Edges
         | DerivedOp::WithArea(..)
         | DerivedOp::WithWidth(..)
@@ -569,6 +570,11 @@ fn check_operands(
             if matches!(row.op, DerivedOp::WithText { .. }) && layers.is_derived(argument) {
                 return wrong("text is drawn on a GDS layer, not a derived one");
             }
+        }
+    }
+    if let DerivedOp::WithRect { w, h, .. } = row.op {
+        if w.raw() <= 0 || h.raw() <= 0 {
+            return wrong("a box has positive sides");
         }
     }
     // A cell tag belongs to a drawn ring; a derived layer has none.
