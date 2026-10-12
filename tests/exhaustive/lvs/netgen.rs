@@ -357,15 +357,36 @@ fn curated() -> Vec<Case> {
 
 /// Netgen's verdict from its comparison log; `None` when it gave none.
 /// "Networks match locally but not globally" is its report of swapped
-/// connections, a mismatch.
+/// connections, a mismatch, and so is "parallel/series network does not
+/// match", its report of merged devices that differ. A match with property
+/// errors is a mismatch however Netgen words it: "Property errors were
+/// found." after a unique match, but only "Netlists match with N
+/// symmetries and property errors." after one it resolved by symmetry,
+/// which this used to read as a clean match (B31).
 fn netgen_verdict(log: &str) -> Option<bool> {
-    if log.contains("Netlists do not match") || log.contains("match locally but not globally") {
+    let refused = ["Netlists do not match", "match locally but not globally"];
+    if refused.iter().any(|why| log.contains(why)) {
         Some(false)
     } else if log.contains("Netlists match") {
-        Some(!log.contains("Property errors were found"))
+        Some(
+            !log.contains("roperty errors")
+                && !log.contains("parallel/series network does not match"),
+        )
     } else {
         None
     }
+}
+
+/// The lines of a Netgen log that say what it found, for a broken case's
+/// report: its verdicts, property and merge complaints, symmetries.
+fn netgen_summary(log: &str) -> String {
+    let telling = ["atch", "roperty", "ymmetr", "network", "shorted"];
+    log.lines()
+        .filter(|line| telling.iter().any(|word| line.contains(word)))
+        .take(12)
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 /// `GPurify`'s verdict, or why it gave none.
@@ -466,12 +487,14 @@ fn differential(netgen: &Path, cases: &[Case]) -> Tally {
                 *tally.differs.entry(why).or_default() += 1;
             }
             _ => tally.broken.push(format!(
-                "{name}: GPurify {ours:?}, Netgen {theirs:?}, enumeration oracle {:?}{}; {}",
+                "{name}: GPurify {ours:?}, Netgen {theirs:?}, enumeration oracle {:?}{}; {}\n    \
+                 netgen: {}",
                 x5_verdict(&case.fixture),
                 case.differs
                     .map(|why| format!(", documented to differ ({why})"))
                     .unwrap_or_default(),
-                path.display()
+                path.display(),
+                netgen_summary(&log)
             )),
         }
     }
@@ -515,9 +538,9 @@ fn compare_all(count: usize, batch: impl Fn(usize) -> Vec<Case> + Sync) -> Tally
     broken.sort();
     assert!(
         broken.is_empty(),
-        "{} cases broken (first 60):\n{}",
+        "{} cases broken (first 200):\n{}",
         broken.len(),
-        broken[..broken.len().min(60)].join("\n")
+        broken[..broken.len().min(200)].join("\n")
     );
     for why in [SERIES, CRITICAL] {
         assert!(

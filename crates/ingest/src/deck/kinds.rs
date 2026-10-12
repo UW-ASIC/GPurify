@@ -22,6 +22,8 @@ pub(crate) enum Dim {
     Temperature,
     /// eV.
     Energy,
+    /// W/(m·K), written `W/mK`.
+    ThermalConductivity,
     /// h.
     Time,
     /// V/um, an electric field (numerically mV/nm).
@@ -67,6 +69,10 @@ pub(crate) enum Dim {
     LengthPairList(&'static str),
     /// One of the listed bare words; the engine param is its index, a count.
     Word(&'static [&'static str]),
+    /// `[(area, n), ..]`, a piecewise-linear table (LEF's `PWL`) with areas
+    /// rising strictly; per point, the area goes to the param's engine name
+    /// and the number to the named one.
+    AreaTable(&'static str),
 }
 
 /// Units, the dimension each belongs to, and the power of ten to the engine unit.
@@ -93,6 +99,7 @@ pub(crate) const UNITS: &[(&str, Dim, i32)] = &[
     ("Mohm", Dim::Resistance, 6),
     ("K", Dim::Temperature, 0),
     ("eV", Dim::Energy, 0),
+    ("W/mK", Dim::ThermalConductivity, 0),
     ("h", Dim::Time, 0),
     ("V/um", Dim::Field, 0),
     ("V/nm", Dim::Field, 3),
@@ -230,6 +237,12 @@ const STEP_CORNERS: &[&str] = &["outside", "inside", "step"];
 const VOLTAGE_SPACE: &[Param] = &[
     p("voltage", "voltage", Dim::VoltageList),
     p("space", "space", Dim::LengthList),
+];
+/// A narrow-line current band: a metal line at most `width` wide may carry
+/// `current` (IHP SG13G2 §2.15's IMAX beside JMAX).
+const EM_NARROW: &[Param] = &[
+    p("width", "narrow_width", Dim::Length),
+    p("current", "narrow_current", Dim::Current),
 ];
 const CMP_MODEL: &[Param] = &[
     p("target", "cmp_target_density", Dim::Fraction),
@@ -609,9 +622,24 @@ pub(crate) const KINDS: &[Kind] = &[
         true,
         &[
             p("max_ratio", "max_ratio", Dim::Scalar),
+            opt("sidewall", "sidewall_thickness", Dim::Length),
+            p("cut_factor", "cut_factor", Dim::Scalar),
             opt("diode", "diode_layer", Dim::Layer),
             p("diode_credit", "diode_credit", Dim::Scalar),
             p("diode_bonus", "diode_bonus", Dim::Scalar),
+            p("area_minus_diode", "area_minus_diode", Dim::Scalar),
+            p("gate_plus_diode", "gate_plus_diode", Dim::Scalar),
+            opt(
+                "diode_reduce",
+                "diode_reduce_area",
+                Dim::AreaTable("diode_reduce"),
+            ),
+            opt(
+                "diode_max_ratio",
+                "diode_max_ratio_area",
+                Dim::AreaTable("diode_max_ratio"),
+            ),
+            opt("exempt", "exempt_layer", Dim::Layer),
         ],
     ),
     erc(
@@ -652,6 +680,7 @@ pub(crate) const KINDS: &[Kind] = &[
         &[
             p("max_density", "max_density", Dim::CurrentPerWidth),
             p("max_current_per_cut", "max_current_per_cut", Dim::Current),
+            opt("narrow", "", Dim::Group(EM_NARROW)),
         ],
     ),
     erc(
@@ -688,6 +717,33 @@ pub(crate) const KINDS: &[Kind] = &[
         ],
     ),
     erc("ir_drop", &[], false, &[]),
+    erc("dynamic_ir_drop", &[], false, &[]),
+    erc(
+        "em_thermal",
+        &[0],
+        true,
+        &[
+            p("max_density", "max_density", Dim::CurrentPerWidth),
+            p("max_current_per_cut", "max_current_per_cut", Dim::Current),
+            p("blech_limit", "blech_limit", Dim::Current),
+            p(
+                "reference_temperature",
+                "reference_temperature",
+                Dim::Temperature,
+            ),
+            p("activation_energy", "activation_energy_ev", Dim::Energy),
+            p("current_exponent", "current_exponent", Dim::Scalar),
+            p(
+                "thermal_conductivity",
+                "thermal_conductivity",
+                Dim::ThermalConductivity,
+            ),
+            p("spreading", "heat_spreading", Dim::Scalar),
+            p("sigma", "sigma", Dim::Scalar),
+            p("limit_failure", "limit_failure", Dim::Fraction),
+            p("max_failure", "max_failure", Dim::Fraction),
+        ],
+    ),
     erc(
         "missing_tie",
         &[0, 1],

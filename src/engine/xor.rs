@@ -22,8 +22,9 @@
 //! layout's path. Data out: one [`RuleRun`] per drawn layer, id
 //! `xor.<layer>`, and the violations, reported as the DRC stage.
 
-use crate::engine::pipeline::{load, Inputs, LoadError, Loaded};
+use crate::engine::pipeline::{load_with, Inputs, LoadError, Loaded};
 use crate::engine::run::{summarize, EngineError, Outputs, StageStatus, Summary};
+use gpurify_check::deck::DeckFn;
 use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, Violation};
 use gpurify_geom::boolean::{subtraction_into, union_into};
 use gpurify_geom::ops::Point;
@@ -39,11 +40,25 @@ use std::path::Path;
 /// # Errors
 ///
 /// - [`EngineError::Load`]: either layout, or the deck, cannot be read, as
-///   [`load`] says; the second layout is held to the deck's layers as the
+///   [`load`](crate::engine::pipeline::load) says; the second layout is held to the deck's layers as the
 ///   first is.
 /// - [`EngineError::GridMismatch`]: the two layouts' `UNITS` differ.
 pub fn run(inputs: &Inputs, other: &Path) -> Result<(Loaded, Outputs, Summary), EngineError> {
-    let mut loaded = load(inputs)?;
+    run_with(inputs, other, &[])
+}
+
+/// [`run`], with the decks a binary carries by name, as
+/// [`load_with`] reads them.
+///
+/// # Errors
+///
+/// As [`run`].
+pub fn run_with(
+    inputs: &Inputs,
+    other: &Path,
+    decks: &[(&str, DeckFn)],
+) -> Result<(Loaded, Outputs, Summary), EngineError> {
+    let mut loaded = load_with(inputs, decks)?;
     let bytes = read_gds_bytes(other).map_err(LoadError::from)?;
     let library = Library::parse(&bytes, &mut loaded.strings).map_err(LoadError::from)?;
     let grid = library.grid().map_err(LoadError::from)?;

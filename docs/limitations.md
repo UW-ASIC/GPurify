@@ -20,7 +20,6 @@ result from them is weaker than it looks.
 |---|---|
 | `enclosure(inner, outer, opposite)` | An inner shape that is not a rectangle is held to the every-side limit instead. |
 | `enclosure(E, L)` on an edge layer | Measures straight out from each edge, so a gap in `L` diagonally off a corner of the shape is not seen. Pair it with the shape `enclosure` where the corner matters. |
-| `antenna_electrical` | A row with a diode and a non-zero `diode_credit` is refused: the unit of the credit is not settled. |
 | `esd_topological`, `esd_latchup` | Only checks that a clamp path exists. The resistance and current capacity of the path are not checked, and a clamp is any device of a listed model, however it is wired. |
 | `gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`, `domain_crossing` | A net's voltage range is the span of every supply it connects to through a device channel that can conduct. Only a transistor whose `device` row states `on_gate_min` or `on_gate_max` is switched by its gate; every other channel always conducts, and threshold drops and power-down are ignored, so these rules can over-report. No shipped deck states a gate condition. A net that reaches no supply that way, such as a primary input with no ESD diode, is not checked, and neither is a device whose terminals sit on such nets. |
 | `hv_tag`, `mixed_tag` | High voltage is decided by the intent's supplies (`hv_tag`) or by a tag layer (`mixed_tag`); sky130's text tags (`shv_nwell`, `hv_bb`, `hv_lv`, and the `lv_net` exemption of hvnwell.10) are not read. No shipped deck carries either yet: sky130's hvnwell.10 can be written `mixed_tag(nwell, hvi)`, but `hv_tag` needs a voltage the manual does not name for "high voltage". |
@@ -51,8 +50,20 @@ result from them is weaker than it looks.
   near that point than it really has.
 - A net's current budget is shared equally among the devices on it, so one
   device that draws more than its share reads cooler than it is.
-- `electromigration` and `reliability` use one temperature for the whole run,
-  the deck's `temperature` (85 °C when it states none), with no self-heating.
+- `electromigration` and `reliability` use one temperature for the whole run:
+  the intent's `temperature_c`, else the deck's `temperature`, else 85 °C,
+  with no self-heating.
+  `em_thermal` adds each wire's own Joule heating to it, but a wire heats
+  only itself: heat from neighbouring wires, heat carried along a line to
+  cooler vias, and resistance rising with temperature are not modelled, so a
+  dense bundle of wires reads cooler than it is. Its current is the static
+  budget's, so AC signal-line RMS and peak limits stay missing (ERC-E7).
+- `dynamic_ir_drop` is vectorless: every load on a net switches at once in
+  one worst cycle, with no timing windows (which errs high). The grid is
+  resistors and decap only, with no package, bump or wire inductance, and
+  only that cycle is followed from the static drop: when decap holds charge
+  longer than a clock period, the cycles before count only as their average.
+  Backward Euler reads a pulse's peak up to 0.61 % low on an RC node.
 
 ## Parasitics
 
@@ -138,8 +149,10 @@ None has been compared against foundry signoff results.
   covers only poly that touches no diffusion.
 - IHP: parasitic area capacitance other than Metal1 is computed from the
   documented layer heights and dielectric constants, and fringe capacitance
-  is zero. Its antenna rows say `diode: none` (no antenna-diode layer is
-  chosen), so a gate with a diode is held to the no-diode limit.
+  is zero. Its antenna rows count a source/drain or tap Activ piece of at
+  least 0.16 µm² as a protection diode (Ant.e/f), where IHP's own KLayout
+  deck sums a net's diode area and counts it above 0.16 µm², so a net
+  protected only by several small pieces is held to the no-diode limit here.
 - `generic_finfet` is ASAP7, a predictive process no fab builds. It
   recognises no transistors and extracts no capacitance: the manual gives no
   resistance for the gate and local-interconnect layers and no capacitance at
@@ -256,9 +269,9 @@ says which foundry manual, standard or tool defines each one.
 | LVS-001 | Port / label consistency | partial | label_conflict flags one label on several nets (an open); net_seed_conflict flags several labels on one net (a short), one row per pair at the first label's shape |
 | LVS-002 | Implicit joins (same-label disjoint shapes, must-connect) | partial | Same-label disjoint shapes are not joined; they are reported as label_conflict, and only with --reference (lvs::check_layout); located on the labelled shapes (F70) |
 | LVS-005 | Short isolation / localisation | partial | Reported in every run, DRC-only included, naming both labelled shapes, located at the first; no path traced; no abort. Opens are not isolated: one reference net split over several layout nets shows only as label_conflict where labelled, never as an open path (CAL:LVS ISOLATE OPENS) |
-| LVS-010 | Circuit without partner / hierarchical compare | partial | The reference is flattened below its top (Netlist::flatten_top) and compared device by device, so a missing block is a mismatch; there is no per-cell matching and no circuit-mismatch report naming the cell; a reference flattening to more than 2²⁸ devices, nets and instances is refused (NetlistError::TooLarge); no cell-correspondence list naming which layout cell matches which reference subcircuit (KL:same_circuits, NG:equate classes) |
+| LVS-010 | Circuit without partner / hierarchical compare | partial | The reference is flattened below its top (Netlist::flatten_top) and compared device by device, so a missing block is a mismatch; there is no per-cell matching and no circuit-mismatch report naming the cell; a reference flattening to more than 2²⁸ devices, nets and instances is refused (NetlistError::TooLarge), and one nesting deeper than the layout's 1024 levels (NetlistError::TooDeep, F96); flattening is linear in what it places (F95); no cell-correspondence list naming which layout cell matches which reference subcircuit (KL:same_circuits, NG:equate classes) |
 | LVS-013 | Paired device with a different class/model | partial | Pairing requires the same kind and model, so it shows as unpaired |
-| LVS-014 | Parameter mismatch with tolerance | partial | One relative tolerance, 0.02 (lvs::CompareOptions); per-parameter and absolute tolerances are missing |
+| LVS-014 | Parameter mismatch with tolerance | partial | One relative tolerance, 0.02 (lvs::CompareOptions); the counts m and nf are compared exactly (F99); per-parameter and absolute tolerances are missing |
 | LVS-016 | Pin / port mismatch | partial | Net and port names are never compared, so a misnamed or reordered port passes; an unconnected reference port shows as unpaired_net (test net_names_do_not_have_to_agree) |
 | LVS-017 | Subcircuit instance unpaired | partial | Instances are flattened, not paired as units: a missing instance shows as its devices unpaired |
 | LVS-030 | Swappable pins (S/D, resistor ends, user-declared) | partial | MOS source/drain and resistor ends are interchangeable; diode anode/cathode and capacitor plates are not, as in Netgen. User-declared equivalent pins are missing |
@@ -273,7 +286,7 @@ says which foundry manual, standard or tool defines each one.
 | LVS-047 | Logic-gate recognition | missing | — |
 | LVS-048 | Filter unused devices | missing | — |
 | LVS-049 | Topology vs property policy (strict/relaxed) | partial | Fixed strict policy: structural differences after reduction are reported as unpaired devices. |
-| LVS-060 | MOS W, L, nf, m, AS/AD/PS/PD, bulk | partial | w and l from the marker bounding box; nf = 1 per channel, summed by parallel merges; marker area and perim. Compared per paired device, only where its card states the parameter (F68). as/ad/ps/pd from the source/drain polygon (gate edge included, BSIM4 perMod=1), a shared diffusion split evenly, compared at the channel end, summed in parallel merges, refused in series; not measured where drawn in pieces; bulk is dropped when the layout has none |
+| LVS-060 | MOS W, L, nf, m, AS/AD/PS/PD, bulk | partial | w and l from the marker bounding box; nf = 1 per channel, summed by parallel merges; marker area and perim. Compared per paired device, only where its card states the parameter (F68). as/ad/ps/pd from the source/drain polygon (gate edge included, BSIM4 perMod=1), a shared diffusion split evenly, compared at the channel end, symmetric channel nets paired the way the diffusions agree (F98), summed in parallel merges, refused in series; not measured where drawn in pieces; bulk is dropped when the layout has none |
 | LVS-061 | Resistor R/L/W | partial | w/l from the resistor body's bounding box; r = sheet·l/w when the device statement gives sheet; positional R1 a b 1k rpoly is read as r. A bent body reads its bounding box; a card with no model is the deck's one resistor (F86); resistors never merge in series |
 | LVS-062 | Capacitor C/A/P | partial | area and perim measured; c = area_cap·area + fringe_cap·perim when the deck gives them; a positional C value is read. No w/l; KLayout A/P read as area/perim (F87); a C card with no model is the deck's one capacitor (F86) |
 | LVS-064 | BJT AE/PE/NE, multi-emitter | partial | ae/pe from the emitter terminal's polygon (B27); marker area and perim; no NE or multi-emitter. sky130 bipolars have no recogniser (limitations.md, "Shipped decks") |
@@ -288,14 +301,7 @@ says which foundry manual, standard or tool defines each one.
 
 | Id | Check | Status | What is missing |
 |---|---|---|---|
-| ERC-A4 | Cut/via ratio, routing-plus-cut accumulation | partial | ROUTINGPLUSCUT is missing |
-| ERC-A5 | Subtractive diode credit (K x area + bonus) | partial | A row with a diode and non-zero diode_credit is refused (limitations.md, "Rules that can pass a layout signoff would flag"); diode_bonus applies only to gates with diode area on their net |
-| ERC-A6 | Additive diode credit (gate += MF x diode) | missing | — |
-| ERC-A7 | PWL diffusion-dependent limit | missing | — |
-| ERC-A9 | Minimum protection-diode size | missing | — |
 | ERC-A11 | MIM capacitor as victim | partial | The gate argument takes any layer; a non-conductor gate joins the layer a device mos row names as its gate terminal, else the conductor it lies on, never metal routed over it (F72, F81 fixed). gf180 leaves ANT.14/15 out, and the FuseTop/Via5 connectivity needs care |
-| ERC-A12 | Oxide-class-specific limits | partial | One row per gate layer |
-| ERC-A13 | Exemption for substrate-shorted nets | missing | No exemption: every net with gate area > 0 is checked; reaching diffusion or a tap protects nothing (erc::rules::antenna::check_antenna) |
 | ERC-A14 | Hierarchical / macro-pin antenna | missing | — |
 | ERC-A15 | Fix hint: required diode area | missing | Report feature |
 | ERC-C2 | ESD device sizing (perimeter, clamp width) | missing | — |
@@ -320,12 +326,10 @@ says which foundry manual, standard or tool defines each one.
 | ERC-D7 | Native-device guard ring | missing | — |
 | ERC-D8 | Forward-biased diode marked and ringed | missing | — |
 | ERC-D9 | PMOS/NMOS devices sharing one well | missing | Named as a Calibre PERC layout check without a public definition of which sharing is illegal |
-| ERC-E3 | Width-banded absolute current for narrow lines | partial | Limit is max_density x width only, with no width band or absolute cap (erc::rules::electrical::check_em_current_density). The IHP deck states JMAX only: it may over-report, but it cannot under-report |
-| ERC-E7 | RMS / Joule heating / peak limits | missing | LEF 5.8 publishes the grammar (limits tabled by frequency and width); no open PDK publishes values |
+| ERC-E7 | RMS / Joule heating / peak limits | missing | Public limits exist: LEF 5.8's ACCURRENTDENSITY tables by frequency and width, and the sky130 tech LEF's RMS limits (6.1 mA/um met1-met2, 14.9 met3-met4, 22.34 met5, Tj 90 C). The intent states only a DC current budget per net, so no RMS or peak current reaches a check |
 | ERC-E9 | PDN integrity (floating stripes, unconnected instances) | partial | Flags unconnected conductors; PDN-specific checks (floating stripes, instance supply terminals) are missing |
-| ERC-E11 | Dynamic / vectorless IR | missing | In scope since 2026-10-11 (was: Static analysis only: dynamic IR needs switching activity) |
-| ERC-E12 | Stress voiding / slotting | partial | cheesing requires a slot in wide shapes; stress-voiding rules beyond slotting are missing |
-| ERC-E13 | Thermal-aware / statistical EM, self-heating | missing | In scope since 2026-10-11 (was: One temperature, 85 C (limitations.md, "Power grid")) |
+| ERC-E11 | Dynamic / vectorless IR | partial | Vectorless worst cycle: every load on a net switches in phase once, a triangular pulse from its budget, toggle rate and rise time, against the net's decap; an RC grid with no package, bump or wire inductance (L di/dt), and one feed point per supply (limitations.md, "Power grid") |
+| ERC-E12 | Stress voiding / slotting | partial | cheesing requires a slot in wide shapes, and the slot geometry (IHP Slt.*, gf180 MSLOT.*) is DRC width, enclosure and spacing; JEP139 and JESD214 are stress-migration test methods that state no layout rule, so the stress-voiding rules beyond slotting (vias landing on wide metal) have no public limit |
 | ERC-F4 | HCI susceptibility flag | missing | — |
 | ERC-F14 | Power-intent supply connectivity (power switches, always-on and retention cells on the supplies the UPF declares) | missing | Needs UPF input; IEEE 1801 not read (check-sources.md §5) |
 | ERC-G8 | Combinational loops | missing | Digital only, optional |
@@ -359,7 +363,7 @@ says which foundry manual, standard or tool defines each one.
 | FLOW-003 | SoC integration (macro sync, ports off grid, fill outside boundary, block/pad-ring overlap) | missing | Cheap from LEF/DEF + GDS |
 | FLOW-004 | Interface DRC top vs blocks | missing | — |
 | FLOW-005 | In-design / live DRC | partial | Shared-deck library (Philis) is the first step |
-| FLOW-006 | User-programmable rules | missing | Rust decks + Rule::Custom (testing-plan.md L9b) |
+| FLOW-006 | User-programmable rules | partial | DRC custom rules as Rust fn pointers (deck::CustomRule via DeckBuilder::custom; runner owns accounting) and gpurify::cli::main_with for a binary with its own decks; ERC custom rules and a KLayout snippet per rule not yet (deck-library plan P5) |
 | FLOW-007 | Fill insertion (density-driven, timing-aware) | missing | DRC-073 checks fill; this generates it |
 | FLOW-008 | Incremental / ECO re-verification (changed regions or nets only) | missing | Metamorphic: an incremental run equals a full run |
 | FLOW-009 | Automated DRC-clean layout enhancement (via and power-grid insertion) | missing | — |

@@ -59,7 +59,7 @@ use gpurify_ingest::StrId;
 /// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
 /// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
 /// [`IrDropTable`]: crate::erc::rules::electrical::IrDropTable
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ReliabilityTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -110,7 +110,7 @@ pub struct ReliabilityTable {
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct HvDomainTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -157,7 +157,7 @@ pub struct HvDomainTable {
 /// [Khazhinsky 2012]: https://www.esda.org/assets/News/8df611267c/ESDEDA-InCompliance-part1.pdf
 /// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
 /// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct EsdLatchupTable {
     /// Rule id and severity per row.
     pub head: RuleHead,

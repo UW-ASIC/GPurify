@@ -1,11 +1,14 @@
-//! Electrical rules: all twenty-four ERC kinds, each against an oracle written
+//! Electrical rules: all twenty-six ERC kinds, each against an oracle written
 //! here from its definition, never from a run.
 //!
 //! - Electrical kinds against closed forms worked out in this file: Ohm's law
 //!   on resistor ladders and a current divider (`ir_drop`, `p2p_resistance`),
 //!   current per width and per cut (`em_current_density`), Black's equation
 //!   with the Blech exemption and the GF180MCU §14.2.2 derating table
-//!   (`electromigration`), the inverse power law times Arrhenius
+//!   (`electromigration`), the static drop plus one RC node's backward-Euler
+//!   response to its switching pulse (`dynamic_ir_drop`), Banerjee's
+//!   self-heating and a lognormal wire (`em_thermal`), the inverse power law
+//!   times Arrhenius
 //!   (`reliability`), the antenna ratios of LEF/DEF 5.8 Appendix C and IHP
 //!   SG13G2 §7.1 (`antenna`, `antenna_electrical`), and window densities
 //!   (`density_cmp`). Each is swept below, at and above its limit.
@@ -75,6 +78,8 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(ir_drop(depth));
     out.extend(em_current_density(depth));
     out.extend(electromigration());
+    out.extend(dynamic_ir_drop());
+    out.extend(em_thermal());
     out.extend(reliability());
     out.extend(p2p(depth));
     out.extend(grid_outcomes());
@@ -798,8 +803,8 @@ fn diode_stub(diode: bool) -> Layout {
 /// - With a diode on the net and a bonus of 0.5: 1.5 swept.
 /// - A bonus is credit for a diode, so a net without one keeps 2.0 (F35:
 ///   it was once subtracted from every gate net).
-/// - A diode with a non-zero credit is refused, as its rustdoc and
-///   limitations.md state.
+/// - The credit is per µm² of diode: SKY130's Table Ig limits
+///   ([`sky130_table_ig`]).
 /// - IHP Ant.b (without diode, 1.5 here) and Ant.e (with diode, 100): a net
 ///   with a diode is held to Ant.e only, so at 2.0 it is clean. Ant.b names
 ///   the diode layer it leaves to Ant.e; before `antenna` took one it held
@@ -813,7 +818,7 @@ fn antenna_electrical() -> Vec<Fixture> {
                 &format!("erc/antenna_electrical/no_credit/{}", side(limit, 2.0)),
                 &["ERC-A5", "ERC-A8"],
                 &antenna_deck(&format!(
-                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, diode: none, diode_credit: 0, diode_bonus: 0)"
+                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, sidewall: none, cut_factor: 1, diode: none, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)"
                 )),
                 ERC,
             )
@@ -827,7 +832,7 @@ fn antenna_electrical() -> Vec<Fixture> {
                 &format!("erc/antenna_electrical/bonus_with_diode/{}", side(limit, 1.5)),
                 &["ERC-A5", "ERC-A8"],
                 &antenna_deck(&format!(
-                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, diode: diff, diode_credit: 0, diode_bonus: 0.5)"
+                    "rule ae antenna_electrical(gate, met1; max_ratio: {limit}, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0.5, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)"
                 )),
                 ERC,
             )
@@ -840,27 +845,24 @@ fn antenna_electrical() -> Vec<Fixture> {
             "erc/antenna_electrical/bonus_without_diode",
             &["ERC-A5"],
             &antenna_deck(
-                "rule ae antenna_electrical(gate, met1; max_ratio: 1.75, diode: diff, diode_credit: 0, diode_bonus: 0.5)",
+                "rule ae antenna_electrical(gate, met1; max_ratio: 1.75, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0.5, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)",
             ),
             ERC,
         )
         .layout(diode_stub(false))
         .expect(Expect::rule("ae", vec![ratio(2.0).at(500, 500)])),
     );
-    out.push(
-        Fixture::new(
-            "erc/antenna_electrical/credit_is_refused",
-            &["ERC-A5"],
-            &antenna_deck(
-                "rule ae antenna_electrical(gate, met1; max_ratio: 1000, diode: diff, diode_credit: 1, diode_bonus: 0)",
-            ),
-            ERC,
-        )
-        .layout(diode_stub(true))
-        .expect(Expect::outcome("ae", Want::Refused)),
-    );
+    out.extend(sky130_table_ig());
+    out.extend(lef_c20_cumulative());
+    out.extend(lef_gate_plus_diode());
+    out.extend(gf180_ant16());
+    out.extend(lef_example4());
+    out.extend(lef_pwl_limit());
+    out.extend(sky130_lef_agrees_with_egar());
+    out.extend(sky130_ar1());
+    out.extend(ihp_ant_g());
     let ihp = "rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: diff)
-rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, diode: diff, diode_credit: 0, diode_bonus: 0)";
+rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)";
     out.push(
         Fixture::new(
             "erc/antenna_electrical/ihp_b_e/with_diode",
@@ -883,6 +885,657 @@ rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, diode: diff, diode_cre
         .expect(Expect::rule("Ant.b", vec![ratio(2.0).at(500, 500)]))
         .expect(Expect::clean("Ant.e")),
     );
+    out
+}
+
+/// A 1.0 µm² gate whose poly a 100 × 100 contact joins to met1 at (450..550,
+/// 1750..1850), and, with `diode` in µm² (a 1000-nm-wide diffusion), a diode
+/// contacted at (-1050..-950, 1750..1850) to the same met1.
+fn egar_stub(diode_um2: Option<f64>) -> Layout {
+    let mut l = Layout::default();
+    rect(&mut l, "poly", (0, 0, 1000, 2000));
+    rect(&mut l, "gate", (0, 0, 1000, 1000));
+    rect(&mut l, "cont", (450, 1750, 550, 1850));
+    if let Some(um2) = diode_um2 {
+        let half = (um2 * 500.0).round() as i64;
+        rect(&mut l, "diff", (-1500, 1800 - half, -500, 1800 + half));
+        rect(&mut l, "cont", (-1050, 1750, -950, 1850));
+    }
+    l
+}
+
+/// `count` square via1 cuts of side `side` nm on a met1 plate over both
+/// contacts of [`egar_stub`], 25 to a row at twice their side.
+fn cut_array(diode_um2: Option<f64>, count: usize, side: i64) -> Layout {
+    let mut l = egar_stub(diode_um2);
+    let rows = count.div_ceil(25) as i64;
+    rect(
+        &mut l,
+        "met1",
+        (-1100, 1700, 1200 + 50 * side, 1900 + 2 * side * rows),
+    );
+    for i in 0..count as i64 {
+        let (x, y) = (1200 + (i % 25) * 2 * side, 1900 + (i / 25) * 2 * side);
+        rect(&mut l, "via1", (x, y, x + side, y + side));
+    }
+    l
+}
+
+/// A met1 line `width` × `length` nm from x = -1100, over both contacts of
+/// [`egar_stub`]: perimeter `2 (length + width)`.
+fn line(diode_um2: Option<f64>, width: i64, length: i64) -> Layout {
+    let mut l = egar_stub(diode_um2);
+    let ylo = 1800 - width / 2;
+    rect(&mut l, "met1", (-1100, ylo, -1100 + length, ylo + width));
+    l
+}
+
+/// SKY130 antenna rules, Table Ig (sky130A's flow) and its "design
+/// limitations due to antenna rules (FET gate = 1um2)", the foundry's own
+/// worked examples of `EGAR = EA / A_gate - K x (AntennaDiode_area in um2) -
+/// diode_bonus`, each at its stated limit (clean) and one step past it
+/// (flagged), with no diode and with a 1 µm² diode:
+///
+/// - Mcon (horizontal, max 3, K 18; 0.17 µm cuts, 0.0289 µm² each): 103
+///   cuts without a diode (2.977), 726 with (20.981 - 18 = 2.981); 104
+///   (3.006) and 727 (3.010) fail.
+/// - LI (vertical, FLT 0.1 µm, max 75, K 450; minimum width 0.17 µm):
+///   370 µm without (2 × 370.17 × 0.1 = 74.034), 2620 µm with (524.034 -
+///   450); 375 µm and 2625 µm fail (75.034).
+/// - Met1 (vertical, FLT 0.35 µm, max 400, K 400, bonus 2200; width 0.14
+///   µm): 570 µm without (399.098), 4280 µm with (2996.098 - 400 - 2200 =
+///   396.098); 572 µm (400.498) and 4286 µm (400.298) fail.
+///
+/// The table's lengths are "approx" (it rounds down); each is checked
+/// against the exact limit it stands for. Then the closed form off the
+/// table: a 0.5 µm² diode halves the credit, so with Via's K 36 and max 6,
+/// 0.15 µm cuts (0.0225 µm²) pass at 1066 (23.985 - 18) and fail at 1067
+/// (24.0075 - 18). A credit per square database unit would pass all of
+/// these, and a credit refused, as it once was, would flag none.
+fn sky130_table_ig() -> Vec<Fixture> {
+    struct Case {
+        name: &'static str,
+        rule: &'static str,
+        layout: Layout,
+        /// The collecting area over the gate, before the credit.
+        ratio: f64,
+        /// `K × diode area + bonus`, or zero without a diode.
+        credit: f64,
+        max: f64,
+    }
+    let mcon = "rule ae antenna_electrical(gate, via1; max_ratio: 3, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 18, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)";
+    let li = "rule ae antenna_electrical(gate, met1; max_ratio: 75, sidewall: 100nm, cut_factor: 1, diode: diff, diode_credit: 450, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)";
+    let met1 = "rule ae antenna_electrical(gate, met1; max_ratio: 400, sidewall: 350nm, cut_factor: 1, diode: diff, diode_credit: 400, diode_bonus: 2200, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)";
+    let via = "rule ae antenna_electrical(gate, via1; max_ratio: 6, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 36, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)";
+    let cuts = |n: usize, side: f64| n as f64 * side * side / 1e6;
+    let side = |width: i64, length: i64, flt: i64| (2 * (length + width) * flt) as f64 / 1e6;
+    let mut cases = Vec::new();
+    for (n, diode) in [(103, None), (104, None), (726, Some(1.0)), (727, Some(1.0))] {
+        cases.push(Case {
+            name: "mcon",
+            rule: mcon,
+            layout: cut_array(diode, n, 170),
+            ratio: cuts(n, 170.0),
+            credit: diode.map_or(0.0, |d| 18.0 * d),
+            max: 3.0,
+        });
+    }
+    for (um, diode) in [
+        (370, None),
+        (375, None),
+        (2620, Some(1.0)),
+        (2625, Some(1.0)),
+    ] {
+        cases.push(Case {
+            name: "li",
+            rule: li,
+            layout: line(diode, 170, um * 1000),
+            ratio: side(170, um * 1000, 100),
+            credit: diode.map_or(0.0, |d| 450.0 * d),
+            max: 75.0,
+        });
+    }
+    for (um, diode) in [
+        (570, None),
+        (572, None),
+        (4280, Some(1.0)),
+        (4286, Some(1.0)),
+    ] {
+        cases.push(Case {
+            name: "met1",
+            rule: met1,
+            layout: line(diode, 140, um * 1000),
+            ratio: side(140, um * 1000, 350),
+            credit: diode.map_or(0.0, |d| 400.0 * d + 2200.0),
+            max: 400.0,
+        });
+    }
+    for n in [1066, 1067] {
+        cases.push(Case {
+            name: "via_half_um2_diode",
+            rule: via,
+            layout: cut_array(Some(0.5), n, 150),
+            ratio: cuts(n, 150.0),
+            credit: 36.0 * 0.5,
+            max: 6.0,
+        });
+    }
+    cases
+        .into_iter()
+        .map(|case| {
+            let value = case.ratio - case.credit;
+            let verdict = if value > case.max { "fails" } else { "passes" };
+            let diode = if case.credit > 0.0 {
+                "diode"
+            } else {
+                "no_diode"
+            };
+            Fixture::new(
+                &format!(
+                    "erc/antenna_electrical/sky130_table_ig/{}/{diode}/{verdict}_{:.3}",
+                    case.name, case.ratio
+                ),
+                &["ERC-A5"],
+                &antenna_deck(case.rule),
+                ERC,
+            )
+            .layout(case.layout)
+            .expect(Expect::rule(
+                "ae",
+                ratio_findings(&[(value, (500, 500))], case.max, true),
+            ))
+        })
+        .collect()
+}
+
+/// LEF/DEF 5.8 Appendix C's cumulative ratio, one partial ratio per layer in
+/// etch order, each `(area - minus × diff_area) / gate_area` with the node's
+/// areas at that layer, the running sum truncated at zero after each layer
+/// (`ANTENNAAREAMINUSDIFF`, Example 2). `nodes` is `(area, diff_area,
+/// gate_area)` per layer.
+fn lef_car(minus: f64, nodes: &[(f64, f64, f64)]) -> f64 {
+    nodes.iter().fold(0.0, |car, &(area, diff, gate)| {
+        (car + (area - minus * diff) / gate).max(0.0)
+    })
+}
+
+/// G1's and G2's nodes on Figure C-20 ([`lef_c20`]) in etch order, cont,
+/// met1, via1, met2, via2, met3, as `(area, diff_area, gate_area)` in µm²,
+/// each cut's area times `cut` (LEF's `ANTENNAAREAFACTOR` on a cut layer).
+/// G1: C1 (0.1, 0, 1), M1,2 (2, 0, 1), V1,2 + V1,3 (0.2, 0, 1), M2 (9, 0.5,
+/// 3), V2 (0.2, 0.5, 3), M3 (15, 0.5, 3); G2: C2 (0.1, 0, 2), M1,3 (3, 0.5,
+/// 2) and V1,4 (0.1, 0.5, 2), D1 reaching M1,3 through C3, then the shared
+/// nodes.
+fn c20_nodes(cut: f64) -> [[(f64, f64, f64); 6]; 2] {
+    [
+        [
+            (0.1 * cut, 0.0, 1.0),
+            (2.0, 0.0, 1.0),
+            (0.2 * cut, 0.0, 1.0),
+            (9.0, 0.5, 3.0),
+            (0.2 * cut, 0.5, 3.0),
+            (15.0, 0.5, 3.0),
+        ],
+        [
+            (0.1 * cut, 0.0, 2.0),
+            (3.0, 0.5, 2.0),
+            (0.1 * cut, 0.5, 2.0),
+            (9.0, 0.5, 3.0),
+            (0.2 * cut, 0.5, 3.0),
+            (15.0, 0.5, 3.0),
+        ],
+    ]
+}
+
+/// LEF/DEF 5.8 Appendix C's cumulative model on Figure C-20, metal and cut
+/// accumulated as one CAR (`ANTENNACUMROUTINGPLUSCUT`: CAR(m_i) = PAR(m_i) +
+/// CAR(v_i-1), CAR(v_i) = PAR(v_i) + CAR(m_i)), each case's value from
+/// [`lef_car`] over [`c20_nodes`] and swept a part in a thousand either
+/// side:
+///
+/// - Example 1, cut factor 10: the manual's steps for G1 read CAR(C) = 1.0,
+///   CAR(M1) = 3.0, CAR(V1) = 5.0, CAR(M2) = 8.0, CAR(V2) = 8.67 and CAR(M3)
+///   = 13.67 (its "12.34" in step 15 is a slip for 5 + 8.67); G2 reads 2.5 at
+///   via1 and 11.17 at met3.
+/// - Example 2, adding `ANTENNAAREAMINUSDIFF 100`: G1's CAR(V1) is still
+///   5.0, and from met2 up every sum truncates to 0 ("-8.67, truncate to
+///   0"), as G2's does from met1; a value of 0 is clean at any limit.
+/// - minus 4 with no cut factor: G1 8.367, G2 6.067, G2's sum truncated at
+///   via1 (0.55 - 0.95). Without the truncation G2 reads 5.667; with the
+///   minus once per stage instead of per layer, G1 reads 9.033.
+/// - `antenna` itself, listing the cuts with the metals: one stage's metal
+///   and the cut on it share a denominator, so its per-stage sum is the same
+///   CAR with factor 1, G1 10.367 and G2 9.667.
+fn lef_c20_cumulative() -> Vec<Fixture> {
+    let (g1, g2) = ((500, 500), (6500, 0));
+    let all = "cont, met1, via1, met2, via2, met3";
+    // (name, catalog, collectors, layers counted, minus, cut factor)
+    let cases: [(&str, &[&'static str], &str, usize, f64, f64); 6] = [
+        ("example1", &["ERC-A4"], all, 6, 0.0, 10.0),
+        (
+            "example1_via1",
+            &["ERC-A4"],
+            "cont, met1, via1",
+            3,
+            0.0,
+            10.0,
+        ),
+        ("example2", &["ERC-A4", "ERC-A5"], all, 6, 100.0, 10.0),
+        (
+            "example2_via1",
+            &["ERC-A4", "ERC-A5"],
+            "cont, met1, via1",
+            3,
+            100.0,
+            10.0,
+        ),
+        ("minus4", &["ERC-A5"], all, 6, 4.0, 1.0),
+        ("antenna", &["ERC-A3", "ERC-A4"], all, 6, 0.0, 1.0),
+    ];
+    let mut out = Vec::new();
+    for (name, catalog, collectors, layers, minus, cut) in cases {
+        let [g1_nodes, g2_nodes] = c20_nodes(cut);
+        let nets = vec![
+            (lef_car(minus, &g1_nodes[..layers]), g1),
+            (lef_car(minus, &g2_nodes[..layers]), g2),
+        ];
+        let positive: Vec<f64> = nets.iter().map(|n| n.0).filter(|&v| v > 0.0).collect();
+        // A value of zero is clean at any positive limit.
+        let limits: Vec<f64> = if positive.is_empty() {
+            vec![1e-3]
+        } else {
+            positive
+                .iter()
+                .flat_map(|&v| [v * 0.999, v * 1.001])
+                .collect()
+        };
+        for limit in limits {
+            let rule = if name == "antenna" {
+                format!("rule ae antenna(gate, {collectors}; max_ratio: {limit}, sidewall: none, diode: none)")
+            } else {
+                format!(
+                    "rule ae antenna_electrical(gate, {collectors}; max_ratio: {limit}, sidewall: none, cut_factor: {cut}, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: {minus}, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)"
+                )
+            };
+            out.push(
+                Fixture::new(
+                    &format!("erc/antenna_electrical/lef_c20_cumulative/{name}/{limit:.4}"),
+                    catalog,
+                    &antenna_deck(&rule),
+                    ERC,
+                )
+                .layout(lef_c20())
+                .expect(Expect::rule("ae", ratio_findings(&nets, limit, true))),
+            );
+        }
+    }
+    out
+}
+
+/// LEF/DEF 5.8 Appendix C, Example 3 (`ANTENNAGATEPLUSDIFF 2.0`) on Figure
+/// C-20 ([`lef_c20`]): `PAR = metal_area / (gate_area + 2.0 × diff_area)`.
+/// The manual's own steps for G1: PAR(M1) = 2 / 1 = 2, PAR(M2) = (4 + 5) /
+/// ((1 + 2) + 2 × 0.5) = 2.25 (CAR 4.25), PAR(M3) = (6 + 9) / 4 = 3.75 (CAR
+/// 8.0). G2's node at met1 already reaches D1: 3 / (2 + 2 × 0.5) = 1.0, CAR
+/// 7.0 at met3. Every value is exact in binary, so each is swept below, at
+/// and above. Without the factor PAR(M2) reads 3.0 and the met3 CARs 10.0
+/// and 9.5 ([`lef_c20_rows`]).
+fn lef_gate_plus_diode() -> Vec<Fixture> {
+    let (g1, g2) = ((500, 500), (6500, 0));
+    let rows: [(&str, &str, Vec<(f64, (i64, i64))>); 4] = [
+        ("par.met1", "met1", vec![(2.0, g1), (1.0, g2)]),
+        ("par.met2", "met2", vec![(2.25, g1)]),
+        ("par.met3", "met3", vec![(3.75, g1)]),
+        ("car.met123", "met1, met2, met3", vec![(8.0, g1), (7.0, g2)]),
+    ];
+    let mut out = Vec::new();
+    for (id, collectors, nets) in rows {
+        for (n, &(value, _)) in nets.iter().enumerate() {
+            for limit in sweep(value) {
+                out.push(
+                    Fixture::new(
+                        &format!(
+                            "erc/antenna_electrical/lef_example3/{id}/net{n}/{}",
+                            side(limit, value)
+                        ),
+                        &["ERC-A6"],
+                        &antenna_deck(&format!(
+                            "rule ae antenna_electrical(gate, {collectors}; max_ratio: {limit}, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 2, diode_reduce: none, diode_max_ratio: none, exempt: none)"
+                        )),
+                        ERC,
+                    )
+                    .layout(lef_c20())
+                    .expect(Expect::rule("ae", ratio_findings(&nets, limit, true))),
+                );
+            }
+        }
+    }
+    out
+}
+
+/// GF180MCU DRM ANT.16: a metal or via ratio is checked with "gate area =
+/// (thin gate area + MF * (COMP area directly connection that node))", MF 2
+/// for a thin gate and 15 for a thick (dual-gate) one, each against its own
+/// oxide's gate area (ERC-A12). A 1.0 µm² thin gate and a 2.0 µm² thick
+/// gate share 2.4 µm² of met1 and a 0.5 µm² diode: the thin row reads 2.4 /
+/// (1 + 2 × 0.5) = 1.2 and the thick row 2.4 / (2 + 15 × 0.5) = 0.2526,
+/// each swept. Without the diode term they read 2.4 and 1.2 (the oxide
+/// fixtures of [`antenna_variants`]); counting both oxides' gates in one
+/// denominator would read 2.4 / 3.0 for both rows before any credit.
+fn gf180_ant16() -> Vec<Fixture> {
+    let layout = {
+        let mut l = gate_stub("gate");
+        rect(&mut l, "poly", (2000, 0, 4000, 2000));
+        rect(&mut l, "gate2", (2000, 0, 4000, 1000));
+        rect(&mut l, "cont", (2900, 1700, 3100, 1900));
+        rect(&mut l, "met1", (0, 1600, 6000, 2000));
+        rect(&mut l, "diff", (4500, 1500, 5500, 2000));
+        rect(&mut l, "cont", (4900, 1700, 5100, 1900));
+        l
+    };
+    let r = |num: i64, den: i64| num as f64 / den as f64;
+    let mut out = Vec::new();
+    for (id, layer, mf, value, at) in [
+        ("thin", "gate", 2, r(4_800_000, 4_000_000), (500, 500)),
+        ("thick", "gate2", 15, r(4_800_000, 19_000_000), (3000, 500)),
+    ] {
+        for limit in sweep(value) {
+            out.push(
+                Fixture::new(
+                    &format!("erc/antenna_electrical/gf180_ant16/{id}/{}", side(limit, value)),
+                    &["ERC-A6", "ERC-A12"],
+                    &antenna_deck(&format!(
+                        "rule ae antenna_electrical({layer}, met1; max_ratio: {limit}, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: {mf}, diode_reduce: none, diode_max_ratio: none, exempt: none)"
+                    )),
+                    ERC,
+                )
+                .layout(layout.clone())
+                .expect(Expect::rule("ae", ratio_findings(&[(value, at)], limit, true))),
+            );
+        }
+    }
+    out
+}
+
+/// An `antenna_electrical` row with every factor neutral but the two
+/// piecewise-linear tables, written as given (`none` or `[(area, n), ..]`).
+fn pwl_row(
+    id: &str,
+    collectors: &str,
+    max: f64,
+    sidewall: &str,
+    reduce: &str,
+    diode_max: &str,
+) -> String {
+    format!(
+        "rule {id} antenna_electrical(gate, {collectors}; max_ratio: {max}, sidewall: {sidewall}, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: {reduce}, diode_max_ratio: {diode_max}, exempt: none)"
+    )
+}
+
+/// LEF/DEF 5.8 Appendix C, Example 4 (`ANTENNAAREADIFFREDUCEPWL ((0.0 1.0)
+/// (0.0999 1.0) (0.1 0.2) (1.0 0.1) (1000.0 0.1))`, cumulative over the
+/// metals) on Figure C-20 ([`lef_c20`]). The factor at D1's 0.5 µm² is
+/// interpolated between (0.1, 0.2) and (1.0, 0.1): 0.2 - 0.1 × 0.4 / 0.9 =
+/// 0.1556 (the manual's "0.155"). G1's node at met1 reaches no diffusion, so
+/// the manual's steps read CAR(M1) = 2, CAR(M2) = 2 + 3 × 0.1556 = 2.467 and
+/// CAR(M3) = 2.467 + 5 × 0.1556 = 3.244 ("3.24"); G2's node reaches D1 from
+/// met1, so it reads (1.5 + 3 + 5) × 0.1556 = 1.478. Both are swept a part
+/// in a thousand either side; without the factor they read 10.0 and 9.5.
+fn lef_example4() -> Vec<Fixture> {
+    let factor = 0.2 + (0.1 - 0.2) * ((0.5 - 0.1) / (1.0 - 0.1));
+    let nets = vec![(2.0 + 8.0 * factor, (500, 500)), (9.5 * factor, (6500, 0))];
+    let reduce = "[(0um2, 1.0), (0.0999um2, 1.0), (0.1um2, 0.2), (1um2, 0.1), (1000um2, 0.1)]";
+    let mut out = Vec::new();
+    for (n, &(value, _)) in nets.iter().enumerate() {
+        for limit in [value * 0.999, value * 1.001] {
+            out.push(
+                Fixture::new(
+                    &format!(
+                        "erc/antenna_electrical/lef_example4/net{n}/{}",
+                        side(limit, value)
+                    ),
+                    &["ERC-A7"],
+                    &antenna_deck(&pwl_row(
+                        "ae",
+                        "met1, met2, met3",
+                        limit,
+                        "none",
+                        reduce,
+                        "none",
+                    )),
+                    ERC,
+                )
+                .layout(lef_c20())
+                .expect(Expect::rule("ae", ratio_findings(&nets, limit, true))),
+            );
+        }
+    }
+    out
+}
+
+/// LEF/DEF 5.8 Appendix C, "Example Using the Antenna Keywords": a
+/// cumulative metal ratio of 1000, and "if a diode of greater than .1 microns
+/// is connected to the metal, the maximum metal ratio is: ratio = diode_area
+/// x 2000 + 5000", written `ANTENNACUMDIFFAREARATIO PWL ((0 1000) (0.099
+/// 1000) (0.1 5200) (100 205000))`. A 1.0 µm² gate under a met1 plate of `X`
+/// µm²: with a 0.5 µm² diode the limit is 0.5 × 2000 + 5000 = 6000, so 5994
+/// passes and 6006 fails; with a 0.05 µm² diode, below the table's step, it
+/// is 1000, so 999 passes and 1001 fails, as without a diode; and with no
+/// table a diode changes nothing, so 5994 fails against `max_ratio`.
+fn lef_pwl_limit() -> Vec<Fixture> {
+    let table = "[(0um2, 1000), (0.099um2, 1000), (0.1um2, 5200), (100um2, 205000)]";
+    let mut out = Vec::new();
+    for (diode, width, height, diode_max, fails) in [
+        (Some(0.5), 99_900, 60_000, table, false),
+        (Some(0.5), 100_100, 60_000, table, true),
+        (Some(0.05), 99_900, 10_000, table, false),
+        (Some(0.05), 100_100, 10_000, table, true),
+        (None, 99_900, 10_000, table, false),
+        (None, 100_100, 10_000, table, true),
+        (Some(0.5), 99_900, 60_000, "none", true),
+    ] {
+        let mut layout = egar_stub(diode);
+        rect(
+            &mut layout,
+            "met1",
+            (-1100, 1700, -1100 + width, 1700 + height),
+        );
+        let value = (width * height) as f64 / 1e6;
+        let with = diode.map_or("no_diode".to_owned(), |d| format!("diode_{d}"));
+        let rows = if diode_max == "none" {
+            "no_table"
+        } else {
+            "table"
+        };
+        out.push(
+            Fixture::new(
+                &format!("erc/antenna_electrical/lef_pwl_limit/{rows}/{with}/{value}"),
+                &["ERC-A7"],
+                &antenna_deck(&pwl_row("ae", "met1", 1000.0, "none", "none", diode_max)),
+                ERC,
+            )
+            .layout(layout)
+            .expect(Expect::rule(
+                "ae",
+                if fails {
+                    vec![ratio(value).at(500, 500)]
+                } else {
+                    Vec::new()
+                },
+            )),
+        );
+    }
+    out
+}
+
+/// Two public statements of sky130's met1 antenna limit agree: SKY130's EGAR
+/// (Table Ig: max 400, K 400, bonus 2200, 0.35 µm sidewall) and the sky130
+/// technology LEF's `ANTENNADIFFSIDEAREARATIO PWL ((0 400) (0.0125 400)
+/// (0.0225 2609) (22.5 11600))`, whose slope past 0.0225 µm² is 8991 /
+/// 22.4775 = 400 per µm²: both allow 2600 + 400 × D for a diode of D ≥
+/// 0.0225 µm², and 400 without. One deck states both as rows; on 0.14 µm
+/// met1 lines (ratio 0.7 × (L + 0.14)) with a 1 µm² diode both pass 4280 µm
+/// and fail 4286 µm (limit 3000), with a 0.5 µm² diode both pass 3990 µm and
+/// fail 4000 µm (limit 2800), and without one both pass 570 µm and fail 572
+/// µm. Each row reports its own form: EGAR the credited ratio against 400,
+/// the LEF row the plain ratio against its interpolated limit.
+fn sky130_lef_agrees_with_egar() -> Vec<Fixture> {
+    let egar = "rule egar antenna_electrical(gate, met1; max_ratio: 400, sidewall: 350nm, cut_factor: 1, diode: diff, diode_credit: 400, diode_bonus: 2200, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)";
+    let lef = pwl_row(
+        "lef",
+        "met1",
+        400.0,
+        "350nm",
+        "none",
+        "[(0um2, 400), (0.0125um2, 400), (0.0225um2, 2609), (22.5um2, 11600)]",
+    );
+    let deck = antenna_deck(&format!("{egar}\n{lef}"));
+    let mut out = Vec::new();
+    for (diode, um, fails) in [
+        (Some(1.0), 4280, false),
+        (Some(1.0), 4286, true),
+        (Some(0.5), 3990, false),
+        (Some(0.5), 4000, true),
+        (None, 570, false),
+        (None, 572, true),
+    ] {
+        let ratio_of = (2 * (um * 1000 + 140) * 350) as f64 / 1e6;
+        let credit = diode.map_or(0.0, |d| 400.0 * d + 2200.0);
+        let with = diode.map_or("no_diode".to_owned(), |d| format!("diode_{d}"));
+        let found = |value: f64| {
+            if fails {
+                vec![ratio(value).at(500, 500)]
+            } else {
+                Vec::new()
+            }
+        };
+        out.push(
+            Fixture::new(
+                &format!("erc/antenna_electrical/sky130_lef_vs_egar/{with}/{um}um"),
+                &["ERC-A5", "ERC-A7"],
+                &deck,
+                ERC,
+            )
+            .layout(line(diode, 140, um * 1000))
+            .expect(Expect::rule("egar", found(ratio_of - credit)))
+            .expect(Expect::rule("lef", found(ratio_of))),
+        );
+    }
+    out
+}
+
+/// SKY130 antenna rule .ar.1, "antenna rules not checked for features
+/// connected to a pAntennaShort" (a p+ tap shorting to the substrate,
+/// `(tap AndNot poly) AndNot nwell`), with AntennaDiode excluding it. Table
+/// Ig's met1 row on a 4286 µm line with a 1 µm² diode reads 400.298 against
+/// 400 ([`sky130_table_ig`]); a 1 µm² `ptap` contacted to the same line
+/// exempts the gate from `antenna_electrical`'s `exempt` and from
+/// `antenna`'s `diode`, which skips the same way: both rows are clean.
+/// Without the tap both flag the gate, `antenna` at the plain ratio
+/// 3000.298.
+fn sky130_ar1() -> Vec<Fixture> {
+    let rules = "layer ptap = gds(13, 0)
+layer adiode = diff not ptap
+rule ae antenna_electrical(gate, met1; max_ratio: 400, sidewall: 350nm, cut_factor: 1, diode: adiode, diode_credit: 400, diode_bonus: 2200, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: ptap)
+rule an antenna(gate, met1; max_ratio: 400, sidewall: 350nm, diode: ptap)";
+    let ratio_of = (2 * (4_286_000_i64 + 140) * 350) as f64 / 1e6;
+    let mut out = Vec::new();
+    for tap in [false, true] {
+        let mut layout = line(Some(1.0), 140, 4_286_000);
+        if tap {
+            rect(&mut layout, "diff", (2000, 1300, 3000, 2300));
+            rect(&mut layout, "ptap", (2000, 1300, 3000, 2300));
+            rect(&mut layout, "cont", (2450, 1750, 2550, 1850));
+        }
+        let (ae, an) = if tap {
+            (Vec::new(), Vec::new())
+        } else {
+            (
+                vec![ratio(ratio_of - 2600.0).at(500, 500)],
+                vec![ratio(ratio_of).at(500, 500)],
+            )
+        };
+        out.push(
+            Fixture::new(
+                &format!(
+                    "erc/antenna_electrical/sky130_ar1/{}",
+                    if tap { "tap_exempts" } else { "no_tap" }
+                ),
+                &["ERC-A13"],
+                &antenna_deck(rules),
+                ERC,
+            )
+            .layout(layout)
+            .expect(Expect::rule("ae", ae))
+            .expect(Expect::rule("an", an)),
+        );
+    }
+    out
+}
+
+/// IHP SG13G2 layout rules §7.1, Ant.g: "size of protection diode (µm²)
+/// 0.16", the least diode that lets a gate's net be held to Ant.e (with
+/// protection diode) instead of Ant.b. A deck writes it with the derived
+/// selection `diff.with_area(>= 0.16um2)` as the `diode` both rows read, and
+/// the size itself as a DRC `area` rule. A 1.0 µm² gate under 2.0 µm² of
+/// met1 (Ant.b scaled to 1.5, Ant.e to 100): a 0.15 µm² diode is too small,
+/// so Ant.b flags 2.0 and Ant.g flags the diode; a 0.16 µm² diode, the
+/// manual's minimum itself, protects the gate (IHP's own KLayout deck counts
+/// a diode only above 0.16, `area(d) > 0.16`: at exactly 0.16 the two
+/// differ), so both rows are clean, and so is Ant.g.
+fn ihp_ant_g() -> Vec<Fixture> {
+    let deck = antenna_deck(
+        "layer prot = diff.with_area(>= 0.16um2)
+rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: prot)
+rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, sidewall: none, cut_factor: 1, diode: prot, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule Ant.g area(diff) >= 0.16um2",
+    );
+    let mut out = Vec::new();
+    for (name, diff, area) in [
+        ("0.15um2", (4000, 1650, 4500, 1950), 150_000),
+        ("0.16um2", (4000, 1600, 4400, 2000), 160_000),
+    ] {
+        let mut layout = gate_stub("gate");
+        rect(&mut layout, "met1", (0, 1600, 5000, 2000));
+        rect(&mut layout, "diff", diff);
+        rect(&mut layout, "cont", (4150, 1700, 4350, 1900));
+        let small = area < 160_000;
+        out.push(
+            Fixture::new(
+                &format!("erc/antenna_electrical/ihp_ant_g/{name}/erc"),
+                &["ERC-A8", "ERC-A9"],
+                &deck,
+                ERC,
+            )
+            .layout(layout.clone())
+            .expect(Expect::rule(
+                "Ant.b",
+                if small {
+                    vec![ratio(2.0).at(500, 500)]
+                } else {
+                    Vec::new()
+                },
+            ))
+            .expect(Expect::clean("Ant.e")),
+        );
+        out.push(
+            Fixture::new(
+                &format!("erc/antenna_electrical/ihp_ant_g/{name}/drc"),
+                &["ERC-A9"],
+                &deck,
+                DRC,
+            )
+            .layout(layout)
+            .expect(Expect::rule(
+                "Ant.g",
+                if small {
+                    vec![Finding::area(area)]
+                } else {
+                    Vec::new()
+                },
+            )),
+        );
+    }
     out
 }
 
@@ -1545,17 +2198,17 @@ fn vdd_intent(budget: f64) -> String {
 /// `max_density × width` on metal and `max_current_per_cut` on a cut, no
 /// derating. One 8 µm edge of width 0.2, 0.5, 1 and 2 µm carrying 1 mA,
 /// swept by a density one part in a thousand either side of `1 mA / width`
-/// (the narrowest is IHP's narrow-line band, which this kind holds to the
-/// same per-width limit, ERC-E3). A cut carrying 1 mA swept exactly across
-/// 1000 µA. Random ladders swept between every edge's `current / width`.
+/// (the narrowest without a narrow band, ERC-E3's [`ihp_narrow_band`]). A
+/// cut carrying 1 mA swept exactly across 1000 µA. Random ladders swept
+/// between every edge's `current / width`.
 fn em_current_density(depth: Depth) -> Vec<Fixture> {
-    let mut out = Vec::new();
+    let mut out = ihp_narrow_band();
     for width in [200, 500, 1000, 2000] {
         let per_um = 1000.0 / (width as f64 / 1000.0);
         let mut layout = Layout::default();
         rail(&mut layout, "VDD", 20_000, 0, width, &[18_000]);
         let catalog: &[&'static str] = if width == 200 {
-            &["ERC-E1", "ERC-E3", "ERC-E10"]
+            &["ERC-E1", "ERC-E10"]
         } else {
             &["ERC-E1", "ERC-E10", "ERC-C7", "ERC-D4"]
         };
@@ -1564,7 +2217,7 @@ fn em_current_density(depth: Depth) -> Vec<Fixture> {
                 &format!("erc/em_current_density/width_{width}/{}", side(density, per_um)),
                 catalog,
                 &rail_deck(&format!(
-                    "rule em em_current_density(met1; max_density: {density}uA/um, max_current_per_cut: 1000uA)"
+                    "rule em em_current_density(met1; max_density: {density}uA/um, max_current_per_cut: 1000uA, narrow: none)"
                 )),
                 ERC,
             )
@@ -1601,7 +2254,7 @@ fn em_current_density(depth: Depth) -> Vec<Fixture> {
             &format!("erc/em_current_density/per_cut/{}", side(per_cut, 1000.0)),
             &["ERC-E2", "ERC-E10"],
             &rail_deck(&format!(
-                "rule em em_current_density(via1; max_density: 1000mA/um, max_current_per_cut: {per_cut}uA)"
+                "rule em em_current_density(via1; max_density: 1000mA/um, max_current_per_cut: {per_cut}uA, narrow: none)"
             )),
             ERC,
         )
@@ -1624,7 +2277,7 @@ fn em_current_density(depth: Depth) -> Vec<Fixture> {
         "erc/em_current_density/metal_and_cut",
         &["ERC-E1", "ERC-E2"],
         &rail_deck(
-            "rule em em_current_density(met1, via1; max_density: 999uA/um, max_current_per_cut: 2000uA)",
+            "rule em em_current_density(met1, via1; max_density: 999uA/um, max_current_per_cut: 2000uA, narrow: none)",
         ),
         ERC,
     )
@@ -1662,7 +2315,7 @@ fn em_current_density(depth: Depth) -> Vec<Fixture> {
                 &format!("erc/em_current_density/random/{case}/{density}"),
                 &["ERC-E1", "ERC-E10"],
                 &rail_deck(&format!(
-                    "rule em em_current_density(met1; max_density: {density}uA/um, max_current_per_cut: 1000uA)"
+                    "rule em em_current_density(met1; max_density: {density}uA/um, max_current_per_cut: 1000uA, narrow: none)"
                 )),
                 ERC,
             )
@@ -1678,6 +2331,52 @@ fn em_current_density(depth: Depth) -> Vec<Fixture> {
             f.intent = Some(vdd_intent(budget));
             out.push(f);
         }
+    }
+    out
+}
+
+/// IHP SG13G2 process specification §2.15, Metal1: IMAXM1 = 0.36 mA for "w
+/// = 0.16 ... 0.36 µm" and JMAXM1 = 1 mA/µm for "w > 0.36 µm", written
+/// `narrow: (width: 360nm, current: 0.36mA)` beside `max_density: 1mA/um`.
+/// One rail edge carries the budget: at 0.2 µm, 300 µA is within IMAX
+/// (JMAX alone would allow 200) and 400 µA is not; at the band's 0.36 µm
+/// edge, 360 µA passes and 361 µA fails; at 0.4 µm the band no longer
+/// applies and JMAX's 400 µA holds (390 passes, 410 fails). Without the
+/// band, 300 µA on 0.2 µm fails, the over-report the band removes.
+fn ihp_narrow_band() -> Vec<Fixture> {
+    let band = "narrow: (width: 360nm, current: 0.36mA)";
+    let mut out = Vec::new();
+    for (width, current, narrow, fails) in [
+        (200, 300.0, band, false),
+        (200, 400.0, band, true),
+        (360, 360.0, band, false),
+        (360, 361.0, band, true),
+        (400, 390.0, band, false),
+        (400, 410.0, band, true),
+        (200, 300.0, "narrow: none", true),
+    ] {
+        let mut layout = Layout::default();
+        rail(&mut layout, "VDD", 20_000, 0, width, &[18_000]);
+        let banded = if narrow == band { "band" } else { "no_band" };
+        let mut f = Fixture::new(
+            &format!("erc/em_current_density/ihp_narrow/{banded}/w{width}/{current}uA"),
+            &["ERC-E1", "ERC-E3"],
+            &rail_deck(&format!(
+                "rule em em_current_density(met1; max_density: 1mA/um, max_current_per_cut: 1000uA, {narrow})"
+            )),
+            ERC,
+        )
+        .layout(layout)
+        .expect(Expect::rule(
+            "em",
+            if fails {
+                vec![microamps(current).at(10_000, width / 2)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(vdd_intent(current));
+        out.push(f);
     }
     out
 }
@@ -2157,11 +2856,11 @@ fn p2p(depth: Depth) -> Vec<Fixture> {
 }
 
 /// Every kind that needs design intent, with the deck spelling of one row.
-const INTENT_ROWS: [(&str, &str); 12] = [
+const INTENT_ROWS: [(&str, &str); 14] = [
     ("s.ir", "ir_drop()"),
     (
         "s.emcd",
-        "em_current_density(met1; max_density: 1mA/um, max_current_per_cut: 1mA)",
+        "em_current_density(met1; max_density: 1mA/um, max_current_per_cut: 1mA, narrow: none)",
     ),
     (
         "s.em",
@@ -2182,6 +2881,11 @@ const INTENT_ROWS: [(&str, &str); 12] = [
     ("s.wb", "well_bias(; pmos: [\"load\"], nmos: none)"),
     ("s.ls", "missing_level_shifter(; shifters: none)"),
     ("s.xing", "domain_crossing()"),
+    ("s.dir", "dynamic_ir_drop()"),
+    (
+        "s.emt",
+        "em_thermal(met1; max_density: 1mA/um, max_current_per_cut: 1mA, blech_limit: 1nA, reference_temperature: 85C, activation_energy: 0.9eV, current_exponent: 2, thermal_conductivity: 1.4W/mK, spreading: 0.88, sigma: 0.5, limit_failure: 0.1%, max_failure: 0.1%)",
+    ),
 ];
 
 /// `rule <id> <row>` lines.
@@ -2208,7 +2912,7 @@ fn grid_outcomes() -> Vec<Fixture> {
     rail(&mut layout, "VDD", 20_000, 0, 1000, &[18_000]);
     let catalog: &[&'static str] = &[
         "ERC-E8", "ERC-E1", "ERC-E4", "ERC-F5", "ERC-F10", "ERC-D2", "ERC-C1", "ERC-F2", "ERC-F3",
-        "ERC-F12", "ERC-F6", "ERC-F9",
+        "ERC-F12", "ERC-F6", "ERC-F9", "ERC-E11", "ERC-E13",
     ];
     for (name, intent_text) in [
         ("no_intent", None),
@@ -4716,4 +5420,239 @@ fn dielectric_field() -> Vec<Fixture> {
         cases.push(f);
     }
     every_placement(&cases)
+}
+
+// ------------------------------------------------- dynamic drop, thermal EM
+
+/// One rail's `dynamic` intent: `budget` µA switching a quarter of 1000 ps
+/// cycles as 100 ps pulses, `decap` pF, limited to `limit` mV.
+fn dynamic_intent(net: &str, role: &str, budget: f64, decap: f64, limit: f64) -> String {
+    intent(
+        &[("core", 1800.0)],
+        &[(net, "core", role)],
+        &[format!(
+            r#"{{"net":"{net}","budget_current_ua":{budget},"dynamic":{{"max_drop_mv":{limit},"toggle_rate":0.25,"clock_period_ps":1000,"rise_time_ps":100,"decap_pf":{decap}}}}}"#
+        )],
+    )
+}
+
+/// One switching event's charge as a peak: `2 (I T / α) / t_r` for this
+/// file's 1000 ps period, toggle rate 0.25 and 100 ps rise.
+fn switching_peak(share: f64) -> f64 {
+    2.0 * share * 1000.0 / 0.25 / 100.0
+}
+
+/// The peak of one RC node's backward-Euler recurrence at the engine's
+/// documented `STEPS_PER_RISE`, mV: `r[k+1] = (c r[k] + i[k+1]) / (c + g)`,
+/// `c = 1000 C / h` and `g = 1000 / R` in µA per mV.
+fn rc_recurrence_peak(ohm: f64, cap_pf: f64, peak_ua: f64, rise_ps: f64) -> f64 {
+    let steps = gpurify::check::erc::power::STEPS_PER_RISE;
+    let h = rise_ps / f64::from(steps);
+    let (c, g) = (1000.0 * cap_pf / h, 1000.0 / ohm);
+    let (mut r, mut best) = (0.0f64, 0.0f64);
+    for k in 1..=10 * steps {
+        let fraction = f64::from(k) / f64::from(steps);
+        let shape = if fraction <= 1.0 {
+            1.0 - (2.0 * fraction - 1.0).abs()
+        } else {
+            0.0
+        };
+        r = (c * r + peak_ua * shape) / (c + g);
+        best = best.max(r);
+    }
+    best
+}
+
+/// `dynamic_ir_drop` (ERC-E11): the static drop plus the worst cycle's.
+///
+/// - One load 8 µm from the feed of a 1 µm met1 rail (1 Ω) drawing 1 mA: its
+///   event is `1 mA × 1000 ps / 0.25` of charge over 100 ps, an 80 mA peak.
+///   Without decap the cycle adds 80 mV (81 mV in all); with 10 pF it adds
+///   the RC recurrence's peak. On a power and a ground rail, the limit a part
+///   in a million either side, under every placement.
+/// - The three-load ladder of `ir_drop` (3 mA): without decap each node's
+///   response is the static drop of every load at its 80 mA peak, so its
+///   drop is 81 times the ladder's; swept between every pair of nodes.
+fn dynamic_ir_drop() -> Vec<Fixture> {
+    let mut out = Vec::new();
+    let mut placed = Vec::new();
+    for (decap, dynamic) in [
+        (0.0, 80.0),
+        (
+            10.0,
+            rc_recurrence_peak(1.0, 10.0, switching_peak(1000.0), 100.0),
+        ),
+    ] {
+        let total = 1.0 + dynamic;
+        for (net, role) in [("VDD", "power"), ("VSS", "ground")] {
+            let mut layout = Layout::default();
+            rail(&mut layout, net, 20_000, 0, 1000, &[18_000]);
+            for factor in [1.0 - 1e-6, 1.0 + 1e-6] {
+                let limit = total * factor;
+                let mut f = Fixture::new(
+                    &format!(
+                        "erc/dynamic_ir_drop/one_load/{role}/decap_{decap}/{}",
+                        side(limit, total)
+                    ),
+                    &["ERC-E11"],
+                    &rail_deck("rule dir dynamic_ir_drop()"),
+                    ERC,
+                )
+                .layout(layout.clone())
+                .expect(Expect::rule(
+                    "dir",
+                    if limit < total {
+                        vec![millivolts(total).at(18_000, 500)]
+                    } else {
+                        Vec::new()
+                    },
+                ));
+                f.intent = Some(dynamic_intent(net, role, 1000.0, decap, limit));
+                if role == "power" && limit < total {
+                    placed.push(f.clone());
+                }
+                out.push(f);
+            }
+        }
+    }
+    for mut f in placed {
+        f.name = format!("{}/placed", f.name);
+        out.extend(every_placement(&[f]));
+    }
+
+    let loads = [12_000, 14_000, 18_000];
+    let (drops, _) = ladder(20_000, 1000, &loads, 3000.0);
+    let scale = 1.0 + switching_peak(1000.0) / 1000.0;
+    let values: Vec<f64> = drops
+        .iter()
+        .map(|d| d.1 * scale)
+        .filter(|&d| d > 0.0)
+        .collect();
+    let mut layout = Layout::default();
+    rail(&mut layout, "VDD", 20_000, 0, 1000, &loads);
+    for limit in between(&values) {
+        let mut f = Fixture::new(
+            &format!("erc/dynamic_ir_drop/ladder/{limit}"),
+            &["ERC-E11"],
+            &rail_deck("rule dir dynamic_ir_drop()"),
+            ERC,
+        )
+        .layout(layout.clone())
+        .expect(Expect::rule(
+            "dir",
+            drops
+                .iter()
+                .filter(|(_, d)| d * scale > limit)
+                .map(|&(x, d)| millivolts(d * scale).at(x, 500))
+                .collect(),
+        ));
+        f.intent = Some(dynamic_intent("VDD", "power", 3000.0, 0.0, limit));
+        out.push(f);
+    }
+    out
+}
+
+/// `Φ(z)` for `z < 0` by composite Simpson's rule on the normal density over
+/// `[z - 12, z]`, 20 000 panels: the definition, integrated, independent of
+/// the engine's series and continued fraction.
+fn normal_cdf_by_simpson(z: f64) -> f64 {
+    let (a, n) = (z - 12.0, 20_000u32);
+    let h = (z - a) / f64::from(n);
+    let density = |t: f64| (-0.5 * t * t).exp() / (2.0 * std::f64::consts::PI).sqrt();
+    let mut sum = density(a) + density(z);
+    for i in 1..n {
+        let weight = if i % 2 == 1 { 4.0 } else { 2.0 };
+        sum += weight * density(a + h * f64::from(i));
+    }
+    sum * h / 3.0
+}
+
+/// `em_thermal` (ERC-E13) on the one-load rail: the 8 µm × 1 µm met1 segment
+/// (1 Ω) 100 nm above the substrate, `K` 0.05 W/(m·K), spreading 0.88, rated
+/// 10 mA/µm at 125 °C (Ea 0.9 eV, n 2), the run at the intent's 105 °C.
+///
+/// - Self-heating (Banerjee 1999): `ΔT = I² R t / (K L (W + φ t))`, so the
+///   segment fails above the current `I*` that solves
+///   `I = 10 mA × exp(Ea / (n k) (1/(T + ΔT(I)) - 1/T_ref))`, found here by
+///   bisection: a budget a part in a thousand under it passes, one over is
+///   flagged at that current, under every placement.
+/// - Statistics: at 90 % of `I*` the wire carries `u` of its self-heated limit
+///   and fails with probability `Φ(z_0.1% + (n / σ) ln u)`, the normal
+///   distribution integrated here by Simpson's rule; a chip budget a part in
+///   a million under that is flagged once, measured at it; one over passes.
+fn em_thermal() -> Vec<Fixture> {
+    let (run, t_ref, ea, n) = (105.0 + 273.15, 125.0 + 273.15, 0.9, 2.0);
+    let rated = 10_000.0;
+    // R θ in K per µA²: 1 Ω, t = 100 nm, L = 8 µm, W = 1 µm.
+    let (t, length, width) = (100e-9, 8e-6, 1e-6);
+    let heat = 1.0 * t / (0.05 * length * (width + 0.88 * t)) * 1e-12;
+    let allowed = |current: f64| {
+        rated * (ea / (n * K_EV) * (1.0 / (run + heat * current * current) - 1.0 / t_ref)).exp()
+    };
+    let (mut lo, mut hi) = (0.0f64, 1e6f64);
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if mid > allowed(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    let threshold = 0.5 * (lo + hi);
+    let row = |max_failure: f64| {
+        format!(
+            "rule hot em_thermal(met1; max_density: 10mA/um, max_current_per_cut: 1mA, blech_limit: 1nA, reference_temperature: 125C, activation_energy: 0.9eV, current_exponent: 2, thermal_conductivity: 0.05W/mK, spreading: 0.88, sigma: 0.5, limit_failure: 0.1%, max_failure: {max_failure})"
+        )
+    };
+    let warm = |budget: f64| vdd_intent(budget).replacen('{', r#"{"temperature_c":105,"#, 1);
+    let mut layout = Layout::default();
+    rail(&mut layout, "VDD", 20_000, 0, 1000, &[18_000]);
+    let mut out = Vec::new();
+    for factor in [0.999, 1.001] {
+        let budget = threshold * factor;
+        let mut f = Fixture::new(
+            &format!("erc/em_thermal/self_heating/{}", side(factor, 1.0)),
+            &["ERC-E13"],
+            &rail_deck(&row(1.0)),
+            ERC,
+        )
+        .layout(layout.clone())
+        .expect(Expect::rule(
+            "hot",
+            // The segment's first node is whichever end the chain orders
+            // first, so the marker moves between its ends with the
+            // placement; the chip case below pins it unrotated.
+            if factor > 1.0 {
+                vec![microamps(budget)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(warm(budget));
+        out.extend(every_placement(&[f]));
+    }
+    let budget = 0.9 * threshold;
+    let usage = budget / allowed(budget);
+    let failed = normal_cdf_by_simpson(-3.090_232_306_167_813 + n / 0.5 * usage.ln());
+    for factor in [1.0 - 1e-6, 1.0 + 1e-6] {
+        let chip_budget = failed * factor;
+        let mut f = Fixture::new(
+            &format!("erc/em_thermal/chip/{}", side(chip_budget, failed)),
+            &["ERC-E13"],
+            &rail_deck(&row(chip_budget)),
+            ERC,
+        )
+        .layout(layout.clone())
+        .expect(Expect::rule(
+            "hot",
+            if chip_budget < failed {
+                vec![ratio(failed).at(10_000, 500)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(warm(budget));
+        out.push(f);
+    }
+    out
 }

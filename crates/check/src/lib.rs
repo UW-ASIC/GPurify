@@ -2,7 +2,8 @@
 //! the rule engines ([`drc`], [`erc`], [`lvs`]) and the report they share
 //! ([`report`]).
 //!
-//! Data in: the deck's rules, and the layout tables a load produced
+//! Data in: the deck, compiled with its rules typed ([`deck::compile`]), and
+//! the layout tables a load produced
 //! ([`gpurify_geom::GeometryStore`], plus [`topology::NetTable`] and
 //! [`topology::DeviceTable`] from extraction). Data out: the
 //! [`report::Violations`] columns, and one [`report::RuleRun`] per configured
@@ -50,7 +51,7 @@
 //! | `wide_space(L; width: len, attached: len) >= len` | `attached_wide_spacing` | [`drc::Rule::AttachedWideSpacing`] | the same, also from what is attached to the wide part | DRC-028 |
 //! | `space(L[, L2]; nets: same \| different) >= len` | `net_spacing` | [`drc::Rule::NetSpacing`] | same-net or different-net shapes too close, on one layer or two | DRC-080, DRC-081 |
 //! | `space_table(L; prl: [..], width: [..], space: [[..]])` | `spacing_table` | [`drc::Rule::SpacingTable`] | two shapes closer than their table cell | DRC-025, DRC-026, DRC-027 |
-//! | `area(L) >= area` | `min_area` | [`drc::Rule::MinArea`] | a shape smaller than the limit | DRC-017 |
+//! | `area(L) >= area` | `min_area` | [`drc::Rule::MinArea`] | a shape smaller than the limit | DRC-017, ERC-A9 |
 //! | `hole_area(L) >= area` | `min_enclosed_area` | [`drc::Rule::MinEnclosedArea`] | a hole smaller than the limit | DRC-019 |
 //! | `cheesing(L) <= area` | `cheesing` | [`drc::Rule::Cheesing`] | a shape larger than the limit with no slot | DRC-075, ERC-E12 |
 //! | `density(L[, boundary]; window: len, step: len) >= frac` | `density` | [`drc::Rule::Density`] | a window with coverage outside the limit | DRC-071 |
@@ -91,12 +92,14 @@
 //!
 //! | Deck | Kind | Checked by | Flags | Catalog |
 //! |---|---|---|---|---|
-//! | `antenna(gate, collectors..; max_ratio, sidewall, diode)` | `antenna` | [`erc::RuleSet::antenna`] | collector area above `max_ratio` times the gate area, a gate on a `diode` net skipped | ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A11, ERC-A12 |
-//! | `antenna_electrical(gate, collectors..; ..)` | `antenna_electrical` | [`erc::RuleSet::antenna_electrical`] | the cumulative ratio, with diode credit | ERC-A5, ERC-A8 |
+//! | `antenna(gate, collectors..; max_ratio, sidewall, diode)` | `antenna` | [`erc::RuleSet::antenna`] | collector area above `max_ratio` times the gate area, a gate on a `diode` net skipped | ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A9, ERC-A11, ERC-A12, ERC-A13 |
+//! | `antenna_electrical(gate, collectors..; ..)` | `antenna_electrical` | [`erc::RuleSet::antenna_electrical`] | the cumulative ratio, with diode credit | ERC-A4, ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A9, ERC-A12, ERC-A13 |
 //! | `density_cmp(L; window, step, ..)` | `density_cmp` | [`erc::RuleSet::density_cmp`] | metal density, or CMP thickness, out of range | DRC-071, DRC-113, ERC-B1 |
 //! | `electromigration(layers..; ..)` | `electromigration` | [`erc::RuleSet::electromigration`] | a wire or cut above its rated current at temperature | ERC-E4, ERC-E5, ERC-E6 |
 //! | `em_current_density(layers..; ..)` | `em_current_density` | [`erc::RuleSet::em_current_density`] | a wire or cut above its instantaneous current limit | ERC-C7, ERC-D4, ERC-E1, ERC-E2, ERC-E3, ERC-E10 |
 //! | `ir_drop()` | `ir_drop` | [`erc::RuleSet::ir_drop`] | a node whose drop exceeds its net's limit | ERC-E8 |
+//! | `dynamic_ir_drop()` | `dynamic_ir_drop` | [`erc::RuleSet::dynamic_ir_drop`] | a node whose drop in the worst switching cycle exceeds its net's limit | ERC-E11 |
+//! | `em_thermal(layers..; ..)` | `em_thermal` | [`erc::RuleSet::em_thermal`] | a wire or cut above its rated current at its self-heated temperature, or a chip too likely to fail by EM | ERC-E13 |
 //! | `p2p_resistance(; max)` | `p2p_resistance` | [`erc::RuleSet::p2p_resistance`] | two points on one net too far apart in resistance | ERC-C6, ERC-D4 |
 //! | `reliability(; ..)` | `reliability` | [`erc::RuleSet::reliability`] | a device whose predicted lifetime is too short | ERC-E5, ERC-F5 |
 //! | `hv_domain(; max_delta, isolation)` | `hv_domain` | [`erc::RuleSet::hv_domain`] | a device spanning supply domains too far apart | DRC-083, ERC-F10 |
@@ -143,6 +146,7 @@
 //! | `lvs.terminal_net` | [`lvs::check_layout`] | a device marker no recogniser could bind, or a terminal on no net | LVS-004 |
 //! | `lvs.terminal_count` | [`lvs::check_layout`] | a device with the wrong number of terminals | LVS-004 |
 
+pub mod deck;
 pub mod drc;
 pub mod erc;
 pub mod lvs;

@@ -87,7 +87,7 @@ rule via.4a enclosure(via1, met1) >= 55nm
 
 It is strict. Every parameter must be written out, every number carries its
 unit, and a typo is an error with a line and column, never a rule that silently
-does nothing. There are 46 design-rule kinds and 31 electrical-rule kinds.
+does nothing. There are 46 design-rule kinds and 33 electrical-rule kinds.
 [docs/deck.md](docs/deck.md) covers the language and every rule.
 
 Four decks ship in `pdks/`, each citing the rule manual release its numbers
@@ -95,12 +95,14 @@ come from and using the foundry's rule ids:
 
 | File | Drawn layers | Rules | Devices |
 |---|---:|---:|---:|
-| `ihp_sg13g2` | 62 | 413 | 10 |
-| `gf180mcu` | 55 | 228 | 27 |
-| `sky130` | 51 | 222 | 22 |
-| `generic_finfet` (ASAP7) | 45 | 168 | 0 |
+| `ihp_sg13g2` | 75 | 459 | 12 |
+| `gf180mcu` | 55 | 263 | 27 |
+| `sky130` | 60 | 271 | 30 |
+| `generic_finfet` (ASAP7) | 45 | 178 | 0 |
 
-None has been compared against foundry signoff. What each leaves out is
+From Rust, each is also compiled into the library as a constant
+(`gpurify::pdks::SKY130` and so on), so a tool built on GPurify reads the
+same deck instead of a copy. None has been compared against foundry signoff. What each leaves out is
 listed at the end of the deck and in [docs/limitations.md](docs/limitations.md#shipped-decks).
 
 ## The same input gives the same file

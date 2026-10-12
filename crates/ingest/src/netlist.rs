@@ -19,7 +19,9 @@
 //! - **Spectre** ([`spectre::read`]): `subckt`/`ends`, `model <name> <master>`
 //!   cards, and instances `name (nets) master params` of a subcircuit, a
 //!   `model`, or a built-in primitive master; `\` continuation, `//` comments.
-//!   Case-sensitive.
+//!   Case-sensitive. A primitive master (`resistor`, `nmos`, …) names no
+//!   model, so the instance is the deck's one recogniser of its kind, as a
+//!   SPICE card naming none is (below).
 //!
 //! An `R` or `C` card may state its value positionally, between its nets and
 //! its model: `R1 a b 1k rpoly` is `R1 a b rpoly r=1k`, and `C1 a b 1p cmim`
@@ -35,14 +37,17 @@
 //! c=1p`, `D1 a b`). LVS pairs a device by its model, so such a card is the
 //! deck's one recogniser of its kind; a deck with none of that kind, or
 //! several, refuses it with [`NetlistError::NoModel`], naming them
-//! (testing-plan F86).
+//! (testing-plan F86). So is a Spectre instance of a primitive master with
+//! no `model` card, of any kind (testing-plan F97): `R1 (a b) resistor
+//! r=1k` is the deck's one resistor, not a device of model `resistor`.
 //!
 //! Refused with [`NetlistError::Unsupported`]: any other dot card (`.param`,
 //! `.include`, `.global`, `.model`, …), sources and other element letters,
 //! a number where a model belongs on any other card, parameters on a
 //! `.subckt` line or an `X` card, and a card outside every subcircuit.
 
-use crate::deck::DeviceKind;
+use crate::deck::{DeviceKind, DeviceRecognition};
+use crate::layout::MAX_HIERARCHY_DEPTH;
 use crate::narrow;
 use gpurify_geom::{StrId, StrTable};
 
@@ -73,7 +78,8 @@ pub const MAX_FLAT_ELEMENTS: u64 = crate::layout::MAX_FLAT_POLYGONS;
 
 /// Why a netlist was refused. Each but [`NetlistError::Io`] and the
 /// hierarchy's refusals ([`NetlistError::CyclicHierarchy`],
-/// [`NetlistError::TooLarge`]) carries the line and the offending token.
+/// [`NetlistError::TooDeep`], [`NetlistError::TooLarge`]) carries the line
+/// and the offending token.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum NetlistError {
     /// A token that does not fit the card: a missing name, a malformed
@@ -95,15 +101,23 @@ pub enum NetlistError {
     /// its subcircuit's port count.
     #[error("line {}: device {1} has {2} terminals, expected {3}", .0.line)]
     TerminalCount(SourceSpan, String, u32, u32),
-    /// An `R`, `C` or `D` card with no model, where the deck has no one
-    /// recogniser of its kind to bind it to: the card, then what the deck
-    /// has of that kind (none, or the models it would have to choose from).
+    /// An `R`, `C` or `D` card with no model, or a Spectre instance of a
+    /// primitive master, where the deck has no one recogniser of its kind to
+    /// bind it to: the card, then what the deck has of that kind (none, or
+    /// the models it would have to choose from).
     #[error("line {}: {1} states no model, and {2}", .0.line)]
     NoModel(SourceSpan, String, String),
     /// A subcircuit that places itself, directly or through others: the
     /// hierarchy cannot be flattened ([`Netlist::flatten_top`]).
     #[error("subcircuit {0} places itself through its instances")]
     CyclicHierarchy(String),
+    /// A placement chain from the top deeper than [`MAX_HIERARCHY_DEPTH`]
+    /// levels, the top included, refused as a layout's is: flattening
+    /// recurses once per level, so a deeper chain would overflow the stack.
+    /// Names the subcircuit the chain passes the cap at
+    /// ([`Netlist::flatten_top`]).
+    #[error("the reference hierarchy is deeper than {MAX_HIERARCHY_DEPTH} levels at {0}")]
+    TooDeep(String),
     /// A top that flattens to more than [`MAX_FLAT_ELEMENTS`] devices, nets
     /// and instances, counted from the tables before anything is expanded
     /// ([`Netlist::flatten_top`]).
@@ -148,8 +162,9 @@ pub struct Netlist {
     pub subckt_device_start: Vec<u32>,
 
     /// One row per device instance (not per subcircuit instance): its model
-    /// name, interned. An `R`, `C` or `D` card that names none has the deck's
-    /// one recogniser of its kind.
+    /// name, interned. An `R`, `C` or `D` card that names none, and a
+    /// Spectre instance of a primitive master, has the deck's one recogniser
+    /// of its kind.
     pub device_model: Vec<StrId>,
     /// The device's family, from its card letter, its Spectre master, or the
     /// deck `device` statement an `X` card called.
@@ -225,9 +240,11 @@ impl Netlist {
     /// # Errors
     ///
     /// [`NetlistError::CyclicHierarchy`] when a subcircuit `top` reaches
-    /// places itself, then [`NetlistError::TooLarge`] when the result would
-    /// hold more than [`MAX_FLAT_ELEMENTS`] devices, nets and instances. Both
-    /// are found by counting, before anything is expanded.
+    /// places itself, [`NetlistError::TooDeep`] when a placement chain from
+    /// `top` is more than [`MAX_HIERARCHY_DEPTH`] levels deep, `top`
+    /// included, then [`NetlistError::TooLarge`] when the result
+    /// would hold more than [`MAX_FLAT_ELEMENTS`] devices, nets and
+    /// instances. All are found by counting, before anything is expanded.
     ///
     /// # Panics
     ///
@@ -235,15 +252,17 @@ impl Netlist {
     ///
     /// # Time complexity
     ///
-    /// The count is linear in the netlist. The expansion is linear in the
-    /// devices, nets and instances it produces, times the netlist's nets and
-    /// instances per instance placed.
+    /// Linear in the netlist and in what the expansion produces, each net
+    /// name produced costing its instance path's length: each subcircuit's
+    /// instances and nets are indexed once, and one net map serves every
+    /// placement.
     pub fn flatten_top(
         &self,
         top: SubcktId,
         strings: &mut StrTable,
     ) -> Result<Netlist, NetlistError> {
-        let size = self.flat_size(top, strings)?;
+        let hierarchy = Hierarchy::of(self);
+        let size = self.flat_size(top, &hierarchy, strings)?;
         if size > MAX_FLAT_ELEMENTS {
             return Err(NetlistError::TooLarge(size));
         }
@@ -256,14 +275,10 @@ impl Netlist {
             ..Netlist::default()
         };
         // The caller's nets for `top`: its own, under their own names.
-        let own: Vec<RefNetId> = (0..narrow(self.net_name.len()))
-            .filter(|&row| self.net_subckt[row as usize] == top)
-            .map(RefNetId)
-            .collect();
         let mut map = vec![u32::MAX; self.net_name.len()];
-        for &net in &own {
-            map[net.0 as usize] = narrow(out.net_name.len());
-            out.net_name.push(self.net_name[net.0 as usize]);
+        for &net in hierarchy.nets_of(top) {
+            map[net as usize] = narrow(out.net_name.len());
+            out.net_name.push(self.net_name[net as usize]);
             out.net_subckt.push(SubcktId(0));
         }
         let ports = self.subckt_port_start[top.0 as usize] as usize
@@ -272,8 +287,7 @@ impl Netlist {
             out.port_net.push(RefNetId(map[port.0 as usize]));
         }
         out.subckt_port_start.push(narrow(out.port_net.len()));
-        let mut on_chain = vec![false; self.subckt_count()];
-        self.expand(top, &map, "", strings, &mut on_chain, &mut out)?;
+        self.expand(top, &hierarchy, &mut map, "", strings, &mut out);
         out.subckt_device_start.push(narrow(out.device_model.len()));
         Ok(out)
     }
@@ -282,80 +296,87 @@ impl Netlist {
     /// its devices, its nets and the instances it places, all the way down,
     /// saturating. `top`'s own nets are all in the result; each instance adds
     /// its callee's nets that are not on a port.
-    fn flat_size(&self, top: SubcktId, strings: &StrTable) -> Result<u64, NetlistError> {
+    fn flat_size(
+        &self,
+        top: SubcktId,
+        hierarchy: &Hierarchy,
+        strings: &StrTable,
+    ) -> Result<u64, NetlistError> {
         let cells = self.subckt_count();
-        let mut calls = vec![Vec::new(); cells];
-        for (&caller, &callee) in self.instance_subckt.iter().zip(&self.instance_of) {
-            calls[caller.0 as usize].push(callee);
-        }
-        let mut on_port = vec![false; self.net_name.len()];
-        for &port in &self.port_net {
-            on_port[port.0 as usize] = true;
-        }
-        let (mut nets, mut inner) = (vec![0u64; cells], vec![0u64; cells]);
-        for (net, &cell) in self.net_subckt.iter().enumerate() {
-            nets[cell.0 as usize] += 1;
-            inner[cell.0 as usize] += u64::from(!on_port[net]);
-        }
+        let inner: Vec<u64> = (0..narrow(cells))
+            .map(|cell| {
+                let nets = hierarchy.nets_of(SubcktId(cell));
+                let inner = nets.iter().filter(|&&net| !hierarchy.on_port[net as usize]);
+                inner.count() as u64
+            })
+            .collect();
         let (mut counted, mut on_chain) = (vec![None; cells], vec![false; cells]);
-        let below = self.flat_below(top, (&calls, &inner), &mut counted, &mut on_chain, strings)?;
-        Ok(nets[top.0 as usize].saturating_add(below))
+        let walk = (hierarchy, &inner[..], strings);
+        let (below, _) = self.flat_below(top, 1, walk, &mut counted, &mut on_chain)?;
+        Ok((hierarchy.nets_of(top).len() as u64).saturating_add(below))
     }
 
-    /// The devices and instances below one placement of `cell`, each
-    /// instance with the nets it adds (`inner` of its callee), saturating;
-    /// memoised in `counted`. Refuses a cycle, naming the subcircuit met
-    /// twice on one chain, as `expand` would.
+    /// The devices and instances below one placement of `cell`, `depth`
+    /// levels down from the top (the top is 1), each instance with the nets
+    /// it adds (`inner` of its callee), saturating; and how many levels
+    /// `cell` spans, itself included. Both memoised in `counted`, so a cell
+    /// first counted shallow and met again deep is held to the depth cap as
+    /// walking it again would be. Refuses a cycle, naming the subcircuit met
+    /// twice on one chain, and a chain past the cap, so `expand` meets
+    /// neither.
     fn flat_below(
         &self,
         cell: SubcktId,
-        (calls, inner): (&[Vec<SubcktId>], &[u64]),
-        counted: &mut [Option<u64>],
+        depth: u32,
+        (hierarchy, inner, strings): (&Hierarchy, &[u64], &StrTable),
+        counted: &mut [Option<(u64, u32)>],
         on_chain: &mut [bool],
-        strings: &StrTable,
-    ) -> Result<u64, NetlistError> {
+    ) -> Result<(u64, u32), NetlistError> {
         let row = cell.0 as usize;
-        if let Some(count) = counted[row] {
-            return Ok(count);
+        let name = || strings.resolve(self.subckt_name[row]).to_owned();
+        if let Some((count, levels)) = counted[row] {
+            if depth + levels - 1 > MAX_HIERARCHY_DEPTH {
+                return Err(NetlistError::TooDeep(name()));
+            }
+            return Ok((count, levels));
         }
         if on_chain[row] {
-            return Err(NetlistError::CyclicHierarchy(
-                strings.resolve(self.subckt_name[row]).to_owned(),
-            ));
+            return Err(NetlistError::CyclicHierarchy(name()));
+        }
+        if depth > MAX_HIERARCHY_DEPTH {
+            return Err(NetlistError::TooDeep(name()));
         }
         on_chain[row] = true;
         let devices = self.devices_of(cell);
-        let mut count = u64::from(devices.end - devices.start);
-        for &callee in &calls[row] {
-            let below = self.flat_below(callee, (calls, inner), counted, on_chain, strings)?;
+        let (mut count, mut levels) = (u64::from(devices.end - devices.start), 1);
+        for &instance in hierarchy.instances_of(cell) {
+            let callee = self.instance_of[instance as usize];
+            let walk = (hierarchy, inner, strings);
+            let (below, spans) = self.flat_below(callee, depth + 1, walk, counted, on_chain)?;
             count = count
                 .saturating_add(1 + inner[callee.0 as usize])
                 .saturating_add(below);
+            levels = levels.max(spans + 1);
         }
         on_chain[row] = false;
-        counted[row] = Some(count);
-        Ok(count)
+        counted[row] = Some((count, levels));
+        Ok((count, levels))
     }
 
     /// Append `cell`'s devices to `out`, its nets mapped by `map` (indexed by
-    /// this netlist's net ids, `u32::MAX` for none yet), then each instance in
-    /// it, recursively, under `path`.
+    /// this netlist's net ids), then each instance in it, recursively, under
+    /// `path`. An instance writes only its callee's rows of `map`, and no
+    /// subcircuit is on the chain twice, so every caller's rows stay as they
+    /// were: one map serves every placement.
     fn expand(
         &self,
         cell: SubcktId,
-        map: &[u32],
+        hierarchy: &Hierarchy,
+        map: &mut [u32],
         path: &str,
         strings: &mut StrTable,
-        on_chain: &mut [bool],
         out: &mut Netlist,
-    ) -> Result<(), NetlistError> {
-        let row = cell.0 as usize;
-        if on_chain[row] {
-            return Err(NetlistError::CyclicHierarchy(
-                strings.resolve(self.subckt_name[row]).to_owned(),
-            ));
-        }
-        on_chain[row] = true;
+    ) {
         for device in self.devices_of(cell) {
             let device = device as usize;
             out.device_model.push(self.device_model[device]);
@@ -372,10 +393,8 @@ impl Netlist {
             out.param.extend_from_slice(&self.param[params]);
             out.device_param_start.push(narrow(out.param.len()));
         }
-        for instance in 0..self.instance_of.len() {
-            if self.instance_subckt[instance] != cell {
-                continue;
-            }
+        for &instance in hierarchy.instances_of(cell) {
+            let instance = instance as usize;
             let callee = self.instance_of[instance];
             let name = strings.resolve(self.instance_name[instance]).to_owned();
             let inner = if path.is_empty() {
@@ -383,29 +402,27 @@ impl Netlist {
             } else {
                 format!("{path}.{name}")
             };
-            let mut child = vec![u32::MAX; self.net_name.len()];
             // Ports first: each takes the caller's net the instance passes.
             let passed = self.instance_net_start[instance] as usize
                 ..self.instance_net_start[instance + 1] as usize;
             let ports = self.subckt_port_start[callee.0 as usize] as usize
                 ..self.subckt_port_start[callee.0 as usize + 1] as usize;
             for (&port, &net) in self.port_net[ports].iter().zip(&self.instance_net[passed]) {
-                child[port.0 as usize] = map[net.0 as usize];
+                map[port.0 as usize] = map[net.0 as usize];
             }
             // Every other net of the callee is new, named under the path.
-            for (net, slot) in child.iter_mut().enumerate() {
-                if self.net_subckt[net] == callee && *slot == u32::MAX {
+            for &net in hierarchy.nets_of(callee) {
+                let net = net as usize;
+                if !hierarchy.on_port[net] {
                     let local = strings.resolve(self.net_name[net]).to_owned();
-                    *slot = narrow(out.net_name.len());
+                    map[net] = narrow(out.net_name.len());
                     out.net_name
                         .push(strings.intern(&format!("{inner}.{local}")));
                     out.net_subckt.push(SubcktId(0));
                 }
             }
-            self.expand(callee, &child, &inner, strings, on_chain, out)?;
+            self.expand(callee, hierarchy, map, &inner, strings, out);
         }
-        on_chain[row] = false;
-        Ok(())
     }
 
     /// The one subcircuit nothing instantiates. `None` when not unique, or
@@ -421,6 +438,69 @@ impl Netlist {
             _ => None,
         }
     }
+}
+
+/// What both walks of [`Netlist::flatten_top`] read per subcircuit, indexed
+/// once: its instances in file order and its nets in row order, each a CSR
+/// run, and whether each net is on a port. Without it each placement
+/// scanned every instance and every net of the netlist (testing-plan F95).
+struct Hierarchy {
+    instance_start: Vec<u32>,
+    instance: Vec<u32>,
+    net_start: Vec<u32>,
+    net: Vec<u32>,
+    on_port: Vec<bool>,
+}
+
+impl Hierarchy {
+    fn of(netlist: &Netlist) -> Self {
+        let cells = netlist.subckt_count();
+        let (instance_start, instance) = group(&netlist.instance_subckt, cells);
+        let (net_start, net) = group(&netlist.net_subckt, cells);
+        let mut on_port = vec![false; netlist.net_name.len()];
+        for &port in &netlist.port_net {
+            on_port[port.0 as usize] = true;
+        }
+        Self {
+            instance_start,
+            instance,
+            net_start,
+            net,
+            on_port,
+        }
+    }
+
+    /// The instance rows `cell` places, in file order.
+    fn instances_of(&self, cell: SubcktId) -> &[u32] {
+        let row = cell.0 as usize;
+        &self.instance[self.instance_start[row] as usize..self.instance_start[row + 1] as usize]
+    }
+
+    /// The net rows of `cell`, ascending.
+    fn nets_of(&self, cell: SubcktId) -> &[u32] {
+        let row = cell.0 as usize;
+        &self.net[self.net_start[row] as usize..self.net_start[row + 1] as usize]
+    }
+}
+
+/// The rows of `owner` grouped by the subcircuit each names, ascending
+/// within a group: a CSR start column over `cells` subcircuits, and the rows.
+fn group(owner: &[SubcktId], cells: usize) -> (Vec<u32>, Vec<u32>) {
+    let mut start = vec![0u32; cells + 1];
+    for &cell in owner {
+        start[cell.0 as usize + 1] += 1;
+    }
+    for at in 1..start.len() {
+        start[at] += start[at - 1];
+    }
+    let mut next = start.clone();
+    let mut rows = vec![0u32; owner.len()];
+    for (row, &cell) in owner.iter().enumerate() {
+        let at = &mut next[cell.0 as usize];
+        rows[*at as usize] = narrow(row);
+        *at += 1;
+    }
+    (start, rows)
 }
 
 // The shared reader: lex to cards, collect the definitions, then read each card.
@@ -652,6 +732,9 @@ struct Build<'a> {
     /// Spectre `model` cards, and for SPICE the deck's device models an `X`
     /// card may call, sorted the same way.
     models: Vec<(StrId, DeviceKind)>,
+    /// The deck's device models, sorted the same way, one row per name: what
+    /// a card that names no model binds to.
+    deck: Vec<(StrId, DeviceKind)>,
     /// The open subcircuit and the `net_name` row its nets start at.
     open: Option<(SubcktId, u32)>,
     open_span: SourceSpan,
@@ -766,10 +849,11 @@ impl Build<'_> {
     }
 
     /// The model a card that names none is: the deck's one recogniser of
-    /// `kind` (testing-plan F86). None, or several, is a refusal naming them.
+    /// `kind` (testing-plan F86, F97). None, or several, is a refusal naming
+    /// them.
     fn only_model(&self, head: Tok, kind: DeviceKind) -> Result<StrId, NetlistError> {
         let of_kind: Vec<StrId> = self
-            .models
+            .deck
             .iter()
             .filter(|&&(_, of)| of == kind)
             .map(|&(name, _)| name)
@@ -1024,20 +1108,22 @@ fn spectre_card(b: &mut Build, card: &[Tok], next: &mut u32) -> Result<(), Netli
         let subckt = b.open_id(head)?;
         return b.instance(head, *master, nets, params, subckt);
     }
-    let kind = b
-        .models
-        .binary_search_by_key(&master_id, |&(name, _)| name)
-        .map(|at| b.models[at].1)
-        .ok()
-        .or_else(|| spectre_primitive(master.text))
-        .ok_or_else(unsupported)?;
+    // A `model` card's name is the model; a primitive master names none, so
+    // the instance is the deck's one recogniser of its kind (F97).
+    let (kind, named) = match b.models.binary_search_by_key(&master_id, |&(name, _)| name) {
+        Ok(at) => (b.models[at].1, true),
+        Err(_) => (
+            spectre_primitive(master.text).ok_or_else(unsupported)?,
+            false,
+        ),
+    };
     let subckt = b.open_id(head)?;
     let (nets, model) = split_terminals(kind, positional, head)?;
     b.device(
         head,
         kind,
         nets,
-        (None, Some(model)),
+        (None, named.then_some(model)),
         params,
         subckt,
         (Dialect::Spectre, false),
@@ -1050,10 +1136,21 @@ fn read_dialect(
     source: &str,
     strings: &mut StrTable,
     dialect: Dialect,
-    mut models: Vec<(StrId, DeviceKind)>,
+    devices: &DeviceRecognition,
 ) -> Result<Netlist, NetlistError> {
-    models.sort_unstable_by_key(|&(name, _)| name);
-    models.dedup_by_key(|&mut (name, _)| name);
+    let mut deck: Vec<(StrId, DeviceKind)> = devices
+        .model
+        .iter()
+        .copied()
+        .zip(devices.kind.iter().copied())
+        .collect();
+    deck.sort_unstable_by_key(|&(name, _)| name);
+    deck.dedup_by_key(|&mut (name, _)| name);
+    // SPICE's `X` card may call a deck model; Spectre's models are its cards.
+    let models = match dialect {
+        Dialect::Spice => deck.clone(),
+        Dialect::Spectre => Vec::new(),
+    };
     let (toks, card_start) = lex(source, dialect);
     let cards = card_start.len() - 1;
     let mut b = Build {
@@ -1062,6 +1159,7 @@ fn read_dialect(
         net_of: Vec::new(),
         defs: Vec::new(),
         models,
+        deck,
         open: None,
         open_span: SourceSpan { line: 0 },
         instances: Vec::new(),
@@ -1122,7 +1220,56 @@ fn read_dialect(
             return Err(NetlistError::TerminalCount(span, name, got, want));
         }
     }
+    debug_assert!(
+        tables_hold(&b.out),
+        "every CSR column is one longer than its table, monotone and terminated, and \
+         every net and subcircuit id is a row"
+    );
     Ok(b.out)
+}
+
+/// Debug check of [`Netlist`]'s table invariants: each `*_start` column one
+/// longer than its table, monotone, ending at the column it indexes (the
+/// instance one empty when there are no instances), the parallel columns
+/// equally long, and every net and subcircuit id in range.
+fn tables_hold(netlist: &Netlist) -> bool {
+    let csr = |start: &[u32], rows: usize, len: usize| {
+        start.len() == rows + 1
+            && start.windows(2).all(|w| w[0] <= w[1])
+            && start[rows] as usize == len
+    };
+    let (subckts, devices, nets) = (
+        netlist.subckt_count(),
+        netlist.device_model.len(),
+        netlist.net_name.len(),
+    );
+    let instances = netlist.instance_of.len();
+    let net_ok = |net: &RefNetId| (net.0 as usize) < nets;
+    let subckt_ok = |subckt: &SubcktId| (subckt.0 as usize) < subckts;
+    csr(&netlist.subckt_port_start, subckts, netlist.port_net.len())
+        && csr(&netlist.subckt_device_start, subckts, devices)
+        && csr(
+            &netlist.device_terminal_start,
+            devices,
+            netlist.terminal_net.len(),
+        )
+        && csr(&netlist.device_param_start, devices, netlist.param.len())
+        && ((instances == 0 && netlist.instance_net_start.is_empty())
+            || csr(
+                &netlist.instance_net_start,
+                instances,
+                netlist.instance_net.len(),
+            ))
+        && netlist.device_kind.len() == devices
+        && netlist.instance_subckt.len() == instances
+        && netlist.instance_name.len() == instances
+        && netlist.net_subckt.len() == nets
+        && netlist.port_net.iter().all(net_ok)
+        && netlist.terminal_net.iter().all(net_ok)
+        && netlist.instance_net.iter().all(net_ok)
+        && netlist.net_subckt.iter().all(subckt_ok)
+        && netlist.instance_of.iter().all(subckt_ok)
+        && netlist.instance_subckt.iter().all(subckt_ok)
 }
 
 /// SPICE and CDL. The accepted subset is in the [module docs](super).
@@ -1148,13 +1295,7 @@ pub mod spice {
         strings: &mut StrTable,
         devices: &DeviceRecognition,
     ) -> Result<Netlist, NetlistError> {
-        let models = devices
-            .model
-            .iter()
-            .copied()
-            .zip(devices.kind.iter().copied())
-            .collect();
-        super::read_dialect(source, strings, super::Dialect::Spice, models)
+        super::read_dialect(source, strings, super::Dialect::Spice, devices)
     }
 }
 
@@ -1165,18 +1306,26 @@ pub mod spice {
 /// subset is in the [module docs](super).
 pub mod spectre {
     use super::{Netlist, NetlistError};
+    use crate::deck::DeviceRecognition;
     use gpurify_geom::StrTable;
 
     /// Reads a Spectre netlist, interning its names into `strings`. A device's
     /// family comes from its `model` card's master or a built-in primitive
     /// master (`nmos`, `bsim4`, `resistor`, …); any other master is refused.
     ///
+    /// `devices`: the deck's recognisers. An instance of a primitive master
+    /// names no model, so it is the one recogniser of its kind here.
+    ///
     /// # Errors
     ///
     /// The first [`NetlistError`] found, with its line; nothing partial is
     /// returned. Definitions are read before cards, and instance port counts
     /// checked last, so the first error found need not be the first in the file.
-    pub fn read(source: &str, strings: &mut StrTable) -> Result<Netlist, NetlistError> {
-        super::read_dialect(source, strings, super::Dialect::Spectre, Vec::new())
+    pub fn read(
+        source: &str,
+        strings: &mut StrTable,
+        devices: &DeviceRecognition,
+    ) -> Result<Netlist, NetlistError> {
+        super::read_dialect(source, strings, super::Dialect::Spectre, devices)
     }
 }

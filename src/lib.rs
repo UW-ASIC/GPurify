@@ -1,7 +1,7 @@
 //! Physical verification for integrated circuits: DRC, LVS, ERC and PEX, in one
 //! tool and one library.
 //!
-//! Most verifiers say how many violations they found. GPurify also says how much
+//! Most verifiers say how many violations they found. `GPurify` also says how much
 //! of the chip it looked at: every rule reports whether it ran and how many
 //! shapes it examined, and a run that could not check everything it was asked to
 //! does not pass. The same inputs always give the same bytes.
@@ -45,8 +45,9 @@
 //!
 //! 1. **Load** ([`engine::pipeline::load`]). The GDSII layout is read and
 //!    flattened onto the grid its `UNITS` record states
-//!    ([`ingest::layout`]). The deck is parsed and every limit converted to
-//!    that grid exactly, or refused ([`ingest::deck`]). The reference netlist and
+//!    ([`ingest::layout`]). The deck is compiled ([`deck::compile`]): parsed,
+//!    every limit converted to that grid exactly or refused ([`ingest::deck`]),
+//!    and every rule typed and held to what its kind can hold. The reference netlist and
 //!    design intent are read if given ([`ingest::netlist`], [`ingest::intent`]).
 //! 2. **Extract** ([`engine::pipeline::extract`]). Nets are traced through the
 //!    deck's conductors and vias, devices are recognised from their marker
@@ -63,6 +64,12 @@
 //! `xor` compares two layouts layer by layer instead of checking one
 //! ([`engine::xor`]).
 //!
+//! The four decks in `pdks/` are compiled into the library as [`pdks`], so a
+//! consumer reads the deck the checker is tested with instead of a copy.
+//! A deck can also be built or overridden in Rust ([`deck::DeckBuilder`]),
+//! with rules of its own written as Rust functions ([`deck::CustomRule`]),
+//! and shipped in a binary of its own ([`cli::main_with`]).
+//!
 //! # Where every rule is defined
 //!
 //! The [rule reference](check#rule-reference) lists every rule kind a deck can
@@ -72,7 +79,7 @@
 //! expected to check, and
 //! [check-sources.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md)
 //! cites the foundry manual, standard or tool that defines each check. What
-//! GPurify does not check yet is in
+//! `GPurify` does not check yet is in
 //! [limitations.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/limitations.md);
 //! do not tape out on its verdict alone.
 //!
@@ -94,9 +101,12 @@
 //! A consumer that only probes geometry can depend on `gpurify-geom` alone.
 
 pub use gpurify_check as check;
+pub use gpurify_check::deck;
+pub mod cli;
 pub use gpurify_geom as geom;
 pub mod engine;
 pub mod export;
 pub mod liberty;
+pub mod pdks;
 pub use gpurify_extract as extract;
 pub use gpurify_ingest as ingest;

@@ -68,6 +68,8 @@ fn run(deck: &str, rects: &[(&str, [i64; 4])]) -> Found {
     let (store, provenance) = library
         .flatten(&deck, &strings, UnknownLayers::Reject)
         .expect("reads back");
+    let deck =
+        gpurify::deck::CompiledDeck::from_deck(deck, grid(), &strings).expect("the deck compiles");
     let loaded = Loaded {
         strings,
         grid: grid(),
@@ -454,7 +456,7 @@ fn m1_3a_measures_from_what_is_attached_to_huge_metal() {
     );
     // sqrt(200² + 20²) = 200.99, reported rounded down.
     assert_eq!(found.of("m1.3a"), [(len(200), len(280))]);
-    assert!(found.of("m1.3b").is_empty());
+    assert_eq!(found.of("m1.3b"), []);
 }
 
 // ---------------------------------------------------------- edge checks

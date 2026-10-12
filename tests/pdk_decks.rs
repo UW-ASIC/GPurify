@@ -29,6 +29,7 @@
 //! every loop below pass vacuously, which is the same false clean in the test
 //! suite that the tests themselves exist to prevent in the tool.
 
+use gpurify::deck::{CompileError, CompiledDeck};
 use gpurify::geom::Grid;
 use gpurify::geom::LayerId;
 use gpurify::ingest::deck::{Deck, DeviceKind, ParamValue};
@@ -99,6 +100,78 @@ fn every_deck_in_pdks_parses_and_builds_both_rule_sets() {
         gpurify::check::erc::RuleSet::from_deck(&deck, &strings).unwrap_or_else(|why| {
             panic!("{}: the ERC rule set does not build: {why}", name_of(&path))
         });
+    }
+}
+
+/// The file stem of a deck path: the name `gpurify::pdks::ALL` gives it.
+fn stem_of(path: &Path) -> &str {
+    path.file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("<unnameable deck>")
+}
+
+/// Oracle: the files themselves. Each deck in `pdks/` is shipped as a
+/// `gpurify::pdks` constant holding its exact bytes, and no constant names a
+/// file that is not there, so a consumer compiling a constant compiles the
+/// deck every other test here reads. Breaks if a deck is added without its
+/// constant, or a constant points at another file.
+#[test]
+fn every_deck_file_is_a_shipped_constant_byte_for_byte() {
+    let files: Vec<(String, String)> = deck_files()
+        .iter()
+        .map(|path| {
+            let text = std::fs::read_to_string(path)
+                .unwrap_or_else(|why| panic!("{}: {why}", path.display()));
+            (stem_of(path).to_owned(), text)
+        })
+        .collect();
+    let shipped: Vec<(String, String)> = gpurify::pdks::ALL
+        .iter()
+        .map(|&(name, text)| (name.to_owned(), text.to_owned()))
+        .collect();
+    let names = |decks: &[(String, String)]| -> Vec<String> {
+        decks.iter().map(|(name, _)| name.clone()).collect()
+    };
+    assert_eq!(
+        names(&shipped),
+        names(&files),
+        "gpurify::pdks::ALL must name every deck in pdks/, sorted, and nothing else"
+    );
+    for ((name, constant), (_, file)) in shipped.iter().zip(&files) {
+        assert!(
+            constant == file,
+            "gpurify::pdks constant {name} is not the bytes of pdks/{name}.deck"
+        );
+    }
+}
+
+/// Oracle: construct-from-answer. Each shipped constant compiles, as a
+/// consumer compiling it from the library would, and configures rules; and
+/// each `gpurify::pdks` function compiles its own constant (one compiling
+/// another deck configures another number of rules).
+#[test]
+fn every_shipped_constant_compiles() {
+    type Compiles = fn(Grid, &mut StrTable) -> Result<CompiledDeck, CompileError>;
+    let functions: [(&str, Compiles); 4] = [
+        ("generic_finfet", gpurify::pdks::generic_finfet),
+        ("gf180mcu", gpurify::pdks::gf180mcu),
+        ("ihp_sg13g2", gpurify::pdks::ihp_sg13g2),
+        ("sky130", gpurify::pdks::sky130),
+    ];
+    let grid = Grid::new(DBU_PER_UM).expect("a thousand database units per micrometre is a grid");
+    for ((name, text), (named, compiles)) in gpurify::pdks::ALL.iter().zip(functions) {
+        assert_eq!(*name, named, "gpurify::pdks::ALL is sorted by file stem");
+        let mut strings = StrTable::default();
+        let deck = gpurify::deck::compile(text, grid, &mut strings)
+            .unwrap_or_else(|why| panic!("gpurify::pdks {name} does not compile: {why}"));
+        assert!(deck.rule_count() > 0, "{name} configures no rule");
+        let again = compiles(grid, &mut StrTable::default())
+            .unwrap_or_else(|why| panic!("gpurify::pdks::{name}() does not compile: {why}"));
+        assert_eq!(
+            again.rule_count(),
+            deck.rule_count(),
+            "gpurify::pdks::{name}() compiles another deck than its constant"
+        );
     }
 }
 

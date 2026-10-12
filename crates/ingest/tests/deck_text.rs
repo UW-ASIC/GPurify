@@ -273,7 +273,7 @@ rule ds drain_source(; models: both, max: 3.3V)
         [r#"model="nfet""#, r#"model="pfet""#, "max_voltage=1980"]
     );
     assert_eq!(got[1].3, [r#"pmos="pfet""#]);
-    assert!(got[2].3.is_empty());
+    assert_eq!(got[2].3, [] as [&str; 0]);
     assert_eq!(got[3].3, [r#"clamp="nfet""#]);
     assert_eq!(
         got[4].3,
@@ -436,6 +436,11 @@ device mos diff model \"nfet\" terminals [poly, diff, diff]
         (
             "device resistor poly model \"r\" terminals [li, li] sheet 1fF/um2\n",
             "a resistance",
+        ),
+        // Past f64's range a decimal reads as infinite, which no device has.
+        (
+            "device resistor poly model \"r\" terminals [li, li] sheet 1e999ohm\n",
+            "`sheet` is too large a number",
         ),
     ];
     for (body, needle) in wrong {
@@ -774,6 +779,9 @@ fn a_pex_row_with_a_value_no_process_has_is_refused_at_the_value() {
         ("dielectric 0", "dielectric must be positive"),
         ("area_cap -25aF/um2", "area_cap must be zero or more"),
         ("fringe_cap -40aF/um", "fringe_cap must be zero or more"),
+        // Past f64's range a decimal reads as infinite, which no process has.
+        ("thickness 1e999nm", "thickness must be positive and finite"),
+        ("sheet 1e999ohm", "sheet must be zero or more, and finite"),
     ] {
         let body = row(value);
         let mut strings = StrTable::default();
@@ -798,6 +806,51 @@ fn a_pex_row_with_a_value_no_process_has_is_refused_at_the_value() {
         "fringe_cap 0aF/um",
     ] {
         ok(&row(value));
+    }
+}
+
+/// N-c7-2 (fixed on the base by D4 the same way): a decimal past `f64`'s range converts to infinity, which passed
+/// "positive" and "zero or more" alike, so `thickness 1e400nm` was a stack
+/// row of infinite thickness (and an infinite capacitance downstream). The
+/// stack's own invariant, every value finite (asserted where it is built,
+/// C7), refuses it at the value.
+///
+/// Oracle: IEEE 754, `1e400` overflows binary64 (largest finite about
+/// `1.8e308`).
+#[test]
+fn a_pex_value_past_the_range_of_a_float_is_refused_at_the_value() {
+    let full = |key: &str, stated: &str| {
+        let row = [
+            ("thickness", "360nm"),
+            ("height", "1376nm"),
+            ("sheet", "0.125ohm"),
+            ("dielectric", "3.9"),
+            ("area_cap", "25.8aF/um2"),
+            ("fringe_cap", "40.5aF/um"),
+        ]
+        .map(|(k, v)| format!("{k} {}", if k == key { stated } else { v }));
+        format!("pex met1 {}\n", row.join(" "))
+    };
+    for (key, stated) in [
+        ("thickness", "1e400nm"),
+        ("height", "1e400nm"),
+        ("sheet", "1e400ohm"),
+        ("dielectric", "1e400"),
+        ("area_cap", "1e400aF/um2"),
+        ("fringe_cap", "1e400aF/um"),
+    ] {
+        let mut strings = StrTable::default();
+        let error = parse_deck(
+            &format!("{HEAD}{}", full(key, stated)),
+            grid(),
+            &mut strings,
+        )
+        .expect_err(key)
+        .to_string();
+        assert!(
+            error.contains(&format!("pex `met1`: {key} must be")) && error.contains("finite"),
+            "{key} {stated}: {error}"
+        );
     }
 }
 
@@ -1136,10 +1189,10 @@ fn a_temperature_moves_each_sheet_resistance_by_its_own_coefficients() {
 #[test]
 fn at_its_nominal_temperature_a_deck_reads_its_sheets_as_written() {
     let (hot, strings) = ok(&format!("temperature 30C nominal 30C\n{SKY130_METALS}"));
-    let plain = SKY130_METALS
+    let plain: String = SKY130_METALS
         .lines()
-        .map(|line| format!("{}\n", &line[..line.find(" tc1").expect("a tc1")]))
-        .collect::<String>();
+        .flat_map(|line| [&line[..line.find(" tc1").expect("a tc1")], "\n"])
+        .collect();
     let (cold, _) = ok(&plain);
     let bits = |stack: &[f64]| stack.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
     let met1 = hot.layers.id(&strings, "met1").expect("met1").idx();
@@ -1205,4 +1258,43 @@ fn a_temperature_and_its_coefficients_come_together() {
         "temperature must be above absolute zero",
     );
     one_error("temperature 85C\n", "expected `nominal`");
+}
+
+/// Oracle: LEF/DEF 5.8's `PWL ( ( d1 r1 ) ( d2 r2 ) ... )`, written as a list
+/// of `(area, number)` points: each point lowers to its area in square grid
+/// units (1 nm grid: 0.0125 µm² is 12 500) and its number, in deck order.
+/// Areas must start at 0 or more and rise strictly, as LEF's diffusion values
+/// do; a point is a pair, and a table has one.
+#[test]
+fn a_piecewise_linear_table_lowers_point_by_point_and_must_rise() {
+    let row = |table: &str| {
+        format!(
+            "rule ae antenna_electrical(poly, met1; max_ratio: 400, sidewall: none, cut_factor: 1, diode: diff,
+    diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
+    diode_reduce: none, diode_max_ratio: {table}, exempt: none)\n"
+        )
+    };
+    let (deck, strings) = ok(&row("[(0um2, 400), (0.0125um2, 400), (22.5um2, 11600)]"));
+    assert_eq!(
+        rules(&deck, &strings)[0].3,
+        [
+            "max_ratio=400",
+            "cut_factor=1",
+            "diode_layer=diff",
+            "diode_credit=0",
+            "diode_bonus=0",
+            "area_minus_diode=0",
+            "gate_plus_diode=0",
+            "diode_max_ratio_area=0dbu2",
+            "diode_max_ratio=400",
+            "diode_max_ratio_area=12500dbu2",
+            "diode_max_ratio=400",
+            "diode_max_ratio_area=22500000dbu2",
+            "diode_max_ratio=11600",
+        ]
+    );
+    one_error(&row("[(0.1um2, 400), (0.1um2, 500)]"), "rise strictly");
+    one_error(&row("[(0.1um2, 400), (0.05um2, 500)]"), "rise strictly");
+    one_error(&row("[(0um2, 400, 1)]"), "(area, number) points");
+    one_error(&row("[]"), "at least one point");
 }

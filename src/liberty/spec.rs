@@ -436,8 +436,8 @@ impl Default for Characterization {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Simulator {
-    /// The simulator executable, looked up on `PATH`. It is driven as ngspice
-    /// in pipe mode (`-p`), so it must be ngspice. Default `ngspice`.
+    /// The simulator executable, looked up on `PATH`. It is run as ngspice
+    /// in batch mode (`-b`), so it must be ngspice. Default `ngspice`.
     pub binary: String,
     /// `.option scale`: lengths are written divided by it. sky130 is `1e-6`.
     pub scale: f64,

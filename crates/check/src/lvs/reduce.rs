@@ -104,6 +104,18 @@ impl ParamNames {
         }
     }
 
+    /// Whether `a` and `b`, two values of the parameter `name`, agree: within
+    /// the relative `tolerance`, `|a - b| <= tolerance * max(|a|, |b|)`,
+    /// except a count, `m` or `nf`, which is a whole number and agrees only
+    /// exactly (testing-plan F99). `NaN` never agrees.
+    #[expect(clippy::float_cmp, reason = "a count agrees only exactly")]
+    pub(crate) fn agree(self, name: StrId, (a, b): (f64, f64), tolerance: f64) -> bool {
+        if Some(name) == self.multiplier || Some(name) == self.fingers {
+            return a == b;
+        }
+        (a - b).abs() <= tolerance * a.abs().max(b.abs())
+    }
+
     /// How many of the four diffusion names `params` states.
     fn diffusions_in(self, params: &[(StrId, f64)]) -> usize {
         self.diffusion
@@ -654,6 +666,13 @@ fn order_by_group(plan: &mut Plan, devices: usize) {
         let head = find(&mut plan.root, device);
         plan.root[device as usize] = head;
     }
+    debug_assert!(
+        (0..devices).all(|device| {
+            let head = plan.root[device] as usize;
+            head <= device && plan.root[head] as usize == head
+        }),
+        "each group's root is its lowest device and its own root"
+    );
     let Plan { root, order, .. } = plan;
     order.clear();
     order.extend(0..narrow(devices));

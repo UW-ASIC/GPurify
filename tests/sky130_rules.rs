@@ -423,7 +423,10 @@ fn m1_1_diagonal_neck_at_overlapping_rectangles() {
 /// five-metal flow, row by row: `MAX_EGAR` without a diode, and `FLT`, the film
 /// thickness the sidewall area is defined with. The deck once took met3 from
 /// Table Ic (the three-metal S8TM flow, FLT 2.0 um) and met4/met5 from Magic's
-/// drawn thicknesses; neither is the rule.
+/// drawn thicknesses; neither is the rule. Then the diode columns, `K` (per
+/// µm² of `AntennaDiode`) and `Diode bonus`: li 450, mcon 18, the metals 400
+/// with a 2200 bonus, the vias 36, and none for poly and licon, whose rows
+/// only skip a net on a `pAntennaShort` (.ar.1).
 #[test]
 fn the_sky130_antenna_rows_are_table_ig() {
     let mut strings = StrTable::default();
@@ -465,7 +468,7 @@ fn the_sky130_antenna_rows_are_table_ig() {
             .find(|rule| strings.resolve(rule.id) == id)
             .unwrap_or_else(|| panic!("the sky130 deck has no {id}"));
         assert!(
-            matches!(param(rule, "max_ratio"), Some(gpurify_ingest::deck::ParamValue::Ratio(r)) if r == ratio),
+            matches!(param(rule, "max_ratio"), Some(gpurify_ingest::deck::ParamValue::Ratio(r)) if r.total_cmp(&ratio).is_eq()),
             "{id}: max_ratio should be {ratio}"
         );
         let sidewall = match param(rule, "sidewall_thickness") {
@@ -476,5 +479,149 @@ fn the_sky130_antenna_rows_are_table_ig() {
             sidewall, sidewall_nm,
             "{id}: sidewall FLT in nm on a 1 nm grid"
         );
+        let ratio_of = |name: &str| match param(rule, name) {
+            Some(gpurify_ingest::deck::ParamValue::Ratio(value)) => Some(value),
+            _ => None,
+        };
+        let (k, bonus) = match id {
+            "ar.poly.1" | "ar.licon.1" => (None, None),
+            "ar.li.1" => (Some(450.0), Some(0.0)),
+            "ar.mcon.1" => (Some(18.0), Some(0.0)),
+            id if id.starts_with("ar.met") => (Some(400.0), Some(2200.0)),
+            _ => (Some(36.0), Some(0.0)),
+        };
+        assert_eq!(ratio_of("diode_credit"), k, "{id}: Table Ig's K");
+        assert_eq!(
+            ratio_of("diode_bonus"),
+            bonus,
+            "{id}: Table Ig's diode bonus"
+        );
+        let named = |name: &str| match param(rule, name) {
+            Some(gpurify_ingest::deck::ParamValue::Layer(layer)) => Some(layer),
+            _ => None,
+        };
+        let short = deck.layers.id(&strings, "pantenna_short");
+        let exempt = if k.is_some() {
+            named("exempt_layer")
+        } else {
+            named("diode_layer")
+        };
+        assert_eq!(exempt, short, "{id}: .ar.1 exempts a pAntennaShort net");
+    }
+}
+
+/// Oracle: IHP SG13G2 Layout Rules §7.1. Without a protection diode, Ant.b
+/// (cumulative metal) 200 and Ant.d (cumulative via) 20; with one, Ant.e
+/// 20000 and Ant.f 500. The no-diode rows leave a gate with a diode to the
+/// protected rows, which credit the same diode layer, each row's stage
+/// collecting Metal1 (or Via1) up to its own layer.
+#[test]
+fn the_ihp_antenna_rows_switch_on_a_protection_diode() {
+    let (deck, strings) = load(IHP);
+    let rule = |id: &str| {
+        deck.rules
+            .spec
+            .iter()
+            .find(|rule| strings.resolve(rule.id) == id)
+            .unwrap_or_else(|| panic!("the IHP deck has no {id}"))
+    };
+    let param = |id: &str, name: &str| {
+        strings
+            .get(name)
+            .and_then(|name| deck.rules.param(rule(id), name))
+    };
+    let diode = deck.layers.id(&strings, "ant_diode");
+    assert!(diode.is_some(), "the IHP deck derives its protection diode");
+    let metals = [
+        "Metal1",
+        "Metal2",
+        "Metal3",
+        "Metal4",
+        "Metal5",
+        "TopMetal1",
+        "TopMetal2",
+    ];
+    let vias = ["Via1", "Via2", "Via3", "Via4", "TopVia1", "TopVia2"];
+    for (without, with, limits, names) in [
+        ("Ant.b", "Ant.e", (200.0, 20000.0), &metals[..]),
+        ("Ant.d", "Ant.f", (20.0, 500.0), &vias[..]),
+    ] {
+        for (n, name) in names.iter().enumerate() {
+            let (bare, protected) = (format!("{without}_{name}"), format!("{with}_{name}"));
+            for (id, limit, kind) in [
+                (&bare, limits.0, "antenna"),
+                (&protected, limits.1, "antenna_electrical"),
+            ] {
+                assert_eq!(strings.resolve(rule(id).kind), kind, "{id}");
+                assert!(
+                    matches!(param(id, "max_ratio"), Some(gpurify_ingest::deck::ParamValue::Ratio(r)) if r.total_cmp(&limit).is_eq()),
+                    "{id}: max_ratio should be {limit}"
+                );
+                assert!(
+                    matches!(param(id, "diode_layer"), Some(gpurify_ingest::deck::ParamValue::Layer(l)) if Some(l) == diode),
+                    "{id}: the protection diode is ant_diode"
+                );
+                assert_eq!(
+                    deck.rules.layers_of(rule(id)).len(),
+                    n + 2,
+                    "{id}: the gate and every layer up to {name}"
+                );
+            }
+        }
+    }
+}
+
+/// Oracle: GF180MCU DRM tables 27 and 28. ANT.1-ANT.15 limit the ratio to the
+/// "related gate oxide area", one row per oxide (thin `gate_thin`, thick
+/// `gate_hv` suffixed `.DG`); ANT.16 adds MF times the COMP area on the node
+/// to the gate area for a metal or via ratio, MF 2 thin and 15 thick, while
+/// the poly and contact rows take no credit.
+#[test]
+fn the_gf180_antenna_rows_credit_comp_by_oxide() {
+    let (deck, strings) = load(GF180);
+    let rule = |id: &str| {
+        deck.rules
+            .spec
+            .iter()
+            .find(|rule| strings.resolve(rule.id) == id)
+            .unwrap_or_else(|| panic!("the gf180 deck has no {id}"))
+    };
+    let ratio = |id: &str, name: &str| match strings
+        .get(name)
+        .and_then(|name| deck.rules.param(rule(id), name))
+    {
+        Some(gpurify_ingest::deck::ParamValue::Ratio(value)) => Some(value),
+        _ => None,
+    };
+    let gate_of = |id: &str| deck.rules.layers_of(rule(id))[0];
+    let thin = deck.layers.id(&strings, "gate_thin");
+    let thick = deck.layers.id(&strings, "gate_hv");
+    let rows: [(&str, f64, bool); 13] = [
+        ("ANT.1", 200.0, false),
+        ("ANT.2", 400.0, true),
+        ("ANT.3", 400.0, true),
+        ("ANT.4", 400.0, true),
+        ("ANT.5", 400.0, true),
+        ("ANT.6", 400.0, true),
+        ("ANT.7", 400.0, true),
+        ("ANT.8", 10.0, false),
+        ("ANT.9", 20.0, true),
+        ("ANT.10", 20.0, true),
+        ("ANT.11", 20.0, true),
+        ("ANT.12", 20.0, true),
+        ("ANT.13", 20.0, true),
+    ];
+    for (id, limit, credited) in rows {
+        let dg = format!("{id}.DG");
+        for (row, gate, mf) in [(id, thin, 2.0), (dg.as_str(), thick, 15.0)] {
+            assert_eq!(
+                ratio(row, "max_ratio"),
+                Some(limit),
+                "{row}: the DRM's limit"
+            );
+            assert_eq!(Some(gate_of(row)), gate, "{row}: its own oxide's gates");
+            let want = credited.then_some(mf);
+            assert_eq!(ratio(row, "gate_plus_diode"), want, "{row}: ANT.16's MF");
+        }
     }
 }

@@ -5,6 +5,7 @@
 //! `tests/fixtures` and check each against its geometry-derived expectation.
 
 use gpurify::check::report::{Measurement, Outcome, Severity, SkipReason};
+use gpurify::deck::CompileError;
 use gpurify::engine::pipeline::LoadError;
 use gpurify::engine::run::{Checks, StageStatus};
 use gpurify::ingest::DeckError;
@@ -155,7 +156,7 @@ fn an_off_grid_deck_limit_is_refused_rather_than_rounded() {
         .expect_err("a limit off the manufacturing grid must not load");
 
     assert!(
-        matches!(&error, LoadError::Deck(DeckError::Invalid { diagnostics, .. })
+        matches!(&error, LoadError::Deck(CompileError::Deck(DeckError::Invalid { diagnostics, .. }))
             if diagnostics[0].message.contains("not on the layout's grid")),
         "expected an off-grid rejection, got {error:?}"
     );
@@ -234,7 +235,7 @@ fn every_lvs_cell_in_the_corpus_extracts_the_devices_it_draws() {
     common::report_domain("LVS", corpus.lvs.cases.len(), &failed);
 }
 
-/// Oracle: the circuit, not its hierarchy. LVS_INV's inverter placed by
+/// Oracle: the circuit, not its hierarchy. `LVS_INV`'s inverter placed by
 /// instance matches the flat cell, and a schematic that also places a second,
 /// undrawn inverter by instance does not (testing-plan F1: the instance used to
 /// be dropped, so the missing block matched).
@@ -1225,6 +1226,7 @@ fn black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal() {
 /// Oracle: law — determinism, on the split extraction path specifically.
 #[test]
 fn extracting_the_split_corpus_twice_is_bit_identical() {
+    use gpurify_testgen::assertions::{net_partition, port_names};
     let checks = Checks {
         drc: false,
         erc: false,
@@ -1234,7 +1236,6 @@ fn extracting_the_split_corpus_twice_is_bit_identical() {
     let first = common::run_case("lvs", "LVS_CLEAN_MATCH", checks).expect("LVS_INV extracts");
     let second = common::run_case("lvs", "LVS_CLEAN_MATCH", checks).expect("LVS_INV extracts");
 
-    use gpurify_testgen::assertions::{net_partition, port_names};
     assert_eq!(
         net_partition(&first.extracted.nets),
         net_partition(&second.extracted.nets),

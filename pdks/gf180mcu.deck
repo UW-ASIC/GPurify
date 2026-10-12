@@ -469,26 +469,52 @@ rule OFFGRID off_grid(; pitch: 5nm)
 rule ACUTE angle(; allowed: [0deg, 45deg, 90deg, 135deg])
 
 # --- Antenna [DRM 27, 28: ratio limits; perimeter-area thickness t per layer, 9 kA MetalTop] ---
-rule ANT.1 antenna(gate, poly2_con; max_ratio: 200, sidewall: 200nm, diode: none)
-let ant_metals = [(ANT.2, metal1_con), (ANT.3, metal2_con), (ANT.4, metal3_con),
-                  (ANT.5, metal4), (ANT.6, metal5)]
-for (id, m) in ant_metals {
-    rule {id} antenna(gate, m; max_ratio: 400, sidewall: 540nm, diode: none)
+# ANT.1-ANT.15 are ratios to the "related gate oxide area", so each rule is one
+# row per oxide, the thick (DUALGATE) one suffixed .DG. ANT.16: a failing metal
+# or via ratio is checked again with "gate area = (gate area + MF * (COMP area
+# directly connection that node))", MF 2 for a thin gate and 15 for a thick
+# one, the COMP being any diode, drain or source on the node.
+layer gate_thin = gate not dualgate
+layer ant_comp = comp not poly2
+rule ANT.1 antenna(gate_thin, poly2_con; max_ratio: 200, sidewall: 200nm, diode: none)
+rule ANT.1.DG antenna(gate_hv, poly2_con; max_ratio: 200, sidewall: 200nm, diode: none)
+let ant_metals = [(ANT.2, ANT.2.DG, metal1_con), (ANT.3, ANT.3.DG, metal2_con),
+                  (ANT.4, ANT.4.DG, metal3_con), (ANT.5, ANT.5.DG, metal4),
+                  (ANT.6, ANT.6.DG, metal5)]
+for (id, dg, m) in ant_metals {
+    rule {id} antenna_electrical(gate_thin, m; max_ratio: 400, sidewall: 540nm, cut_factor: 1,
+        diode: ant_comp, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 2,
+        diode_reduce: none, diode_max_ratio: none, exempt: none)
+    rule {dg} antenna_electrical(gate_hv, m; max_ratio: 400, sidewall: 540nm, cut_factor: 1,
+        diode: ant_comp, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 15,
+        diode_reduce: none, diode_max_ratio: none, exempt: none)
 }
-rule ANT.7 antenna(gate, metaltop_con; max_ratio: 400, sidewall: 990nm, diode: none)
-rule ANT.8 antenna(gate, contact; max_ratio: 10, sidewall: none, diode: none)
-let ant_vias = [(ANT.9, via1), (ANT.10, via2), (ANT.11, via3), (ANT.12, via4), (ANT.13, via5_nomim)]
-for (id, v) in ant_vias {
-    rule {id} antenna(gate, v; max_ratio: 20, sidewall: none, diode: none)
+rule ANT.7 antenna_electrical(gate_thin, metaltop_con; max_ratio: 400, sidewall: 990nm, cut_factor: 1,
+        diode: ant_comp, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 2,
+        diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule ANT.7.DG antenna_electrical(gate_hv, metaltop_con; max_ratio: 400, sidewall: 990nm, cut_factor: 1,
+        diode: ant_comp, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 15,
+        diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule ANT.8 antenna(gate_thin, contact; max_ratio: 10, sidewall: none, diode: none)
+rule ANT.8.DG antenna(gate_hv, contact; max_ratio: 10, sidewall: none, diode: none)
+let ant_vias = [(ANT.9, ANT.9.DG, via1), (ANT.10, ANT.10.DG, via2), (ANT.11, ANT.11.DG, via3),
+                (ANT.12, ANT.12.DG, via4), (ANT.13, ANT.13.DG, via5_nomim)]
+for (id, dg, v) in ant_vias {
+    rule {id} antenna_electrical(gate_thin, v; max_ratio: 20, sidewall: none, cut_factor: 1,
+        diode: ant_comp, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 2,
+        diode_reduce: none, diode_max_ratio: none, exempt: none)
+    rule {dg} antenna_electrical(gate_hv, v; max_ratio: 20, sidewall: none, cut_factor: 1,
+        diode: ant_comp, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 15,
+        diode_reduce: none, diode_max_ratio: none, exempt: none)
 }
 
 # --- Electromigration at 85 C, unidirectional (DC) limits [DRM 54, tables 14.3 and 14.4] ---
 # A cut row's max_density is not read (a cut carries per-cut current); it
 # restates the wire limit because the parameter is required.
-rule EM.14.3_Mn em_current_density(metal1_con, metal2_con, metal3_con, metal4, metal5; max_density: 2.09mA/um, max_current_per_cut: 0.58mA)
-rule EM.14.3_MT em_current_density(metaltop_con; max_density: 3.77mA/um, max_current_per_cut: 0.58mA)
-rule EM.14.4_Vn em_current_density(via1, via2, via3, via4, via5_nomim; max_density: 2.09mA/um, max_current_per_cut: 0.58mA)
-rule EM.14.4_CO em_current_density(contact; max_density: 2.09mA/um, max_current_per_cut: 0.43mA)
+rule EM.14.3_Mn em_current_density(metal1_con, metal2_con, metal3_con, metal4, metal5; max_density: 2.09mA/um, max_current_per_cut: 0.58mA, narrow: none)
+rule EM.14.3_MT em_current_density(metaltop_con; max_density: 3.77mA/um, max_current_per_cut: 0.58mA, narrow: none)
+rule EM.14.4_Vn em_current_density(via1, via2, via3, via4, via5_nomim; max_density: 2.09mA/um, max_current_per_cut: 0.58mA, narrow: none)
+rule EM.14.4_CO em_current_density(contact; max_density: 2.09mA/um, max_current_per_cut: 0.43mA, narrow: none)
 
 # --- Electrical ---
 # LU.9 / LU.10: Nwell taps go to the most positive supply and substrate taps to
@@ -645,9 +671,8 @@ rule DF.11 length(ncomp.edges() and pcomp.edges()) >= 300nm
 #   LU.1..LU.5 (tap distance conditional on the well-to-COMP space x/y),
 #   IO.1..IO.4 (I/O latch-up guard rings: the ring-to-pad-COMP distance is
 #   not what esd_latchup measures), MIMTM.8b (maximum area), MIMTM.11,
-#   MT30.* (30 kA top metal only), ANT.14/ANT.15 (MIM-area antenna: the gate
-#   is FuseTop, not a gate), ANT.16 diode credit (MF = 2 thin, 15 thick; the
-#   tool refuses a non-zero credit), DE.*, the LDMOS (MDN/MDP), OTP, eFuse,
+#   MT30.* (30 kA top metal only), ANT.14/ANT.15 (MIM-area antenna: the victim
+#   is FuseTop, which no connect row joins to the MetalTop above it), DE.*, the LDMOS (MDN/MDP), OTP, eFuse,
 #   SRAM and scribe-line sections.
 # Devices not recognised: every diode (np/pn/nwp/dnwpw/dnwps/sc_diode), the
 #   nwell and pwell resistors, the vertical BJTs and the inversion-mode MOS

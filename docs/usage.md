@@ -147,9 +147,12 @@ drain diffusions `as`, `ad`, `ps` and `pd`, a bipolar's emitter `ae` and
 capacitor's `c` where the deck gives their coefficients (see
 [deck.md](deck.md#devices)). A diffusion is compared on the net it is drawn
 on: a card that writes the transistor drain first gives its `as` to that
-net. Each parameter a
+net. Where nothing else tells a transistor's two channel nets apart, they
+pair the way its diffusions agree, so a card with them the other way round
+is the same transistor. Each parameter a
 schematic card states is compared on that device, within 2 % of the larger
-value. A card that
+value, except the counts `m` and `nf`: they are whole numbers and must be
+equal, so `m=50` does not match `m=51`. A card that
 leaves a parameter out says nothing about it, whatever other cards of the
 same model state, and a parameter the layout does not measure is reported
 (`lvs.undeclared_param`) rather than passed.
@@ -158,7 +161,9 @@ An `R` or `C` card may give its value positionally, between its nets and
 its model: `R1 a b 1k rpoly` is `R1 a b rpoly r=1k`. Devices are paired by
 model, so an `R`, `C` or `D` card that names none (`R1 a b 1k`, `D1 a b`)
 is the deck's one device of its kind; where the deck has none of that kind,
-or several, the card is refused, and the message names them. On a
+or several, the card is refused, and the message names them. So is a
+Spectre instance of a built-in primitive with no `model` card
+(`R1 (a b) resistor r=1k`, `M1 (d g s b) nmos`), of any kind. On a
 resistor, capacitor or diode card, other tools' names for the area and
 perimeter are read as this tool's: KLayout's `A` and `P`, and ngspice's
 diode `pj`, are `area`, `perim` and `perim`. A parameter stated twice, under
@@ -174,15 +179,17 @@ missing input, a file that could not be read.
 ## Design intent
 
 Some electrical rules need facts about the chip that no process deck can know:
-`ir_drop`, `em_current_density`, `electromigration`, `reliability`,
-`hv_domain`, `esd_latchup`, `esd_topological`, `gate_oxide`, `drain_source`,
-`well_bias`, `missing_level_shifter`, `domain_crossing`, `voltage_spacing`,
-`hv_tag`, `undriven_gate` and `missing_isolation` (these two also need
-`states`), and `multiple_drivers` and `tie_high_low`, which read the supplies as the rails
+`ir_drop`, `dynamic_ir_drop`, `em_current_density`, `electromigration`,
+`em_thermal`, `reliability`, `hv_domain`, `esd_latchup`, `esd_topological`,
+`gate_oxide`, `drain_source`, `well_bias`, `missing_level_shifter`,
+`domain_crossing`, `voltage_spacing`, `dielectric_field`, `hv_tag`,
+`undriven_gate` and `missing_isolation` (these two also need `states`), and
+`multiple_drivers` and `tie_high_low`, which read the supplies as the rails
 that orient each transistor channel. Without `--intent` they report skipped.
 
 ```json
 {
+  "temperature_c": 105,
   "domains":  { "core": { "voltage_mv": 1800 } },
   "supplies": [
     { "net": "VDD", "domain": "core", "role": "power" },
@@ -190,7 +197,10 @@ that orient each transistor channel. Without `--intent` they report skipped.
   ],
   "limits": [
     { "net": "VDD", "max_drop_mv": 90, "max_drop_fraction": 0.05,
-      "max_overvoltage_mv": 100, "budget_current_ua": 2000 }
+      "max_overvoltage_mv": 100, "budget_current_ua": 2000,
+      "dynamic": { "max_drop_mv": 180, "toggle_rate": 0.2,
+                   "clock_period_ps": 2000, "rise_time_ps": 100,
+                   "decap_pf": 50 } }
   ]
 }
 ```
@@ -201,6 +211,16 @@ its domain's voltage for either role. A limit you leave out on a net
 means that net is not checked for it, not that it is unlimited. A current
 budget on a net that no device terminal reaches is refused rather than
 ignored, because zero current would pass every limit.
+
+`temperature_c` is the junction temperature the electromigration and
+reliability rules run at; without it they run at the deck's `temperature`, else 85 °C. A net's `dynamic`
+entry is what `dynamic_ir_drop` simulates: in the net's worst clock cycle
+every load switches at once, each drawing its share of `budget_current_ua`
+over the fraction `toggle_rate` of cycles it switches in, as a triangular
+pulse `rise_time_ps` wide, while `decap_pf` (zero if left out) holds the
+net up. `max_drop_mv` there is the limit on the static drop plus that
+cycle's. It needs the net's `budget_current_ua`; a toggle rate above 1, or a
+rise longer than the clock period, is refused.
 
 The supplies also set the voltages the overstress and domain rules check. A
 power net sits at its domain's voltage and a ground net at 0 V. Every other

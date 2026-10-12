@@ -261,7 +261,7 @@ ends inv
 alter corner_tt dev=nfet param=vth value=0.4
 ";
     let mut strings = StrTable::default();
-    match spectre::read(source, &mut strings) {
+    match spectre::read(source, &mut strings, &DeviceRecognition::default()) {
         Err(NetlistError::Unsupported(span, _)) => {
             assert_eq!(
                 span.line, 3,
@@ -455,6 +455,140 @@ fn a_reference_over_the_flat_cap_is_refused_before_it_is_expanded() {
     assert!(started.elapsed().as_secs() < 5, "refused without expanding");
 }
 
+/// Oracle: construct-from-answer, testing-plan F95. One net map serves
+/// every placement, so a placement must leave its callers' nets alone and
+/// a later placement of the same cell must not read an earlier one's. `top`
+/// places `mid` (`Xa`), `leaf` (`Xb`), then `mid` again on `b` (`Xc`);
+/// `mid` places `leaf` on its port `x` and on its inner net `y`; `leaf` is a
+/// resistor from its port `p` to an inner net `q`. Derived by hand, a
+/// cell's devices before its instances, instances in file order: `top`'s
+/// R1 a–b, then `Xa`'s R1 a–Xa.y, its leaves a–Xa.X1.q and Xa.y–Xa.X2.q,
+/// `Xb` a–Xb.q, `Xc`'s R1 b–Xc.y, its leaves b–Xc.X1.q and Xc.y–Xc.X2.q.
+#[test]
+fn flattening_keeps_each_placements_nets_apart() {
+    let mut strings = StrTable::default();
+    let source = "\
+.subckt leaf p
+R1 p q rpoly
+.ends
+.subckt mid x
+X1 x leaf
+X2 y leaf
+R1 x y rpoly
+.ends
+.subckt top a
+Xa a mid
+Xb a leaf
+Xc b mid
+R1 a b rpoly
+.ends
+";
+    let netlist = spice::read(source, &mut strings, &DeviceRecognition::default())
+        .expect("a three-level netlist reads");
+    let top = netlist.top().expect("top is the one top");
+    let flat = netlist.flatten_top(top, &mut strings).expect("no cycle");
+    let net = |id: RefNetId| strings.resolve(flat.net_name[id.0 as usize]).to_owned();
+    let devices: Vec<[String; 2]> = (0..flat.device_model.len())
+        .map(|device| {
+            let ends = terminals_of(&flat, device);
+            [net(ends[0]), net(ends[1])]
+        })
+        .collect();
+    let want = [
+        ["a", "b"],
+        ["a", "Xa.y"],
+        ["a", "Xa.X1.q"],
+        ["Xa.y", "Xa.X2.q"],
+        ["a", "Xb.q"],
+        ["b", "Xc.y"],
+        ["b", "Xc.X1.q"],
+        ["Xc.y", "Xc.X2.q"],
+    ];
+    assert_eq!(devices, want.map(|ends| ends.map(str::to_owned)));
+    assert_eq!(flat.net_name.len(), 9, "a, b and seven inner nets");
+}
+
+/// Oracle: the cost model, testing-plan F95. `top` placing `n` leaves, each
+/// a resistor to an inner net of its own, flattens to `n` devices and
+/// `n + 1` nets. A flatten linear in what it produces takes about twice as
+/// long at `2n` as at `n`; one that scans every instance card per
+/// placement, as it did, four times. Each size is timed three times,
+/// interleaved, the fastest kept, and the bound, three times, sits between.
+#[test]
+#[ignore = "nightly: flattens 10^5 and 2 x 10^5 placements, timed"]
+fn flattening_is_linear_in_the_placements() {
+    use std::fmt::Write;
+    use std::time::{Duration, Instant};
+
+    let read = |n: usize| {
+        let mut text = String::from(".subckt leaf p\nR1 p q rpoly\n.ends\n.subckt top a\n");
+        for i in 0..n {
+            writeln!(text, "X{i} a leaf").expect("a String takes any text");
+        }
+        text.push_str(".ends\n");
+        let mut strings = StrTable::default();
+        let netlist = spice::read(&text, &mut strings, &DeviceRecognition::default())
+            .expect("the placements read");
+        (netlist, strings)
+    };
+    let sizes = [100_000, 200_000];
+    let mut best = [Duration::MAX; 2];
+    for _ in 0..3 {
+        for (slot, n) in best.iter_mut().zip(sizes) {
+            let (netlist, mut strings) = read(n);
+            let top = netlist.top().expect("top is the one top");
+            let start = Instant::now();
+            let flat = netlist
+                .flatten_top(top, &mut strings)
+                .expect("within the cap");
+            *slot = (*slot).min(start.elapsed());
+            assert_eq!((flat.device_model.len(), flat.net_name.len()), (n, n + 1));
+        }
+    }
+    assert!(
+        best[1] < 3 * best[0],
+        "{:?} at 2 x 10^5 placements, {:?} at 10^5: over three times",
+        best[1],
+        best[0]
+    );
+}
+
+/// Oracle: the stated cap, testing-plan F96, as the layout's
+/// (`MAX_HIERARCHY_DEPTH`, 1024 levels, the top included). Subcircuits `c0`
+/// (the top) to `c{n-1}` each place the next once, and `c{n-1}` holds one
+/// resistor, so a chain of `n` subcircuits is `n` levels deep. At 1024 it
+/// flattens to the resistor and two nets, the top's `a` and the leaf's own
+/// `b`; at 1025, `c1024` is level 1025 and is named in the refusal, as it
+/// is at 10 000, which overflowed the stack before any error was returned.
+#[test]
+fn a_reference_deeper_than_the_layouts_depth_cap_is_refused_not_overflowed() {
+    use gpurify_ingest::layout::MAX_HIERARCHY_DEPTH;
+    use std::fmt::Write;
+
+    let flatten = |n: u32| {
+        let mut text = String::new();
+        for k in 0..n - 1 {
+            writeln!(text, ".subckt c{k} a\nX1 a c{}\n.ends", k + 1).expect("a String takes text");
+        }
+        writeln!(text, ".subckt c{} a\nR1 a b rpoly\n.ends", n - 1).expect("and more");
+        let mut strings = StrTable::default();
+        let netlist = spice::read(&text, &mut strings, &DeviceRecognition::default())
+            .expect("a chain of subcircuits reads");
+        let top = netlist.top().expect("c0 is the one top");
+        netlist
+            .flatten_top(top, &mut strings)
+            .map(|flat| (flat.device_model.len(), flat.net_name.len()))
+    };
+    assert_eq!(MAX_HIERARCHY_DEPTH, 1024);
+    assert_eq!(flatten(1024).expect("at the cap"), (1, 2));
+    for n in [1025, 10_000] {
+        match flatten(n) {
+            Err(NetlistError::TooDeep(name)) => assert_eq!(name, "c1024", "{n} levels"),
+            other => panic!("{n} levels: {other:?}, want TooDeep(c1024)"),
+        }
+    }
+}
+
 /// Oracle: SPICE's own card syntax (ngspice manual, "Resistors" and
 /// "Capacitors": `RXXXXXXX n+ n- <value> <mname>`). A value written between
 /// a card's nets and its model is the device's `r` or `c`, so the positional
@@ -572,6 +706,69 @@ fn a_two_pin_card_with_no_model_is_the_decks_one_recogniser_of_its_kind() {
                 assert!(!has.contains("cmim"), "{has}");
             }
             other => panic!("R1 with no model bound against {names:?}: {other:?}"),
+        }
+    }
+}
+
+/// Oracle: construct-from-answer, testing-plan F97, as F86 decided for
+/// SPICE. A Spectre instance of a primitive master names no model, so it
+/// is the deck's one recogniser of its kind: `R1 (a b) resistor r=1k` is
+/// `rpoly` of 1000 ohms, `C1 (a b) capacitor` is `cmim` and `M1 (a b a a)
+/// nmos` is `nfet`. An instance of a `model` card is that card's name: `R2
+/// (a b) rhi` is `rhi`. A deck with two resistors, or none, has no one to
+/// bind `R1` to, and the refusal names what it has.
+#[test]
+fn a_spectre_primitive_with_no_model_card_is_the_decks_one_recogniser_of_its_kind() {
+    let mut strings = StrTable::default();
+    let deck = |strings: &mut StrTable, models: &[(&str, DeviceKind)]| DeviceRecognition {
+        kind: models.iter().map(|&(_, kind)| kind).collect(),
+        model: models
+            .iter()
+            .map(|&(name, _)| strings.intern(name))
+            .collect(),
+        ..DeviceRecognition::default()
+    };
+    let one_each = deck(
+        &mut strings,
+        &[
+            ("nfet", DeviceKind::Mos),
+            ("rpoly", DeviceKind::Resistor),
+            ("cmim", DeviceKind::Capacitor),
+        ],
+    );
+    let source = "model rhi resistor\nsubckt top a b\nR1 (a b) resistor r=1k\n\
+                  C1 (a b) capacitor\nM1 (a b a a) nmos\nR2 (a b) rhi\nends top\n";
+    let netlist = spectre::read(source, &mut strings, &one_each).expect("each binds");
+    let models: Vec<&str> = netlist
+        .device_model
+        .iter()
+        .map(|&model| strings.resolve(model))
+        .collect();
+    assert_eq!(models, ["rpoly", "cmim", "nfet", "rhi"]);
+    assert_eq!(netlist.param, [(strings.intern("r"), 1000.0)]);
+
+    let two = deck(
+        &mut strings,
+        &[
+            ("rpoly", DeviceKind::Resistor),
+            ("rdiff", DeviceKind::Resistor),
+        ],
+    );
+    let none = deck(&mut strings, &[("cmim", DeviceKind::Capacitor)]);
+    for (recognisers, names) in [(&two, &["rpoly", "rdiff"][..]), (&none, &[][..])] {
+        match spectre::read(
+            "subckt top a b\nR1 (a b) resistor r=1k\nends top\n",
+            &mut strings,
+            recognisers,
+        ) {
+            Err(NetlistError::NoModel(span, card, has)) => {
+                assert_eq!((span.line, card.as_str()), (2, "R1"));
+                for name in names {
+                    assert!(has.contains(name), "{has}");
+                }
+                assert!(!has.contains("cmim"), "{has}");
+            }
+            other => panic!("R1 with no model card bound against {names:?}: {other:?}"),
         }
     }
 }

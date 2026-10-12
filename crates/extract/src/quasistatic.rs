@@ -234,6 +234,7 @@ pub fn overlay(network: &mut ParasiticNetwork, solved: &ParasiticNetwork) {
         );
     }
     network.sort_canonical();
+    network.debug_check();
 }
 
 /// One node per net, anchored on the net's lowest layer that is not global:

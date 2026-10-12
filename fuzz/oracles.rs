@@ -445,9 +445,9 @@ pub fn gds_structured(data: &[u8]) {
 /// `deck::parse_deck` on arbitrary text, then DRC and ERC over one square on
 /// every drawn layer.
 ///
-/// Oracle (B15): every error diagnostic's span lies inside the input on
+/// Oracles: (B15) every error diagnostic's span lies inside the input on
 /// character boundaries, and every `rule` an accepted deck holds gets a row
-/// in the run table.
+/// in the run table; (D4) an accepted deck printed compiles back to itself.
 pub fn deck(data: &[u8]) {
     let Ok(text) = std::str::from_utf8(data) else {
         return;
@@ -488,6 +488,31 @@ pub fn deck(data: &[u8]) {
     }
     intern_report_ids(&mut strings);
     let rules: Vec<_> = deck.rules.spec.iter().map(|rule| rule.id).collect();
+    // A deck whose rules do not compile has no run table to hold them to.
+    let Ok(deck) = gpurify::deck::CompiledDeck::from_deck(deck, nm_grid(), &strings) else {
+        return;
+    };
+    // The printer's round trip (D4): the deck as text compiles, in the same
+    // string table, back to the same deck. A `for` loop can splice a unit
+    // such as `%` into a rule id, which no `rule` statement can write; the
+    // printer refuses that deck rather than write it wrong.
+    let writable = |id: &str| {
+        !id.is_empty()
+            && id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'.')
+    };
+    let printed = match gpurify::deck::print(&deck, &strings) {
+        Ok(printed) => printed,
+        Err(_) if deck.rules().any(|(id, _)| !writable(strings.resolve(id))) => return,
+        Err(why) => panic!("a parsed deck does not print: {why}"),
+    };
+    let again = gpurify::deck::compile(&printed, nm_grid(), &mut strings)
+        .unwrap_or_else(|why| panic!("the printed deck does not compile: {why}\n{printed}"));
+    assert!(
+        again == deck,
+        "the printed deck compiles to another deck:\n{printed}"
+    );
     let loaded = Loaded {
         strings,
         grid: nm_grid(),
@@ -732,7 +757,8 @@ pub fn netlist_spectre(data: &[u8]) {
         return;
     };
     let mut strings = StrTable::default();
-    if let Ok(netlist) = gpurify_ingest::netlist::spectre::read(text, &mut strings) {
+    let devices = DeviceRecognition::default();
+    if let Ok(netlist) = gpurify_ingest::netlist::spectre::read(text, &mut strings, &devices) {
         assert_eq!(
             netlist.device_model.len() + netlist.instance_of.len(),
             spectre_statements(text),

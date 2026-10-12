@@ -80,10 +80,13 @@ pub struct Device {
     /// Each terminal's role, in `nodes` order.
     pub roles: Vec<TerminalRole>,
     /// Card parameters, `(name, value)`: the recogniser's `w`, `l`, `nf`,
-    /// `area` and `perim` (`pj` on a diode). A MOS has its diffusions' `ad`,
-    /// `as`, `pd` and `ps` instead of area and perimeter, shared diffusion
-    /// split between the fingers that share it, and BSIM4 `sa` and `sb` when
-    /// its channel's direction can be told.
+    /// `area` and `perim` (`pj` on a diode). A MOS has its diffusions' `as`,
+    /// `ps`, `ad` and `pd` instead of area and perimeter, topology's measures
+    /// ([`DeviceParam::SourceArea`] and the rest, the ones LVS compares): a
+    /// shared diffusion split between the fingers that share it, holes out of
+    /// the area and in the perimeter, none where the terminal is drawn in
+    /// pieces. And BSIM4 `sa` and `sb` when its channel's direction can be
+    /// told.
     pub params: Vec<(&'static str, Param)>,
 }
 
@@ -866,7 +869,7 @@ impl<'a> Builder<'a> {
     }
 
     /// Cards for every recognised device, terminals on the rectangles that
-    /// touch their channel, MOS diffusion area and perimeter measured.
+    /// touch their channel, parameters as topology measured them.
     fn devices(&mut self) {
         let loaded = self.loaded;
         let store = &loaded.store;
@@ -905,11 +908,9 @@ impl<'a> Builder<'a> {
                 channels.insert(id, store.poly_bbox(table.marker[d]));
             }
         }
-        // Per diffusion polygon: how many channels it serves, so a shared
-        // diffusion's area and perimeter are split between them.
+        // Per MOS: the diffusion polygons its channel abuts, for `sa` and `sb`.
         let mut found = Vec::new();
         let mut touching: Vec<Vec<u32>> = vec![Vec::new(); table.len()];
-        let mut shares = vec![0u32; sd_polys.len()];
         for (d, touches) in touching.iter_mut().enumerate() {
             if table.kind[d] != DeviceKind::Mos {
                 continue;
@@ -919,7 +920,6 @@ impl<'a> Builder<'a> {
             for &p in &found {
                 if contact(store.poly_bbox(sd_polys[p as usize]), m) > 0 {
                     touches.push(p);
-                    shares[p as usize] += 1;
                 }
             }
         }
@@ -950,20 +950,17 @@ impl<'a> Builder<'a> {
                 device.nodes.push(node);
             }
             for &(param, measure) in table.params_of(id) {
-                // A MOS's area and perimeter are its diffusions', measured below
-                // with this circuit's own rectangles; a bipolar's emitter
-                // measures are no ngspice instance parameter.
+                // A MOS's area and perimeter are its diffusions', which
+                // topology measured as LVS compares them (testing-plan F100);
+                // a bipolar's emitter measures are no ngspice instance
+                // parameter.
                 let key = match (device.kind, param) {
                     (DeviceKind::Mos, DeviceParam::Area | DeviceParam::Perimeter)
-                    | (
-                        _,
-                        DeviceParam::SourceArea
-                        | DeviceParam::DrainArea
-                        | DeviceParam::SourcePerimeter
-                        | DeviceParam::DrainPerimeter
-                        | DeviceParam::EmitterArea
-                        | DeviceParam::EmitterPerimeter,
-                    ) => continue,
+                    | (_, DeviceParam::EmitterArea | DeviceParam::EmitterPerimeter) => continue,
+                    (_, DeviceParam::SourceArea) => "as",
+                    (_, DeviceParam::DrainArea) => "ad",
+                    (_, DeviceParam::SourcePerimeter) => "ps",
+                    (_, DeviceParam::DrainPerimeter) => "pd",
                     (_, DeviceParam::Width) => "w",
                     (_, DeviceParam::Length) => "l",
                     (_, DeviceParam::Fingers) => "nf",
@@ -986,7 +983,6 @@ impl<'a> Builder<'a> {
                 device.params.push((key, value));
             }
             if device.kind == DeviceKind::Mos {
-                self.diffusion(&mut device, touches, &sd_polys, &shares);
                 let active = Active {
                     store,
                     sd_index: &sd_index,
@@ -1005,78 +1001,6 @@ impl<'a> Builder<'a> {
             }
             self.devices.push(device);
         }
-    }
-
-    /// `ad pd` on the drain, `as ps` on the source. Perimeter includes the
-    /// edge against the gate (BSIM4 `permod = 1`, sky130's setting).
-    fn diffusion(
-        &self,
-        device: &mut Device,
-        touching: &[u32],
-        sd_polys: &[PolyId],
-        shares: &[u32],
-    ) {
-        let store = &self.loaded.store;
-        let nets = &self.extracted.nets;
-        let net_of_role = |role: TerminalRole| {
-            device
-                .roles
-                .iter()
-                .position(|&r| r == role)
-                .map(|i| device.nets[i])
-        };
-        let (Some(drain), Some(source)) = (
-            net_of_role(TerminalRole::Drain),
-            net_of_role(TerminalRole::Source),
-        ) else {
-            return;
-        };
-        // A polygon on both nets' side (source and drain shorted) is handed out
-        // in position order, so neither side counts it twice.
-        let mut drain_polys = Vec::new();
-        let mut source_polys = Vec::new();
-        for &p in touching {
-            let net = nets.net_of(sd_polys[p as usize]);
-            if net == drain && net == source {
-                if drain_polys.len() <= source_polys.len() {
-                    source_polys.push(p);
-                } else {
-                    drain_polys.push(p);
-                }
-            } else if net == drain {
-                drain_polys.push(p);
-            } else if net == source {
-                source_polys.push(p);
-            }
-        }
-        let um = self.um;
-        let measure = |polys: &[u32]| {
-            let (mut area, mut perimeter) = (0.0, 0.0);
-            for &p in polys {
-                let (xs, ys) = store.poly_verts(sd_polys[p as usize]);
-                #[expect(clippy::cast_precision_loss, reason = "an area below 2^80")]
-                let a = (gpurify_geom::ops::area2(xs, ys).raw().abs() / 2) as f64;
-                let mut per = 0.0;
-                for i in 0..xs.len() {
-                    let j = (i + 1) % xs.len();
-                    per += as_f64(
-                        (xs[j].raw() - xs[i].raw()).abs() + (ys[j].raw() - ys[i].raw()).abs(),
-                    );
-                }
-                let share = f64::from(shares[p as usize].max(1));
-                area += a * um * um / share;
-                perimeter += per * um / share;
-            }
-            (area, perimeter)
-        };
-        let (ad, pd) = measure(&drain_polys);
-        let (as_, ps) = measure(&source_polys);
-        device.params.extend([
-            ("ad", Param::Area(ad)),
-            ("as", Param::Area(as_)),
-            ("pd", Param::Length(pd)),
-            ("ps", Param::Length(ps)),
-        ]);
     }
 
     /// The rectangle of `net` touching `marker` most; the net's anchor if none.

@@ -64,9 +64,9 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 |---|---:|---:|---:|---:|---:|---:|
 | DRC | 33 | 4 | 36 | 33 | 0 | 0 |
 | LVS | 17 | 1 | 16 | 14 | 0 | 0 |
-| ERC | 35 | 2 | 12 | 32 | 0 | 0 |
+| ERC | 43 | 3 | 9 | 26 | 0 | 0 |
 | PEX | 4 | 0 | 3 | 9 | 0 | 0 |
-| Flow | 0 | 0 | 1 | 9 | 0 | 0 |
+| Flow | 0 | 0 | 2 | 8 | 0 | 0 |
 
 These numbers come from the TSV. Once `tests/catalog.rs` exists, it computes
 them, so this table cannot go stale unnoticed (the plan's F5 problem).
@@ -150,6 +150,9 @@ plus the dialect real PDK netlists use.
 | `JESD63`, `JESD202`, `JESD263`, `JESD241`, `JESD28`, `JESD60`, `JEP139`, `JESD214`, `JEP159A` | JEDEC EM, dielectric and transistor reliability test methods. JESD263 replaced JESD35A/JESD92 in Jun 2024; JESD241 replaced JESD90. | various | Registration | jedec.org |
 | `WP1`–`WP5` | Industry Council on ESD Target Levels white papers (JEP155B, JEP157A, JEP196) | 2016–2023 | Open | https://www.esdindustrycouncil.org/ic/en/documents |
 | `Black1969`, `Blech1976` | Black, IEEE TED 16(4), doi:10.1109/T-ED.1969.16754; Blech, J. Appl. Phys. 47(4), doi:10.1063/1.322842 | — | Paywalled | — |
+| `Banerjee1999` | Banerjee, Mehrotra, Sangiovanni-Vincentelli, Hu, "On thermal effects in deep sub-micron VLSI interconnects", DAC 1999, pp. 885–891, doi:10.1145/309847.310093: self-heating `ΔT = I²rms R θ`, `θ = t / (K L W_eff)`, `W_eff = W + φ t` (eqs. 7, 8, 10, 14) | — | Open copy, read | https://www.cecs.uci.edu/~papers/compendium94-03/papers/1999/dac99/pdffiles/49_2.pdf |
+| `Kitchin1995` | Kitchin, "Statistical electromigration budgeting for reliable design and verification in a 300-MHz microprocessor", Symp. VLSI Circuits Dig. Tech. Papers 1995, pp. 115–116: chip EM risk as the weakest link of every wire's | — | Paywalled; known through citing papers | — |
+| `Najm2003` | Kouroussis and Najm, "A static pattern-independent technique for power grid voltage integrity verification", DAC 2003, pp. 99–104, doi:10.1145/775832.775861: vectorless verification of an RC grid stepped by backward Euler | — | Paywalled; abstract read | https://dl.acm.org/doi/10.1145/775832.775861 |
 | `IEEE1801` | IEEE 1801-2024 (UPF 4.0) | 2025-03-04 | Free through IEEE GET; **not read**, so no clause numbers are cited | https://standards.ieee.org/ieee/1801/11890/ |
 | `CPF` | Si2 Common Power Format 2.1 | archived 2014 | Not read | https://si2.org/si2-openstandards/ |
 | `OR` | OpenROAD `psm` (IR, EM, `check_power_grid`), `ant` (PAR/CAR per LEF/DEF), `rcx` (OpenRCX, extraction from DEF), `fin` (`density_fill`) and `dpl` (placement legality, cell edge spacing) | latest | Open | https://openroad.readthedocs.io/en/latest/main/src/psm/README.html ; https://openroad.readthedocs.io/en/latest/main/src/rcx/README.html |
@@ -267,9 +270,10 @@ All are `missing` or `partial` in the catalog.
 6. **Shape-class and count selection**: rectangles and squares, exact or
    maximum count, aspect ratio, channel W/L (DRC-005, 011, 022, 049). sky130,
    gf180 and IHP each leave rules out of the shipped decks for lack of these.
-7. **Antenna credit models**: gf180's additive model, LEF PWL, IHP minimum
-   diode size, hierarchical pins (ERC-A5–A7, A9, A14). Today a diode row with
-   credit is refused.
+7. **Antenna hierarchy**: LEF's macro-pin antenna values (ERC-A14) need a
+   LEF reader and abstract cells. The credit models (sky130's EGAR per µm²,
+   gf180's additive model, LEF's PWL and minus/plus factors, IHP's minimum
+   diode, ERC-A5–A7, A9) are in `antenna_electrical`.
 8. **LVS equivalence controls**: black boxes, ignore class, shorted dummies,
    per-parameter tolerance, asymmetric devices, R/C/D/BJT reduction
    (LVS-031–035, 043, 044, 014).
@@ -307,12 +311,15 @@ single oracle is a named gap that ledger P1 closes.
 | LVS-071 | Spectre reader | implemented | - | SY; MR; fuzz |
 | ERC-A2 | Side-area (sidewall) ratio | implemented | LEF:App.C; GF:ANT.1-7; SKY:antenna vertical | CF; FR; MR; SY |
 | ERC-A3 | Cumulative ratio (CAR) | implemented | LEF:App.C; IHP:Ant.b,Ant.d | SE:IHP AreaRatio; CF; MR; SY |
-| ERC-A4 | Cut/via ratio, routing-plus-cut accumulation | partial | LEF:ANTENNACUMROUTINGPLUSCUT; GF:ANT.8-13; SKY:licon.1,via.1; IHP:Ant.c | FR; CF; MR; SY |
-| ERC-A5 | Subtractive diode credit (K x area + bonus) | partial | SKY:EGAR; LEF:ANTENNAAREAMINUSDIFF | SE:SKY formula; FR; MR; SY |
+| ERC-A4 | Cut/via ratio, routing-plus-cut accumulation | implemented | LEF:ANTENNACUMROUTINGPLUSCUT; GF:ANT.8-13; SKY:licon.1,via.1; IHP:Ant.c | SE:LEF Example 1; SE:LEF Example 2; FR; CF; MR; SY |
+| ERC-A6 | Additive diode credit (gate += MF x diode) | implemented | GF:ANT.16; LEF:ANTENNAGATEPLUSDIFF | SE:GF ANT.16; SE:LEF Example 3; MR; SY |
+| ERC-A7 | PWL diffusion-dependent limit | implemented | LEF:ANTENNADIFFAREARATIO PWL,ANTENNAAREADIFFREDUCEPWL; SKY:tech LEF | SE:LEF Example 4; SE:LEF keyword example; SE:SKY tech LEF; MR; SY |
 | ERC-A8 | Separate limits with/without diode | implemented | IHP:Ant.b/e,Ant.d/f; SKY | FR; MR; SY |
+| ERC-A9 | Minimum protection-diode size | expressible | IHP:Ant.g | SE:IHP Ant.g; MR; SY |
 | ERC-A10 | Diode well legality | expressible | IHP:Ant.h,Ant.i | FR; SY |
 | ERC-A11 | MIM capacitor as victim | partial | GF:ANT.14,ANT.15 | FR; MR; SY |
-| ERC-A12 | Oxide-class-specific limits | partial | LEF:ANTENNAMODEL OXIDE1-4; GF | FR; MR; SY |
+| ERC-A12 | Oxide-class-specific limits | implemented | LEF:ANTENNAMODEL OXIDE1-4; GF | SE:GF ANT.16; FR; MR; SY |
+| ERC-A13 | Exemption for substrate-shorted nets | implemented | SKY:.ar.1 | SE:SKY .ar.1; MR; SY |
 | ERC-B1 | Windowed density + CMP thickness | implemented | GF:13 | CF; MR; SY |
 | ERC-C1 | Pad ESD path to power and ground | implemented | TR18-01:4.5.2-4.5.4; Khazhinsky2012 | SY; NV; MR |
 | ERC-C7 | ESD-pulse current density | partial | TR18-01:Fig58; TR22:4.4; CAL; ICV; PF | CF; MR; SY |
@@ -322,11 +329,13 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-D4 | Guard-ring resistance / current under injection | partial | TR18-02:2.3; JESD78:Table 1; CAL | CF; MR; SY |
 | ERC-E1 | DC current per width | implemented | GF:Table 14.3; IHP:2.15 | FR; CF; MR; SY |
 | ERC-E2 | Current per cut | implemented | GF:Table 14.4; IHP:2.15 | FR; MR; SY |
-| ERC-E3 | Width-banded absolute current for narrow lines | partial | IHP:2.15 | FR; MR; SY |
+| ERC-E3 | Width-banded absolute current for narrow lines | implemented | IHP:2.15 | SE:IHP 2.15; FR; MR; SY |
 | ERC-E4 | Temperature derating (Black / Arrhenius) | implemented | GF:14.2.2; Black1969; JEP122; JESD63 | SE:GF formula vs table (1.6% rounding); MR; SY |
 | ERC-E5 | Lifetime target and percentile | implemented | GF:14.2; IHP:2.15; JESD202 | SE; MR; SY |
 | ERC-E6 | Blech short-length immortality | implemented | Blech1976 | CF; MR; SY |
-| ERC-E12 | Stress voiding / slotting | partial | JEP139; JESD214; GF:14.6 | FR; MR; SY |
+| ERC-E11 | Dynamic / vectorless IR | partial | RH; VOL; MP; TOT; Najm2003; WH | CF; NV; MR; SY |
+| ERC-E12 | Stress voiding / slotting | partial | JEP139; JESD214; GF:14.6,MSLOT.1-10; IHP:Slt.a-i | FR; MR; SY |
+| ERC-E13 | Thermal-aware / statistical EM, self-heating | implemented | RH; TOT; VOL; Banerjee1999; Black1969; JEP122; JESD63; Kitchin1995 | CF; SE; MR; SY |
 | ERC-F1 | Static voltage propagation, conditional on gate voltage | implemented | CAL:WP 81822; SKY:hv.X.1; patents P5,P9 | SE:Siemens WP; SY; NV |
 | ERC-F2 | Gate-oxide overstress | implemented | GF:14.1.4.2; SKY:hv; TR22:4.1; CAL | FR; CF; SY |
 | ERC-F3 | Junction / drain-source overstress | implemented | SKY:hv; IHP:process spec | FR; SY |

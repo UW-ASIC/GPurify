@@ -28,9 +28,11 @@
 //!    differ, until no class splits;
 //! 4. breaks a symmetry, a class still holding the same number `k >= 2` of
 //!    nodes on each side, by pairing its lowest layout node with the
-//!    reference node of the class whose parameters are closest (the lowest on
-//!    a tie, and always for nets), then refines again. This is how Netgen
-//!    resolves symmetries by property value (catalog LVS-018). Refinement
+//!    reference node of the class whose parameters are closest, for a net
+//!    the one whose pairing puts the diffusions of the transistors already
+//!    paired closest at each channel end (testing-plan F98), the lowest on a
+//!    tie, then refines again. This is how Netgen resolves symmetries by
+//!    property value (catalog LVS-018). Refinement
 //!    cannot always tell apart nodes no relabelling exchanges, so while a
 //!    match is still possible the pairing is a trial: kept when no class is
 //!    left with more reference nodes than layout nodes and every device pair
@@ -42,8 +44,10 @@
 //!    reference card states must be measured and agree, and a measure the
 //!    card omits is not compared, whatever other cards of the model state
 //!    (testing-plan F68). The count `m` is no measure: a card without one
-//!    counts one device, and is compared so. Everything else is a
-//!    [`Discrepancy`].
+//!    counts one device, and is compared so. Counts, `m` and `nf`, are
+//!    whole numbers and compared exactly, every other parameter within
+//!    [`CompareOptions::param_tolerance`] (testing-plan F99). Everything
+//!    else is a [`Discrepancy`].
 //!
 //! Roles decide which terminals are interchangeable. Positions never matter.
 //!
@@ -109,13 +113,14 @@
 //!   where the deck gives their coefficients. A capacitor's `w` and `l` are
 //!   not measured, so a card stating one is `lvs.undeclared_param`.
 //! - **Diffusions on symmetric nets.** A diffusion is compared at the
-//!   channel end the net pairing puts it on. Where nothing tells the two
-//!   channel nets apart, which reference net each pairs with is a tie-break,
-//!   and a transistor whose source and drain diffusions differ can then be
-//!   compared the wrong way round: a false mismatch, never a false match.
-//!   A parallel merge sums diffusions end by end; a series merge of
-//!   transistors stating them is refused, so such a stack never matches one
-//!   long card.
+//!   channel end the net pairing puts it on. Where nothing tells two
+//!   channel nets apart, the tie-break pairs them the way the diffusions of
+//!   the transistors already paired agree, all of a net's transistors
+//!   weighed together (testing-plan F98); where no one pairing suits them
+//!   all, the closest is kept and the verdict is a false mismatch, never a
+//!   false match. A parallel merge sums diffusions end by end; a series
+//!   merge of transistors stating them is refused, so such a stack never
+//!   matches one long card.
 //! - **Bounded symmetry search.** A tie-break takes back only a pairing whose
 //!   own refinement shows it wrong, and tries at most eight candidates; a
 //!   wrong pairing exposed only after a later tie-break, or a right one past

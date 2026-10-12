@@ -1,6 +1,6 @@
 //! The text rendering of a run, for a human.
 
-use gpurify::engine::{Outputs, StageStatus, Summary};
+use crate::engine::{Outputs, StageStatus, Summary};
 use gpurify_check::report::{Measurement, Outcome, Severity, SkipReason};
 use gpurify_geom::{Dbu, Grid};
 use gpurify_ingest::StrTable;
@@ -158,7 +158,7 @@ pub fn write_error(error: &dyn std::error::Error, out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::{write_summary, write_violations};
-    use gpurify::engine::{Outputs, StageStatus, Summary};
+    use crate::engine::{Outputs, StageStatus, Summary};
     use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, SkipReason, Violation};
     use gpurify_geom::{DbuArea, Grid, LayerId, PolyId};
     use gpurify_ingest::StrTable;

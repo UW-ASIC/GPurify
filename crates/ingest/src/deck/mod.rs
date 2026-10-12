@@ -35,7 +35,6 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use crate::narrow;
 use gpurify_geom::LayerId;
 use gpurify_geom::{prefix, Qty, Temperature};
 use gpurify_geom::{Dbu, DbuArea};
@@ -44,8 +43,15 @@ use gpurify_geom::{StrId, StrTable};
 mod kinds;
 mod lex;
 mod parse;
+mod print;
+mod source;
 
-pub use parse::{parse_deck, Diagnostic};
+pub use parse::{parse_deck, parse_source, Diagnostic};
+pub use print::{print, PrintError};
+pub use source::{
+    lower, ConnectivitySource, DeckSource, DerivedSource, DeviceSource, LabelSource, ParamSource,
+    RuleSource, StackSource, ViaSource,
+};
 
 /// Why a deck was rejected.
 #[derive(Debug, Clone, thiserror::Error)]
@@ -84,13 +90,14 @@ impl DeckError {
     }
 }
 
-/// A parsed, validated, grid-resolved deck, built by [`parse_deck`].
+/// A parsed, validated, grid-resolved deck, built by [`parse_deck`] (or by
+/// [`lower`] from a [`DeckSource`]).
 ///
 /// Every table refers to layers by [`LayerId`], and every name (layer, rule,
 /// model, parameter) is a [`StrId`] in the [`StrTable`] the deck was parsed
 /// with. Lengths are [`Dbu`] on the layout grid the deck was parsed against,
 /// so a deck is only meaningful with a layout on that grid.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Deck {
     /// Drawn and derived layers, and the stream pairs the deck ignores.
     pub layers: LayerTable,
@@ -106,6 +113,40 @@ pub struct Deck {
     /// when the deck states none. [`ProcessStack::sheet_res_ohm_sq`] is
     /// already at it.
     pub temperature: Option<Qty<Temperature, { prefix::BASE }>>,
+    /// The `temperature` statement and the `pex` rows' coefficients as
+    /// written, which [`ProcessStack::sheet_res_ohm_sq`] was computed from;
+    /// `None` when the deck states no temperature.
+    pub temperature_law: Option<TemperatureLaw>,
+}
+
+/// A deck's `temperature T nominal T0` and, per `pex` row, its sheet
+/// resistance at `T0` with its coefficients: the law the stack's sheet
+/// resistances were moved to `T` by, kept so the deck can be written again
+/// exactly.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemperatureLaw {
+    /// `T`, the operating temperature, kelvin.
+    pub operating_k: f64,
+    /// `T0`, the temperature the `sheet` values are stated at, kelvin.
+    pub nominal_k: f64,
+    /// Per `pex` row, its layer, its sheet resistance at `T0` in ohms per
+    /// square, and `(tc1, tc2)` per K and per K².
+    pub rows: Vec<(LayerId, f64, (f64, f64))>,
+}
+
+/// The layer table, for a reader that needs only the layers
+/// ([`flatten`](crate::layout::gds::Library::flatten)).
+impl AsRef<LayerTable> for Deck {
+    fn as_ref(&self) -> &LayerTable {
+        &self.layers
+    }
+}
+
+/// Itself, so a reader taking any holder of a layer table takes the table.
+impl AsRef<LayerTable> for LayerTable {
+    fn as_ref(&self) -> &LayerTable {
+        self
+    }
 }
 
 /// Layer names and stream pairs to ids, and back.
@@ -116,7 +157,7 @@ pub struct Deck {
 /// such as `(a or b) not c` adds a hidden derived layer (`x#1`, `x#2`, …), and
 /// a layer expression written inside a rule adds one named `<rule id>@k`. No
 /// deck text can name a hidden layer.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct LayerTable {
     /// `LayerId(i)` is named `name[i]`.
     name: Vec<StrId>,
@@ -397,7 +438,7 @@ impl DerivedOp {
 ///
 /// Read its layers and parameters through [`RuleTable::layers_of`] and
 /// [`RuleTable::params_of`] rather than slicing by hand.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuleSpec {
     /// The rule's id, for reporting: the deck's text with every `{name}`
     /// replaced. Interned; unique within a deck.
@@ -417,7 +458,7 @@ pub struct RuleSpec {
 }
 
 /// A rule parameter, already converted to the unit the engines store.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ParamValue {
     /// A length in grid units, on the deck grid and exact on the layout grid.
     /// The common case: every comparison limit on a length.
@@ -442,7 +483,7 @@ pub enum ParamValue {
 }
 
 /// Every rule in the deck, `SoA`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct RuleTable {
     /// One row per `rule` statement, in deck order (a `for` loop's rules in
     /// iteration order).
@@ -482,7 +523,7 @@ impl RuleTable {
 ///
 /// Rows of `via_cut` and `via_connects` pair by index, as do `label_layer`
 /// and `label_names`.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Connectivity {
     /// The layers that carry a net (`connect conductors [..]`), in the order
     /// written. No global layer is among them.
@@ -515,7 +556,7 @@ pub struct Connectivity {
 /// | `Mos` | gate, source, drain, bulk |
 /// | `Bjt` | base, emitter, collector, then bulk if a fourth is declared |
 /// | `Resistor`, `Capacitor`, `Diode` | pin 0, pin 1 — symmetric, so the comparator may swap them |
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct DeviceRecognition {
     /// The device family of each recogniser.
     pub kind: Vec<DeviceKind>,
@@ -587,7 +628,7 @@ pub enum DeviceKind {
 /// `0.0`, not stated), and every other value zero or more (a zero again reads
 /// as "not stated"); the parser refuses anything else, naming the value. A
 /// stack built in code is not checked.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ProcessStack {
     /// Conductor thickness, nm.
     pub thickness_nm: Vec<f64>,
@@ -609,355 +650,6 @@ pub struct ProcessStack {
     /// Relative permittivity of the surrounding dielectric; `0.0` where the
     /// row leaves it out.
     pub dielectric_k: Vec<f64>,
-}
-
-/// Lower a parsed deck to a [`Deck`]. Base layers take ids ascending by name
-/// bytes; derived layers follow in declaration order. Strings are interned in
-/// section order, so the same deck text always yields the same [`StrId`]s. The
-/// parser has already checked every name and value; what fails here is a
-/// relation between statements.
-fn build(doc: &DeckSrc, strings: &mut StrTable) -> Result<Deck, DeckError> {
-    let mut layers = build_layers(&doc.layers, strings);
-    // First: any later section may name a derived layer.
-    for row in &doc.derived {
-        let operands = row
-            .layers
-            .iter()
-            .map(|name| layer_of(&layers, strings, name))
-            .collect();
-        layers.push_derived(strings.intern(&row.name), row.op, operands);
-    }
-    layers.texts.clone_from(&doc.texts);
-    layers.ignored.clone_from(&doc.ignored);
-    layers.ignored.sort_unstable();
-    // A misspelt model would match no device and silently check nothing.
-    for rule in &doc.rules {
-        for (_, stated) in &rule.params {
-            if let ParamSrc::Model(model) = stated {
-                if !doc.devices.iter().any(|device| device.model == *model) {
-                    return Err(DeckError::Malformed(format!(
-                        "rule {}: model \"{model}\" is not declared by any device statement",
-                        rule.id
-                    )));
-                }
-            }
-        }
-    }
-    let rules = build_rules(&doc.rules, &layers, strings);
-    let connectivity = build_connectivity(&doc.connectivity, &layers, strings)?;
-    // Only a conductor's shapes carry a net; any other layer would read as all
-    // different nets, or none the same.
-    for rule in &doc.rules {
-        // Every layer of a spacing by net; the judged layer of a tag rule.
-        let judged: &[String] = match rule.kind {
-            "net_spacing" | "voltage_spacing" | "dielectric_field" => &rule.layers[..],
-            "hv_tag" | "mixed_tag" => &rule.layers[..1],
-            _ => &[],
-        };
-        for layer in judged {
-            if !connectivity
-                .conductors
-                .contains(&layer_of(&layers, strings, layer))
-            {
-                return Err(DeckError::Malformed(format!(
-                    "rule {}: judges nets on {layer}, which is not a conductor",
-                    rule.id
-                )));
-            }
-        }
-    }
-    let devices = build_devices(&doc.devices, &layers, strings);
-    let stack = build_stack(&doc.pex, doc.temperature, &layers, strings)?;
-
-    Ok(Deck {
-        layers,
-        rules,
-        connectivity,
-        devices,
-        stack,
-        temperature: doc.temperature.map(|(operating, _)| Qty::new(operating)),
-    })
-}
-
-/// A layer name the parser has already resolved.
-fn layer_of(layers: &LayerTable, strings: &StrTable, name: &str) -> LayerId {
-    layers
-        .id(strings, name)
-        .expect("the parser admits only declared layers")
-}
-
-/// Layer names to a [`LayerTable`], ids ascending by name *bytes*, not interning order.
-fn build_layers(declared: &[(String, (u16, u16))], strings: &mut StrTable) -> LayerTable {
-    let mut sorted: Vec<&(String, (u16, u16))> = declared.iter().collect();
-    sorted.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-    let entries: Vec<(StrId, u16, u16)> = sorted
-        .iter()
-        .map(|(name, (layer, datatype))| (strings.intern(name), *layer, *datatype))
-        .collect();
-    LayerTable::build(&entries)
-}
-
-/// The rules to a [`RuleTable`], in deck order.
-fn build_rules(declared: &[RuleSrc], layers: &LayerTable, strings: &mut StrTable) -> RuleTable {
-    let mut table = RuleTable {
-        spec: Vec::with_capacity(declared.len()),
-        ..RuleTable::default()
-    };
-    for rule in declared {
-        let id = strings.intern(&rule.id);
-        let layer_start = table.layer_ref.len();
-        for name in &rule.layers {
-            table.layer_ref.push(layer_of(layers, strings, name));
-        }
-        let param_start = table.param.len();
-        for (name, stated) in &rule.params {
-            let value = match *stated {
-                ParamSrc::Value(value) => value,
-                ParamSrc::Layer(ref layer) => ParamValue::Layer(layer_of(layers, strings, layer)),
-                ParamSrc::Model(ref model) => ParamValue::Model(strings.intern(model)),
-            };
-            table.param.push((strings.intern(name), value));
-        }
-        table.spec.push(RuleSpec {
-            id,
-            kind: strings.intern(rule.kind),
-            layer_start: narrow(layer_start),
-            layer_len: narrow(table.layer_ref.len() - layer_start),
-            param_start: narrow(param_start),
-            param_len: narrow(table.param.len() - param_start),
-        });
-    }
-    table
-}
-
-/// Connectivity, layers resolved; a label row must name a drawn layer and a conductor.
-fn build_connectivity(
-    declared: &ConnectivitySrc,
-    layers: &LayerTable,
-    strings: &StrTable,
-) -> Result<Connectivity, DeckError> {
-    let layer = |name: &str| layer_of(layers, strings, name);
-    let mut connectivity = Connectivity {
-        conductors: declared.conductors.iter().map(|name| layer(name)).collect(),
-        via_cut: declared.vias.iter().map(|via| layer(&via.layer)).collect(),
-        via_connects: declared
-            .vias
-            .iter()
-            .map(|via| (layer(&via.connects.0), layer(&via.connects.1)))
-            .collect(),
-        intra_layer_touch: declared.intra_layer_touch,
-        global: declared.global.iter().map(|name| layer(name)).collect(),
-        label_layer: Vec::with_capacity(declared.labels.len()),
-        label_names: Vec::with_capacity(declared.labels.len()),
-    };
-    if let Some(name) = declared
-        .global
-        .iter()
-        .find(|name| connectivity.conductors.contains(&layer(name)))
-    {
-        return Err(DeckError::Malformed(format!(
-            "connect global {name}: a global layer is net-only, not a conductor"
-        )));
-    }
-    for label in &declared.labels {
-        let names = layer(&label.names);
-        // Fail closed here rather than as `topology::port`'s `OrphanLabel`: at
-        // run time nothing can say which deck row was wrong.
-        if !connectivity.conductors.contains(&names) {
-            return Err(DeckError::Malformed(format!(
-                "connect label {} names {}, which is not a conductor",
-                label.layer, label.names
-            )));
-        }
-        let text = layer(&label.layer);
-        // A `TEXT` record carries a stream pair and a derived layer has none,
-        // so such a pairing can never bind a label — silently, at run time.
-        if layers.is_derived(text) {
-            return Err(DeckError::Malformed(format!(
-                "connect label {}: a derived layer carries no text records",
-                label.layer
-            )));
-        }
-        connectivity.label_layer.push(text);
-        connectivity.label_names.push(names);
-    }
-    Ok(connectivity)
-}
-
-/// Device recognisers, as the CSR [`DeviceRecognition`] holds. Terminal order
-/// is the role, and this preserves the deck's order.
-fn build_devices(
-    declared: &[DeviceSrc],
-    layers: &LayerTable,
-    strings: &mut StrTable,
-) -> DeviceRecognition {
-    let mut devices = DeviceRecognition::default();
-    if declared.is_empty() {
-        // Sentinel included: a `terminal_start` of `[0]` would claim a
-        // recogniser row the empty `kind` column does not have.
-        return devices;
-    }
-    devices.terminal_start.push(0);
-    for device in declared {
-        devices.kind.push(device.kind);
-        devices
-            .marker
-            .push(layer_of(layers, strings, &device.marker));
-        devices.model.push(strings.intern(&device.model));
-        for name in &device.terminals {
-            devices.terminal.push(layer_of(layers, strings, name));
-        }
-        devices.terminal_start.push(narrow(devices.terminal.len()));
-        devices.value.push(device.value);
-    }
-    devices
-}
-
-/// The PEX stack, a column per parameter indexed by [`LayerId`].
-///
-/// Every column is `layers.len()` long once any `pex` row exists;
-/// `pex::stack_row` indexes it directly. A layer with no row keeps its zero.
-/// Each row's sheet resistance is moved from `temperature`'s nominal to its
-/// operating value ([`ProcessStack::sheet_res_ohm_sq`]).
-///
-/// A deck that states a temperature gives every row both coefficients, and
-/// one that states none gives none: a coefficient left out would be a silent
-/// zero, and one with no temperature would change nothing. The law must keep
-/// the resistance positive.
-fn build_stack(
-    declared: &[(String, StackSrc)],
-    temperature: Option<(f64, f64)>,
-    layers: &LayerTable,
-    strings: &StrTable,
-) -> Result<ProcessStack, DeckError> {
-    if declared.is_empty() {
-        return Ok(ProcessStack::default());
-    }
-    let rows = layers.len();
-    let mut stack = ProcessStack {
-        thickness_nm: vec![0.0; rows],
-        height_nm: vec![0.0; rows],
-        sheet_res_ohm_sq: vec![0.0; rows],
-        area_cap_af_um2: vec![0.0; rows],
-        fringe_cap_af_um: vec![0.0; rows],
-        dielectric_k: vec![0.0; rows],
-    };
-    for (name, row) in declared {
-        let factor = match (temperature, row.tc) {
-            (None, None) => 1.0,
-            (Some((operating, nominal)), Some((tc1, tc2))) => {
-                let delta = operating - nominal;
-                let factor = 1.0 + tc1 * delta + tc2 * delta * delta;
-                if !(factor.is_finite() && factor > 0.0) {
-                    return Err(DeckError::Malformed(format!(
-                        "pex {name}: tc1 and tc2 scale its resistance by {factor} at the \
-                         deck's temperature; a resistance stays positive"
-                    )));
-                }
-                factor
-            }
-            (None, Some(_)) => {
-                return Err(DeckError::Malformed(format!(
-                    "pex {name}: tc1 and tc2 need a `temperature` statement to say how far \
-                     from nominal the run is"
-                )))
-            }
-            (Some(_), None) => {
-                return Err(DeckError::Malformed(format!(
-                    "pex {name}: the deck states a temperature, so the row needs tc1 and tc2 \
-                     (0/K and 0/K2 for a resistance that does not vary)"
-                )))
-            }
-        };
-        let at = layer_of(layers, strings, name).idx();
-        stack.thickness_nm[at] = row.thickness_nm;
-        stack.height_nm[at] = row.height_nm;
-        stack.sheet_res_ohm_sq[at] = row.sheet_res_ohm_sq * factor;
-        stack.area_cap_af_um2[at] = row.area_cap_af_um2;
-        stack.fringe_cap_af_um[at] = row.fringe_cap_af_um;
-        stack.dielectric_k[at] = row.dielectric_k;
-    }
-    Ok(stack)
-}
-
-/// The deck as the parser states it: names unresolved, values converted.
-#[derive(Default)]
-struct DeckSrc {
-    /// Base layers in statement order, with their GDS pair.
-    layers: Vec<(String, (u16, u16))>,
-    /// `ignore gds(L, D)` pairs, distinct, none of them a base layer's.
-    ignored: Vec<(u16, u16)>,
-    /// In declaration order, which decides the ids they take.
-    derived: Vec<DerivedSrc>,
-    /// Text patterns, indexed by [`DerivedOp::WithText`].
-    texts: Vec<String>,
-    rules: Vec<RuleSrc>,
-    connectivity: ConnectivitySrc,
-    devices: Vec<DeviceSrc>,
-    pex: Vec<(String, StackSrc)>,
-    /// `temperature T nominal T0`: `(T, T0)`, kelvin, both positive.
-    temperature: Option<(f64, f64)>,
-}
-
-struct RuleSrc {
-    id: String,
-    /// The engine kind name.
-    kind: &'static str,
-    layers: Vec<String>,
-    params: Vec<(&'static str, ParamSrc)>,
-}
-
-/// A converted value, or a layer still to resolve.
-enum ParamSrc {
-    Value(ParamValue),
-    Layer(String),
-    Model(String),
-}
-
-#[derive(Default)]
-struct ConnectivitySrc {
-    conductors: Vec<String>,
-    intra_layer_touch: bool,
-    global: Vec<String>,
-    vias: Vec<ViaSrc>,
-    labels: Vec<LabelSrc>,
-}
-
-struct ViaSrc {
-    layer: String,
-    connects: (String, String),
-}
-
-/// `connect label <layer> names <conductor>`.
-struct LabelSrc {
-    layer: String,
-    names: String,
-}
-
-struct DeviceSrc {
-    kind: DeviceKind,
-    marker: String,
-    model: String,
-    terminals: Vec<String>,
-    value: DeviceValue,
-}
-
-/// `layer <name> = a op b op ..`, one operator folded left.
-struct DerivedSrc {
-    name: String,
-    op: DerivedOp,
-    layers: Vec<String>,
-}
-
-struct StackSrc {
-    thickness_nm: f64,
-    height_nm: f64,
-    sheet_res_ohm_sq: f64,
-    area_cap_af_um2: f64,
-    fringe_cap_af_um: f64,
-    dielectric_k: f64,
-    /// `(tc1 per K, tc2 per K²)`, given together or not at all.
-    tc: Option<(f64, f64)>,
 }
 
 /// Layer-table tests, and the fixture the layout tests borrow.

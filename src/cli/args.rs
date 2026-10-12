@@ -1,8 +1,8 @@
 //! Command line: `gpurify <drc|erc|lvs|pex|all|lib> <layout> --deck <deck> [options]`,
 //! or `gpurify xor <layout> <other> --deck <deck> [--format text|json]`.
 
-use gpurify::engine::{Checks, Inputs, RunOptions};
-use gpurify::liberty::Accuracy;
+use crate::engine::{Checks, Inputs, RunOptions};
+use crate::liberty::Accuracy;
 use std::path::PathBuf;
 
 /// How to render the result.
@@ -112,7 +112,8 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     };
     // (checks, takes --intent, takes --reference, takes --quasistatic*)
     let (checks, takes_intent, takes_reference, takes_quasistatic) = match subcommand.as_str() {
-        "drc" => (Checks { drc: true, ..none }, false, false, false),
+        // `xor` compares two layouts; its rows report as the DRC stage.
+        "drc" | "xor" => (Checks { drc: true, ..none }, false, false, false),
         "erc" => (Checks { erc: true, ..none }, true, false, false),
         "lvs" => (Checks { lvs: true, ..none }, false, true, false),
         "pex" => (Checks { pex: true, ..none }, false, false, true),
@@ -120,8 +121,6 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         "all" => (Checks::ALL, true, true, false),
         // A reference is cross-checked against the spec's pins, never compared.
         "lib" => (none, false, true, false),
-        // Two layouts compared; its rows report as the DRC stage.
-        "xor" => (Checks { drc: true, ..none }, false, false, false),
         other => {
             return usage(format!(
                 "unknown subcommand {other}; expected drc, erc, lvs, pex, all, lib or xor"
@@ -238,7 +237,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
 #[cfg(test)]
 mod tests {
     use super::{parse, Cli, Format};
-    use gpurify::engine::Checks;
+    use crate::engine::Checks;
 
     fn parse_str(argv: &str) -> Result<Cli, String> {
         let argv: Vec<String> = argv.split_whitespace().map(str::to_string).collect();
@@ -287,7 +286,7 @@ mod tests {
         let one = parse_str("lib t --deck d --spec s --output-dir o --accuracy 2").expect("legal");
         assert_eq!(
             one.lib.expect("lib").accuracy,
-            [gpurify::liberty::Accuracy::Field]
+            [crate::liberty::Accuracy::Field]
         );
     }
 

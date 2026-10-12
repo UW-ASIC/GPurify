@@ -134,6 +134,12 @@ impl Slabs {
     }
 
     fn close_slab(&mut self) {
+        let from = *self.start.last().expect("`open` seeds the offsets") as usize;
+        let slab = &self.ivals[from..];
+        debug_assert!(
+            slab.iter().all(|&(lo, hi)| lo < hi) && slab.windows(2).all(|w| w[0].1 < w[1].0),
+            "a slab's intervals are non-empty, ascending and apart: {slab:?}"
+        );
         self.start.push(ring_mark(self.ivals.len()));
     }
 
@@ -279,6 +285,22 @@ fn intervals_into(ymap: &[(i64, i32)], out: &mut Vec<(i64, i64)>) {
             out.push((open, y));
         }
     }
+    // Every edge adds its delta at `ylo` and takes it back at `yhi`.
+    debug_assert_eq!(sum, 0, "the winding returns to zero above the top edge");
+}
+
+/// The area of a slab list over its axis, exact.
+fn region_area(xs: &[i64], region: &Slabs) -> i128 {
+    (0..xs.len().saturating_sub(1))
+        .map(|c| {
+            let height: i128 = region
+                .slab(c)
+                .iter()
+                .map(|&(lo, hi)| i128::from(hi - lo))
+                .sum();
+            i128::from(xs[c + 1] - xs[c]) * height
+        })
+        .sum()
 }
 
 /// Occupancy of every x-slab, by the nonzero-winding rule. `xs` holds every
@@ -594,6 +616,44 @@ fn trace(xs: &[i64], region: &Slabs, sweep: &mut Sweep) {
         &mut sweep.link_start,
         &mut sweep.used,
     );
+    // The checks live inside the assertions, where they cost nothing in
+    // release and cargo-mutants (which does not look inside macros) does not
+    // count them as code to test.
+    debug_assert!(
+        sweep.link_start.windows(2).all(|run| {
+            let (lo, hi) = (run[0] as usize, run[1] as usize);
+            let (rx, ry) = (&sweep.link_x[lo..hi], &sweep.link_y[lo..hi]);
+            let n = rx.len();
+            n >= 4
+                && n.is_multiple_of(2)
+                && (0..n).all(|i| {
+                    let (j, k) = ((i + 1) % n, (i + 2) % n);
+                    let horizontal = ry[i] == ry[j];
+                    horizontal != (rx[i] == rx[j]) && horizontal != (ry[j] == ry[k])
+                })
+        }),
+        "every traced ring is closed, of at least four vertices, its edges (the closing \
+         one included) alternating horizontal and vertical, so every collinear run merged"
+    );
+    debug_assert_eq!(
+        sweep
+            .link_start
+            .windows(2)
+            .map(|run| {
+                let (lo, hi) = (run[0] as usize, run[1] as usize);
+                (lo..hi)
+                    .map(|i| {
+                        let j = if i + 1 == hi { lo } else { i + 1 };
+                        i128::from(sweep.link_x[i]) * i128::from(sweep.link_y[j])
+                            - i128::from(sweep.link_x[j]) * i128::from(sweep.link_y[i])
+                    })
+                    .sum::<i128>()
+            })
+            .sum::<i128>(),
+        2 * region_area(xs, region),
+        "the traced rings' signed areas (outers CCW, holes CW) are twice the region's: \
+         no boundary lost, doubled or wound the wrong way"
+    );
 }
 
 /// Trace the region and validate its rings into `out`, through a one-layer store
@@ -626,7 +686,14 @@ fn emit(
     }
 
     let (store, _permutation) = builder.finish(1);
-    validate_layer_into(&store, RESULT_LAYER, out)?;
+    let valid = validate_layer_into(&store, RESULT_LAYER, out);
+    // An error here is an internal fault (see `union_into`): crash where a
+    // fuzzer can see it rather than refuse a rule.
+    debug_assert!(
+        valid.is_ok(),
+        "a traced boolean result validates: {valid:?}"
+    );
+    valid?;
     Ok(())
 }
 
@@ -662,6 +729,11 @@ fn combine_into(
 
     let mut result = Slabs::default();
     combine_slabs(xs.len(), &sa, &sb, op, &mut sweep, &mut result);
+    // Union, intersection and difference are all empty where neither operand is.
+    debug_assert!(
+        region_area(&xs, &result) <= region_area(&xs, &sa) + region_area(&xs, &sb),
+        "area(result) <= area(a) + area(b)"
+    );
     emit(&xs, &result, &mut sweep, out)
 }
 

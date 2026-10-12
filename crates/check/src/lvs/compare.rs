@@ -13,6 +13,70 @@ use crate::topology::TerminalRole;
 use gpurify_ingest::StrId;
 use std::cmp::Ordering;
 
+/// Debug-asserts the invariants [`Graph`] lists, at the seams that read a
+/// graph as given: column lengths, CSR offsets, net rows in range, and the
+/// net side the transpose of the device side. A macro, so the checks live
+/// only inside assertions, where cargo-mutants (which does not look inside
+/// macros) does not count them as code to test.
+macro_rules! debug_assert_graph {
+    ($graph:expr) => {{
+        let graph: &Graph = $graph;
+        let (devices, nets) = (graph.device_count(), graph.net_count());
+        debug_assert!(
+            {
+                // An empty table may leave its offsets empty (the `Default` graph).
+                let csr = |start: &[u32], rows: usize, len: usize| {
+                    (start.is_empty() && rows == 0 && len == 0)
+                        || (start.len() == rows + 1
+                            && start[0] == 0
+                            && start.windows(2).all(|w| w[0] <= w[1])
+                            && start[rows] as usize == len)
+                };
+                graph.device_model.len() == devices
+                    && graph.terminal_role.len() == graph.terminal_net.len()
+                    && csr(
+                        &graph.device_terminal_start,
+                        devices,
+                        graph.terminal_net.len(),
+                    )
+                    && csr(&graph.device_param_start, devices, graph.param.len())
+                    && csr(&graph.net_terminal_start, nets, graph.net_terminal.len())
+            },
+            "a graph's columns are as long as its tables, and its offsets CSR over them"
+        );
+        debug_assert!(
+            graph
+                .terminal_net
+                .iter()
+                .all(|&net| net == u32::MAX || (net as usize) < nets)
+                && graph.port_net.iter().all(|&net| (net as usize) < nets),
+            "every terminal is on a net row or on none, and every port is a net row"
+        );
+        debug_assert!(
+            (0..narrow(nets)).all(|net| {
+                let on = graph.terminals_on(net);
+                on.windows(2).all(|w| w[0].0 <= w[1].0)
+                    && on.iter().all(|&(device, role)| {
+                        (device as usize) < devices && {
+                            let (to, roles) = graph.terminals_of(device);
+                            to.iter().zip(roles).any(|(&n, &r)| n == net && r == role)
+                        }
+                    })
+            }),
+            "each net's terminals ascend by device and name a terminal of that device on it"
+        );
+        debug_assert_eq!(
+            graph.net_terminal.len(),
+            graph
+                .terminal_net
+                .iter()
+                .filter(|&&net| net != u32::MAX)
+                .count(),
+            "the net side lists every terminal on a net exactly once"
+        );
+    }};
+}
+
 /// How to run a comparison.
 ///
 /// The default is 1000 rounds, a 2% tolerance and no parameter names. The
@@ -25,11 +89,14 @@ pub struct CompareOptions {
     /// restarts at each symmetry tie-break, and at each pairing a tie-break
     /// tries, so the number of symmetries does not spend it.
     pub max_rounds: u32,
-    /// Relative tolerance `tol` for every parameter of a paired device: values
-    /// `a` and `b` agree when `|a - b| <= tol * max(|a|, |b|)`. `NaN` never
-    /// agrees. It is the only tolerance: there is no absolute or per-parameter
-    /// one (catalog LVS-014), and it does not apply to reduction, whose merges
-    /// need the other parameters bit-identical.
+    /// Relative tolerance `tol` for every parameter of a paired device but
+    /// its counts: values `a` and `b` agree when
+    /// `|a - b| <= tol * max(|a|, |b|)`. `NaN` never agrees. A count, the
+    /// parameter [`ParamNames`] names `m` or `nf`, is a whole number and
+    /// agrees only exactly (testing-plan F99): `m = 50` against `m = 51`,
+    /// 1.96 % apart, is a mismatch. It is the only tolerance: there is no
+    /// absolute or per-parameter one (catalog LVS-014), and it does not apply
+    /// to reduction, whose merges need the other parameters bit-identical.
     ///
     /// Netgen's counterpart is `property ... tolerance`, `KLayout`'s `tolerance`.
     /// Netgen measures the difference against the mean of the two values, not
@@ -122,6 +189,8 @@ pub fn compare_logged(
     reference: &Graph,
     options: CompareOptions,
 ) -> (Verdict, Vec<(Side, Merge)>) {
+    debug_assert_graph!(layout);
+    debug_assert_graph!(reference);
     let mut declared = reference.clone();
     drop_unextracted_bulk(layout, &mut declared);
     protect_labelled(layout, &mut declared);
@@ -133,6 +202,9 @@ pub fn compare_logged(
         state_count(&mut layout, multiplier);
         state_count(&mut reference, multiplier);
     }
+    // Reduction returns graphs that keep the invariants refinement reads.
+    debug_assert_graph!(&layout);
+    debug_assert_graph!(&reference);
     let merges = layout_merges
         .into_iter()
         .map(|m| (Side::Layout, m))
@@ -209,6 +281,13 @@ fn interpret(
         .filter(|&(_, class)| resolved[class.0 as usize])
         .map(|(node, class)| (narrow(node), partition.ref_first[class.0 as usize]))
         .collect();
+    // Classes seed devices apart from nets and only ever split.
+    debug_assert!(
+        pairs.iter().all(|&(layout_node, ref_node)| {
+            ref_node != u32::MAX && (layout_node < layout_devices) == (ref_node < ref_devices)
+        }),
+        "a resolved class pairs a device with a device and a net with a net"
+    );
 
     let mut layout_mate = vec![UNPAIRED; layout.device_count() + layout.net_count()];
     let mut ref_mate = vec![UNPAIRED; reference.device_count() + reference.net_count()];
@@ -389,8 +468,9 @@ fn crossed(
 }
 
 /// The parameters the reference card states, each joined by name to the
-/// layout's within relative tolerance (`NaN` fails), the layout's diffusions
-/// read the other way round when the pair is `crossed`. One the layout does
+/// layout's and [agreeing](ParamNames::agree) with it, within the relative
+/// tolerance or, for a count, exactly, the layout's diffusions read the other
+/// way round when the pair is `crossed`. One the layout does
 /// not measure is [`Discrepancy::UndeclaredParam`], never a pass. One only the
 /// layout measures is not compared: presence is per device, and a card that
 /// omits a parameter states nothing about it (testing-plan F68).
@@ -441,9 +521,9 @@ fn compare_params(
         at_mine += 1;
         at_theirs += 1;
 
-        let spread = (layout_value - ref_value).abs();
-        let scale = layout_value.abs().max(ref_value.abs());
-        let agree = spread <= tolerance * scale;
+        let agree = options
+            .params
+            .agree(layout_param, (layout_value, ref_value), tolerance);
         if !agree {
             found.push(Discrepancy::ParameterMismatch {
                 layout_device: pair.0,

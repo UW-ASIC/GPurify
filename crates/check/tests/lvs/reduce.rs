@@ -740,6 +740,49 @@ fn parallel_passives_keep_their_value_and_count_the_devices() {
     }
 }
 
+/// Oracle: the definition of a count, testing-plan F99. `m` counts devices
+/// and `nf` fingers, whole numbers, so each is compared exactly and not
+/// within the 2 % parameter tolerance: 50 against 51 is 1/51 = 1.96 %
+/// apart, inside 2 %, and mismatches, on a resistor's `m` and a
+/// transistor's `nf`; 50 against 50 matches. A value is still compared
+/// within the tolerance: `r` 1000 against 1019 is 1.86 % apart and agrees.
+#[test]
+fn counts_are_compared_exactly_and_values_within_the_tolerance() {
+    let options = CompareOptions {
+        params: NAMES,
+        ..CompareOptions::default()
+    };
+    let fingers = NAMES.fingers.expect("named");
+    let resistor = |m: f64| passives(DeviceKind::Resistor, &[&[(R_VALUE, 1e3), (M, m)]]);
+    let transistor = |nf: f64| {
+        let mut builder = GraphBuilder::new(4);
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+            &[(fingers, nf)],
+        );
+        builder.finish()
+    };
+    let cases = [
+        ("m", resistor(50.0), resistor(51.0)),
+        ("nf", transistor(50.0), transistor(51.0)),
+    ];
+    for (what, fifty, fifty_one) in &cases {
+        assert_eq!(compare(fifty, fifty, options), Verdict::Match, "{what}");
+        assert_ne!(
+            compare(fifty, fifty_one, options),
+            Verdict::Match,
+            "{what} = 50 matched {what} = 51"
+        );
+    }
+    let valued = |r: f64| passives(DeviceKind::Resistor, &[&[(R_VALUE, r)]]);
+    assert_eq!(
+        compare(&valued(1e3), &valued(1019.0), options),
+        Verdict::Match
+    );
+}
+
 /// Oracle: construct-from-answer. Values that differ are not one device,
 /// and with no `m` name the count has nowhere to go, so nothing merges and
 /// both stay: under-reduction, never a count lost.
@@ -998,4 +1041,41 @@ fn a_diffusion_is_compared_at_its_channel_end() {
         Verdict::Match,
         "the diffusions were read at the wrong ends"
     );
+}
+
+/// Oracle: construct-from-answer, testing-plan F98. A lone transistor gated
+/// by net 0, its channel between nets 1 and 2, its bulk on net 3: nothing
+/// tells net 1 from net 2, so which reference net each pairs with is the
+/// tie-break's. The layout states `as` 1, `ad` 2, `ps` 10 and `pd` 20, its
+/// source on net 1. The mirrored card, `as` 2, `ad` 1, `ps` 20, `pd` 10, its
+/// source also on net 1, is the same transistor once nets 1 and 2 trade
+/// names, so it matches. A card with the areas mirrored and the perimeters
+/// not, `as` 2, `ad` 1, `ps` 10, `pd` 20, agrees under neither orientation,
+/// and nor does one stating 2 at both ends.
+#[test]
+fn diffusions_on_symmetric_channel_nets_pair_the_way_they_agree() {
+    let options = CompareOptions {
+        params: NAMES,
+        ..CompareOptions::default()
+    };
+    let circuit = |sd: [f64; 4]| {
+        let mut builder = GraphBuilder::new(4);
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+            &[(AS, sd[0]), (AD, sd[1]), (PS, sd[2]), (PD, sd[3])],
+        );
+        builder.finish()
+    };
+    let layout = circuit([1.0, 2.0, 10.0, 20.0]);
+    let mirrored = compare(&layout, &circuit([2.0, 1.0, 20.0, 10.0]), options);
+    assert_eq!(mirrored, Verdict::Match, "{mirrored:?}");
+    for card in [[2.0, 1.0, 10.0, 20.0], [2.0, 2.0, 10.0, 20.0]] {
+        assert_ne!(
+            compare(&layout, &circuit(card), options),
+            Verdict::Match,
+            "{card:?} matched"
+        );
+    }
 }

@@ -267,6 +267,10 @@ pub(crate) fn record_run(
     examined: u64,
 ) {
     let pushed = out.len() - violations_before;
+    debug_assert!(
+        pushed == 0 || examined > 0,
+        "a rule that reported {pushed} findings examined at least one item: {rule:?}"
+    );
     runs.push(RuleRun {
         rule,
         outcome,

@@ -35,7 +35,7 @@ use gpurify_ingest::StrId;
 ///
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct SupplyShortTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -68,7 +68,7 @@ pub struct SupplyShortTable {
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [KLayout `soft_connect`]: https://www.klayout.de/doc-qt5/about/lvs_ref_netter.html
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct SoftConnectionTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -111,7 +111,7 @@ pub struct SoftConnectionTable {
 /// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
 /// [ASAP7]: https://github.com/The-OpenROAD-Project/asap7_pdk_r1p7/blob/main/docs/asap7_drm_201207a.pdf
 /// [ESDA TR18.0-02]: https://www.esda.org/store/standards/product/307/esd-tr18-0-02-20/
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct MissingTieTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -140,7 +140,7 @@ pub struct MissingTieTable {
 ///
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct TieHighLowTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -169,7 +169,7 @@ pub struct TieHighLowTable {
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [ESDA TR18.0-01]: https://www.esda.org/store/standards/product/457/esd-tr18-0-01-25/
 /// [Khazhinsky 2012]: https://www.esda.org/assets/News/8df611267c/ESDEDA-InCompliance-part1.pdf
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct EsdTopologicalTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -302,7 +302,7 @@ fn nets_marked(marks: &[u32], want: u32) -> Vec<u32> {
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct MixedTagTable {
     /// Rule id and severity per row.
     pub head: RuleHead,

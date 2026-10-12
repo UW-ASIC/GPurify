@@ -299,6 +299,27 @@ fn an_operator_producing_a_non_finite_value_fails_rather_than_returning_one() {
     );
 }
 
+/// Oracle: law, the same as the test above, for [`refine`], which the field
+/// solve calls for every column. Its true residual on a `NaN` operator is
+/// `NaN`, which compares false against the tolerance both in its loop and in
+/// its final check, so before C7 it returned `Converged` with a `NaN`
+/// residual and the zero initial guess as the answer: a capacitance of zero,
+/// reported (testing-plan F9 follow-up, N-c7-1).
+#[test]
+fn refinement_of_an_operator_producing_a_non_finite_value_fails_rather_than_returning_one() {
+    let poisoned = |_: &[f64], y: &mut [f64]| y.fill(f64::NAN);
+    let b = [1.0, 1.0, 1.0];
+    let mut x = vec![0.0; 3];
+    let mut workspace = Workspace::default();
+
+    let error = refine(poisoned, &b, tight(), &mut x, &mut workspace)
+        .expect_err("an operator returning NaN cannot produce a solution");
+    assert!(
+        matches!(error, SolveError::NonFinite(_)),
+        "expected NonFinite, got {error}"
+    );
+}
+
 /// Oracle: construct-from-answer. Refinement is used unconditionally, including
 /// with a host adapter where it converges in one outer step, so it must reach
 /// the same solution GMRES does on an operator that is already `f64`-exact.

@@ -206,6 +206,17 @@ impl Level {
         // Each cursor now holds its bucket's end: shift right to restore offsets.
         bucket_start.copy_within(0..buckets, 1);
         bucket_start[0] = 0;
+        debug_assert_eq!(
+            bucket_start[buckets] as usize,
+            rows.len(),
+            "the bucket offsets end at the filing count"
+        );
+        debug_assert!(
+            bucket_start
+                .windows(2)
+                .all(|w| w[0] <= w[1] && rows[w[0] as usize..w[1] as usize].is_sorted()),
+            "bucket offsets are monotone and each bucket's rows ascend"
+        );
         self.bucket_start = bucket_start;
         self.rows = rows;
     }
@@ -305,6 +316,28 @@ fn prune_pairs<const SAME: bool>(
     // A box filed under several cells is gathered several times.
     out.sort_unstable();
     out.dedup();
+    // On up to 4096 row pairs, the brute-force scan the index exists to
+    // avoid: the first pair of boxes within `distance` that is no candidate.
+    // Inside the assertion, so cargo-mutants does not count it as code.
+    debug_assert_eq!(
+        {
+            let (a_rows, b_rows) = (
+                store.polys_on_layer(layer),
+                store.polys_on_layer(built(index)),
+            );
+            let small = a_rows.len() * b_rows.len() <= 1 << 12;
+            a_rows
+                .filter(|_| small)
+                .flat_map(|a| b_rows.clone().map(move |b| (PolyId(a), PolyId(b))))
+                .find(|&(a, b)| {
+                    (!SAME || a < b)
+                        && store.poly_bbox(a).within(store.poly_bbox(b), distance)
+                        && out.binary_search(&(a, b)).is_err()
+                })
+        },
+        None,
+        "the candidate pairs hold every pair of boxes within the distance"
+    );
 }
 
 /// Every row of one level that `a_box` grown by `distance` can reach, appended

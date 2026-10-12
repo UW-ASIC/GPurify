@@ -8,7 +8,10 @@
 //! stall is broken by pairing the lowest layout node of the stalled class holding
 //! it with the reference node of that class whose parameters are closest (netgen's
 //! "resolving symmetries by property value"), the lowest such on a tie, one class
-//! per stall.
+//! per stall. A net has no parameters of its own: its closest is the one whose
+//! pairing puts the diffusions of the transistors already paired closest at each
+//! channel end, so symmetric channel nets pair the way the diffusions agree
+//! (testing-plan F98).
 //!
 //! Refinement cannot always split nodes that no relabelling exchanges, so the
 //! closest node can be the wrong one (testing-plan F58). A pairing is a trial
@@ -89,6 +92,51 @@ pub(crate) struct Partition {
     hopeless: bool,
 }
 
+/// Debug-asserts the partition's invariants, with `$split` the first reference
+/// node: `member` is a permutation of the nodes that `slot` inverts; the
+/// classes, none empty, tile it with each member labelled by its own class;
+/// `layout_size` counts each class's layout members; and `deficit` counts the
+/// short classes. A macro, so the checks live only inside assertions, where
+/// cargo-mutants (which does not look inside macros) does not count them as
+/// code to test.
+macro_rules! debug_assert_partition {
+    ($partition:expr, $split:expr) => {{
+        let p: &Partition = $partition;
+        let split: u32 = $split;
+        let nodes = p.class.len();
+        debug_assert!(
+            p.member.len() == nodes
+                && p.slot.len() == nodes
+                && (0..nodes).all(|at| p.slot[p.member[at] as usize] as usize == at),
+            "`member` is a permutation of the nodes and `slot` its inverse"
+        );
+        debug_assert_eq!(
+            (0..p.start.len()).find(|&class| {
+                let from = p.start[class] as usize;
+                let run = &p.member[from..from + p.size[class] as usize];
+                run.is_empty()
+                    || run
+                        .iter()
+                        .any(|&node| p.class[node as usize] as usize != class)
+                    || run.iter().filter(|&&node| node < split).count()
+                        != p.layout_size[class] as usize
+            }),
+            None,
+            "every class is non-empty, holds only its own nodes, and counts its layout members"
+        );
+        debug_assert_eq!(
+            p.size.iter().map(|&size| size as usize).sum::<usize>(),
+            nodes,
+            "the classes tile the nodes, each node in one"
+        );
+        debug_assert_eq!(
+            p.deficit as usize,
+            (0..p.start.len()).filter(|&class| p.short(class)).count(),
+            "`deficit` counts the classes short of layout nodes"
+        );
+    }};
+}
+
 /// Splitmix64's finaliser.
 const fn mix(mut z: u64) -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -166,6 +214,26 @@ impl Sides<'_> {
     }
 }
 
+/// `|a - b|` relative to the larger magnitude; zero when both are zero.
+fn relative(a: f64, b: f64) -> f64 {
+    let scale = a.abs().max(b.abs());
+    if scale == 0.0 {
+        0.0
+    } else {
+        (a - b).abs() / scale
+    }
+}
+
+/// Which channel end a role is, as an index into [`ParamNames::diffusion`]:
+/// 0 (`as`, `ps` at 2) for the source, 1 (`ad`, `pd` at 3) for the drain.
+const fn channel_end(role: TerminalRole) -> Option<usize> {
+    match role {
+        TerminalRole::Source => Some(0),
+        TerminalRole::Drain => Some(1),
+        _ => None,
+    }
+}
+
 impl Sides<'_> {
     /// How far apart the parameters of layout node `layout` and reference node
     /// `reference` are: per name the reference states, the relative difference
@@ -186,14 +254,6 @@ impl Sides<'_> {
             self.layout.params_of(layout),
             self.reference.params_of(reference),
         );
-        let relative = |a: f64, b: f64| {
-            let scale = a.abs().max(b.abs());
-            if scale == 0.0 {
-                0.0
-            } else {
-                (a - b).abs() / scale
-            }
-        };
         let apart = |crossed: bool| -> f64 {
             theirs
                 .iter()
@@ -220,9 +280,8 @@ impl Sides<'_> {
 
     /// Whether layout node `layout` and reference node `reference` would pass
     /// the verdict's parameter comparison: every name the reference states
-    /// stated by the layout too, each value within `tolerance` of the other
-    /// relatively (`NaN` never is), diffusions either way round. Nets always
-    /// do.
+    /// stated by the layout too, each value [agreeing](ParamNames::agree)
+    /// with the other, diffusions either way round. Nets always do.
     fn agrees(self, layout: u32, reference: u32, tolerance: f64) -> bool {
         let reference = reference - self.split;
         if layout >= narrow(self.layout.device_count())
@@ -238,7 +297,7 @@ impl Sides<'_> {
             theirs.iter().all(|&(name, b)| {
                 let read = self.read(name, crossed);
                 mine.iter().any(|&(other, a)| {
-                    Some(other) == read && (a - b).abs() <= tolerance * a.abs().max(b.abs())
+                    Some(other) == read && self.names.agree(name, (a, b), tolerance)
                 })
             })
         };
@@ -470,15 +529,75 @@ impl Partition {
             .filter(move |&member| member >= split)
     }
 
-    /// The reference node of `node`'s class whose parameters are closest, the
-    /// lowest on a tie.
+    /// How far apart layout node `node` and reference node `mate` are:
+    /// their parameters' [distance](Sides::distance) for devices, and for
+    /// nets the diffusions pairing them would put at one channel end
+    /// ([`Self::end_distance`]).
+    fn apart(&self, node: u32, mate: u32, sides: Sides) -> f64 {
+        if node < narrow(sides.layout.device_count()) {
+            sides.distance(node, mate)
+        } else {
+            self.end_distance(node, mate, sides)
+        }
+    }
+
+    /// How far apart the diffusions are that pairing layout net `net` with
+    /// reference net `mate` puts at one channel end: for each source or
+    /// drain on `net` whose transistor a class already pairs one to one, and
+    /// whose mate has a source or drain on `mate`, each diffusion name the
+    /// mate states at that end against the layout's at its own, as
+    /// [`Sides::distance`] weighs them. Nothing else is told apart by a
+    /// net's pairing, so it is zero where no such transistor is.
+    fn end_distance(&self, net: u32, mate: u32, sides: Sides) -> f64 {
+        let ref_devices = narrow(sides.reference.device_count());
+        let ref_net = mate - sides.split - ref_devices;
+        let names = sides.names.diffusion;
+        let mut apart = 0.0;
+        sides.for_each_neighbour(net, |role, device| {
+            let class = self.class[device as usize] as usize;
+            let Some(mine) = channel_end(role) else {
+                return;
+            };
+            if self.size[class] != 2 || self.layout_size[class] != 1 {
+                return;
+            }
+            let from = self.start[class] as usize;
+            let other = self.member[from].max(self.member[from + 1]) - sides.split;
+            let (nets, roles) = sides.reference.terminals_of(other);
+            let Some(theirs) = nets
+                .iter()
+                .zip(roles)
+                .find_map(|(&at, &role)| channel_end(role).filter(|_| at == ref_net))
+            else {
+                return;
+            };
+            let (layout, reference) = (
+                sides.layout.params_of(device),
+                sides.reference.params_of(other),
+            );
+            // Area, then perimeter.
+            for k in [0, 2] {
+                let (Some(read), Some(stated)) = (names[mine + k], names[theirs + k]) else {
+                    continue;
+                };
+                if let Some(&(_, b)) = reference.iter().find(|&&(name, _)| name == stated) {
+                    let a = layout.iter().find(|&&(name, _)| name == read);
+                    apart += a.map_or(1.0, |&(_, a)| relative(a, b));
+                }
+            }
+        });
+        apart
+    }
+
+    /// The reference node of `node`'s class that is [closest](Self::apart),
+    /// the lowest on a tie.
     ///
     /// ponytail: O(class size) per stall; keep members sorted per class if a
     /// huge class of isolated nodes ever shows up in a profile.
     fn closest(&self, node: u32, sides: Sides) -> u32 {
         self.mates(node, sides.split)
             .min_by(|&a, &b| {
-                let (da, db) = (sides.distance(node, a), sides.distance(node, b));
+                let (da, db) = (self.apart(node, a, sides), self.apart(node, b, sides));
                 da.total_cmp(&db).then(a.cmp(&b))
             })
             .expect("a stalled class holds reference nodes")
@@ -491,7 +610,7 @@ impl Partition {
         let mut ranked: Vec<(f64, u32)> = self
             .mates(node, sides.split)
             .filter(|&mate| mate != closest)
-            .map(|mate| (sides.distance(node, mate), mate))
+            .map(|mate| (self.apart(node, mate, sides), mate))
             .collect();
         ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         ranked.truncate(TRIES - 1);
@@ -502,6 +621,10 @@ impl Partition {
     /// of their own whose two nodes are dirty.
     fn pair(&mut self, node: u32, mate: u32, split: u32) {
         let class = self.class[node as usize];
+        debug_assert!(
+            node < split && mate >= split && self.class[mate as usize] == class,
+            "a tie-break pairs a layout node with a reference node of its own class"
+        );
         let end = self.start[class as usize] + self.size[class as usize];
         self.place(node, end - 2);
         self.place(mate, end - 1);
@@ -581,6 +704,7 @@ impl Partition {
             }
             self.undo();
             self.deficit = deficit;
+            debug_assert_partition!(self, sides.split);
             let others = ranked.get_or_insert_with(|| self.ranked(node, sides, closest));
             let Some(&next) = others.get(tried) else {
                 break;
@@ -597,6 +721,7 @@ impl Partition {
 
     /// Per-class tallies and the layout classes, as the verdict reads them.
     fn publish(&mut self, split: u32) {
+        debug_assert_partition!(self, split);
         self.layout_tally.clone_from(&self.layout_size);
         self.ref_tally.clear();
         self.ref_tally.extend(

@@ -186,7 +186,7 @@ pub enum ErcError {
         found: u32,
     },
     /// A limit that must be positive is zero or negative; also a zero
-    /// `max_drivers` or `duty_cycle`.
+    /// `max_drivers` or `duty_cycle`, or a negative antenna diode factor.
     #[error("rule {rule}: limit {limit} is not positive")]
     NonPositiveLimit {
         /// The deck's rule id.

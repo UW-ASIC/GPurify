@@ -3,15 +3,18 @@
 #[path = "../common/gen_fixtures.rs"]
 mod gen_fixtures;
 
+mod custom;
+
 use gpurify::engine::pipeline::{extract, load, ExtractError, Inputs, LoadError, Loaded};
 use gpurify::engine::run::{
     run, run_checks, Checks, EngineError, RunOptions, StageStatus, Summary,
 };
+use gpurify_check::deck::{CompileError, CompiledDeck};
 use gpurify_check::drc::DrcError;
 use gpurify_check::lvs::verdict::{Discrepancy, Side};
 use gpurify_check::lvs::{CompareOptions, Verdict};
 use gpurify_geom::{GeometryStore, GeometryStoreBuilder, Grid, LayerId};
-use gpurify_ingest::deck::{parse_deck, Connectivity, Deck, DeviceKind, RuleSpec};
+use gpurify_ingest::deck::{parse_deck, Connectivity, Deck, DeviceKind};
 use gpurify_ingest::netlist::{Netlist, RefNetId, SubcktId};
 use gpurify_ingest::{Provenance, StrId, StrTable};
 use gpurify_testgen::shapes::dbu;
@@ -37,9 +40,13 @@ fn options(checks: Checks) -> RunOptions {
     }
 }
 
+/// A run of `deck`, which states no rule, over `store`, with nothing else read.
 fn empty_loaded(store: GeometryStore, deck: Deck) -> Loaded {
+    let strings = StrTable::default();
+    let deck =
+        CompiledDeck::from_deck(deck, grid(), &strings).expect("a deck of no rules compiles");
     Loaded {
-        strings: StrTable::default(),
+        strings,
         grid: grid(),
         deck,
         store,
@@ -350,40 +357,30 @@ fn lvs_is_skipped_without_a_reference_and_a_mismatch_fails_the_run_with_one() {
     assert!(!summary.passed());
 }
 
-fn loaded_with_rule_kinds(kinds: &[&str]) -> Loaded {
-    let mut loaded = empty_loaded(GeometryStore::default(), Deck::default());
-    for (at, kind) in kinds.iter().enumerate() {
-        let id = loaded.strings.intern(&format!("rule.{at}"));
-        let kind = loaded.strings.intern(kind);
-        loaded.deck.rules.spec.push(RuleSpec {
-            id,
-            kind,
-            layer_start: 0,
-            layer_len: 0,
-            param_start: 0,
-            param_len: 0,
-        });
-    }
-    loaded
-}
-
-/// One deck may hold both domains' kinds; a kind in neither is refused even
-/// when no check is selected, so a misspelling cannot hide behind a DRC-only run.
-///
-/// Oracle: `run_checks`' documented error: a kind neither DRC nor ERC knows is
-/// refused "even when neither is selected"; `min_widht` is no kind, `min_width`
-/// and `antenna_electrical` are each one domain's.
+/// One deck may hold both domains' kinds; a kind in neither is refused when
+/// the deck compiles, before any check is selected, so a misspelling cannot
+/// hide behind a DRC-only run. The parser refuses a spelling it does not
+/// know, so the unknown kind is written into a parsed deck's table.
+/// Oracle: construct-from-answer: `min_widht` is no kind; `width` and
+/// `ir_drop` are one domain's each.
 #[test]
-fn a_kind_in_neither_domain_is_refused_whatever_was_selected() {
-    let both = loaded_with_rule_kinds(&["min_width", "antenna_electrical"]);
-    let extracted = extract(&both).expect("empty extracts");
-    run_checks(&both, &extracted, &options(NONE)).expect("both kinds are known");
+fn a_kind_in_neither_domain_is_refused_when_the_deck_compiles() {
+    const TEXT: &str = "grid 1nm
+layer m = gds(1, 0)
+rule a width(m) >= 10nm
+rule b ir_drop()
+";
+    let mut strings = StrTable::default();
+    let both = parse_deck(TEXT, grid(), &mut strings).expect("parses");
+    let compiled = CompiledDeck::from_deck(both, grid(), &strings).expect("both kinds are known");
+    assert_eq!((compiled.drc.rule_count(), compiled.erc.len()), (1, 1));
 
-    let misspelled = loaded_with_rule_kinds(&["min_width", "min_widht"]);
-    let error = run_checks(&misspelled, &extracted, &options(NONE))
+    let mut misspelled = parse_deck(TEXT, grid(), &mut strings).expect("parses");
+    misspelled.rules.spec[0].kind = strings.intern("min_widht");
+    let error = CompiledDeck::from_deck(misspelled, grid(), &strings)
         .expect_err("min_widht is nobody's rule kind");
     assert!(
-        matches!(error, EngineError::Drc(DrcError::UnknownKind { ref kind, .. }) if kind == "min_widht"),
+        matches!(error, CompileError::Drc(DrcError::UnknownKind { ref kind, .. }) if kind == "min_widht"),
         "{error:?}"
     );
 }
@@ -550,6 +547,7 @@ fn sky130_lvs(rects: &[(&str, i64, i64, i64, i64)], reference: &str) -> (Verdict
     let reference = gpurify_ingest::netlist::spice::read(reference, &mut strings, &deck.devices)
         .expect("the reference parses");
     gpurify::engine::pipeline::intern_report_ids(&mut strings);
+    let deck = CompiledDeck::from_deck(deck, grid(), &strings).expect("sky130.deck compiles");
     let loaded = Loaded {
         strings,
         grid: grid(),

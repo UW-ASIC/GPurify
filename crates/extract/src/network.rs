@@ -113,6 +113,53 @@ impl ParasiticNetwork {
         self.from.len()
     }
 
+    /// Debug check of the type's invariant, where the `extract_into` entry
+    /// points establish it: parallel columns, each net's nodes one ascending
+    /// run, every element's nodes in range, only a ground capacitance to
+    /// ground, canonical order, and every value finite (a `NaN` compares
+    /// false against every limit and every writer).
+    pub(crate) fn debug_check(&self) {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        let nodes = self.node_count();
+        debug_assert_eq!(self.node_layer.len(), nodes, "one layer per node");
+        debug_assert!(
+            self.to.len() == self.from.len() && self.value.len() == self.from.len(),
+            "one far node and one value per element"
+        );
+        debug_assert!(
+            self.node_net.windows(2).all(|w| w[0] <= w[1]),
+            "each net's nodes are one run, nets ascending"
+        );
+        debug_assert!(
+            (0..self.element_count()).all(|row| {
+                let near = (self.from[row].0 as usize) < nodes;
+                let far = match self.to[row] {
+                    Some(node) => (node.0 as usize) < nodes,
+                    None => matches!(self.value[row], Parasitic::GroundCap(_)),
+                };
+                near && far
+            }),
+            "every element's nodes exist, and only a ground capacitance has no far node"
+        );
+        debug_assert!(
+            (1..self.element_count()).all(|row| {
+                let key = |at: usize| canonical_key(self.from[at], self.to[at], self.value[at]);
+                key(row - 1) <= key(row)
+            }),
+            "the elements are in canonical order"
+        );
+        debug_assert!(
+            self.value.iter().all(|value| match *value {
+                Parasitic::Resistance(q) => q.is_finite(),
+                Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => q.is_finite(),
+                Parasitic::Inductance(q) => q.is_finite(),
+            }),
+            "every element's value is finite"
+        );
+    }
+
     pub(crate) fn clear(&mut self) {
         self.node_net.clear();
         self.node_layer.clear();

@@ -3,7 +3,7 @@
 //! Optional. Rules needing an absent intent are reported as skipped, never as
 //! clean.
 
-use gpurify_geom::{prefix, Qty, Voltage};
+use gpurify_geom::{celsius, prefix, Qty, Temperature, Voltage};
 use gpurify_geom::{StrId, StrTable};
 
 /// Why an intent file was rejected.
@@ -11,9 +11,13 @@ use gpurify_geom::{StrId, StrTable};
 pub enum IntentError {
     /// Not JSON of the schema (an unknown key, a wrong type), more than 64
     /// domains, a domain voltage that is not finite, a supply naming an
-    /// undeclared domain, two `limits` entries for one net, or a power state
-    /// that repeats a name, turns off a net no supply declares, or pins an
-    /// input twice or to a voltage that is not finite.
+    /// undeclared domain, two `limits` entries for one net, a temperature
+    /// that is not finite or not above absolute zero, or a `dynamic` entry
+    /// that cannot be simulated: no `budget_current_ua` beside it, a toggle
+    /// rate above 1, a rise time longer than the clock period, or a negative
+    /// decap, or a power state that repeats a name, turns off a net no
+    /// supply declares, or pins an input twice or to a voltage that is not
+    /// finite.
     #[error("malformed intent file: {0}")]
     Malformed(String),
     /// A net listed more than once in `supplies`, in one domain or two.
@@ -22,8 +26,9 @@ pub enum IntentError {
     /// A declared domain that no supply net belongs to.
     #[error("domain {0} has no supply net")]
     DomainWithoutSupply(String),
-    /// A stated limit of a net (drop, drop fraction, overvoltage or current
-    /// budget) is zero, negative, `NaN` or infinite.
+    /// A stated limit of a net (drop, drop fraction, overvoltage, current
+    /// budget, or a `dynamic` drop, toggle rate, clock period or rise time)
+    /// is zero, negative, `NaN` or infinite.
     #[error("net {net}: {limit} is not a positive finite number")]
     BadLimit {
         /// The net the limit belongs to.
@@ -63,6 +68,8 @@ pub struct DesignIntent {
     supplies: Vec<(StrId, DomainId, SupplyRole)>,
     /// Per-net limits, strictly ascending by net. Sparse.
     limits: Vec<(StrId, NetLimits)>,
+    /// The junction temperature the chip runs at (`temperature_c`).
+    temperature: Option<Qty<Temperature, { prefix::BASE }>>,
     /// Declared power states, in file order.
     states: Vec<PowerState>,
 }
@@ -99,6 +106,30 @@ pub struct NetLimits {
     /// Current the net is budgeted to carry, µA (`budget_current_ua`), for
     /// electromigration and IR drop.
     pub budget_current_ua: Option<f64>,
+    /// The vectorless switching the dynamic drop is simulated from, and its
+    /// limit (`dynamic`). Stated only beside `budget_current_ua`.
+    pub dynamic: Option<Switching>,
+}
+
+/// One net's worst switching cycle, for vectorless dynamic IR drop: every load
+/// on the net switches at once, each drawing the charge of its share of the
+/// budget over the cycles it switches in.
+#[derive(Debug, Clone, Copy)]
+pub struct Switching {
+    /// The dynamic drop permitted at any node of the net, mV
+    /// (`max_drop_mv`).
+    pub max_drop: Qty<Voltage, { prefix::MILLI }>,
+    /// The fraction of clock cycles in which a load switches, `0 < α <= 1`
+    /// (`toggle_rate`). The budget is the average over every cycle, so one
+    /// switching event carries the budget's charge over `1 / α` cycles.
+    pub toggle_rate: f64,
+    /// The clock period, ps (`clock_period_ps`): the cycle simulated.
+    pub clock_period_ps: f64,
+    /// The current pulse's base, ps (`rise_time_ps`), at most the period.
+    pub rise_time_ps: f64,
+    /// Decoupling capacitance on the net, intrinsic and placed, pF
+    /// (`decap_pf`); zero or more, zero when left out.
+    pub decap_pf: f64,
 }
 
 impl DesignIntent {
@@ -128,6 +159,12 @@ impl DesignIntent {
         &self.states
     }
 
+    /// The junction temperature the file states, absolute; `None` leaves the
+    /// run's default.
+    pub fn temperature(&self) -> Option<Qty<Temperature, { prefix::BASE }>> {
+        self.temperature
+    }
+
     /// True when nothing was declared, so every intent-dependent rule reports skipped, not clean.
     pub fn is_empty(&self) -> bool {
         self.domain_voltage.is_empty()
@@ -150,6 +187,7 @@ struct IntentFile {
     supplies: Vec<SupplySpec>,
     #[serde(default)]
     limits: Vec<LimitSpec>,
+    temperature_c: Option<f64>,
     #[serde(default)]
     states: Vec<StateSpec>,
 }
@@ -201,6 +239,18 @@ struct LimitSpec {
     max_drop_fraction: Option<f64>,
     max_overvoltage_mv: Option<f64>,
     budget_current_ua: Option<f64>,
+    dynamic: Option<DynamicSpec>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DynamicSpec {
+    max_drop_mv: f64,
+    toggle_rate: f64,
+    clock_period_ps: f64,
+    rise_time_ps: f64,
+    #[serde(default)]
+    decap_pf: f64,
 }
 
 /// A stated limit must be a strictly positive, finite number. Zero, negative,
@@ -220,25 +270,62 @@ fn checked_limit(
     }
 }
 
+/// A net's `dynamic` entry, validated: every number positive and finite
+/// (`decap_pf` zero or more), a toggle rate of at most 1, a rise within the
+/// period, and a budget beside it for the charge to come from.
+fn checked_switching(
+    spec: &DynamicSpec,
+    net: &str,
+    budget: Option<f64>,
+) -> Result<Switching, IntentError> {
+    let positive =
+        |value: f64, limit: &'static str| checked_limit(Some(value), net, limit).map(|_| value);
+    let switching = Switching {
+        max_drop: Qty::new(positive(spec.max_drop_mv, "dynamic.max_drop_mv")?),
+        toggle_rate: positive(spec.toggle_rate, "dynamic.toggle_rate")?,
+        clock_period_ps: positive(spec.clock_period_ps, "dynamic.clock_period_ps")?,
+        rise_time_ps: positive(spec.rise_time_ps, "dynamic.rise_time_ps")?,
+        decap_pf: spec.decap_pf,
+    };
+    let why = if budget.is_none() {
+        "needs budget_current_ua, the current it switches"
+    } else if switching.toggle_rate > 1.0 {
+        "toggle_rate is a fraction of cycles, at most 1"
+    } else if switching.rise_time_ps > switching.clock_period_ps {
+        "rise_time_ps is longer than clock_period_ps"
+    } else if !(switching.decap_pf.is_finite() && switching.decap_pf >= 0.0) {
+        "decap_pf is negative or not finite"
+    } else {
+        return Ok(switching);
+    };
+    Err(IntentError::Malformed(format!("net {net}: dynamic {why}")))
+}
+
 /// Parse and validate design intent from memory.
 ///
 /// # Schema
 ///
 /// ```json
 /// {
+///   "temperature_c": <n>,
 ///   "domains":  { "<domain>": { "voltage_mv": <n> } },
 ///   "supplies": [{ "net": "<name>", "domain": "<domain>",
 ///                  "role": "power"|"ground" }],
 ///   "limits":   [{ "net": "<name>", "max_drop_mv": <n>,
 ///                  "max_drop_fraction": <f>, "max_overvoltage_mv": <n>,
-///                  "budget_current_ua": <f> }],
+///                  "budget_current_ua": <f>,
+///                  "dynamic": { "max_drop_mv": <n>, "toggle_rate": <f>,
+///                               "clock_period_ps": <n>, "rise_time_ps": <n>,
+///                               "decap_pf": <n> } }],
 ///   "states":   [{ "name": "<state>", "off": ["<supply net>"],
 ///                  "inputs": [{ "net": "<name>", "voltage_mv": <n> }] }]
 /// }
 /// ```
 ///
-/// Every section is optional; an absent key is [`NetLimits`]'s `None`. `supplies` and
-/// `limits` are arrays so a net stated twice is expressible, and therefore refusable.
+/// Every section is optional; an absent key is [`NetLimits`]'s `None`, and an
+/// absent `decap_pf` is zero. `temperature_c` is the junction temperature
+/// the reliability rules run at. `supplies` and `limits` are arrays so a net
+/// stated twice is expressible, and therefore refusable.
 ///
 /// # Errors
 ///
@@ -249,6 +336,15 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
         serde_json::from_str(source).map_err(|e| IntentError::Malformed(e.to_string()))?;
 
     let mut out = DesignIntent::default();
+    if let Some(degrees) = file.temperature_c {
+        let kelvin = celsius(degrees);
+        if !(kelvin.is_finite() && kelvin.raw() > 0.0) {
+            return Err(IntentError::Malformed(format!(
+                "temperature_c is {degrees}, not a temperature above absolute zero"
+            )));
+        }
+        out.temperature = Some(kelvin);
+    }
 
     // ponytail: a domain is one bit of a u64 in ERC's voltage propagation; widen the mask past 64.
     if file.domains.len() > 64 {
@@ -327,6 +423,14 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
                     &spec.net,
                     "budget_current_ua",
                 )?,
+                dynamic: match &spec.dynamic {
+                    None => None,
+                    Some(dynamic) => Some(checked_switching(
+                        dynamic,
+                        &spec.net,
+                        spec.budget_current_ua,
+                    )?),
+                },
             },
         ));
     }

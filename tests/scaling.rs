@@ -67,6 +67,8 @@ fn engine(bytes: &[u8]) -> Duration {
         .resolve_labels(&store, &deck.connectivity)
         .expect("no labels to bind");
     intern_report_ids(&mut strings);
+    let deck =
+        gpurify::deck::CompiledDeck::from_deck(deck, grid, &strings).expect("the deck compiles");
     let loaded = Loaded {
         strings,
         grid,

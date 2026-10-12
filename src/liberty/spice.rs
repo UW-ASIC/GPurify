@@ -1,13 +1,15 @@
 //! The simulator: the macro as a subcircuit, one testbench deck per corner,
-//! and a pool of persistent ngspice processes driven over a pipe.
+//! and a pool of sessions, each a series of ngspice batch runs of that deck.
 //!
 //! Every pin is driven by a source the characterizer rewrites (`alter`) before
-//! each analysis, so a corner's models load once per process, not once per
-//! measurement. A measurement is a block of commands whose results come back as
+//! each analysis. A measurement is a block of commands, run as the deck's
+//! `.control` section in one batch run, whose results come back as
 //! `RES <key> <value>` lines; a value the simulator could not measure comes
 //! back empty and reads as `None`, never as zero.
 //!
-//! The simulator must be ngspice, run in pipe mode (`ngspice -p`), found as
+//! The simulator must be ngspice, run in batch mode (`ngspice -b`, the
+//! ngspice manual's "Batch mode", for unattended runs: it opens no graphics
+//! interface, so it runs on a machine with no display), found as
 //! [`Simulator::binary`] on `PATH`. Every value written to it is in SI base
 //! units (seconds, volts, ohms, farads), except device lengths and areas,
 //! which are divided by [`Simulator::scale`] and its square for
@@ -15,9 +17,9 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::io::{BufRead, BufReader, Write as _};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -37,7 +39,7 @@ pub enum SimError {
     Died {
         /// The corner whose deck was loaded.
         corner: String,
-        /// What the pipe reported.
+        /// What went wrong: the run that stopped short, or the pipe error.
         why: String,
         /// The path of the session's log file.
         log: String,
@@ -223,98 +225,141 @@ pub fn write_deck(
     out.push_str(".end\n");
 }
 
-/// One ngspice process with a corner's deck loaded. Dropping it sends `quit`
-/// and waits for the process to exit.
+/// A corner's deck, run in ngspice batch mode once per [`Session::run`]. The
+/// state a run leaves (`alter`ed sources, `option`s, a `setseed` and `reset`)
+/// is replayed before the next run's commands, so a session behaves as one
+/// simulator that keeps it; analyses, measurements and vectors are not.
 pub struct Session {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    binary: String,
+    /// The deck without its closing `.end`.
+    deck: String,
+    /// Every state command run so far, in order.
+    state: String,
     serial: u64,
     corner: String,
     log: PathBuf,
+}
+
+/// The ngspice commands whose effect outlives the run that issues them: a
+/// source or load rewritten, an option, the random seed and the circuit
+/// redrawn from it.
+const STATE_COMMANDS: [&str; 5] = ["alter", "altermod", "option", "setseed", "reset"];
+
+/// Appends to `state` the [`STATE_COMMANDS`] lines of `commands`, in order. A
+/// setting rewritten (`alter X = …`, `option reltol=…`) replaces the line
+/// that set it before, so the state a session replays stays the size of the
+/// circuit's settings however many runs it has made.
+fn remember(state: &mut String, commands: &str) {
+    for line in commands.lines() {
+        let word = line.split_whitespace().next().unwrap_or_default();
+        if !STATE_COMMANDS.contains(&word) {
+            continue;
+        }
+        if let Some((target, _)) = line.split_once('=') {
+            let target = target.trim_end();
+            let mut kept = String::with_capacity(state.len());
+            for old in state.lines() {
+                if old.split_once('=').map(|(t, _)| t.trim_end()) != Some(target) {
+                    kept.push_str(old);
+                    kept.push('\n');
+                }
+            }
+            *state = kept;
+        }
+        state.push_str(line);
+        state.push('\n');
+    }
 }
 
 /// Measured values by key; `None` is a measurement that failed.
 pub type Results = BTreeMap<String, Option<f64>>;
 
 impl Session {
-    /// Starts `sim.binary -p` with its standard error going to `log`, and
-    /// sources `deck`.
+    /// Reads `deck` and runs it once, with no commands, in `sim.binary -b`,
+    /// its standard error going to `log`.
     ///
     /// # Errors
     ///
-    /// [`SimError::Io`] when `log` cannot be created, [`SimError::Spawn`]
-    /// when the binary cannot be started, and [`SimError::Died`] when it
-    /// exits while loading the deck.
+    /// [`SimError::Io`] when `deck` cannot be read or `log` created,
+    /// [`SimError::Spawn`] when the binary cannot be started, and
+    /// [`SimError::Died`] when it stops before the end of the deck.
     pub fn start(
         sim: &Simulator,
         deck: &Path,
         corner: &str,
         log: PathBuf,
     ) -> Result<Self, SimError> {
-        let stderr = std::fs::File::create(&log).map_err(|e| SimError::Io(e.to_string()))?;
-        let mut child = Command::new(&sim.binary)
-            .arg("-p")
-            .env("OMP_NUM_THREADS", "1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(stderr)
-            .spawn()
-            .map_err(|e| SimError::Spawn(sim.binary.clone(), e.to_string()))?;
-        let stdin = child.stdin.take().expect("piped");
-        let stdout = BufReader::new(child.stdout.take().expect("piped"));
+        let io = |e: std::io::Error| SimError::Io(e.to_string());
+        let text = std::fs::read_to_string(deck).map_err(io)?;
+        std::fs::File::create(&log).map_err(io)?;
+        let body = text.trim_end().strip_suffix(".end").unwrap_or(&text);
         let mut session = Self {
-            child,
-            stdin,
-            stdout,
+            binary: sim.binary.clone(),
+            deck: body.to_owned(),
+            state: String::new(),
             serial: 0,
             corner: corner.to_owned(),
             log,
         };
-        session.run(&format!("set noaskquit\nsource {}\n", deck.display()))?;
+        session.run("")?;
         Ok(session)
     }
 
-    /// Sends `commands` and blocks until ngspice has run them all, returning
+    /// Runs the deck in ngspice batch mode with the state commands of every
+    /// earlier run, then `commands`, as its `.control` section, and returns
     /// every `RES <key> <value>` line they echoed. A key echoed twice keeps
     /// its last value; a value that does not parse or is not finite reads
-    /// `None`. There is no timeout: a simulation that never ends blocks the
-    /// caller.
+    /// `None`. The run's deck is written beside the log and kept only when
+    /// the run fails, its output then appended to the log. There is no
+    /// timeout: a simulation that never ends blocks the caller.
     ///
     /// # Errors
     ///
-    /// [`SimError::Died`] when the process stops reading or closes its
-    /// output.
+    /// [`SimError::Io`] when the run's deck or the log cannot be written,
+    /// [`SimError::Spawn`] when the binary cannot be started, and
+    /// [`SimError::Died`] when it stops before the last command.
     pub fn run(&mut self, commands: &str) -> Result<Results, SimError> {
         self.serial += 1;
         let marker = format!("@@END{}", self.serial);
-        let died = |s: &Self, why: String| SimError::Died {
-            corner: s.corner.clone(),
-            why,
-            log: s.log.display().to_string(),
+        let io = |e: std::io::Error| SimError::Io(e.to_string());
+        let path = self.log.with_extension(format!("{}.cir", self.serial));
+        let text = format!(
+            "{}\n.control\nset noaskquit\n{}{commands}\necho \"{marker}\"\n.endc\n.end\n",
+            self.deck, self.state
+        );
+        std::fs::write(&path, text).map_err(io)?;
+        let append = || {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&self.log)
+                .map_err(io)
         };
-        let sent = self
-            .stdin
-            .write_all(commands.as_bytes())
-            .and_then(|()| writeln!(self.stdin, "echo \"{marker}\""))
-            .and_then(|()| self.stdin.flush());
-        if let Err(e) = sent {
-            return Err(died(self, e.to_string()));
+        let output = Command::new(&self.binary)
+            .arg("-b")
+            .arg(&path)
+            .env("OMP_NUM_THREADS", "1")
+            .stdin(Stdio::null())
+            .stderr(append()?)
+            .output()
+            .map_err(|e| SimError::Spawn(self.binary.clone(), e.to_string()))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if !stdout.lines().any(|line| line.trim_end() == marker) {
+            let _ = writeln!(
+                append()?,
+                "---- {} ({})\n{stdout}",
+                path.display(),
+                output.status
+            );
+            return Err(SimError::Died {
+                corner: self.corner.clone(),
+                why: format!("{} ended before its last command", path.display()),
+                log: self.log.display().to_string(),
+            });
         }
+        let _ = std::fs::remove_file(&path);
         let mut results = Results::new();
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match self.stdout.read_line(&mut line) {
-                Ok(0) => return Err(died(self, "end of output".to_owned())),
-                Ok(_) => {}
-                Err(e) => return Err(died(self, e.to_string())),
-            }
-            let text = line.trim_end();
-            if text == marker {
-                return Ok(results);
-            }
-            if let Some(rest) = text.strip_prefix("RES ") {
+        for line in stdout.lines() {
+            if let Some(rest) = line.trim_end().strip_prefix("RES ") {
                 let mut words = rest.split_whitespace();
                 if let Some(key) = words.next() {
                     let value = words.next().and_then(|w| w.parse::<f64>().ok());
@@ -322,19 +367,13 @@ impl Session {
                 }
             }
         }
+        remember(&mut self.state, commands);
+        Ok(results)
     }
 
     /// The name of the corner whose deck this session loaded.
     pub fn corner(&self) -> &str {
         &self.corner
-    }
-}
-
-impl Drop for Session {
-    fn drop(&mut self) {
-        let _ = writeln!(self.stdin, "quit");
-        let _ = self.stdin.flush();
-        let _ = self.child.wait();
     }
 }
 
@@ -409,4 +448,35 @@ pub fn run_pool<'a, T: Send>(
         .into_iter()
         .map(|r| r.expect("with no failure every task ran"))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remember;
+
+    /// Oracle: construct-from-answer. A batch run keeps nothing, so a session
+    /// replays the state its earlier runs left: the sources and loads they
+    /// `alter`ed, the `option`s they set, the seed and the circuit redrawn
+    /// from it, in order. Analyses, measurements, echoes and vector commands
+    /// are not state and are not replayed. A setting written again replaces
+    /// its earlier line, so the last write wins and the state stays small.
+    #[test]
+    fn a_session_replays_what_earlier_runs_set_and_nothing_else() {
+        let mut state = String::new();
+        remember(
+            &mut state,
+            "alter @vp0[pwl] = [ 0 0 1e-9 1.8 ]\nalter cp1 = 1e-15\ntran 1e-12 2e-9\n\
+             meas tran d WHEN v(p1)=0.9\necho \"RES d $&d\"\ndestroy all\n",
+        );
+        remember(
+            &mut state,
+            "setseed 3\nreset\noption reltol=1e-3\nalter cp1 = 2e-15\nop\nlet p = 1\n",
+        );
+        remember(&mut state, "option reltol=1e-6\n");
+        assert_eq!(
+            state,
+            "alter @vp0[pwl] = [ 0 0 1e-9 1.8 ]\nsetseed 3\nreset\nalter cp1 = 2e-15\n\
+             option reltol=1e-6\n"
+        );
+    }
 }

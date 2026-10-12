@@ -37,7 +37,7 @@ use gpurify_ingest::StrId;
 /// with no ESD diode, is not checked, and neither is a device whose measured
 /// terminals sit on such nets. The shipped decks state the operating
 /// voltages the PDKs document, not an absolute maximum rating.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ModelLimitTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -73,7 +73,7 @@ pub struct ModelLimitTable {
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct WellBiasTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -113,7 +113,7 @@ pub struct WellBiasTable {
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [IEEE 1801]: https://standards.ieee.org/ieee/1801/11890/
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct MissingLevelShifterTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -147,7 +147,7 @@ pub struct MissingLevelShifterTable {
 ///
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct DomainCrossingTable {
     /// Rule id and severity per row. Rows differ only in id and severity.
     pub head: RuleHead,
@@ -194,7 +194,7 @@ pub struct DomainCrossingTable {
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [LEF58_VOLTAGESPACING]: https://github.com/The-OpenROAD-Project/OpenROAD/blob/master/src/odb/src/lefin/lefTechLayerVoltageSpacing.cpp
 /// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct VoltageSpacingTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -246,7 +246,7 @@ pub struct VoltageSpacingTable {
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [JEP159A]: https://www.jedec.org/standards-documents/docs/jep159a
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct DielectricFieldTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -291,7 +291,7 @@ pub struct DielectricFieldTable {
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct HvTagTable {
     /// Rule id and severity per row.
     pub head: RuleHead,
@@ -331,7 +331,7 @@ pub struct HvTagTable {
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [IEEE 1801]: https://standards.ieee.org/ieee/1801/11890/
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct UndrivenGateTable {
     /// Rule id and severity per row. Rows differ only in id and severity.
     pub head: RuleHead,
@@ -365,7 +365,7 @@ pub struct UndrivenGateTable {
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [IEEE 1801]: https://standards.ieee.org/ieee/1801/11890/
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct MissingIsolationTable {
     /// Rule id and severity per row.
     pub head: RuleHead,

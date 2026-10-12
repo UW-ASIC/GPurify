@@ -145,9 +145,11 @@ impl GeometryStore {
     ///
     /// # Panics
     ///
-    /// When the column lengths disagree, when `layer` is past
-    /// [`Self::layer_count`], when any later layer already holds rows (they would
-    /// land in another layer's range), or past `u32::MAX` vertices in total.
+    /// When the column lengths disagree, when a ring's run
+    /// `vert_start[i]..vert_start[i] + vert_len[i]` reaches past `xs`, when
+    /// `layer` is past [`Self::layer_count`], when any later layer already
+    /// holds rows (they would land in another layer's range), or past
+    /// `u32::MAX` vertices in total.
     pub fn append_layer(
         &mut self,
         layer: LayerId,
@@ -181,6 +183,11 @@ impl GeometryStore {
         for (&start, &len) in vert_start.iter().zip(vert_len) {
             let from = start as usize;
             let to = from + len as usize;
+            assert!(
+                to <= xs.len(),
+                "an appended ring's vertex run {from}..{to} lies inside the {} vertices given",
+                xs.len()
+            );
             self.poly_vert_start.push(base + start);
             self.poly_vert_len.push(len);
             self.poly_bbox
@@ -303,6 +310,18 @@ impl GeometryStoreBuilder {
             verts_x.extend_from_slice(xs);
             verts_y.extend_from_slice(ys);
         }
+
+        // CSR: the layer offsets end at the row count, and the vertex runs
+        // tile the columns end to end.
+        debug_assert_eq!(
+            layer_start[layer_count] as usize, rows,
+            "the last layer offset is the row count"
+        );
+        debug_assert_eq!(
+            at as usize,
+            verts_x.len(),
+            "the permuted vertex runs cover every vertex once"
+        );
 
         let store = GeometryStore {
             verts_x,

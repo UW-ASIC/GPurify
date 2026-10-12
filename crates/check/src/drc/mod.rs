@@ -1,6 +1,7 @@
 //! Design rule checking: a deck's DRC rows as one [`RuleSet`], run row by row.
 //!
-//! Data in: the deck (via [`RuleSet::from_deck`]) and the layout's
+//! Data in: the deck (via [`RuleSet::from_deck`], usually through
+//! [`deck::compile`](crate::deck::compile)) and the layout's
 //! [`GeometryStore`], plus its extracted nets for [`Rule::NetSpacing`]
 //! ([`RuleSet::run_with_nets`]). Data out:
 //! [`Violations`](crate::report::Violations) plus one
@@ -15,7 +16,7 @@
 pub mod rules;
 pub mod ruleset;
 
-pub use ruleset::{Rule, RuleSet};
+pub use ruleset::{Rule, RuleSet, SpacingQuery, StepKind};
 
 use gpurify_geom::connectivity::ComponentLabel;
 use gpurify_geom::index::SpatialIndex;
@@ -26,13 +27,14 @@ use gpurify_geom::{Bbox, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer
 /// rule cannot handle is that rule's `Refused` row, not an error.
 ///
 /// The deck parser already refuses most of these with a line and column;
-/// [`RuleSet::from_deck`] checks them again for a deck built in code. Every
-/// `rule` field is the row's id as the deck spells it.
+/// [`RuleSet::from_deck`] and [`Rule::validate`] check them again for a deck
+/// built in code. Every `rule` field is the row's id as the deck spells it.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DrcError {
     /// A row's kind is in neither the DRC nor the ERC
-    /// [`KINDS`](ruleset::KINDS). Raised by the engine before any rule runs;
-    /// `from_deck` alone steps over such a row.
+    /// [`KINDS`](ruleset::KINDS). Raised by
+    /// [`CompiledDeck::from_deck`](crate::deck::CompiledDeck::from_deck);
+    /// `RuleSet::from_deck` alone steps over such a row.
     #[error("rule {rule}: unknown rule kind {kind}")]
     UnknownKind {
         /// The row's id.

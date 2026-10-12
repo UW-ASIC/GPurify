@@ -1,4 +1,4 @@
-//! The thirty-one tables, the deck parser that fills them, and the dispatcher.
+//! The thirty-three tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
@@ -10,52 +10,15 @@ use crate::erc::voltage::NetVoltage;
 use crate::erc::{Design, ErcError, Scratch};
 use crate::report::{RuleRun, Severity, Violations};
 use crate::topology::PortTable;
-use gpurify_geom::{prefix, Dbu, Grid, Qty, Temperature, Voltage};
+use gpurify_geom::{prefix, Dbu, DbuArea, Grid, Qty, Temperature, Voltage};
 use gpurify_geom::{Bbox, LayerId};
 use gpurify_ingest::deck::{Deck, DeviceKind, ParamValue, ProcessStack, RuleSpec, RuleTable};
 use gpurify_ingest::{StrId, StrTable};
 
-/// Every rule kind this crate implements, as the deck spells it. Any other
-/// kind belongs to another domain and is stepped over.
-///
-/// Each name is a [`RuleSet`] field of the same name; the crate's
-/// [rule reference](crate#electrical-rules) gives each one's deck syntax.
-pub const KINDS: [&str; 31] = [
-    "antenna",
-    "antenna_electrical",
-    "density_cmp",
-    "dielectric_field",
-    "domain_crossing",
-    "drain_source",
-    "electromigration",
-    "em_current_density",
-    "esd_latchup",
-    "esd_topological",
-    "fanout",
-    "floating_gate",
-    "floating_well",
-    "gate_oxide",
-    "hv_domain",
-    "hv_tag",
-    "ir_drop",
-    "missing_isolation",
-    "missing_level_shifter",
-    "missing_tie",
-    "mixed_tag",
-    "multiple_drivers",
-    "p2p_resistance",
-    "reliability",
-    "soft_connection",
-    "supply_short",
-    "tie_high_low",
-    "unconnected_pin",
-    "undriven_gate",
-    "voltage_spacing",
-    "well_bias",
-];
+pub use crate::deck::rules::ERC_KINDS as KINDS;
 
 /// The two columns every rule table has.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct RuleHead {
     /// The deck's id for this rule, interned; what a `RuleRun` is attributed to.
     pub rule: Vec<StrId>,
@@ -80,7 +43,7 @@ impl RuleHead {
 /// Built by [`RuleSet::from_deck`] and run by [`RuleSet::run`], usually
 /// through [`erc::check`](crate::erc::check). Each field holds the rows of
 /// the [`KINDS`] entry of the same name; its table type defines the kind.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct RuleSet {
     /// `floating_gate` rows: [`topology::FloatingGateTable`].
     pub floating_gate: topology::FloatingGateTable,
@@ -121,6 +84,10 @@ pub struct RuleSet {
     pub em_current_density: electrical::EmCurrentDensityTable,
     /// `electromigration` rows: [`electrical::ElectromigrationTable`].
     pub electromigration: electrical::ElectromigrationTable,
+    /// `dynamic_ir_drop` rows: [`electrical::DynamicIrDropTable`].
+    pub dynamic_ir_drop: electrical::DynamicIrDropTable,
+    /// `em_thermal` rows: [`electrical::EmThermalTable`].
+    pub em_thermal: electrical::EmThermalTable,
 
     /// `reliability` rows: [`reliability::ReliabilityTable`].
     pub reliability: reliability::ReliabilityTable,
@@ -180,7 +147,8 @@ pub struct RunInputs<'a> {
     /// The die boundary: the denominator of every density.
     pub die: Bbox,
     /// The layout's grid, which turns a width in database units into metres
-    /// for a current-density limit.
+    /// for a current-density limit, and a diode's area into the square
+    /// micrometres an antenna credit is stated per.
     pub grid: Grid,
     /// The applied sign-off temperature, absolute; distinct from each row's
     /// characterisation temperature.
@@ -217,7 +185,8 @@ fn close_csr(start: &mut Vec<u32>, end: usize) {
 }
 
 /// One deck row, and the typed parameter lookups. Physical parameters arrive
-/// as [`ParamValue::Ratio`] already in their column's unit.
+/// as [`ParamValue::Ratio`] already in their column's unit. Each lookup checks
+/// the value's type only; what values a row can hold is [`RuleSet::validate`]'s.
 #[derive(Clone, Copy)]
 struct Row<'a> {
     rules: &'a RuleTable,
@@ -235,13 +204,6 @@ impl Row<'_> {
         ErcError::WrongParamType {
             rule: self.name(),
             param,
-        }
-    }
-
-    fn non_positive(&self, param: &'static str) -> ErcError {
-        ErcError::NonPositiveLimit {
-            rule: self.name(),
-            limit: param.to_owned(),
         }
     }
 
@@ -283,11 +245,10 @@ impl Row<'_> {
         })
     }
 
-    /// A strictly positive distance.
+    /// A distance.
     fn length(&self, param: &'static str) -> Result<Dbu, ErcError> {
         match self.need(param)? {
-            ParamValue::Length(value) if value.raw() > 0 => Ok(value),
-            ParamValue::Length(_) => Err(self.non_positive(param)),
+            ParamValue::Length(value) => Ok(value),
             _ => Err(self.wrong_type(param)),
         }
     }
@@ -299,56 +260,44 @@ impl Row<'_> {
         }
     }
 
-    /// A distance of either sign.
-    fn signed_length(&self, param: &'static str) -> Result<Dbu, ErcError> {
-        match self.need(param)? {
-            ParamValue::Length(value) => Ok(value),
-            _ => Err(self.wrong_type(param)),
-        }
-    }
-
-    /// A finite `f64`: an infinite limit would pass everything.
+    /// A number in its column's unit.
     fn number(&self, param: &'static str) -> Result<f64, ErcError> {
         match self.need(param)? {
-            ParamValue::Ratio(value) if value.is_finite() => Ok(value),
+            ParamValue::Ratio(value) => Ok(value),
             _ => Err(self.wrong_type(param)),
         }
     }
 
-    fn opt_number(&self, param: &'static str, absent: f64) -> Result<f64, ErcError> {
-        match self.find(param) {
-            None => Ok(absent),
-            Some(_) => self.number(param),
+    /// A piecewise-linear table, `(area, value)` points in deck order; empty
+    /// when absent.
+    fn area_table(
+        &self,
+        area: &'static str,
+        value: &'static str,
+    ) -> Result<Vec<(DbuArea, f64)>, ErcError> {
+        let (Some(area_key), Some(value_key)) = (self.strings.get(area), self.strings.get(value))
+        else {
+            return Ok(Vec::new());
+        };
+        let (mut areas, mut values) = (Vec::new(), Vec::new());
+        for &(key, param) in self.rules.params_of(self.spec) {
+            match param {
+                ParamValue::Area(at) if key == area_key => areas.push(at),
+                ParamValue::Ratio(of) if key == value_key => values.push(of),
+                _ if key == area_key || key == value_key => return Err(self.wrong_type(value)),
+                _ => {}
+            }
         }
+        if areas.len() != values.len() {
+            return Err(self.wrong_type(value));
+        }
+        Ok(areas.into_iter().zip(values).collect())
     }
 
-    /// A finite, strictly positive `f64`.
-    fn positive(&self, param: &'static str) -> Result<f64, ErcError> {
-        let value = self.number(param)?;
-        if value > 0.0 {
-            Ok(value)
-        } else {
-            Err(self.non_positive(param))
-        }
-    }
-
-    /// A fraction in `0.0 ..= 1.0`.
-    fn fraction(&self, param: &'static str) -> Result<f64, ErcError> {
-        let value = self.number(param)?;
-        if (0.0..=1.0).contains(&value) {
-            Ok(value)
-        } else {
-            Err(ErcError::NotAFraction {
-                rule: self.name(),
-                param,
-            })
-        }
-    }
-
-    fn opt_fraction(&self, param: &'static str) -> Result<Option<f64>, ErcError> {
+    fn opt_number(&self, param: &'static str) -> Result<Option<f64>, ErcError> {
         match self.find(param) {
             None => Ok(None),
-            Some(_) => self.fraction(param).map(Some),
+            Some(_) => self.number(param).map(Some),
         }
     }
 
@@ -384,16 +333,13 @@ impl Row<'_> {
         Ok(out)
     }
 
-    /// At least one model.
-    fn need_models(&self, param: &'static str) -> Result<Vec<StrId>, ErcError> {
-        let models = self.models(param)?;
-        if models.is_empty() {
-            return Err(ErcError::MissingParam {
-                rule: self.name(),
-                param,
-            });
-        }
-        Ok(models)
+    /// An antenna row's one collecting measure: a row states one
+    /// `sidewall_thickness`, or none for the drawn area.
+    fn antenna_measure(&self) -> Result<antenna::AntennaMeasure, ErcError> {
+        Ok(match self.opt_length("sidewall_thickness")? {
+            Some(thickness) => antenna::AntennaMeasure::Sidewall { thickness },
+            None => antenna::AntennaMeasure::Area,
+        })
     }
 
     fn flag(&self, param: &'static str, absent: bool) -> Result<bool, ErcError> {
@@ -445,19 +391,6 @@ impl Row<'_> {
         if voltage.len() != space.len() {
             return Err(bad("a voltage table needs one space per voltage"));
         }
-        if voltage[0] < 0.0 || voltage.windows(2).any(|pair| pair[0] >= pair[1]) {
-            return Err(bad(
-                "a voltage table's voltages start at 0 V or more and rise strictly",
-            ));
-        }
-        if space.iter().any(|length| length.raw() <= 0) {
-            return Err(self.non_positive("space"));
-        }
-        if space.windows(2).any(|pair| pair[1] < pair[0]) {
-            return Err(bad(
-                "a voltage table's spaces never fall as the voltage rises",
-            ));
-        }
         Ok((voltage.into_iter().map(Qty::new).collect(), space))
     }
 
@@ -475,17 +408,94 @@ impl Row<'_> {
     }
 }
 
+/// The value checks of [`RuleSet::validate`], for one rule.
+struct Check<'a> {
+    /// The rule's id, for the error.
+    rule: &'a str,
+}
+
+impl Check<'_> {
+    /// A finite number: an infinite limit would pass everything.
+    fn finite(&self, param: &'static str, value: f64) -> Result<(), ErcError> {
+        if value.is_finite() {
+            Ok(())
+        } else {
+            Err(ErcError::WrongParamType {
+                rule: self.rule.to_owned(),
+                param,
+            })
+        }
+    }
+
+    /// A finite, strictly positive number.
+    fn positive(&self, param: &'static str, value: f64) -> Result<(), ErcError> {
+        self.finite(param, value)?;
+        if value > 0.0 {
+            Ok(())
+        } else {
+            Err(self.non_positive(param))
+        }
+    }
+
+    /// A finite number of zero or more.
+    fn not_negative(&self, param: &'static str, value: f64) -> Result<(), ErcError> {
+        self.finite(param, value)?;
+        if value >= 0.0 {
+            Ok(())
+        } else {
+            Err(self.non_positive(param))
+        }
+    }
+
+    /// A strictly positive distance.
+    fn length(&self, param: &'static str, value: Dbu) -> Result<(), ErcError> {
+        if value.raw() > 0 {
+            Ok(())
+        } else {
+            Err(self.non_positive(param))
+        }
+    }
+
+    /// A fraction in `0.0 ..= 1.0`.
+    fn fraction(&self, param: &'static str, value: f64) -> Result<(), ErcError> {
+        self.finite(param, value)?;
+        if (0.0..=1.0).contains(&value) {
+            Ok(())
+        } else {
+            Err(ErcError::NotAFraction {
+                rule: self.rule.to_owned(),
+                param,
+            })
+        }
+    }
+
+    fn non_positive(&self, param: &'static str) -> ErcError {
+        ErcError::NonPositiveLimit {
+            rule: self.rule.to_owned(),
+            limit: param.to_owned(),
+        }
+    }
+
+    fn missing(&self, param: &'static str) -> ErcError {
+        ErcError::MissingParam {
+            rule: self.rule.to_owned(),
+            param,
+        }
+    }
+}
+
 impl RuleSet {
-    /// Builds the tables from a deck. Fails closed on any row of a kind in
-    /// [`KINDS`] it cannot read; rows of other kinds are stepped over. The
-    /// antenna tables also take a copy of the deck's connectivity.
+    /// Builds the tables from a deck, holding each row to [`Self::validate`]'s
+    /// checks as it is filed. Fails closed on any row of a kind in [`KINDS`] it
+    /// cannot read; rows of other kinds are stepped over. The antenna tables
+    /// also take a copy of the deck's connectivity.
     ///
     /// # Errors
     ///
     /// Returns the first [`ErcError`] in deck order: a rule id used twice by
     /// rows of any kind, or, in a row of a kind in [`KINDS`], a missing or
-    /// mistyped parameter, a wrong layer count, a non-positive limit, a
-    /// fraction outside `0.0 ..= 1.0`, or a row that bounds nothing.
+    /// mistyped parameter or a wrong layer count, then what
+    /// [`Self::validate`] refuses of it.
     ///
     /// # Panics
     ///
@@ -494,6 +504,15 @@ impl RuleSet {
         let mut set = Self::default();
         // Sorted ids already filed; the first duplicate in deck order is refused.
         let mut seen: Vec<StrId> = Vec::with_capacity(deck.rules.spec.len());
+        // A cut collects by its area whatever the row's measure: LEF's cut
+        // layers "do not use side area modelling".
+        let cut_by_area = |layer: LayerId, measure: antenna::AntennaMeasure| {
+            if deck.connectivity.via_cut.contains(&layer) {
+                antenna::AntennaMeasure::Area
+            } else {
+                measure
+            }
+        };
 
         for spec in &deck.rules.spec {
             let row = Row {
@@ -506,18 +525,15 @@ impl RuleSet {
                 Err(at) => seen.insert(at, spec.id),
             }
 
-            // Every arm reads its parameters before touching a table, so a
-            // refused row leaves no half-written column.
-            match strings.resolve(spec.kind) {
+            // Every arm reads its parameters before touching a table, so a row
+            // of the wrong shape leaves no half-written column; its values are
+            // checked once it is filed.
+            let kind = strings.resolve(spec.kind);
+            match kind {
                 "antenna" => {
                     let layers = row.layers_from(2)?;
-                    let max_ratio = row.positive("max_ratio")?;
-                    // One measure for the whole collecting set: a row states
-                    // one `sidewall_thickness`.
-                    let measure = match row.opt_length("sidewall_thickness")? {
-                        Some(thickness) => antenna::AntennaMeasure::Sidewall { thickness },
-                        None => antenna::AntennaMeasure::Area,
-                    };
+                    let max_ratio = row.number("max_ratio")?;
+                    let measure = row.antenna_measure()?;
                     let diode = row.opt_layer("diode_layer")?;
                     let table = &mut set.antenna;
                     row.head(&mut table.head)?;
@@ -526,23 +542,39 @@ impl RuleSet {
                     table.collector.extend_from_slice(&layers[1..]);
                     table
                         .collector_measure
-                        .extend(layers[1..].iter().map(|_| measure));
+                        .extend(layers[1..].iter().map(|&layer| cut_by_area(layer, measure)));
                     table.max_ratio.push(max_ratio);
                     close_csr(&mut table.collector_start, table.collector.len());
                 }
                 "antenna_electrical" => {
                     let layers = row.layers_from(2)?;
-                    let max_ratio = row.positive("max_ratio")?;
+                    let max_ratio = row.number("max_ratio")?;
+                    let measure = row.antenna_measure()?;
                     let diode = row.opt_layer("diode_layer")?;
-                    let credit = row.opt_number("diode_credit", 0.0)?;
-                    let bonus = row.opt_number("diode_bonus", 0.0)?;
+                    let credit = row.opt_number("diode_credit")?.unwrap_or(0.0);
+                    let bonus = row.opt_number("diode_bonus")?.unwrap_or(0.0);
+                    let minus = row.opt_number("area_minus_diode")?.unwrap_or(0.0);
+                    let plus = row.opt_number("gate_plus_diode")?.unwrap_or(0.0);
+                    let reduce = row.area_table("diode_reduce_area", "diode_reduce")?;
+                    let diode_max = row.area_table("diode_max_ratio_area", "diode_max_ratio")?;
+                    let cut_factor = row.number("cut_factor")?;
+                    let exempt = row.opt_layer("exempt_layer")?;
                     let table = &mut set.antenna_electrical;
                     row.head(&mut table.head)?;
                     table.gate.push(layers[0]);
                     table.collector.extend_from_slice(&layers[1..]);
+                    table
+                        .collector_measure
+                        .extend(layers[1..].iter().map(|&layer| cut_by_area(layer, measure)));
+                    table.cut_factor.push(cut_factor);
                     table.diode.push(diode);
                     table.diode_credit.push(credit);
                     table.diode_bonus.push(bonus);
+                    table.area_minus_diode.push(minus);
+                    table.gate_plus_diode.push(plus);
+                    table.diode_reduce.push(reduce);
+                    table.diode_max_ratio.push(diode_max);
+                    table.exempt.push(exempt);
                     table.max_ratio.push(max_ratio);
                     close_csr(&mut table.collector_start, table.collector.len());
                 }
@@ -550,31 +582,19 @@ impl RuleSet {
                     let layers = row.layers(1)?;
                     let window = (row.length("window_x")?, row.length("window_y")?);
                     let step = (row.length("step_x")?, row.length("step_y")?);
-                    let min_density = row.opt_fraction("min_density")?;
-                    let max_density = row.opt_fraction("max_density")?;
-                    let max_neighbour_delta = row.opt_fraction("max_neighbour_delta")?;
+                    let min_density = row.opt_number("min_density")?;
+                    let max_density = row.opt_number("max_density")?;
+                    let max_neighbour_delta = row.opt_number("max_neighbour_delta")?;
                     let include_partial_windows = row.flag("include_partial_windows", true)?;
                     // The three coefficients are one model: all or none.
                     let cmp = match row.find("cmp_target_density") {
                         None => None,
                         Some(_) => Some(antenna::CmpModel {
-                            target_density: row.fraction("cmp_target_density")?,
-                            thickness_sensitivity: row
-                                .signed_length("cmp_thickness_sensitivity")?,
+                            target_density: row.number("cmp_target_density")?,
+                            thickness_sensitivity: row.length("cmp_thickness_sensitivity")?,
                             max_abs_thickness_delta: row.length("cmp_max_abs_thickness_delta")?,
                         }),
                     };
-                    // A row bounding nothing would report clean forever.
-                    if min_density.is_none()
-                        && max_density.is_none()
-                        && max_neighbour_delta.is_none()
-                        && cmp.is_none()
-                    {
-                        return Err(ErcError::MissingParam {
-                            rule: row.name(),
-                            param: "max_density",
-                        });
-                    }
                     let table = &mut set.density_cmp;
                     row.head(&mut table.head)?;
                     table.layer.push(layers[0]);
@@ -588,12 +608,12 @@ impl RuleSet {
                 }
                 "electromigration" => {
                     let layers = row.layers_from(1)?;
-                    let max_density = Qty::new(row.positive("max_density")?);
-                    let per_cut = Qty::new(row.positive("max_current_per_cut")?);
-                    let blech = Qty::new(row.positive("blech_limit")?);
-                    let reference = Qty::new(row.positive("reference_temperature")?);
-                    let activation = row.positive("activation_energy_ev")?;
-                    let exponent = row.positive("current_exponent")?;
+                    let max_density = Qty::new(row.number("max_density")?);
+                    let per_cut = Qty::new(row.number("max_current_per_cut")?);
+                    let blech = Qty::new(row.number("blech_limit")?);
+                    let reference = Qty::new(row.number("reference_temperature")?);
+                    let activation = row.number("activation_energy_ev")?;
+                    let exponent = row.number("current_exponent")?;
                     let table = &mut set.electromigration;
                     row.head(&mut table.head)?;
                     table.layer.extend_from_slice(layers);
@@ -609,8 +629,13 @@ impl RuleSet {
                 }
                 "em_current_density" => {
                     let layers = row.layers_from(1)?;
-                    let max_density = Qty::new(row.positive("max_density")?);
-                    let per_cut = Qty::new(row.positive("max_current_per_cut")?);
+                    let max_density = Qty::new(row.number("max_density")?);
+                    let per_cut = Qty::new(row.number("max_current_per_cut")?);
+                    // The band's width and current are one statement: both or none.
+                    let narrow = match row.opt_length("narrow_width")? {
+                        Some(width) => Some((width, Qty::new(row.number("narrow_current")?))),
+                        None => None,
+                    };
                     let table = &mut set.em_current_density;
                     row.head(&mut table.head)?;
                     table.layer.extend_from_slice(layers);
@@ -618,13 +643,14 @@ impl RuleSet {
                     table
                         .max_current_per_cut
                         .extend(layers.iter().map(|_| per_cut));
+                    table.narrow.extend(layers.iter().map(|_| narrow));
                     close_csr(&mut table.layer_start, table.layer.len());
                 }
                 "esd_latchup" => {
                     let layers = row.layers(2)?;
                     let min_guard_ring_width = row.length("min_guard_ring_width")?;
                     let max_tap_distance = row.length("max_tap_distance")?;
-                    let clamps = row.need_models("clamp")?;
+                    let clamps = row.models("clamp")?;
                     let table = &mut set.esd_latchup;
                     row.head(&mut table.head)?;
                     table.pad.push(layers[0]);
@@ -636,17 +662,17 @@ impl RuleSet {
                 }
                 "esd_topological" => {
                     let layers = row.layers(1)?;
-                    let clamps = row.need_models("clamp")?;
+                    let clamps = row.models("clamp")?;
                     let table = &mut set.esd_topological;
                     row.head(&mut table.head)?;
                     table.pad.push(layers[0]);
                     table.clamp.extend(clamps);
                     close_csr(&mut table.clamp_start, table.clamp.len());
                 }
-                kind @ ("gate_oxide" | "drain_source") => {
+                "gate_oxide" | "drain_source" => {
                     row.layers(0)?;
-                    let models = row.need_models("model")?;
-                    let max_voltage = Qty::new(row.positive("max_voltage")?);
+                    let models = row.models("model")?;
+                    let max_voltage = Qty::new(row.number("max_voltage")?);
                     let table = if kind == "gate_oxide" {
                         &mut set.gate_oxide
                     } else {
@@ -661,13 +687,6 @@ impl RuleSet {
                     row.layers(0)?;
                     let pmos = row.models("pmos")?;
                     let nmos = row.models("nmos")?;
-                    // A row naming no model would check nothing.
-                    if pmos.is_empty() && nmos.is_empty() {
-                        return Err(ErcError::MissingParam {
-                            rule: row.name(),
-                            param: "pmos",
-                        });
-                    }
                     let table = &mut set.well_bias;
                     row.head(&mut table.head)?;
                     table.pmos.extend(pmos);
@@ -701,7 +720,7 @@ impl RuleSet {
                 }
                 "hv_tag" => {
                     let layers = row.layers(2)?;
-                    let voltage = Qty::new(row.positive("voltage")?);
+                    let voltage = Qty::new(row.number("voltage")?);
                     let table = &mut set.hv_tag;
                     row.head(&mut table.head)?;
                     table.layer.push(layers[0]);
@@ -718,7 +737,7 @@ impl RuleSet {
                 "dielectric_field" => {
                     let count = narrow(row.rules.layers_of(row.spec).len());
                     let layers = row.layers_where(2, (1..=2).contains(&count))?;
-                    let max_field = row.positive("max_field")?;
+                    let max_field = row.number("max_field")?;
                     let vertical = match layers.get(1) {
                         None => Some(0.0),
                         Some(&b) => vertical_gap(&deck.stack, layers[0], b),
@@ -751,10 +770,6 @@ impl RuleSet {
                 "fanout" => {
                     row.layers(0)?;
                     let max_gates = row.count("max_gates")?;
-                    // Zero permitted gates flags every gate net.
-                    if max_gates == 0 {
-                        return Err(row.non_positive("max_gates"));
-                    }
                     let table = &mut set.fanout;
                     row.head(&mut table.head)?;
                     table.max_gates.push(max_gates);
@@ -768,7 +783,7 @@ impl RuleSet {
                 }
                 "hv_domain" => {
                     row.layers(0)?;
-                    let max_domain_delta = Qty::new(row.positive("max_domain_delta")?);
+                    let max_domain_delta = Qty::new(row.number("max_domain_delta")?);
                     let isolation = row.opt_layer("isolation")?;
                     let table = &mut set.hv_domain;
                     row.head(&mut table.head)?;
@@ -778,6 +793,41 @@ impl RuleSet {
                 "ir_drop" => {
                     row.layers(0)?;
                     row.head(&mut set.ir_drop.head)?;
+                }
+                "dynamic_ir_drop" => {
+                    row.layers(0)?;
+                    row.head(&mut set.dynamic_ir_drop.head)?;
+                }
+                "em_thermal" => {
+                    let layers = row.layers_from(1)?;
+                    let max_density = Qty::new(row.number("max_density")?);
+                    let per_cut = Qty::new(row.number("max_current_per_cut")?);
+                    let blech = Qty::new(row.number("blech_limit")?);
+                    let reference = Qty::new(row.number("reference_temperature")?);
+                    let activation = row.number("activation_energy_ev")?;
+                    let exponent = row.number("current_exponent")?;
+                    let conductivity = row.number("thermal_conductivity")?;
+                    let spreading = row.number("heat_spreading")?;
+                    let sigma = row.number("sigma")?;
+                    let limit_failure = row.number("limit_failure")?;
+                    let max_failure = row.number("max_failure")?;
+                    let table = &mut set.em_thermal;
+                    row.head(&mut table.head)?;
+                    table.layer.extend_from_slice(layers);
+                    table.max_density.extend(layers.iter().map(|_| max_density));
+                    table
+                        .max_current_per_cut
+                        .extend(layers.iter().map(|_| per_cut));
+                    table.blech_limit.extend(layers.iter().map(|_| blech));
+                    table.reference_temperature.push(reference);
+                    table.activation_energy_ev.push(activation);
+                    table.current_exponent.push(exponent);
+                    table.thermal_conductivity.push(conductivity);
+                    table.heat_spreading.push(spreading);
+                    table.sigma.push(sigma);
+                    table.limit_failure.push(limit_failure);
+                    table.max_failure.push(max_failure);
+                    close_csr(&mut table.layer_start, table.layer.len());
                 }
                 "missing_tie" => {
                     let layers = row.layers(2)?;
@@ -791,35 +841,27 @@ impl RuleSet {
                 "multiple_drivers" => {
                     row.layers(0)?;
                     let max_drivers = row.count("max_drivers")?;
-                    // Zero permitted drivers flags every driven net.
-                    if max_drivers == 0 {
-                        return Err(row.non_positive("max_drivers"));
-                    }
                     let table = &mut set.multiple_drivers;
                     row.head(&mut table.head)?;
                     table.max_drivers.push(max_drivers);
                 }
                 "p2p_resistance" => {
                     row.layers(0)?;
-                    let max_resistance = Qty::new(row.positive("max_resistance")?);
+                    let max_resistance = Qty::new(row.number("max_resistance")?);
                     let table = &mut set.p2p_resistance;
                     row.head(&mut table.head)?;
                     table.max_resistance.push(max_resistance);
                 }
                 "reliability" => {
                     row.layers(0)?;
-                    let required_lifetime_hours = row.positive("required_lifetime_hours")?;
-                    let reference_lifetime_hours = row.positive("reference_lifetime_hours")?;
-                    let reference_stress = Qty::new(row.positive("reference_stress")?);
-                    let stress_exponent = row.positive("stress_exponent")?;
-                    let reference_temperature = Qty::new(row.positive("reference_temperature")?);
-                    let activation_energy_ev = row.positive("activation_energy_ev")?;
-                    let max_abs_voltage = Qty::new(row.positive("max_abs_voltage")?);
-                    // A zero duty cycle makes every lifetime infinite.
-                    let duty_cycle = row.fraction("duty_cycle")?;
-                    if duty_cycle <= 0.0 {
-                        return Err(row.non_positive("duty_cycle"));
-                    }
+                    let required_lifetime_hours = row.number("required_lifetime_hours")?;
+                    let reference_lifetime_hours = row.number("reference_lifetime_hours")?;
+                    let reference_stress = Qty::new(row.number("reference_stress")?);
+                    let stress_exponent = row.number("stress_exponent")?;
+                    let reference_temperature = Qty::new(row.number("reference_temperature")?);
+                    let activation_energy_ev = row.number("activation_energy_ev")?;
+                    let max_abs_voltage = Qty::new(row.number("max_abs_voltage")?);
+                    let duty_cycle = row.number("duty_cycle")?;
                     let table = &mut set.reliability;
                     row.head(&mut table.head)?;
                     table.required_lifetime_hours.push(required_lifetime_hours);
@@ -859,11 +901,15 @@ impl RuleSet {
                     table.layer.extend_from_slice(layers);
                     close_csr(&mut table.layer_start, table.layer.len());
                 }
-                // Another domain's row; the engine refuses a kind no domain knows.
-                _ => {}
+                // Another domain's row; a kind no domain knows is refused by
+                // `CompiledDeck::from_deck`.
+                _ => continue,
             }
+            let filed = set.head_of(kind).len() - 1;
+            set.check_row(kind, filed, strings)?;
         }
         set.soft_connection.connectivity = deck.connectivity.clone();
+        set.em_thermal.height_nm.clone_from(&deck.stack.height_nm);
         for stack in [&mut set.antenna.stack, &mut set.antenna_electrical.stack] {
             let from = &deck.connectivity;
             stack.conductors.clone_from(&from.conductors);
@@ -882,6 +928,311 @@ impl RuleSet {
                 .collect();
         }
         Ok(set)
+    }
+
+    /// Whether every row's values are ones its kind can hold: every limit,
+    /// rating and lifetime finite and positive, every distance positive,
+    /// every fraction in `0.0 ..= 1.0` (a duty cycle also above 0), a
+    /// `density_cmp` row bounding something, a `well_bias` row naming a
+    /// model, the clamp and model lists of the kinds that need one not empty,
+    /// and `max_drivers` at least 1. [`Self::from_deck`] holds each row to
+    /// this as it is filed; tables built in code are held to the same.
+    ///
+    /// Rows are checked table by table in [`KINDS`] order, each row's values
+    /// in the order its kind reads them.
+    ///
+    /// # Errors
+    ///
+    /// The first failing value: [`ErcError::WrongParamType`] for a number that
+    /// is not finite, [`ErcError::NonPositiveLimit`],
+    /// [`ErcError::NotAFraction`], or [`ErcError::MissingParam`] for a row
+    /// that bounds or names nothing.
+    ///
+    /// # Panics
+    ///
+    /// When a table's columns break the
+    /// [table invariants](crate::erc::rules#tables).
+    pub fn validate(&self, strings: &StrTable) -> Result<(), ErcError> {
+        for kind in KINDS {
+            for row in 0..self.head_of(kind).len() {
+                self.check_row(kind, row, strings)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Every row's rule id with its kind, table by table in [`KINDS`] order.
+    pub fn rules(&self) -> impl Iterator<Item = (StrId, &'static str)> + '_ {
+        KINDS.into_iter().flat_map(move |kind| {
+            self.head_of(kind)
+                .rule
+                .iter()
+                .map(move |&rule| (rule, kind))
+        })
+    }
+
+    /// The head of the table of `kind`, one of [`KINDS`].
+    fn head_of(&self, kind: &str) -> &RuleHead {
+        match kind {
+            "antenna" => &self.antenna.head,
+            "antenna_electrical" => &self.antenna_electrical.head,
+            "density_cmp" => &self.density_cmp.head,
+            "domain_crossing" => &self.domain_crossing.head,
+            "drain_source" => &self.drain_source.head,
+            "electromigration" => &self.electromigration.head,
+            "em_current_density" => &self.em_current_density.head,
+            "dynamic_ir_drop" => &self.dynamic_ir_drop.head,
+            "em_thermal" => &self.em_thermal.head,
+            "esd_latchup" => &self.esd_latchup.head,
+            "esd_topological" => &self.esd_topological.head,
+            "floating_gate" => &self.floating_gate.head,
+            "floating_well" => &self.floating_well.head,
+            "gate_oxide" => &self.gate_oxide.head,
+            "hv_domain" => &self.hv_domain.head,
+            "ir_drop" => &self.ir_drop.head,
+            "missing_level_shifter" => &self.missing_level_shifter.head,
+            "missing_tie" => &self.missing_tie.head,
+            "multiple_drivers" => &self.multiple_drivers.head,
+            "p2p_resistance" => &self.p2p_resistance.head,
+            "reliability" => &self.reliability.head,
+            "soft_connection" => &self.soft_connection.head,
+            "supply_short" => &self.supply_short.head,
+            "tie_high_low" => &self.tie_high_low.head,
+            "unconnected_pin" => &self.unconnected_pin.head,
+            "well_bias" => &self.well_bias.head,
+            "voltage_spacing" => &self.voltage_spacing.head,
+            "dielectric_field" => &self.dielectric_field.head,
+            "hv_tag" => &self.hv_tag.head,
+            "mixed_tag" => &self.mixed_tag.head,
+            "fanout" => &self.fanout.head,
+            "undriven_gate" => &self.undriven_gate.head,
+            "missing_isolation" => &self.missing_isolation.head,
+            other => unreachable!("{other} is not an ERC kind"),
+        }
+    }
+
+    /// [`Self::validate`] for row `r` of the table of `kind`.
+    fn check_row(&self, kind: &str, r: usize, strings: &StrTable) -> Result<(), ErcError> {
+        let c = Check {
+            rule: strings.resolve(self.head_of(kind).rule[r]),
+        };
+        let span = |start: &[u32]| start[r] as usize..start[r + 1] as usize;
+        match kind {
+            "antenna" => {
+                let t = &self.antenna;
+                c.positive("max_ratio", t.max_ratio[r])?;
+                for &measure in &t.collector_measure[span(&t.collector_start)] {
+                    if let antenna::AntennaMeasure::Sidewall { thickness } = measure {
+                        c.length("sidewall_thickness", thickness)?;
+                    }
+                }
+            }
+            "antenna_electrical" => {
+                let t = &self.antenna_electrical;
+                c.positive("max_ratio", t.max_ratio[r])?;
+                c.finite("diode_credit", t.diode_credit[r])?;
+                c.finite("diode_bonus", t.diode_bonus[r])?;
+                c.not_negative("area_minus_diode", t.area_minus_diode[r])?;
+                c.not_negative("gate_plus_diode", t.gate_plus_diode[r])?;
+                c.positive("cut_factor", t.cut_factor[r])?;
+                for &measure in &t.collector_measure[span(&t.collector_start)] {
+                    if let antenna::AntennaMeasure::Sidewall { thickness } = measure {
+                        c.length("sidewall_thickness", thickness)?;
+                    }
+                }
+                for &(_, factor) in &t.diode_reduce[r] {
+                    c.not_negative("diode_reduce", factor)?;
+                }
+                for &(_, limit) in &t.diode_max_ratio[r] {
+                    c.positive("diode_max_ratio", limit)?;
+                }
+            }
+            "density_cmp" => {
+                let t = &self.density_cmp;
+                c.length("window_x", t.window[r].0)?;
+                c.length("window_y", t.window[r].1)?;
+                c.length("step_x", t.step[r].0)?;
+                c.length("step_y", t.step[r].1)?;
+                for (param, bound) in [
+                    ("min_density", t.min_density[r]),
+                    ("max_density", t.max_density[r]),
+                    ("max_neighbour_delta", t.max_neighbour_delta[r]),
+                ] {
+                    if let Some(value) = bound {
+                        c.fraction(param, value)?;
+                    }
+                }
+                if let Some(cmp) = t.cmp[r] {
+                    c.fraction("cmp_target_density", cmp.target_density)?;
+                    c.length("cmp_max_abs_thickness_delta", cmp.max_abs_thickness_delta)?;
+                }
+                // A row bounding nothing would report clean forever.
+                if t.min_density[r].is_none()
+                    && t.max_density[r].is_none()
+                    && t.max_neighbour_delta[r].is_none()
+                    && t.cmp[r].is_none()
+                {
+                    return Err(c.missing("max_density"));
+                }
+            }
+            "electromigration" => {
+                let t = &self.electromigration;
+                for at in span(&t.layer_start) {
+                    c.positive("max_density", t.max_density[at].raw())?;
+                    c.positive("max_current_per_cut", t.max_current_per_cut[at].raw())?;
+                    c.positive("blech_limit", t.blech_limit[at].raw())?;
+                }
+                c.positive("reference_temperature", t.reference_temperature[r].raw())?;
+                c.positive("activation_energy_ev", t.activation_energy_ev[r])?;
+                c.positive("current_exponent", t.current_exponent[r])?;
+            }
+            "em_current_density" => {
+                let t = &self.em_current_density;
+                for at in span(&t.layer_start) {
+                    c.positive("max_density", t.max_density[at].raw())?;
+                    c.positive("max_current_per_cut", t.max_current_per_cut[at].raw())?;
+                    if let Some((width, current)) = t.narrow[at] {
+                        c.length("narrow_width", width)?;
+                        c.positive("narrow_current", current.raw())?;
+                    }
+                }
+            }
+            "em_thermal" => {
+                let t = &self.em_thermal;
+                for at in span(&t.layer_start) {
+                    c.positive("max_density", t.max_density[at].raw())?;
+                    c.positive("max_current_per_cut", t.max_current_per_cut[at].raw())?;
+                    c.positive("blech_limit", t.blech_limit[at].raw())?;
+                }
+                c.positive("reference_temperature", t.reference_temperature[r].raw())?;
+                c.positive("activation_energy_ev", t.activation_energy_ev[r])?;
+                c.positive("current_exponent", t.current_exponent[r])?;
+                c.positive("thermal_conductivity", t.thermal_conductivity[r])?;
+                c.positive("sigma", t.sigma[r])?;
+                // Zero spreading is a one-dimensional heat path; less is no
+                // geometry.
+                c.finite("heat_spreading", t.heat_spreading[r])?;
+                if t.heat_spreading[r] < 0.0 {
+                    return Err(c.non_positive("heat_spreading"));
+                }
+                // A characterisation at 0 or 1 has no quantile; a budget of 0
+                // flags any wire that carries current.
+                for (param, value) in [
+                    ("limit_failure", t.limit_failure[r]),
+                    ("max_failure", t.max_failure[r]),
+                ] {
+                    c.fraction(param, value)?;
+                    if value <= 0.0 {
+                        return Err(c.non_positive(param));
+                    }
+                }
+                if t.limit_failure[r] >= 1.0 {
+                    return Err(ErcError::NotAFraction {
+                        rule: c.rule.to_owned(),
+                        param: "limit_failure",
+                    });
+                }
+            }
+            "esd_latchup" => {
+                let t = &self.esd_latchup;
+                c.length("min_guard_ring_width", t.min_guard_ring_width[r])?;
+                c.length("max_tap_distance", t.max_tap_distance[r])?;
+                if span(&t.clamp_start).is_empty() {
+                    return Err(c.missing("clamp"));
+                }
+            }
+            "esd_topological" if span(&self.esd_topological.clamp_start).is_empty() => {
+                return Err(c.missing("clamp"));
+            }
+            "gate_oxide" | "drain_source" => {
+                let t = if kind == "gate_oxide" {
+                    &self.gate_oxide
+                } else {
+                    &self.drain_source
+                };
+                if span(&t.model_start).is_empty() {
+                    return Err(c.missing("model"));
+                }
+                c.positive("max_voltage", t.max_voltage[r].raw())?;
+            }
+            // A row naming no model would check nothing.
+            "well_bias" => {
+                let t = &self.well_bias;
+                if span(&t.pmos_start).is_empty() && span(&t.nmos_start).is_empty() {
+                    return Err(c.missing("pmos"));
+                }
+            }
+            "hv_domain" => {
+                c.positive("max_domain_delta", self.hv_domain.max_domain_delta[r].raw())?;
+            }
+            "missing_tie" => c.length("max_distance", self.missing_tie.max_distance[r])?,
+            // Zero permitted drivers flags every driven net.
+            "multiple_drivers" if self.multiple_drivers.max_drivers[r] == 0 => {
+                return Err(c.non_positive("max_drivers"));
+            }
+            "p2p_resistance" => {
+                c.positive(
+                    "max_resistance",
+                    self.p2p_resistance.max_resistance[r].raw(),
+                )?;
+            }
+            "reliability" => {
+                let t = &self.reliability;
+                c.positive("required_lifetime_hours", t.required_lifetime_hours[r])?;
+                c.positive("reference_lifetime_hours", t.reference_lifetime_hours[r])?;
+                c.positive("reference_stress", t.reference_stress[r].raw())?;
+                c.positive("stress_exponent", t.stress_exponent[r])?;
+                c.positive("reference_temperature", t.reference_temperature[r].raw())?;
+                c.positive("activation_energy_ev", t.activation_energy_ev[r])?;
+                c.positive("max_abs_voltage", t.max_abs_voltage[r].raw())?;
+                // A zero duty cycle makes every lifetime infinite.
+                c.fraction("duty_cycle", t.duty_cycle[r])?;
+                if t.duty_cycle[r] <= 0.0 {
+                    return Err(c.non_positive("duty_cycle"));
+                }
+            }
+            "hv_tag" => c.positive("voltage", self.hv_tag.voltage[r].raw())?,
+            "dielectric_field" => c.positive("max_field", self.dielectric_field.max_field[r])?,
+            // Zero permitted gates flags every gate net.
+            "fanout" if self.fanout.max_gates[r] == 0 => {
+                return Err(c.non_positive("max_gates"));
+            }
+            "voltage_spacing" => {
+                let t = &self.voltage_spacing;
+                let steps = span(&t.step_start);
+                let (voltage, space) = (&t.voltage[steps.clone()], &t.space[steps]);
+                let bad = |why| ErcError::BadTable {
+                    rule: c.rule.to_owned(),
+                    why,
+                };
+                if voltage.is_empty() {
+                    return Err(c.missing("voltage"));
+                }
+                for step in voltage {
+                    c.finite("voltage", step.raw())?;
+                }
+                if voltage[0].raw() < 0.0
+                    || voltage
+                        .windows(2)
+                        .any(|pair| pair[0].raw() >= pair[1].raw())
+                {
+                    return Err(bad(
+                        "a voltage table's voltages start at 0 V or more and rise strictly",
+                    ));
+                }
+                for &step in space {
+                    c.length("space", step)?;
+                }
+                if space.windows(2).any(|pair| pair[1] < pair[0]) {
+                    return Err(bad(
+                        "a voltage table's spaces never fall as the voltage rises",
+                    ));
+                }
+            }
+            // Nothing beyond the layers and models each row names.
+            _ => {}
+        }
+        Ok(())
     }
 
     /// Configured rule rows across every table: the number of `RuleRun` rows a
@@ -906,6 +1257,8 @@ impl RuleSet {
             &self.ir_drop.head,
             &self.em_current_density.head,
             &self.electromigration.head,
+            &self.dynamic_ir_drop.head,
+            &self.em_thermal.head,
             &self.reliability.head,
             &self.hv_domain.head,
             &self.esd_latchup.head,
@@ -980,7 +1333,14 @@ impl RuleSet {
         supply::check_mixed_tag(design, &self.mixed_tag, out, runs);
 
         antenna::check_antenna(design, &self.antenna, scratch, out, runs);
-        antenna::check_antenna_electrical(design, &self.antenna_electrical, scratch, out, runs);
+        antenna::check_antenna_electrical(
+            design,
+            grid,
+            &self.antenna_electrical,
+            scratch,
+            out,
+            runs,
+        );
         antenna::check_density_cmp(design, die, &self.density_cmp, scratch, out, runs);
 
         electrical::check_p2p_resistance(
@@ -1006,6 +1366,16 @@ impl RuleSet {
             grid,
             operating_temperature,
             &self.electromigration,
+            out,
+            runs,
+        );
+        electrical::check_dynamic_ir_drop(power, intent, &self.dynamic_ir_drop, scratch, out, runs);
+        electrical::check_em_thermal(
+            power,
+            intent,
+            grid,
+            operating_temperature,
+            &self.em_thermal,
             out,
             runs,
         );
