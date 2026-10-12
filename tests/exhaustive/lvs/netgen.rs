@@ -417,15 +417,22 @@ fn on_each_side(model: &str, body: &str) -> String {
     )
 }
 
-/// One case's setup file: its asymmetric models, which [`SETUP`] reads, the
-/// setup, then its other controls ([`netgen_controls`]). Every file sets
-/// `$asymmetric`, since one Netgen process runs a whole batch and a Tcl
-/// global would carry over from the case before.
-fn netgen_setup(setup: &str, controls: &Controls) -> String {
+/// One case's setup file, the only way [`SETUP`] reaches Netgen: its
+/// asymmetric models, which [`SETUP`] reads and nothing else defines, the
+/// setup with `TOL` replaced by Netgen's tolerance (`2t/(2 - t)` for
+/// [`TOLERANCE`]), then its other controls ([`netgen_controls`]). Every
+/// file sets `$asymmetric`, since one Netgen process runs a whole batch and
+/// a Tcl global would carry over from the case before; a setup written
+/// without it would make Netgen skip every `permute` and `tolerance` line
+/// of [`SETUP`] (an unset variable errors out of the loop), silently
+/// weakening the differential.
+fn netgen_setup(controls: &Controls) -> String {
+    let tolerance = 2.0 * TOLERANCE / (2.0 - TOLERANCE);
     let asymmetric: Vec<&str> = controls.asymmetric.iter().map(|m| m.name()).collect();
     format!(
-        "set asymmetric {{{}}}\n{setup}{}",
+        "set asymmetric {{{}}}\n{}{}",
         asymmetric.join(" "),
+        SETUP.replace("TOL", &tolerance.to_string()),
         netgen_controls(controls)
     )
 }
@@ -897,8 +904,6 @@ fn differential(netgen: &Path, cases: &[Case]) -> Tally {
     let write = |name: &str, text: &str| {
         std::fs::write(dir.join(name), text).expect("the scratch directory is writable");
     };
-    let tolerance = 2.0 * TOLERANCE / (2.0 - TOLERANCE);
-    let setup = SETUP.replace("TOL", &tolerance.to_string());
     let mut tally = Tally {
         cases: cases.len(),
         ..Tally::default()
@@ -908,7 +913,7 @@ fn differential(netgen: &Path, cases: &[Case]) -> Tally {
         if has_device(&case.reference) {
             write(&format!("l{i}.spice"), &case.layout);
             write(&format!("r{i}.spice"), &case.reference);
-            write(&format!("s{i}.tcl"), &netgen_setup(&setup, &case.controls));
+            write(&format!("s{i}.tcl"), &netgen_setup(&case.controls));
             match &case.verilog {
                 None => {
                     let _ = writeln!(
@@ -1077,9 +1082,7 @@ fn netgen_differential_system_stacks() {
     let write = |name: &str, text: &str| {
         std::fs::write(dir.join(name), text).expect("the scratch directory is writable");
     };
-    let tolerance = 2.0 * TOLERANCE / (2.0 - TOLERANCE);
-    let setup = SETUP.replace("TOL", &tolerance.to_string());
-    write("setup.tcl", &netgen_setup(&setup, &Controls::default()));
+    write("setup.tcl", &netgen_setup(&Controls::default()));
     let mut batch = String::new();
     for (i, (_, _, layout, reference)) in cases.iter().enumerate() {
         write(&format!("l{i}.spice"), &for_netgen(&spice(layout)));
@@ -1115,4 +1118,35 @@ fn netgen_differential_system_stacks() {
         let _ = std::fs::remove_dir_all(&dir);
     }
     assert!(agreed > 100, "the stacks ran");
+}
+
+/// Every setup a differential writes defines `$asymmetric` before
+/// [`SETUP`] reads it, and carries the setup's `permute` and `tolerance`
+/// lines with the tolerance filled in, for every controls value the cases
+/// use: a setup missing them would let Netgen compare with its own defaults
+/// and agree for the wrong reason.
+///
+/// Oracle: construct-from-answer: the lines [`SETUP`] states and the value
+/// `2t/(2 - t)` of `CompareOptions::param_tolerance`'s documented 2 %,
+/// 0.020202..., searched for in each file written.
+#[test]
+fn every_netgen_setup_defines_what_it_reads() {
+    let mut controls: Vec<Controls> = curated().into_iter().map(|case| case.controls).collect();
+    controls.push(Controls::default());
+    for controls in &controls {
+        let setup = netgen_setup(controls);
+        assert!(setup.starts_with("set asymmetric {"), "{setup}");
+        assert!(
+            !setup.contains("TOL"),
+            "a tolerance left unfilled:\n{setup}"
+        );
+        for line in [
+            "permute \"$side $mos\" source drain",
+            "permute \"$side rpoly\" end_a end_b",
+            "property \"$side $mos\" tolerance {w 0.0202",
+            "property \"$side $passive\" parallel enable",
+        ] {
+            assert!(setup.contains(line), "{line} missing from\n{setup}");
+        }
+    }
 }
