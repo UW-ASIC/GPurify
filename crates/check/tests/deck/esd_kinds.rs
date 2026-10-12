@@ -35,8 +35,8 @@ rule par esd_parasitic(pad, diff; min_spacing: 5um)
 rule exp esd_exposed(pad; clamps: [\"dio\"], resistors: none, rated: [\"dio\"])
 rule grb guard_ring_bias(ring; power: false)
 rule ta tie_area(well, cont, gate; min_ratio: 3%)
-rule gr guard_ring(diff, ring; max_space: 15um, min_width: 2um, pad: pad, near: none, within: none)
-rule gr.near guard_ring(mk, ring; max_space: none, min_width: none, pad: none, near: well, within: 50um)
+rule gr guard_ring(diff, ring; max_space: 15um, min_width: 2um, pad: pad, near: none, within: none, clear: none)
+rule gr.near guard_ring(mk, ring; max_space: none, min_width: none, pad: none, near: well, within: 50um, clear: none)
 rule fd forward_diode(mk; models: [\"dio\"])
 rule ct conditional_tie(diff, cont, well, gate; within: 50um, spacing: [1um, 2um], \
 max_distance: [15um, 30um, 50um])
@@ -104,11 +104,20 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     d.rule("ta", tie_area(well, cont, gate, 0.03));
     d.rule(
         "gr",
-        guard_ring(diff, ring, Some(um(15)), Some(um(2)), Some(pad), None, None),
+        guard_ring(
+            diff,
+            ring,
+            Some(um(15)),
+            Some(um(2)),
+            Some(pad),
+            None,
+            None,
+            None,
+        ),
     );
     d.rule(
         "gr.near",
-        guard_ring(mk, ring, None, None, None, Some(well), Some(um(50))),
+        guard_ring(mk, ring, None, None, None, Some(well), Some(um(50)), None),
     );
     d.rule("fd", forward_diode(mk, &["dio"]));
     d.rule(

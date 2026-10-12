@@ -5481,7 +5481,7 @@ fn guard_ring() -> Vec<Fixture> {
     let (pad_net, other) = (5, 6);
     let deck = format!(
         "{}rule gr guard_ring(diff, ring; max_space: 15um, min_width: 2um, pad: pad, \
-         near: none, within: none)\n",
+         near: none, within: none, clear: none)\n",
         diode_process()
     );
     let target: Rect = (0, -6000, 2000, -5000);
@@ -5546,6 +5546,7 @@ fn guard_ring() -> Vec<Fixture> {
         out.extend(every_placement(&[f]));
     }
     out.extend(native_ring());
+    out.extend(native_clear());
     out.extend(double_ring());
     out
 }
@@ -5557,9 +5558,9 @@ fn guard_ring() -> Vec<Fixture> {
 fn double_ring() -> Vec<Fixture> {
     let deck = "grid 1nm\nlayer hv = gds(1, 0)\nlayer nring = gds(2, 0)\nlayer pring = gds(3, 0)\n\
                 rule dn guard_ring(hv, nring; max_space: none, min_width: none, pad: none, \
-                near: none, within: none)\n\
+                near: none, within: none, clear: none)\n\
                 rule dp guard_ring(hv, pring; max_space: none, min_width: none, pad: none, \
-                near: none, within: none)\n";
+                near: none, within: none, clear: none)\n";
     let mut out = Vec::new();
     for outer in [true, false] {
         let mut l = Layout::default();
@@ -5592,7 +5593,7 @@ fn double_ring() -> Vec<Fixture> {
 fn native_ring() -> Vec<Fixture> {
     let deck = "grid 1nm\nlayer nat = gds(1, 0)\nlayer well = gds(2, 0)\nlayer ring = gds(3, 0)\n\
                 rule lu5 guard_ring(nat, ring; max_space: none, min_width: none, pad: none, \
-                near: well, within: 50um)\n";
+                near: well, within: 50um, clear: none)\n";
     let mut out = Vec::new();
     for (gap, ringed) in [
         (49_999, false),
@@ -5613,6 +5614,59 @@ fn native_ring() -> Vec<Fixture> {
         };
         let f = Fixture::new(
             &format!("erc/guard_ring/native/{gap}_{ringed}"),
+            &["ERC-D7"],
+            deck,
+            ERC,
+        )
+        .layout(l)
+        .expect(Expect::rule("lu5", findings));
+        out.extend(every_placement(&[f]));
+    }
+    out
+}
+
+/// `guard_ring` with `clear` for GF180MCU LU.5's "No other NCOMP, NWELL in
+/// between the NAT and PCOMP guard ring" (ERC-D7): `clear` is the derived
+/// `ncomp or well`. The ring's hole is (-200, -200)-(2200, 2200) round a NAT
+/// at (0, 0)-(2000, 2000), its band 300 wide; the near well sits 1 µm
+/// right of the ring. Hand-derived: a clear figure counts when it has area
+/// in the hole outside the NAT, so an NCOMP inside the NAT, or one lying on
+/// the ring's band, is clean, and one in the gap, one straddling the NAT's
+/// edge into the gap, or a well island in the gap each count once.
+fn native_clear() -> Vec<Fixture> {
+    let deck = "grid 1nm\nlayer nat = gds(1, 0)\nlayer well = gds(2, 0)\nlayer ring = gds(3, 0)\n\
+                layer ncomp = gds(4, 0)\nlayer between = ncomp or well\n\
+                rule lu5 guard_ring(nat, ring; max_space: none, min_width: none, pad: none, \
+                near: well, within: 50um, clear: between)\n";
+    let cases: [(&str, &[(&str, Rect)], u32); 7] = [
+        ("empty", &[], 0),
+        ("ncomp_in_nat", &[("ncomp", (500, 500, 1500, 1500))], 0),
+        ("ncomp_on_ring", &[("ncomp", (-450, 0, -250, 200))], 0),
+        ("ncomp_in_gap", &[("ncomp", (2050, 0, 2150, 100))], 1),
+        ("ncomp_straddles_nat", &[("ncomp", (1900, 500, 2100, 600))], 1),
+        ("well_in_gap", &[("well", (0, 2050, 100, 2150))], 1),
+        (
+            "two_in_gap",
+            &[("ncomp", (2050, 0, 2150, 100)), ("ncomp", (-150, 0, -50, 100))],
+            2,
+        ),
+    ];
+    let mut out = Vec::new();
+    for (name, extra, between) in cases {
+        let mut l = Layout::default();
+        rect(&mut l, "nat", (0, 0, 2000, 2000));
+        rect(&mut l, "well", (3500, 0, 7500, 4000));
+        ring_round(&mut l, "ring", (-200, -200, 2200, 2200), 300);
+        for &(layer, r) in extra {
+            rect(&mut l, layer, r);
+        }
+        let findings = if between > 0 {
+            vec![count(between)]
+        } else {
+            Vec::new()
+        };
+        let f = Fixture::new(
+            &format!("erc/guard_ring/native_clear/{name}"),
             &["ERC-D7"],
             deck,
             ERC,

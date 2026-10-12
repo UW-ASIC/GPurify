@@ -125,7 +125,7 @@
 //! | `p2p_resistance(; max)` | `p2p_resistance` | [`erc::RuleSet::p2p_resistance`] | two points on one net too far apart in resistance | ERC-C6, ERC-D4 |
 //! | `reliability(; ..)` | `reliability` | [`erc::RuleSet::reliability`] | a device whose predicted lifetime is too short | ERC-E5, ERC-F5 |
 //! | `forward_diode(marker; models)` | `forward_diode` | [`erc::RuleSet::forward_diode`] | a diode the supplies can forward-bias that no latch-up marker covers | ERC-D8 |
-//! | `guard_ring(target, ring; max_space, min_width, pad, near, within)` | `guard_ring` | [`erc::RuleSet::guard_ring`] | a target no closed ring surrounds, one too far inside its ring, or a ring too narrow | ERC-D2, ERC-D6, ERC-D7, ERC-D8 |
+//! | `guard_ring(target, ring; max_space, min_width, pad, near, within, clear)` | `guard_ring` | [`erc::RuleSet::guard_ring`] | a target no closed ring surrounds, one too far inside its ring, a ring too narrow, or a ring holding other `clear` area | ERC-D2, ERC-D6, ERC-D7, ERC-D8 |
 //! | `guard_ring_bias(ring; power)` | `guard_ring_bias` | [`erc::RuleSet::guard_ring_bias`] | an n-type ring or tap off the most positive supply, a p-type one off ground | ERC-D3, ERC-D6 |
 //! | `hv_domain(; max_delta, isolation)` | `hv_domain` | [`erc::RuleSet::hv_domain`] | a device spanning supply domains too far apart | DRC-083, ERC-F10 |
 //! | `hv_tag(L, tag; voltage)` | `hv_tag` | [`erc::RuleSet::hv_tag`] | a figure on a net that can reach `voltage` or more, not inside `tag` | DRC-083 |

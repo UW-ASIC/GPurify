@@ -391,6 +391,7 @@ fn a_target_in_a_hole_s_box_but_not_its_hole_is_not_surrounded() {
             min_width: vec![None],
             pad: vec![None],
             near: vec![None],
+            clear: vec![None],
         },
         &mut Scratch::default(),
         &mut out,

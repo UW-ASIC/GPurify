@@ -296,13 +296,18 @@ pub fn check_tie_area(
 /// unless one of two conditions leaves it out: with `pad`, only a target on a
 /// net that holds a polygon of `pad` (a diffusion directly connected to an
 /// I/O pad; `target` must then conduct); with `near` and `within`, only a
-/// target with a polygon of `near` no further than `within` from it. Needs no
-/// design intent.
+/// target with a polygon of `near` no further than `within` from it. With
+/// `clear`, the ring must directly surround the target: the innermost hole
+/// round it may hold no area of the `clear` layer outside the target itself.
+/// Needs no design intent.
 ///
 /// So GF180MCU IO.1 (a2) and IO.2 are `guard_ring(ncomp_in_psub, nwell_ring;
 /// max_space: 15um, min_width: 2um, pad: pad, ..)`, IO.3 (a2) and IO.4 the
 /// same for p-diffusion in an n-well, LU.5 `guard_ring(nat, psub_ring; near:
-/// nwell, within: 50um, ..)`, and §14.3.3's forward-biased diodes, once
+/// nwell, within: 50um, clear: ncomp_or_nwell, ..)` ("NAT layer shall be
+/// directly surrounded by PCOMP substrate guard ring. (No other NCOMP, NWELL
+/// in between the NAT and PCOMP guard ring)", `ncomp_or_nwell` a derived
+/// `ncomp or nwell`), and §14.3.3's forward-biased diodes, once
 /// marked, `guard_ring(marked_diode, nwell_ring; ..)`. §14.3.4's double
 /// guard ring round high-voltage devices is two rows, `guard_ring(hv,
 /// nwell_ring; ..)` and `guard_ring(hv, psub_ring; ..)`, with
@@ -311,8 +316,9 @@ pub fn check_tie_area(
 /// # Limits
 ///
 /// The space is box to box: exact for a rectangular target in a rectangular
-/// hole, over-reported for other shapes. LU.5's "no other NCOMP, NWELL in
-/// between" is not checked: anything may lie in the hole beside the target.
+/// hole, over-reported for other shapes. The hole `clear` reads is the hole's
+/// box less its ring: exact unless another hole of the same ring figure lies
+/// in that box, which can only over-report.
 ///
 /// Catalog: ERC-D2, ERC-D6, ERC-D7, ERC-D8 in the [check catalog]. Defined
 /// by
@@ -342,6 +348,84 @@ pub struct GuardRingTable {
     /// Per row: the layer, and the distance, a target must be near to be
     /// selected; `None` selects all.
     pub near: Vec<Option<(LayerId, Dbu)>>,
+    /// Per row: the layer that may have no area between a target and its
+    /// ring; `None` leaves the hole unread.
+    pub clear: Vec<Option<LayerId>>,
+}
+
+/// What a `clear` row reads: the `clear` layer's merged rectangles labelled
+/// by figure, every ring figure's rectangles, and the target layer's drawn
+/// rectangles.
+struct ClearIndex {
+    clear: SortedRects<u32>,
+    ring_rects: Vec<Bbox>,
+    ring_start: Vec<u32>,
+    targets: LayerRects,
+    first_target: u32,
+}
+
+impl ClearIndex {
+    /// `None` when the clear or target layer will not validate or merge.
+    fn new(
+        store: &GeometryStore,
+        clear: LayerId,
+        target: LayerId,
+        rings: &ValidatedLayer,
+    ) -> Option<Self> {
+        let (mut drawn, mut merged) = (ValidatedLayer::default(), ValidatedLayer::default());
+        merged_into(store, clear, &mut drawn, &mut merged)?;
+        let (mut rects, mut start) = (Vec::new(), Vec::new());
+        decompose_into(&merged, &mut rects, &mut start);
+        let labelled = start
+            .windows(2)
+            .zip(0u32..)
+            .flat_map(|(span, f)| {
+                rects[span[0] as usize..span[1] as usize]
+                    .iter()
+                    .map(move |&r| (r, f))
+            })
+            .collect();
+        let (mut ring_rects, mut ring_start) = (Vec::new(), Vec::new());
+        decompose_into(rings, &mut ring_rects, &mut ring_start);
+        validate_layer_into(store, target, &mut drawn).ok()?;
+        let mut targets = LayerRects::default();
+        targets.build(store, target, &drawn);
+        Some(ClearIndex {
+            clear: SortedRects::new(labelled),
+            ring_rects,
+            ring_start,
+            targets,
+            first_target: store.polys_on_layer(target).start,
+        })
+    }
+
+    /// The `clear` figures with area in `hole` (a box of ring figure
+    /// `figure`) off that figure and off `target`: the hole's area, less the
+    /// ring's within the box, less the target's, which lies in the hole.
+    fn between(&self, hole: Bbox, figure: usize, target: PolyId) -> u32 {
+        let mut area: Vec<(u32, i128)> = Vec::new();
+        let mut add = |r: Bbox, sign: i128| {
+            for (piece, f) in self.clear.overlapping(r) {
+                let a = sign * piece.area().raw();
+                match area.iter_mut().find(|e| e.0 == f) {
+                    Some(e) => e.1 += a,
+                    None => area.push((f, a)),
+                }
+            }
+        };
+        add(hole, 1);
+        let span = self.ring_start[figure] as usize..self.ring_start[figure + 1] as usize;
+        for &r in &self.ring_rects[span] {
+            if let Some(r) = r.intersection(hole) {
+                add(r, -1);
+            }
+        }
+        let poly = self.targets.poly_of_row[(target.0 - self.first_target) as usize];
+        for &r in self.targets.of(poly) {
+            add(r, -1);
+        }
+        u32::try_from(area.iter().filter(|e| e.1 > 0).count()).expect("figures fit a u32")
+    }
 }
 
 /// The counter-clockwise rows of `layer`: its polygons, not their holes.
@@ -397,10 +481,12 @@ fn ring_box(xs: &[Dbu], ys: &[Dbu]) -> Bbox {
 /// `examined` counts selected targets. A target no ring surrounds is a
 /// violation at its first vertex, on the target layer, measuring the count of
 /// rings round it, 0, against 1; one too far from its ring measures the
-/// largest gap against `max_space`. A surrounding ring narrower than
+/// largest gap against `max_space`; one whose hole holds `clear` area measures
+/// the count of `clear` figures with area there against 0. A surrounding ring narrower than
 /// `min_width` is one violation at the first vertex of the lowest drawn
 /// polygon under it, on the ring layer, measuring its narrowest band. A row
-/// is refused when its ring layer will not validate or merge.
+/// is refused when its ring, `clear` or target layer will not validate or
+/// merge.
 ///
 /// # Panics
 ///
@@ -430,6 +516,17 @@ pub fn check_guard_ring(
         let selected: Option<Vec<NetId>> = table.pad[row].map(|pad| pad_nets(design, pad));
         let near: Option<(Vec<PolyId>, Dbu)> =
             table.near[row].map(|(layer, within)| (outers(store, layer).collect(), within));
+        let clear = match table.clear[row] {
+            None => None,
+            Some(layer) => {
+                let Some(index) = ClearIndex::new(store, layer, target_layer, &scratch.layer_b)
+                else {
+                    record_run(runs, out, before, rule, Outcome::Refused, 0);
+                    continue;
+                };
+                Some(index)
+            }
+        };
         let mut reported: Vec<usize> = Vec::new();
         let mut examined = 0u64;
         for target in outers(store, target_layer) {
@@ -489,6 +586,18 @@ pub fn check_guard_ring(
                 );
                 continue;
             };
+            if let Some(index) = &clear {
+                let between = index.between(hole, figure, target);
+                if between > 0 {
+                    push(
+                        target_layer,
+                        at,
+                        target,
+                        Measurement::Count(between),
+                        Measurement::Count(0),
+                    );
+                }
+            }
             if let Some(max_space) = table.max_space[row] {
                 let gap = (tb.xlo - hole.xlo)
                     .max(hole.xhi - tb.xhi)
