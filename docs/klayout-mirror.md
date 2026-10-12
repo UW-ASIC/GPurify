@@ -321,8 +321,9 @@ explains (kind 30).
 | 72 | cut_area_change | `cut_area_change(pre, post, lower, upper; cuts, change)` | POINT | EXACT (scripted) | exact | new |
 | 73 | pattern_match | `pattern(L; window, shapes, ignore)` | POINT | EXACT (scripted) | exact | new |
 | 74 | dfm_score | `dfm_score(L[, outer]; check, required, recommended, rate) >= s` | — | NONE | reported as not mirrored (a score over a mirrored check's findings) | — |
+| 75 | via_redundancy | `via_redundancy(cut, lower, upper; pitch, space) >= r` | POINT | EXACT (scripted) | exact | new |
 
-49 kinds are EXACT (eleven scripted over KLayout's polygons), 16 APPROX and nine NONE; `convex_corner_spacing` is NONE on a deck with
+50 kinds are EXACT (twelve scripted over KLayout's polygons), 16 APPROX and nine NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`, and between two layers (`space(A, B; nets: ..)`), which is not mirrored. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1491,6 +1492,15 @@ distinct window, at its centre. **KLayout** (prelude `pattern`): the same placem
 `RBA::Trans` (four turns, with and without the mirror), the same comparison by `Region#^`.
 **Key**: POINT. **Oracle**: US7757190B2's definition with deck-supplied patterns; fixtures
 `pattern/*`.
+
+### 75. via_redundancy — EXACT (scripted)
+
+**GPurify** (`via.rs` `via_redundancy`): connectors as `cut_area_change` reads them; a single cut
+is dead when none of its box's four `pitch` neighbours lies wholly on both figures at least
+`space` from every merged cut; one finding at the first dead cut when `1 - dead / vias` is below
+the limit. **KLayout** (prelude `via_redundancy`): the same over pairs of merged polygons, with
+`Box#moved` and `Region` differences. **Key**: POINT. **Oracle**: Xu et al. (ASP-DAC 2005) with
+deck-supplied values; fixtures `via_redundancy/*`.
 
 ### Derived-layer operations
 

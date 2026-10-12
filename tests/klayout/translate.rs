@@ -383,6 +383,41 @@ def via_stack(rule, layers, max)
     end
   end
 end
+# The redundant-via rate (x2): per pair of merged lower and upper polygons
+# that overlap, the merged cuts on their overlap are a via; a single cut is
+# dead when none of its box's four neighbours at `pitch` lies wholly on both
+# polygons at least `space` from every cut.
+def via_redundancy(rule, cut, lower, upper, pitch, space, limit)
+  cuts = cut.data.merged.each.map(&:bbox)
+  gap2 = lambda do |a, b|
+    dx = [b.left - a.right, a.left - b.right, 0].max
+    dy = [b.bottom - a.top, a.bottom - b.top, 0].max
+    dx * dx + dy * dy
+  end
+  vias = 0
+  dead = []
+  lower.data.merged.each do |l|
+    upper.data.merged.each do |u|
+      f = RBA::Region.new(l) & RBA::Region.new(u)
+      next if f.is_empty?
+      held = cuts.select { |b| !(RBA::Region.new(b) & f).is_empty? }
+      next if held.empty?
+      vias += 1
+      next if held.size > 1
+      b = held[0]
+      room = [[pitch, 0], [-pitch, 0], [0, pitch], [0, -pitch]].any? do |dx, dy|
+        c = b.moved(dx, dy)
+        (RBA::Region.new(c) - RBA::Region.new(l)).is_empty? &&
+          (RBA::Region.new(c) - RBA::Region.new(u)).is_empty? &&
+          cuts.all? { |o| gap2.(c, o) >= space * space }
+      end
+      dead << b unless room
+    end
+  end
+  return if vias == 0
+  rate = 1.0 - dead.size.to_f / vias
+  put({ rule: rule, pt: [dead[0].center.x, dead[0].center.y], v: rate }) if rate < limit
+end
 # A pattern on one layer (x2): window w x h from the origin, shape and
 # don't-care boxes, anchor; every placement in the eight orientations with
 # the anchor on a corner of the merged layer where the layer clipped to the
@@ -2108,6 +2143,29 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 Value::Ignore,
                 vec![],
             ),
+            Rule::ViaRedundancy {
+                cut,
+                lower,
+                upper,
+                pitch,
+                space,
+                limit,
+            } => {
+                for layer in [cut, lower, upper] {
+                    layers.reads(layer, &mut reads);
+                }
+                writeln!(
+                    body,
+                    "via_redundancy({q}, {}, {}, {}, {}, {}, {limit:?})",
+                    var(cut),
+                    var(lower),
+                    var(upper),
+                    lim(pitch),
+                    lim(space)
+                )
+                .expect("a String");
+                exact("via_redundancy", Key::Point, Value::Ratio)
+            }
             Rule::DfmScore { .. } => (
                 "dfm_score",
                 Verdict::None("a score over another check's findings; the check itself is mirrored"),

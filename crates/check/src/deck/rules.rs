@@ -415,6 +415,14 @@ kinds! {
         step: Dbu = "step",
         limit: f64 = "limit",
     }
+    /// [`Rule::ViaRedundancy`](crate::drc::Rule::ViaRedundancy):
+    /// `via_redundancy(cut, lower, upper; pitch, space) >= limit`; `limit` a
+    /// fraction.
+    via_redundancy(cut: one, lower: one, upper: one) [] {
+        pitch: Dbu = "pitch",
+        space: Dbu = "space",
+        limit: f64 = "limit",
+    }
     /// [`Rule::DfmScore`](crate::drc::Rule::DfmScore):
     /// `dfm_score(layer[, outer]; check, required, recommended, rate) >=
     /// limit`; `outer` only for [`DfmCheck::Enclosure`], `rate` and `limit`

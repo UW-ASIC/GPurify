@@ -1805,6 +1805,43 @@ pub enum Rule {
         /// Index into [`RuleSet::widths`].
         widths: u32,
     },
+    /// A design whose redundant-via rate is below `limit`.
+    ///
+    /// Deck: `via_redundancy(cut, lower, upper; pitch: len, space: len) >=
+    /// frac`, kind `via_redundancy`. A via is the merged `cut` figures on a
+    /// connector, a merged `lower` figure and a merged `upper` figure that
+    /// overlap (as [`Rule::CutAreaChange`] reads them). A single-cut via is
+    /// dead when no redundant cut can go beside it: none of its cut's four
+    /// neighbours, its box moved `pitch` left, right, up or down, lies wholly
+    /// on both of its figures at least `space` from every cut, its own
+    /// included. The rate is `1 - dead / vias`, the redundant-via rate of
+    /// Xu, Huang and Wong (ASP-DAC 2005), which counts the single vias that
+    /// cannot be doubled. Values deck-supplied; no public deck states them:
+    /// where a second cut may go is the foundry's via-doubling rule.
+    ///
+    /// At most one violation, on `cut`, at the centre of the first dead
+    /// via's cut, `measured` the rate against `limit`, naming no shape.
+    /// `examined` counts vias.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-117. Rules: Calibre `YieldAnalyzer`'s via redundancy, Xu et al.
+    /// (ASP-DAC 2005).
+    ViaRedundancy {
+        /// The cut layer.
+        cut: LayerId,
+        /// The layer under the cuts.
+        lower: LayerId,
+        /// The layer over the cuts.
+        upper: LayerId,
+        /// How far a redundant cut sits from the one it doubles, centre to
+        /// centre along one axis, in grid units; positive.
+        pitch: Dbu,
+        /// The least gap from a redundant cut to any cut, in grid units;
+        /// 0 or more.
+        space: Dbu,
+        /// The least rate, from 0 to 1.
+        limit: f64,
+    },
     /// A design whose DFM score over a recommended rule's findings is below
     /// `limit`.
     ///
@@ -3315,6 +3352,17 @@ impl RuleSet {
                     radius: length(spec, "radius")?,
                     limit: area_limit(spec, "limit")?,
                 },
+                "via_redundancy" => {
+                    layers(spec, 3)?;
+                    Rule::ViaRedundancy {
+                        cut: layer(spec, 0),
+                        lower: layer(spec, 1),
+                        upper: layer(spec, 2),
+                        pitch: length(spec, "pitch")?,
+                        space: at_least_zero(spec, "space")?,
+                        limit: ratio(spec, "limit")?,
+                    }
+                }
                 "dfm_score" => {
                     let check = match count(spec, "check", 2)? {
                         0 => DfmCheck::Space,
@@ -4302,6 +4350,22 @@ impl RuleSet {
                         radius,
                         limit,
                     } => area::critical_area(store, id, layer, radius, limit, s, out),
+                    Rule::ViaRedundancy {
+                        cut,
+                        lower,
+                        upper,
+                        pitch,
+                        space,
+                        limit,
+                    } => via::via_redundancy(
+                        store,
+                        id,
+                        (cut, lower, upper),
+                        (pitch, space),
+                        limit,
+                        s,
+                        out,
+                    ),
                     Rule::DfmScore {
                         check,
                         layer,
@@ -4982,6 +5046,18 @@ impl Rule {
             // The bands are checked where they are filed.
             Rule::CoverDensity { window, step, .. } => length(window).and(length(step)),
             Rule::CutAreaChange { .. } | Rule::PatternMatch { .. } => Ok(()),
+            Rule::ViaRedundancy {
+                pitch,
+                space,
+                limit,
+                ..
+            } => length(pitch)
+                .and(if space.raw() < 0 {
+                    Err(refuse(space.raw()))
+                } else {
+                    Ok(())
+                })
+                .and(fraction(limit)),
             Rule::DfmScore {
                 required,
                 recommended,
@@ -5238,6 +5314,7 @@ impl Rule {
             Rule::CutAreaChange { .. } => "cut_area_change",
             Rule::PatternMatch { .. } => "pattern_match",
             Rule::DfmScore { .. } => "dfm_score",
+            Rule::ViaRedundancy { .. } => "via_redundancy",
             Rule::Forbidden { .. } => "forbidden",
             Rule::MustContain { .. } => "must_contain",
             Rule::MustBeInside { .. } => "must_be_inside",
@@ -5386,6 +5463,9 @@ impl Rule {
                 pre, post, lower, ..
             } => [Some(pre), Some(post), Some(lower)],
             Rule::DfmScore { layer, outer, .. } => [Some(layer), outer, None],
+            Rule::ViaRedundancy {
+                cut, lower, upper, ..
+            } => [Some(cut), Some(lower), Some(upper)],
             Rule::Angle { layer, .. }
             | Rule::MinInteriorAngle { layer, .. }
             | Rule::PolygonValidity { layer } => [layer, None, None],
