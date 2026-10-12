@@ -3298,7 +3298,9 @@ fn cell_tree(core: &str) -> Layout {
 /// Then the rules the selections state: a width exempted inside `PAD*`
 /// cells, swept, and sky130 x.25's "pnp.dg must be only within cell name
 /// `s8rf_pnp`, `s8rf_pnp5x`, `s8tesd_iref_pnp`, `stk14ecx_*`" (DRC-097), where a
-/// longer name does not match a whole-name pattern. Every case is placed
+/// longer name does not match a whole-name pattern; and a maximum cell-name
+/// length (DRC-097, Calibre's DRC MAXIMUM CELL NAME LENGTH) as
+/// `forbidden(a.in_cells("?????*"))`. Every case is placed
 /// under all eight symmetries, which turn each placement with the design.
 fn cell_selections() -> Vec<Fixture> {
     let mut cases = vec![derived(
@@ -3380,6 +3382,26 @@ fn cell_selections() -> Vec<Fixture> {
             .cell("s8rf_pnp_big", square())
             .cell("my_pnp", Layout::default().rect("pnp", 0, 0, 200, 100)),
         &[("x.25", areas(&[20_000, 10_000, 20_000]))],
+    ));
+    // A maximum cell-name length of 4 (Calibre's DRC MAXIMUM CELL NAME
+    // LENGTH, as a forbidden selection): five `?` and a `*` match a name of
+    // five or more characters. A short cell under a long one is flagged with
+    // it; `TOP` and `ABCD` are not.
+    let length = new_deck(&["a"], "rule name.max forbidden(a.in_cells(\"?????*\"))\n");
+    cases.push(fixture(
+        "cell_exemption/name_length",
+        &["DRC-097"],
+        &length,
+        Layout::default()
+            .rect("a", -1000, 0, -900, 100)
+            .place("ABCD", r0, 0, 0)
+            .place("ABCDE", r0, 1000, 0)
+            .place("LONGNAME", r0, 2000, 0)
+            .cell("ABCD", Layout::default().rect("a", 0, 0, 100, 100))
+            .cell("ABCDE", Layout::default().rect("a", 0, 0, 200, 100))
+            .cell("LONGNAME", Layout::default().place("AB", r0, 0, 0))
+            .cell("AB", Layout::default().rect("a", 0, 0, 300, 100)),
+        &[("name.max", areas(&[20_000, 30_000]))],
     ));
     every_placement(cases)
 }
