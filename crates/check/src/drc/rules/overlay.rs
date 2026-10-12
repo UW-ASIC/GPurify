@@ -11,8 +11,8 @@
 use super::presence::{hosts, inside_point, rects_of};
 use super::width::{rects_layer, wide_rects_into};
 use super::{
-    centre, gap_midpoint, merged, mid, owners_of, rects_ring_dist2, ring_segs, SortedRects,
-    Verdict, REFUSED,
+    centre, figures_holding, gap_midpoint, merged, mid, owners_by_point, owners_of,
+    rects_ring_dist2, ring_segs, SortedRects, Verdict, REFUSED,
 };
 use crate::drc::{Scratch, WireBand};
 use crate::erc::rules::supply::untied_points;
@@ -20,9 +20,11 @@ use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
 };
 use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
+use gpurify_geom::derive::inside_flags;
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
-use gpurify_geom::ops::{isqrt, seg_seg_dist2, Point, Seg};
+use gpurify_geom::ops::{isqrt, seg_seg_dist2, seg_seg_near2, Point, Seg};
 use gpurify_geom::rects::{clipped_area, covered_area, decompose_into};
+use gpurify_geom::relation::{pair_threshold2, projected_reach2, Metric, Relation, Zero};
 use gpurify_geom::width::{narrowest_facing, narrowest_neck, poly_edges};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, PolygonRef, ValidatedLayer};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
@@ -420,6 +422,21 @@ pub(crate) fn enclosure(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
+    match s.validated.pair_octilinear(store, outer, inner_layer) {
+        None => return REFUSED,
+        Some((hosts, drawn)) if !(hosts.is_rectilinear() && drawn.is_rectilinear()) => {
+            return enclosure_octilinear(
+                store,
+                rule,
+                (outer, inner_layer),
+                (limit, wire),
+                mode,
+                s,
+                out,
+            );
+        }
+        Some(_) => {}
+    }
     if !pair_layers(store, inner_layer, outer, Dbu::new_unchecked(0), s) {
         return REFUSED;
     }
@@ -546,6 +563,213 @@ pub(crate) fn enclosure(
         });
     }
     (Outcome::Ran, examined)
+}
+
+/// [`enclosure`] where either layer has a 45-degree edge. Hosts are the
+/// figures of the merged outer layer, as there; an inner polygon is hosted
+/// by the figure that covers it (`gpurify_geom::derive::inside_flags`). An
+/// inner polygon no host covers measures 0.
+///
+/// Every side: the Euclidean distance from the inner polygon's boundary to
+/// the host's, exact (twice its square is whole on the octilinear grid),
+/// floored when reported. The other modes read the edge pairs the
+/// foundries' `KLayout` decks check them by, exactly
+/// (`gpurify_geom::relation`): non-coincident, `enclosing` Euclidean without
+/// touching edges; opposite, `enclosed` by projection, an inner polygon
+/// held when both an x-facing and a y-facing edge of it pair closer than the
+/// limit; adjacent, `enclosing` by projection, held at a convex corner where
+/// the reported parts of both its edges reach. Opposite and adjacent read a
+/// rectilinear inner polygon, as the decks do (cuts); one with a 45-degree
+/// edge refuses. Full width and a wire band refuse: both cut their layers
+/// into rectangles.
+fn enclosure_octilinear(
+    store: &GeometryStore,
+    rule: StrId,
+    (outer, inner_layer): (LayerId, LayerId),
+    (limit, wire): (Dbu, WireBand),
+    mode: Mode,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Scratch {
+        validated,
+        layer_out: merged,
+        ..
+    } = s;
+    let Some((hosts, drawn)) = validated.pair_octilinear(store, outer, inner_layer) else {
+        return REFUSED;
+    };
+    let straight_out = matches!(mode, Mode::Opposite | Mode::Adjacent);
+    if mode == Mode::FullWidth
+        || wire.from.raw() > 0
+        || wire.below.is_some()
+        || (straight_out && !drawn.is_rectilinear())
+    {
+        return REFUSED;
+    }
+    if union_into(hosts, &ValidatedLayer::default(), merged).is_err() {
+        return REFUSED;
+    }
+    let Ok(covered) = inside_flags(drawn, merged) else {
+        return REFUSED;
+    };
+    let home = figures_holding(merged, drawn);
+    let owners = owners_by_point(merged, hosts);
+    let limit2 = 2 * i128::from(limit.raw()) * i128::from(limit.raw());
+    let limit = Measurement::Length(limit);
+    let mut examined = 0u64;
+    for poly in 0..u32::try_from(drawn.len()).expect("a layer indexes polygons with a u32") {
+        examined += 1;
+        let shape = drawn.get(poly);
+        let host = home[poly as usize].filter(|_| covered[poly as usize]);
+        let (reading, at, host_row) = match host {
+            Some(figure) => {
+                let Some((twice, at)) = octilinear_reading(shape, merged.get(figure), mode) else {
+                    continue;
+                };
+                (twice, at, Some(owners[figure as usize]))
+            }
+            None => (0, centre(shape.bbox()), None),
+        };
+        if reading >= limit2 {
+            continue;
+        }
+        out.push(Violation {
+            rule,
+            layer: inner_layer,
+            severity: Severity::Error,
+            at,
+            measured: Measurement::Length(isqrt(DbuArea::new(saturate(reading / 2)))),
+            limit,
+            shapes: (shape.provenance(), host_row),
+        });
+    }
+    (Outcome::Ran, examined)
+}
+
+/// A segment reversed: a `GPurify` ring's edge in `KLayout`'s orientation.
+fn rev(s: Seg) -> Seg {
+    Seg { a: s.b, b: s.a }
+}
+
+/// The midpoint of the two nearest points of `e` and `f`, floored.
+fn nearest_mid(e: Seg, f: Seg) -> Point {
+    let (_, p, q) = seg_seg_near2(e, f);
+    Point {
+        x: Dbu::new_unchecked((p.0 + q.0).div_euclid(4)),
+        y: Dbu::new_unchecked((p.1 + q.1).div_euclid(4)),
+    }
+}
+
+/// A hosted inner polygon's enclosure under `mode` (not full width), as
+/// twice its square, and where to report it; `None` when nothing measures it
+/// (no edge pair, so no limit is broken). See [`enclosure_octilinear`].
+fn octilinear_reading(
+    inner: PolygonRef<'_>,
+    host: PolygonRef<'_>,
+    mode: Mode,
+) -> Option<(i128, Point)> {
+    let inner_edges: Vec<Seg> = poly_edges(inner).map(|(a, b)| Seg { a, b }).collect();
+    let host_edges: Vec<Seg> = poly_edges(host).map(|(a, b)| Seg { a, b }).collect();
+    let least = |reading: &dyn Fn(Seg, Seg) -> Option<i128>, e: Seg| {
+        host_edges
+            .iter()
+            .filter_map(|&f| reading(e, f).map(|r| (r, f)))
+            .min_by_key(|&(r, _)| r)
+    };
+    match mode {
+        Mode::EverySide => inner_edges
+            .iter()
+            .flat_map(|&e| {
+                host_edges
+                    .iter()
+                    .map(move |&f| (seg_seg_near2(e, f).0, e, f))
+            })
+            .min_by_key(|&(r, _, _)| r)
+            .map(|(r, e, f)| (r, nearest_mid(e, f))),
+        Mode::NonCoincident => {
+            let pair = |e: Seg, f: Seg| {
+                pair_threshold2(
+                    Relation::Overlap,
+                    Metric::Euclidean,
+                    Zero::Never,
+                    rev(f),
+                    rev(e),
+                )
+            };
+            inner_edges
+                .iter()
+                .filter_map(|&e| least(&pair, e).map(|(r, f)| (r, nearest_mid(e, f))))
+                .min_by_key(|&(r, _)| r)
+        }
+        Mode::Opposite => {
+            // Per axis, the least reading of the edges facing along it.
+            let pair = |e: Seg, f: Seg| {
+                pair_threshold2(
+                    Relation::Inside,
+                    Metric::Projection,
+                    Zero::WhenTouching,
+                    rev(e),
+                    rev(f),
+                )
+            };
+            let mut axis: [Option<(i128, Point)>; 2] = [None, None];
+            for &e in &inner_edges {
+                let Some((r, f)) = least(&pair, e) else {
+                    continue;
+                };
+                let slot = &mut axis[usize::from(e.a.y == e.b.y)];
+                if slot.is_none_or(|(b, _)| r < b) {
+                    *slot = Some((r, nearest_mid(e, f)));
+                }
+            }
+            let (x, y) = (axis[0]?, axis[1]?);
+            Some(if x.0 >= y.0 { x } else { y })
+        }
+        Mode::Adjacent => {
+            let pair = |e: Seg, f: Seg| {
+                pair_threshold2(
+                    Relation::Overlap,
+                    Metric::Projection,
+                    Zero::WhenTouching,
+                    rev(f),
+                    rev(e),
+                )
+            };
+            // An edge's reading at its end `v`: paired, and its reported
+            // part reaching `v`.
+            let at_end = |e: Seg, v: Point| {
+                host_edges
+                    .iter()
+                    .filter_map(|&f| {
+                        let reach = projected_reach2(
+                            Relation::Overlap,
+                            Zero::WhenTouching,
+                            rev(f),
+                            rev(e),
+                            v,
+                        )?;
+                        Some(pair(e, f)?.max(reach))
+                    })
+                    .min()
+            };
+            let n = inner_edges.len();
+            (0..n)
+                .filter_map(|i| {
+                    let (into, from) = (inner_edges[i], inner_edges[(i + 1) % n]);
+                    let v = into.b;
+                    // Convex: a left turn (material on the left).
+                    let turn = (into.b.x - into.a.x).raw() * (from.b.y - from.a.y).raw()
+                        - (into.b.y - into.a.y).raw() * (from.b.x - from.a.x).raw();
+                    if turn <= 0 || from.a != v {
+                        return None;
+                    }
+                    Some((at_end(into, v)?.max(at_end(from, v)?), v))
+                })
+                .min_by_key(|&(r, _)| r)
+        }
+        Mode::FullWidth => None,
+    }
 }
 
 /// The part of `host` (its rectangles) that `held` (rectangles) grown by

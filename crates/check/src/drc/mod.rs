@@ -169,6 +169,21 @@ impl Validated {
             .ok()
     }
 
+    /// Two layers validated with edges at 45 degrees allowed, as
+    /// [`Validated::get_octilinear`], borrowed together; `None` when either
+    /// does not validate.
+    pub(crate) fn pair_octilinear(
+        &mut self,
+        store: &GeometryStore,
+        a: LayerId,
+        b: LayerId,
+    ) -> Option<(&ValidatedLayer, &ValidatedLayer)> {
+        self.get_octilinear(store, a)?;
+        self.get_octilinear(store, b)?;
+        let get = |layer: LayerId| self.slots[layer.idx()].as_ref()?.as_ref().ok();
+        Some((get(a)?, get(b)?))
+    }
+
     pub(crate) fn forget(&mut self, layer: LayerId) {
         if let Some(slot) = self.slots.get_mut(layer.idx()) {
             *slot = None;

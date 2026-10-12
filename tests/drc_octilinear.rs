@@ -447,3 +447,143 @@ fn a_strict_width_bound_is_exact_on_a_half_unit_square() {
     assert!(found.of("under").is_empty());
     assert_eq!(found.outcome("under"), Outcome::Ran);
 }
+
+/// A 100-square on met2 with every corner chamfered by 30: a host whose
+/// 45-degree edges lie on `x + y = 30`, `x - y = 70`, `x + y = 170` and
+/// `y - x = 70`.
+fn octagon_host() -> (&'static str, Vec<(i64, i64)>) {
+    (
+        "met2",
+        vec![
+            (30, 0),
+            (70, 0),
+            (100, 30),
+            (100, 70),
+            (70, 100),
+            (30, 100),
+            (0, 70),
+            (0, 30),
+        ],
+    )
+}
+
+/// Every finding and outcome of `rules` on `rings` after symmetry `t`, as
+/// sorted text.
+fn found_under(rules: &str, rings: &[(&str, Vec<(i64, i64)>)], t: usize) -> Vec<String> {
+    let moved: Vec<(&str, Vec<(i64, i64)>)> = rings
+        .iter()
+        .map(|(layer, ring)| (*layer, symmetric(ring, t)))
+        .collect();
+    let found = run_on(rules, &moved);
+    let mut all: Vec<String> = found
+        .findings
+        .iter()
+        .map(|f| format!("{f:?}"))
+        .chain(found.outcomes.iter().map(|o| format!("{o:?}")))
+        .collect();
+    all.sort();
+    all
+}
+
+/// `rules` on `layout` find the same under all eight grid symmetries.
+fn holds_under_symmetries(rules: &str, layout: &[(&str, Vec<(i64, i64)>)]) {
+    let base = found_under(rules, layout, 0);
+    for t in 1..8 {
+        assert_eq!(found_under(rules, layout, t), base, "symmetry {t}");
+    }
+}
+
+/// DRC-040 on 45-degree shapes (H12b): `enclosure` is the Euclidean distance
+/// from the inner shape to its host's boundary, a 45-degree host edge
+/// included.
+///
+/// Oracle: hand-derived, and the symmetry law. A 20-square at (40..60)² in
+/// [`octagon_host`] is 40 from every side, but its corner (40, 40) is
+/// `(80 - 30)/√2 = √1250 ≈ 35.36` from the chamfer `x + y = 30`: `>= 36nm`
+/// flags it at 35 (floored), `>= 35nm` passes. A diamond of radius 10 at
+/// (50, 50) is 40 from the sides at its tips and `(100 - 30 - 10)/√2 ≈ 42.4`
+/// from a chamfer at its nearest edge: `>= 41nm` flags it at 40. A square
+/// poking past the chamfer is not hosted: 0.
+#[test]
+fn enclosure_reads_a_45_degree_host_and_inner() {
+    let square = ("met1", vec![(40, 40), (60, 40), (60, 60), (40, 60)]);
+    let rules = "rule e36 enclosure(met1, met2) >= 36nm\nrule e35 enclosure(met1, met2) >= 35nm";
+    let found = run_on(rules, &[octagon_host(), square.clone()]);
+    assert_eq!(found.outcome("e36"), Outcome::Ran);
+    assert_eq!(found.of("e36"), [(len(35), len(36))]);
+    assert!(found.of("e35").is_empty());
+
+    let diamond = ("met1", vec![(50, 40), (60, 50), (50, 60), (40, 50)]);
+    let found = run_on(
+        "rule e41 enclosure(met1, met2) >= 41nm",
+        &[octagon_host(), diamond.clone()],
+    );
+    assert_eq!(found.of("e41"), [(len(40), len(41))]);
+
+    let out = ("met1", vec![(5, 5), (25, 5), (25, 25), (5, 25)]);
+    let found = run_on(
+        "rule e1 enclosure(met1, met2) >= 1nm",
+        &[octagon_host(), out],
+    );
+    assert_eq!(found.of("e1"), [(len(0), len(1))]);
+
+    holds_under_symmetries(
+        "rule e36 enclosure(met1, met2) >= 36nm",
+        &[octagon_host(), square, diamond],
+    );
+}
+
+/// DRC-054 on 45-degree shapes (H12b): a non-coincident enclosure exempts an
+/// inner edge lying on the host's 45-degree edge, and pairs an inner edge
+/// with a host edge at 45 degrees to it, as `KLayout`'s `enclosing` does.
+///
+/// Oracle: hand-derived, and the symmetry law. The right triangle (10, 20),
+/// (20, 10), (20, 20) in [`octagon_host`] has its hypotenuse on the chamfer
+/// `x + y = 30`: `enclosure` reads 0 there, but the non-coincident reading
+/// skips that coincident pair. Its right edge pairs with the chamfer `x - y
+/// = 70` (45 degrees to it), nearest from (20, 10) to the chamfer's end
+/// (70, 0), `√2600 ≈ 50.99`, and its top edge likewise with `y - x = 70`:
+/// `>= 50nm` passes, `>= 51nm` flags at 50 (floored).
+#[test]
+fn a_noncoincident_enclosure_exempts_an_edge_on_a_chamfer() {
+    let triangle = ("met1", vec![(20, 10), (20, 20), (10, 20)]);
+    let rules = "rule e1 enclosure(met1, met2) >= 1nm\n\
+                 rule n50 enclosure(met1, met2, noncoincident) >= 50nm\n\
+                 rule n51 enclosure(met1, met2, noncoincident) >= 51nm";
+    let layout = [octagon_host(), triangle];
+    let found = run_on(rules, &layout);
+    assert_eq!(found.of("e1"), [(len(0), len(1))]);
+    assert!(found.of("n50").is_empty());
+    assert_eq!(found.of("n51"), [(len(50), len(51))]);
+    holds_under_symmetries(rules, &layout);
+}
+
+/// DRC-041 and DRC-042 on 45-degree hosts (H12b): opposite and adjacent
+/// enclosure read a rectangle straight out to a 45-degree host edge at its
+/// point nearest the rectangle's side; an inner shape with a 45-degree edge
+/// has no straight-out reading and refuses.
+///
+/// Oracle: hand-derived, and the symmetry law. The 20-square at (10..30,
+/// 40..60) in [`octagon_host`] reads 10 left and 70 right; below, the
+/// chamfer `x + y = 30` over x 10..30 comes nearest at (10, 20): 20; above,
+/// `y - x = 70` at (10, 80): 20. Opposite: `max(min(10, 70), min(20, 20)) =
+/// 20`, so `>= 21nm` flags at 20 and `>= 20nm` passes. Adjacent: the left
+/// corners' better side is the horizontal one, 20; the right corners' the
+/// vertical one, 70: `>= 21nm` flags at 20.
+#[test]
+fn straight_out_enclosures_read_a_chamfer_at_its_nearest_point() {
+    let square = ("met1", vec![(10, 40), (30, 40), (30, 60), (10, 60)]);
+    let rules = "rule o21 enclosure(met1, met2, opposite) >= 21nm\n\
+                 rule o20 enclosure(met1, met2, opposite) >= 20nm\n\
+                 rule a21 enclosure(met1, met2, adjacent) >= 21nm";
+    let layout = [octagon_host(), square];
+    let found = run_on(rules, &layout);
+    assert_eq!(found.of("o21"), [(len(20), len(21))]);
+    assert!(found.of("o20").is_empty());
+    assert_eq!(found.of("a21"), [(len(20), len(21))]);
+    holds_under_symmetries(rules, &layout);
+    let diamond = ("met1", vec![(50, 40), (60, 50), (50, 60), (40, 50)]);
+    let found = run_on(rules, &[octagon_host(), diamond]);
+    assert_eq!(found.outcome("o21"), Outcome::Refused);
+    assert_eq!(found.outcome("a21"), Outcome::Refused);
+}

@@ -204,7 +204,10 @@ format (v t6 `out.lyrdb`):
 `random_octilinear_layouts_agree_with_the_klayout_mirror` runs 1500 random layouts of
 chamfered rectangles, octagons and 45-degree bars through the kinds that measure 45-degree
 shapes (`width`, `notch`, `space` one layer and two, `area`, `hole_area`, `edge_length`,
-`forbidden`, `angle`, and booleans feeding them), compared as each kind's verdict below states.
+`forbidden`, `angle`, the enclosures `min_enclosure`, `noncoincident_enclosure`,
+`asymmetric_enclosure` and `adjacent_enclosure` of 45-degree met2 and square cuts in met1, and
+booleans feeding them), compared as each kind's verdict below states. The cuts never meet one
+another: an enclosure reads each drawn cut on its own, the mirror's `enclosed` their merge.
 Three differences are documented, not defects, and the deck and lattice keep them out:
 
 - **Snapping.** A boolean result vertex where a rising and a falling 45-degree edge cross between

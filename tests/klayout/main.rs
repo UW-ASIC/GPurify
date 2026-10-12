@@ -459,6 +459,7 @@ fn random_fixtures(count: u64) -> Vec<harness::Fixture> {
 const OCTILINEAR_DECK: &str = "grid 1nm
 layer met1 = gds(68, 20)
 layer met2 = gds(69, 20)
+layer via1 = gds(68, 44)
 layer both = met1 and met2
 layer cut = met1 not met2
 layer all = met1 or met2
@@ -476,7 +477,25 @@ rule ba area(both) >= 10000nm2
 rule cn notch(cut) >= 100nm
 rule as space(all) >= 100nm
 rule ang angle(; allowed: [0deg, 45deg, 90deg, 135deg])
+rule en enclosure(met2, met1) >= 50nm
+rule enn enclosure(met2, met1, noncoincident) >= 50nm
+rule ev enclosure(via1, met1) >= 30nm
+rule evn enclosure(via1, met1, noncoincident) >= 30nm
+rule eo enclosure(via1, met1, opposite) >= 30nm
+rule ea enclosure(via1, met1, adjacent) >= 30nm
 ";
+
+/// The bounding box of a ring, `(xlo, ylo, xhi, yhi)`.
+fn ring_box(ring: &[(i64, i64)]) -> (i64, i64, i64, i64) {
+    let xs = ring.iter().map(|p| p.0);
+    let ys = ring.iter().map(|p| p.1);
+    (
+        xs.clone().min().expect("a ring"),
+        ys.clone().min().expect("a ring"),
+        xs.max().expect("a ring"),
+        ys.max().expect("a ring"),
+    )
+}
 
 /// One random 45-degree shape on a 10 nm lattice: a rectangle with chamfered
 /// corners (an octagon when all four are cut), or a bar at 45 degrees whose
@@ -531,10 +550,43 @@ fn octilinear_fixtures(count: u64) -> Vec<harness::Fixture> {
         .map(|seed| {
             let mut rng = gpurify_testgen::Rng::new(seed ^ 0x45_45);
             let mut layout = harness::Layout::default();
+            let mut boxes = Vec::new();
             for (layer, n, size) in [("met1", 7, 40), ("met2", 3, 30)] {
                 for _ in 0..rng.range(1, n) {
-                    layout = layout.polygon(layer, &octilinear_shape(&mut rng, size));
+                    let ring = octilinear_shape(&mut rng, size);
+                    if layer == "met1" {
+                        boxes.push(ring_box(&ring));
+                    }
+                    layout = layout.polygon(layer, &ring);
                 }
+            }
+            // A square cut in some met1 shapes' boxes, mostly hosted, some
+            // past a chamfer; its own stream so the shapes above are as
+            // before. Cuts never meet: an enclosure reads each drawn cut on
+            // its own (`docs/deck.md`), the mirror's `enclosed` their merge.
+            let mut cuts = gpurify_testgen::Rng::new(seed ^ 0xc0_7c);
+            let mut placed: Vec<(i64, i64, i64)> = Vec::new();
+            for (x0, y0, x1, y1) in boxes {
+                if cuts.range(0, 3) == 0 {
+                    continue;
+                }
+                let side = cuts.range(2, 7) * 10;
+                if x1 - x0 <= side || y1 - y0 <= side {
+                    continue;
+                }
+                let x = x0 + cuts.range(0, (x1 - x0 - side) / 10 + 1) * 10;
+                let y = y0 + cuts.range(0, (y1 - y0 - side) / 10 + 1) * 10;
+                let apart = |&(px, py, ps): &(i64, i64, i64)| {
+                    x > px + ps || px > x + side || y > py + ps || py > y + side
+                };
+                if !placed.iter().all(apart) {
+                    continue;
+                }
+                placed.push((x, y, side));
+                layout = layout.polygon(
+                    "via1",
+                    &[(x, y), (x + side, y), (x + side, y + side), (x, y + side)],
+                );
             }
             harness::Fixture::new(&format!("octilinear/{seed}"), &[], OCTILINEAR_DECK, drc())
                 .layout(layout)

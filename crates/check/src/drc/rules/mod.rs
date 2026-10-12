@@ -173,6 +173,27 @@ pub(crate) fn owners_of(figures: &ValidatedLayer, drawn: &LayerRects) -> Vec<Pol
 /// [`owners_of`], which cuts into rectangles.
 pub(crate) fn owners_by_point(figures: &ValidatedLayer, drawn: &ValidatedLayer) -> Vec<PolyId> {
     let mut owner = vec![PolyId(u32::MAX); figures.len()];
+    for (poly, home) in figures_holding(figures, drawn).into_iter().enumerate() {
+        if let Some(figure) = home {
+            let slot = &mut owner[figure as usize];
+            *slot = (*slot).min(
+                drawn
+                    .get(u32::try_from(poly).expect("a u32 index"))
+                    .provenance(),
+            );
+        }
+    }
+    owner
+}
+
+/// Per polygon of `drawn`: the figure of `figures` holding a point just
+/// inside it, near its lowest convex corner, or `None`. Where `figures` is
+/// the merge of a layer `drawn` lies in, that is the figure it lies in; for
+/// any other `drawn` it is the figure a covered polygon lies in.
+pub(crate) fn figures_holding(
+    figures: &ValidatedLayer,
+    drawn: &ValidatedLayer,
+) -> Vec<Option<u32>> {
     let mut by_xlo: Vec<(Bbox, u32)> = figures.bboxes().iter().copied().zip(0..).collect();
     by_xlo.sort_unstable_by_key(|&(b, _)| b.xlo);
     let widest = by_xlo
@@ -180,22 +201,22 @@ pub(crate) fn owners_by_point(figures: &ValidatedLayer, drawn: &ValidatedLayer) 
         .map(|(b, _)| (b.xhi - b.xlo).raw())
         .max()
         .unwrap_or(0);
-    for poly in 0..u32::try_from(drawn.len()).expect("a layer indexes polygons with a u32") {
-        let shape = drawn.get(poly);
-        let (x8, y8) = interior_point8(shape);
-        let b = shape.bbox();
-        // A figure holding the shape starts at or left of it and reaches past it.
-        let lo = by_xlo.partition_point(|&(f, _)| f.xlo.raw() < b.xhi.raw() - widest);
-        let hi = by_xlo.partition_point(|&(f, _)| f.xlo <= b.xlo);
-        let home = by_xlo[lo..hi.max(lo)]
-            .iter()
-            .find(|&&(f, figure)| f.contains(b) && contains_scaled(figures.get(figure), x8, y8, 8));
-        if let Some(&(_, figure)) = home {
-            let slot = &mut owner[figure as usize];
-            *slot = (*slot).min(shape.provenance());
-        }
-    }
-    owner
+    (0..u32::try_from(drawn.len()).expect("a layer indexes polygons with a u32"))
+        .map(|poly| {
+            let shape = drawn.get(poly);
+            let (x8, y8) = interior_point8(shape);
+            let b = shape.bbox();
+            // A figure holding the shape starts at or left of it and reaches past it.
+            let lo = by_xlo.partition_point(|&(f, _)| f.xlo.raw() < b.xhi.raw() - widest);
+            let hi = by_xlo.partition_point(|&(f, _)| f.xlo <= b.xlo);
+            by_xlo[lo..hi.max(lo)]
+                .iter()
+                .find(|&&(f, figure)| {
+                    f.contains(b) && contains_scaled(figures.get(figure), x8, y8, 8)
+                })
+                .map(|&(_, figure)| figure)
+        })
+        .collect()
 }
 
 /// A layer validated and merged; `None` when it does not validate.
