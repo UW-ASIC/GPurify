@@ -91,6 +91,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         aspect_ratio(depth),
         channel(depth),
         directional(depth),
+        wrong_direction_spacing(depth),
         validity(depth),
         pins(depth),
     ]
@@ -4660,6 +4661,113 @@ fn directional(depth: Depth) -> Vec<Fixture> {
             vec![],
             vec![Finding::length(30).at(65, 275)],
         ],
+    );
+    let turned = deck(true);
+    cases
+        .iter()
+        .flat_map(|fixture| {
+            OFFSETS.iter().flat_map(move |&(dx, dy)| {
+                Symmetry::ALL
+                    .iter()
+                    .map(move |&symmetry| (fixture, symmetry, dx, dy))
+            })
+        })
+        .map(|(fixture, symmetry, dx, dy)| {
+            let mut placed = fixture.transformed(symmetry, dx, dy);
+            if symmetry.turns % 2 == 1 {
+                placed.deck.clone_from(&turned);
+            }
+            placed
+        })
+        .collect()
+}
+
+/// `LEF58_SPACING 0.12 WRONGDIRECTION NONEOL 0.15 PRL 0.1` on a horizontal
+/// layer (DRC-016), written `facing_space(wd; prl: 100nm) >= 120nm` over
+/// `wd = met1.edges().vertical().with_length(>= 150nm)`: as `OpenROAD`
+/// `TritonRoute`'s `checkMetalSpacing_wrongDir` reads it, the edges across
+/// the layer's direction, either one shorter than the `NONEOL` width
+/// skipped, a pair judged only when it overlaps by more than the `PRL`, and
+/// closer than the spacing a violation.
+///
+/// Oracle: bars drawn to a gap, a run and an edge length, each swept one
+/// step either side of its limit: the gap around 120 (119 fails), the
+/// overlap around 100 at a gap of 60 (101 fails, 100 is not more than the
+/// run), the edge length around 150 at a gap of 60 (149 is skipped). A tall
+/// bar facing a short one (140, under 150) is not judged; two bars stacked
+/// end to end (horizontal edges) are not either; a pair offset diagonally
+/// has no run. A quarter turn makes the layer vertical, so the turned
+/// placements take `horizontal()` and keep the expectation.
+fn wrong_direction_spacing(depth: Depth) -> Vec<Fixture> {
+    let deck = |turned: bool| {
+        let across = if turned { "horizontal" } else { "vertical" };
+        format!(
+            "grid 1nm\nlayer met1 = gds(68, 20)\n\
+             layer wd = met1.edges().{across}().with_length(>= 150nm)\n\
+             rule wd facing_space(wd; prl: 100nm) >= 120nm\n"
+        )
+    };
+    let flat = deck(false);
+    let mut cases = Vec::new();
+    let mut case = |name: String, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("wrong_direction/{name}"),
+            &["DRC-016"],
+            &flat,
+            layout,
+            vec![("wd", findings)],
+        ));
+    };
+    for g in sweep(depth, 120).into_iter().filter(|&g| g > 0) {
+        let findings = if g < 120 {
+            vec![pin(Finding::length(g), 200 + g, 1000)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("gap/{}", side(g, 120)),
+            met1(&[[0, 0, 100, 1000], [100 + g, 0, 200 + g, 1000]]),
+            findings,
+        );
+    }
+    for r in sweep(depth, 100).into_iter().filter(|&r| r > 0) {
+        let findings = if r > 100 {
+            vec![pin(Finding::length(60), 260, 2000 - r)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("run/{}", side(r, 100)),
+            met1(&[[0, 0, 100, 1000], [160, 1000 - r, 260, 2000 - r]]),
+            findings,
+        );
+    }
+    for h in sweep(depth, 150).into_iter().filter(|&h| h > 0) {
+        let findings = if h >= 150 {
+            vec![pin(Finding::length(60), 260, h)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("noneol/{}", side(h, 150)),
+            met1(&[[0, 0, 100, h], [160, 0, 260, h]]),
+            findings,
+        );
+    }
+    case(
+        "short_partner".into(),
+        met1(&[[0, 0, 100, 1000], [160, 400, 260, 540]]),
+        Vec::new(),
+    );
+    case(
+        "end_to_end".into(),
+        met1(&[[0, 0, 1000, 100], [0, 160, 1000, 260]]),
+        Vec::new(),
+    );
+    case(
+        "diagonal".into(),
+        met1(&[[0, 0, 100, 1000], [160, 1000, 260, 2000]]),
+        Vec::new(),
     );
     let turned = deck(true);
     cases

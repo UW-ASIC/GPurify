@@ -197,7 +197,8 @@ impl CompiledDeck {
             | Rule::Notch { layer, limit }
             | Rule::MinSpacing { layer, limit }
             | Rule::CornerToCorner { layer, limit }
-            | Rule::EdgeMinLength { layer, limit } => one(layer).length("limit", limit),
+            | Rule::EdgeMinLength { layer, limit }
+            | Rule::EdgeWidth { layer, limit } => one(layer).length("limit", limit),
             Rule::CutSize {
                 layer,
                 width,
@@ -601,8 +602,13 @@ impl CompiledDeck {
                 }
                 row
             }
-            Rule::EdgeWidth { layer, limit } | Rule::EdgeFacingSpace { layer, limit } => {
-                one(layer).length("limit", limit)
+            Rule::EdgeFacingSpace { layer, limit, prl } => {
+                let row = one(layer).length("limit", limit);
+                if prl.raw() > 0 {
+                    row.length("prl", prl)
+                } else {
+                    row
+                }
             }
             Rule::RegionDensity {
                 layer,

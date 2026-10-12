@@ -1036,6 +1036,9 @@ emit(id, E.space(LIM, projection))
 
 - On an edge layer `space` reports pairs in a "face to face" relation, "their outer sides face
   each other" ([L]). Key POINT, the gap's middle; the length compared.
+- `facing_space(E; prl: P)` (`LEF58_SPACING ... WRONGDIRECTION PRL`) judges only pairs that
+  overlap by more than P: `E.space(LIM, projection, projection_limits(2·P + 1, nil))`, the
+  pairs whose projected length is at least 2·P + 1 at the doubled scale.
 
 ### 42. region_density — EXACT
 

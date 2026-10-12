@@ -131,6 +131,22 @@ impl RuleRow {
         self
     }
 
+    /// An [`edge_facing_space`] row that judges only pairs running alongside
+    /// each other longer than `prl` (the deck's `prl:`, `LEF58_SPACING ...
+    /// WRONGDIRECTION PRL`); 0 is the plain form.
+    ///
+    /// # Panics
+    ///
+    /// On a row of any other kind.
+    #[must_use]
+    pub fn prl(mut self, prl: Dbu) -> Self {
+        assert_eq!(self.kind, "edge_facing_space", "{} has no run", self.kind);
+        if prl.raw() > 0 {
+            prl.put("prl", &mut self.params);
+        }
+        self
+    }
+
     /// A rule reported as a warning, not an error: the deck's
     /// `rule <id> warning ...`, as a foundry's recommended design rule is
     /// carried (catalog DRC-110).

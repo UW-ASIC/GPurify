@@ -1740,20 +1740,38 @@ pub enum Rule {
     /// measured, and a shape's own width is not. [`Rule::EdgeSpacing`]
     /// measures whatever the sides.
     ///
+    /// `facing_space(E; prl: len) >= len` judges only the pairs whose
+    /// projections overlap by more than `prl`; the plain form is `prl: 0nm`,
+    /// any positive overlap. With the edges across a layer's direction
+    /// (`L.edges().vertical()` on a horizontal layer) and those shorter than
+    /// a length left out (`.with_length(>= w)`), this is `LEF58_SPACING s
+    /// WRONGDIRECTION [NONEOL w] [PRL p]` as `OpenROAD` `TritonRoute` checks
+    /// it (`checkMetalSpacing_wrongDir`): edges whose orientation is not the
+    /// layer's, either one shorter than `w` skipped, a pair exempt when its
+    /// overlap is at most `p`, a violation when the two segments are closer
+    /// than `s`, which over a positive overlap is the gap straight across.
+    ///
     /// One violation per pair closer than `limit`, at the middle of the gap
     /// between their bounding boxes, naming no shape. `examined` counts the
-    /// parallel pairs within reach. Records [`Outcome::Refused`] when an edge
-    /// is not axis-aligned.
+    /// parallel pairs within reach that run alongside each other longer than
+    /// `prl`. Records [`Outcome::Refused`] when an edge is not axis-aligned.
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-016. Rules: ASAP7 M4.S.1 and M4.S.2 ("minimum vertical (horizontal)
-    /// spacing between two M4 layer polygons' edges"), LEF58 `SPACING ..
-    /// WRONGDIRECTION`; `KLayout` `space` on an edge layer.
+    /// spacing between two M4 layer polygons' edges"), `LEF58_SPACING ..
+    /// WRONGDIRECTION [NONEOL] [PRL]`; `KLayout` `space` on an edge layer.
+    ///
+    /// Limits: `LEF58_SPACING ... WRONGDIRECTION ... LENGTH` is not modelled:
+    /// no public text defines it, and `TritonRoute` drops a rule that states
+    /// it (DRT-333), as it drops a negative `PRL` (DRT-334).
     EdgeFacingSpace {
         /// The edge layer.
         layer: LayerId,
         /// The smallest legal gap, in grid units; positive.
         limit: Dbu,
+        /// The overlap a pair must exceed to be judged, in grid units; 0 or
+        /// more.
+        prl: Dbu,
     },
     /// A shape of `region` inside which `layer` covers too little, or too
     /// much, of the area.
@@ -4048,6 +4066,10 @@ impl RuleSet {
                 "edge_facing_space" => Rule::EdgeFacingSpace {
                     layer: one(spec)?,
                     limit: length(spec, "limit")?,
+                    prl: match optional(spec, "prl") {
+                        Some(_) => at_least_zero(spec, "prl")?,
+                        None => Dbu::new_unchecked(0),
+                    },
                 },
                 "allowed_width" => {
                     let layer = one(spec)?;
@@ -4865,11 +4887,16 @@ impl RuleSet {
                     Rule::CutClass { layer, classes } => {
                         width::cut_class(store, id, layer, &self.classes[classes as usize], s, out)
                     }
-                    Rule::EdgeWidth { layer, limit } => {
-                        edge::facing(store, id, layer, limit, true, out)
-                    }
-                    Rule::EdgeFacingSpace { layer, limit } => {
-                        edge::facing(store, id, layer, limit, false, out)
+                    Rule::EdgeWidth { layer, limit } => edge::facing(
+                        store,
+                        id,
+                        layer,
+                        (limit, Dbu::new_unchecked(0)),
+                        true,
+                        out,
+                    ),
+                    Rule::EdgeFacingSpace { layer, limit, prl } => {
+                        edge::facing(store, id, layer, (limit, prl), false, out)
                     }
                     Rule::RegionDensity {
                         layer,

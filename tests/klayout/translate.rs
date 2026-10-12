@@ -2054,15 +2054,24 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 .expect("a String");
                 exact("region_density", Key::FigAt(name), Value::Ratio)
             }
-            Rule::EdgeWidth { layer, limit } | Rule::EdgeFacingSpace { layer, limit } => {
+            Rule::EdgeWidth { layer, limit } | Rule::EdgeFacingSpace { layer, limit, .. } => {
                 let (kind, check) = if matches!(rule, Rule::EdgeWidth { .. }) {
                     ("edge_width", "width")
                 } else {
                     ("edge_facing_space", "space")
                 };
+                // A run the pair must exceed: projection_limits keeps the
+                // pairs whose overlap is at least 2·prl + 1 at the doubled
+                // scale, more than prl.
+                let run = match rule {
+                    Rule::EdgeFacingSpace { prl, .. } if prl.raw() > 0 => {
+                        format!(", projection_limits({}, nil)", lim(prl) + 1)
+                    }
+                    _ => String::new(),
+                };
                 writeln!(
                     body,
-                    "emit({q}, {}.{check}({}, projection))",
+                    "emit({q}, {}.{check}({}, projection{run}))",
                     var(layer),
                     lim(limit)
                 )
