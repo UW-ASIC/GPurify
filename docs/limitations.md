@@ -222,7 +222,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-090 | Device-family rules (R, MIM, BJT, varactor, inductor, fuse, Schottky, LDMOS, photodiode, SRAM) | partial | Geometry is expressible through markers; exact resistor widths are width(L; allowed: [..]) (sky130 rpm.1b-1f) and channel length and width width(E) (DRC-011). Missing: licon counts per resistor terminal (rpm.1g-1k) and varactor taps (varac.2, varac.6) |
 | DRC-092 | Exemptions (areaid regions, cell-name, rule flags) | partial | Region exemptions work via `not areaid`; cell-name exemptions are missing (layout is flattened) |
 | DRC-095 | Seal ring | partial | Geometry through the generic kinds; one seal ring per chip (IHP Seal.m) is count(seal) <= 1 with >= 1, nothing outside it (Seal.l) forbidden(L not (seal or seal.holes())). Missing: the seal ring at the origin (sky130 x.19) and a partnum beside it (x.27) |
-| DRC-097 | Frame / die / cell-name rules | partial | Frame, scribe and LBE geometry is expressible with the generic kinds (sky130 x.16, x.21, x.23a-d, x.28; IHP LBE.*), e.g. forbidden(sl and diff), forbidden(lbe.holes()). Missing: cell-name and pcell rules (x.12 exemptions, x.25-x.27) and the seal ring's corner at the origin (x.19) |
+| DRC-097 | Frame / die / cell-name rules | partial | Frame, scribe and LBE geometry is expressible with the generic kinds (sky130 x.16, x.21, x.23a-d, x.28; IHP LBE.*), e.g. forbidden(sl and diff), forbidden(lbe.holes()). Missing: cell-name and pcell rules (x.12 exemptions, x.25-x.27) and the seal ring's corner at the origin (x.19); a maximum cell-name length (CAL:DRC MAXIMUM CELL NAME LENGTH) is a further form |
 | DRC-101 | MP error taxonomy (anchor path, anchor self-conflict, same-mask self-conflict, min opposite-mask spacing) | partial | Reports a colouring failure, not its class |
 | DRC-102 | Pre-coloured (MASK) same-/different-mask spacing | missing | — |
 | DRC-103 | Stitch legality | missing | — |
@@ -239,6 +239,13 @@ says which foundry manual, standard or tool defines each one.
 | DRC-121 | Selection by shape class, net or angle; covering/overlapping; anisotropic size | partial | limitations.md, "Checks that do not exist yet" |
 | DRC-122 | Edge-layer ops incl. extension | partial | limitations.md, "Checks that do not exist yet" |
 | DRC-123 | Hierarchical processing | partial | Flattened at load (gds::Library::flatten); a scale issue, not correctness |
+| DRC-124 | Layout input exceptions (missing cell reference, duplicate cell, magnified or angled placement, odd or zero path width, spike, vertex count) | missing | Calibre grades each malformed-database case as an error or warning; whether the GDS reader refuses each case is unverified, and none is reported as a rule |
+| DRC-125 | Protrusion width (narrow protrusion from wide metal) | missing | A protrusion narrower than width1 and shorter than length from metal wider than width2 |
+| DRC-126 | Cut keep-out zone by cut class (end, side and spiral extensions) | missing | — |
+| DRC-127 | Cell edge-type spacing between placed cells | missing | Spacing by the edge types of neighbouring standard cells (EXCEPTNONFILLERINBETWEEN and other options); needs cell placement, which a flattened layout loses |
+| DRC-128 | Self-aligned multiple patterning (SADP/SAQP mandrel, spacer, cut) legality | missing | Distinct from LELE colouring (DRC-100): legality is a mandrel/non-mandrel assignment plus cut-mask rules |
+| DRC-129 | Inter-die alignment and overlap (bump and pad alignment, rotation, cross-die spacing) | missing | Companion to LVS-073; needs a stack description placing each die |
+| DRC-130 | Shape must contain a rectangle of a given size | missing | No open foundry rule found that states it; the operation is public only as an SVRF statement name |
 
 ### Layout against schematic (LVS)
 
@@ -246,8 +253,8 @@ says which foundry manual, standard or tool defines each one.
 |---|---|---|---|
 | LVS-001 | Port / label consistency | partial | label_conflict flags one label on several nets (an open); net_seed_conflict flags several labels on one net (a short), one row per pair at the first label's shape |
 | LVS-002 | Implicit joins (same-label disjoint shapes, must-connect) | partial | Same-label disjoint shapes are not joined; they are reported as label_conflict, and only with --reference (lvs::check_layout); located on the labelled shapes (F70) |
-| LVS-005 | Short isolation / localisation | partial | Reported in every run, DRC-only included, naming both labelled shapes, located at the first; no path traced; no abort |
-| LVS-010 | Circuit without partner / hierarchical compare | partial | The reference is flattened below its top (Netlist::flatten_top) and compared device by device, so a missing block is a mismatch; there is no per-cell matching and no circuit-mismatch report naming the cell; a reference flattening to more than 2²⁸ devices, nets and instances is refused (NetlistError::TooLarge) |
+| LVS-005 | Short isolation / localisation | partial | Reported in every run, DRC-only included, naming both labelled shapes, located at the first; no path traced; no abort. Opens are not isolated: one reference net split over several layout nets shows only as label_conflict where labelled, never as an open path (CAL:LVS ISOLATE OPENS) |
+| LVS-010 | Circuit without partner / hierarchical compare | partial | The reference is flattened below its top (Netlist::flatten_top) and compared device by device, so a missing block is a mismatch; there is no per-cell matching and no circuit-mismatch report naming the cell; a reference flattening to more than 2²⁸ devices, nets and instances is refused (NetlistError::TooLarge); no cell-correspondence list naming which layout cell matches which reference subcircuit (KL:same_circuits, NG:equate classes) |
 | LVS-013 | Paired device with a different class/model | partial | Pairing requires the same kind and model, so it shows as unpaired |
 | LVS-014 | Parameter mismatch with tolerance | partial | One relative tolerance, 0.02 (lvs::CompareOptions); per-parameter and absolute tolerances are missing |
 | LVS-016 | Pin / port mismatch | partial | Net and port names are never compared, so a misnamed or reordered port passes; an unconnected reference port shows as unpaired_net (test net_names_do_not_have_to_agree) |
@@ -260,7 +267,7 @@ says which foundry manual, standard or tool defines each one.
 | LVS-035 | Dummy / shorted device removal | missing | — |
 | LVS-042 | Semi-series MOS | missing | — |
 | LVS-043 | Resistor series/parallel | partial | Parallel resistors merge keeping R and counting m (match one card with m=2, not one card of R/2). Series merging is MOS only |
-| LVS-044 | Capacitor / diode / BJT parallel | partial | Parallel capacitors, diodes and bipolars keep their value and count m; values are not added. Diodes wired in opposite directions do not merge |
+| LVS-044 | Capacitor / diode / BJT parallel | partial | Parallel capacitors, diodes and bipolars keep their value and count m; values are not added. Diodes wired in opposite directions do not merge. Series capacitors never merge (CAL:LVS REDUCE SERIES CAPACITORS) |
 | LVS-047 | Logic-gate recognition | missing | — |
 | LVS-048 | Filter unused devices | missing | — |
 | LVS-049 | Topology vs property policy (strict/relaxed) | partial | Fixed strict policy: structural differences after reduction are reported as unpaired devices. |
@@ -272,6 +279,8 @@ says which foundry manual, standard or tool defines each one.
 | LVS-067 | Subcircuit-modelled devices (rsubcircuit, fixed cells: VPP, ESD) | missing | sky130 VPP caps have no marker (limitations.md) |
 | LVS-068 | Device-count and parameter-range limits (devices per model, W/L inside the model's valid range) | missing | No check exists: the deck has no syntax for per-model counts or parameter ranges |
 | LVS-073 | 3D / system LVS across dies | missing | In scope since 2026-10-11 (was: Single-die only) |
+| LVS-074 | Layout-dependent-effect parameters (LOD SA/SB/SD, WPE SCA/SCB/SCC) | missing | BSIM4 defines the instance parameters and their geometry; no open PDK deck extracts them |
+| LVS-075 | Structural Verilog reference netlist | missing | Digital top levels arrive as gate-level Verilog |
 
 ### Electrical rules (ERC)
 
@@ -295,9 +304,10 @@ says which foundry manual, standard or tool defines each one.
 | ERC-C7 | ESD-pulse current density | partial | No ESD stimulus and no It2 limits |
 | ERC-C8 | Path voltage vs device failure (ESD window) | missing | — |
 | ERC-C9 | CDM checks (bus inductance, local clamps, driver/receiver ground R) | missing | — |
-| ERC-C10 | Layout parasitic ESD paths | missing | Spacing values are NDA |
+| ERC-C10 | Layout parasitic ESD paths | missing | Spacing values are NDA. The public forms: field-oxide parasitic MOS between PMOS/NMOS diffusions (HoganMedhat2021) and parasitic bipolars in I/O assemblies (Khazhinsky2012) |
 | ERC-C12 | Package / 2.5D / 3D ESD | missing | In scope since 2026-10-11 (was: On-chip only: package and multi-die ESD models are outside a layout verifier) |
 | ERC-C13 | System-level ESD | missing | In scope since 2026-10-11 (was: A board and system concern, outside a layout verifier) |
+| ERC-C14 | ESD layout rules on recognised devices (clamp distance to pad, minimum ESD-path metal width) | missing | Numeric limits are NDA |
 | ERC-D1a | Tap distance conditional on neighbouring well spacing | missing | — |
 | ERC-D1b | Minimum well-tie area | missing | — |
 | ERC-D2 | Pad-diffusion guard ring (spacing, width) | partial | No deck carries it (limitations.md, "Shipped decks"); width is the merged ring's narrowest band, tap distance a bounding-box gap |
@@ -307,8 +317,9 @@ says which foundry manual, standard or tool defines each one.
 | ERC-D6 | HV latch-up between isolated pockets | missing | — |
 | ERC-D7 | Native-device guard ring | missing | — |
 | ERC-D8 | Forward-biased diode marked and ringed | missing | — |
+| ERC-D9 | PMOS/NMOS devices sharing one well | missing | Named as a Calibre PERC layout check without a public definition of which sharing is illegal |
 | ERC-E3 | Width-banded absolute current for narrow lines | partial | Limit is max_density x width only, with no width band or absolute cap (erc::rules::electrical::check_em_current_density). The IHP deck states JMAX only: it may over-report, but it cannot under-report |
-| ERC-E7 | RMS / Joule heating / peak limits | missing | No open source |
+| ERC-E7 | RMS / Joule heating / peak limits | missing | LEF 5.8 publishes the grammar (limits tabled by frequency and width); no open PDK publishes values |
 | ERC-E9 | PDN integrity (floating stripes, unconnected instances) | partial | Flags unconnected conductors; PDN-specific checks (floating stripes, instance supply terminals) are missing |
 | ERC-E11 | Dynamic / vectorless IR | missing | In scope since 2026-10-11 (was: Static analysis only: dynamic IR needs switching activity) |
 | ERC-E12 | Stress voiding / slotting | partial | cheesing requires a slot in wide shapes; stress-voiding rules beyond slotting are missing |
@@ -320,7 +331,9 @@ says which foundry manual, standard or tool defines each one.
 | ERC-F10 | HV tag consistency | partial | The domain span across a device is checked; tag consistency (LV and HV n-wells on one net) is not |
 | ERC-F11 | Voltage-dependent spacing | missing | Same row as DRC-082 |
 | ERC-F13 | Inter-metal dielectric breakdown | missing | — |
+| ERC-F14 | Power-intent supply connectivity (power switches, always-on and retention cells on the supplies the UPF declares) | missing | Needs UPF input; IEEE 1801 not read (check-sources.md §5) |
 | ERC-G8 | Combinational loops | missing | Digital only, optional |
+| ERC-G9 | Path check: nets with no path to power or ground | missing | — |
 | ERC-H1 | Static leakage / HiZ / floating in power-down | missing | — |
 | ERC-H2 | Analog constraints (symmetry, common centroid, matching, orientation, dummies, WPE, STI) | missing | Overlaps Philis's own properties |
 | ERC-H3 | Netlist path checks (gate to ground within N devices; net types) | missing | — |
@@ -331,11 +344,17 @@ says which foundry manual, standard or tool defines each one.
 | Id | Check | Status | What is missing |
 |---|---|---|---|
 | PEX-003 | Coupling C (same-layer and cross-layer) | partial | No dielectric images: each panel pair sees the mean of their two permittivities and interfaces reflect nothing, so same-layer coupling is under-predicted 14-159% (extract::field). The substrate is a grounded plane at height 0 (testing-plan F24); a shape at height 0 (well, diffusion) is a junction, out of the field and in closed form, so the field reads metal over another net's junction as coupling to ground (F73); a junction layer needs no dielectric (F94) |
-| PEX-004 | Partial self / mutual inductance | partial | Each field-solved net gets its self L and R; mutual inductance between nets is never computed. Current is uniform across each rectangle of the merged conductor, so crowding at corners and width steps is not modelled; a net whose pieces meet only at a corner, or join only through a global layer, is refused (testing-plan F23, F45, F79) |
-| PEX-006 | Multi-corner extraction | missing | — |
-| PEX-007 | Process effects (CMP thickness, temp-dependent R, nonlinear via R, colour-aware) | partial | Temperature-dependent R: the deck's temperature T nominal T0 and each pex row's tc1/tc2 give R(T) = R(T0)(1 + tc1(T - T0) + tc2(T - T0)^2), the ngspice resistor law with the coefficients PDKs publish; extraction, the power grid and lib read it. Not modelled: CMP thickness from pattern density, current-dependent via R, colour (mask-shift) effects: their models need foundry calibration data no open PDK publishes |
-| PEX-008 | Reduction modes (C-only, RC, RCC, thresholds) | missing | One fixed output (R, ground C, coupling C, via R); --quasistatic <net> field-solves R, C and L for that net; --format spef\|dspf. No C-only or RC modes and no thresholds |
+| PEX-004 | Partial self / mutual inductance | partial | Each field-solved net gets its self L and R; mutual inductance between nets is never computed. Current is uniform across each rectangle of the merged conductor, so crowding at corners and width steps is not modelled; a net whose pieces meet only at a corner, or join only through a global layer, is refused (testing-plan F23, F45, F79). Frequency-dependent R and L (skin and proximity effect), which FastHenry computes with filament meshing, are not modelled |
+| PEX-006 | Multi-corner extraction | missing | Simultaneous multi-corner extraction in one run (SRC:datasheet) is the proprietary form; one corner per run is the minimum |
+| PEX-007 | Process effects (CMP thickness, temp-dependent R, nonlinear via R, colour-aware) | partial | Temperature-dependent R: the deck's temperature T nominal T0 and each pex row's tc1/tc2 give R(T) = R(T0)(1 + tc1(T - T0) + tc2(T - T0)^2), the ngspice resistor law with the coefficients PDKs publish; extraction, the power grid and lib read it. Not modelled: CMP thickness from pattern density, current-dependent via R, colour (mask-shift) effects: their models need foundry calibration data no open PDK publishes; width- and spacing-dependent thickness and sheet R, layer etch, via-coverage R (SRC:datasheet) |
+| PEX-008 | Reduction modes (C-only, RC, RCC, thresholds) | missing | One fixed output (R, ground C, coupling C, via R); --quasistatic <net> field-solves R, C and L for that net; --format spef\|dspf. No C-only or RC modes and no thresholds. Also missing: R-only reduction (CAL:PEX REDUCE RONLY), extraction of selected nets only, and regions excluded from extraction (IHP noqrc layer, datatype 28) |
 | PEX-009 | PEX netlist diff / qualification | missing | Worth building as an internal test tool |
+| PEX-011 | Device-region (MEOL/FEOL) parasitics: gate-to-contact and gate-to-diffusion C, trench contact, via-location gate R | missing | Needs the foundry's device cross-section; no open PDK publishes one |
+| PEX-012 | Metal-fill treatment (floating or grounded fill, virtual fill) | missing | — |
+| PEX-013 | Substrate network extraction (substrate and well resistance and coupling) | missing | — |
+| PEX-014 | Route-level (gate-level) extraction from LEF/DEF | missing | Needs a DEF reader |
+| PEX-015 | 3D-IC extraction (TSV, micro-bump, interposer, TSV-TSV coupling) | missing | — |
+| PEX-016 | Point-to-point resistance and net-to-net coupling report between arbitrary points | missing | ERC-C6 measures P2P on an ESD path only |
 
 ### Flow
 
@@ -347,5 +366,9 @@ says which foundry manual, standard or tool defines each one.
 | FLOW-004 | Interface DRC top vs blocks | missing | — |
 | FLOW-005 | In-design / live DRC | partial | Shared-deck library (Philis) is the first step |
 | FLOW-006 | User-programmable rules | missing | Rust decks + Rule::Custom (testing-plan.md L9b) |
+| FLOW-007 | Fill insertion (density-driven, timing-aware) | missing | DRC-073 checks fill; this generates it |
+| FLOW-008 | Incremental / ECO re-verification (changed regions or nets only) | missing | Metamorphic: an incremental run equals a full run |
+| FLOW-009 | Automated DRC-clean layout enhancement (via and power-grid insertion) | missing | — |
+| FLOW-010 | Clustering and triage of very large result sets | missing | — |
 
 <!-- end of generated block -->
