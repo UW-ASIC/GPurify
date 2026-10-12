@@ -70,11 +70,11 @@
 //! change it per model (below).
 //!
 //! Net names break ties and nothing more (catalog LVS-032): where refinement
-//! leaves nets interchangeable, a layout net pairs first with the reference
-//! net its label names, as `KLayout`'s `consider_net_names` (on by default)
-//! resolves ambiguities, so a transistor whose two diffusions differ on
-//! otherwise symmetric nets is compared the way its labels say. Names are
-//! not compared, so a misnamed or reordered port passes (catalog LVS-016),
+//! and the diffusions (testing-plan F98) leave nets interchangeable, a
+//! layout net pairs first with the reference net its label names, as
+//! `KLayout`'s `consider_net_names` (on by default) resolves ambiguities, so
+//! what is reported against such nets follows the labels. Names are not
+//! compared, so a misnamed or reordered port passes (catalog LVS-016),
 //! unless the deck asks for ports by name (below).
 //!
 //! # Deck controls

@@ -883,13 +883,15 @@ fn two_buffers_sized_apart_match_themselves_reversed() {
 
 /// Oracle: `KLayout`'s `consider_net_names` ("employ net names to resolve
 /// ambiguities"), by hand. One transistor whose source net `a` has a 1 pm²
-/// diffusion and drain net `b` a 2 pm² one; nothing but names tells `a`
-/// from `b`, so they stall. The reference lists `b` first, so the lowest
-/// reference net is `b`: paired by row order, the layout's source would be
-/// read against the card's drain, 1 pm² against 2 pm², a false mismatch.
-/// Paired by name, it matches, and a card with the diffusions exchanged
-/// (as 2, ad 1 at the same nets) is then reported. Breaks if names do not
-/// break the tie.
+/// diffusion and drain net `b` a 2 pm² one, against a card stating 3 pm² at
+/// both ends: either pairing of `a` and `b` puts the diffusions equally far
+/// apart (2 and 1 pm² against 3 pm²), so they tie (testing-plan F98 decides
+/// nothing), and only names tell `a` from `b`. The reference lists `b`
+/// first, so the lowest reference net is `b`: paired by row order, the card's
+/// `as` would be read against the layout's drain, 2 pm². Paired by name it
+/// is read against the source, 1 pm², and the report says so. A card with
+/// the diffusions exchanged at its nets is the same transistor (F98). Breaks
+/// if names do not break the tie.
 #[test]
 fn nets_nothing_else_tells_apart_pair_by_name() {
     use gpurify_check::lvs::ParamNames;
@@ -930,7 +932,18 @@ fn nets_nothing_else_tells_apart_pair_by_name() {
     let reference = mos([b, a, g, bulk], [1e-12, 2e-12]);
     assert_eq!(compare(&layout, &reference, options), Verdict::Match);
     let exchanged = mos([b, a, g, bulk], [2e-12, 1e-12]);
-    assert_ne!(compare(&layout, &exchanged, options), Verdict::Match);
+    assert_eq!(compare(&layout, &exchanged, options), Verdict::Match);
+    let level = mos([b, a, g, bulk], [3e-12, 3e-12]);
+    let verdict = compare(&layout, &level, options);
+    let source = discrepancies(&verdict).iter().find_map(|d| match *d {
+        Discrepancy::ParameterMismatch {
+            param,
+            layout_value,
+            ..
+        } if param == area_s => Some(layout_value),
+        _ => None,
+    });
+    assert_eq!(source, Some(1e-12), "{verdict:?}");
 }
 
 /// Two transistors in a chain, the second gated by the first's drain:

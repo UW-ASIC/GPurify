@@ -2320,10 +2320,11 @@ fn curated() -> Vec<Fixture> {
             0,
         );
     }
-    // LVS-032: the fingers alone, their nets labelled. Nothing but the
-    // labels tells n1 from n2, so names break the tie, as KLayout's
-    // `consider_net_names`: the card that puts 1 um² at its source n1
-    // matches, and the one that puts it at n2 does not, as labelled.
+    // LVS-032: the fingers alone, their nets labelled. Labels break a tie
+    // only after the diffusions (KLayout's `consider_net_names`): the
+    // channel nets pair the way the diffusions agree (testing-plan F98), so
+    // the card that puts 1 um² at its source n1 matches, and so does the
+    // one that puts it at n2, the same transistor the other way round.
     let mut fingers = shared.clone();
     for net in 0..3 {
         let t = track(net);
@@ -2336,7 +2337,7 @@ fn curated() -> Vec<Fixture> {
     }
     for (case, ends, matched) in [
         ("as_labelled", [1e-12, 5e-13, 6e-6, 3e-6], true),
-        ("against_the_labels", [5e-13, 1e-12, 3e-6, 6e-6], false),
+        ("against_the_labels", [5e-13, 1e-12, 3e-6, 6e-6], true),
     ] {
         let card = DIFFUSIONS
             .into_iter()
