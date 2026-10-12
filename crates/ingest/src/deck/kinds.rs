@@ -554,6 +554,17 @@ pub(crate) const KINDS: &[Kind] = &[
     opposite(WIRE_WIDTH),
     opposite(WIRE_BELOW),
     opposite(WIRE),
+    Kind {
+        modifier: Some("adjacent"),
+        ..drc(
+            "enclosure",
+            Cmp::Ge,
+            "adjacent_enclosure",
+            &[1, 0],
+            Some(p("", "min_one_side", Dim::Length)),
+            &[],
+        )
+    },
     drc("extension", Cmp::Ge, "min_extension", &[0, 1], LIMIT, &[]),
     // A gate's shape: `bend(poly, diff)` (poly turning on diff, sky130
     // poly.11) and `covers_corner(poly, diff)` (poly over an inner corner of

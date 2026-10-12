@@ -965,6 +965,33 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 .expect("a String");
                 exact("max_enclosure", Key::FigAt(name), Value::Ignore)
             }
+            Rule::AdjacentEnclosure {
+                outer,
+                inner,
+                min_one_side,
+            } => {
+                fig(outer, &mut reads);
+                let name = fig(inner, &mut reads);
+                // The sky130A_mr.drc idiom (m1.5, li.5): inner edges enclosed
+                // by less, projected; a corner where two such edges meet.
+                writeln!(
+                    body,
+                    "c = {o}.enclosing({i}, {}, projection).second_edges ; \
+                     emit({q}, {i}.interacting(c.width(angle_limit(100.0), 1.dbu).polygons(1.dbu))) ; \
+                     emit({q}, {i}.not_inside({o}))",
+                    lim(min_one_side),
+                    o = var(outer),
+                    i = var(inner)
+                )
+                .expect("a String");
+                approx(
+                    "adjacent_enclosure",
+                    Compare::KlayoutWithin,
+                    Key::FigRow(name.clone(), 0),
+                    Value::Ignore,
+                    vec![name],
+                )
+            }
             Rule::MinExtension {
                 layer,
                 reference,

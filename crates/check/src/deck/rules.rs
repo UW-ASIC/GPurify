@@ -398,6 +398,9 @@ kinds! {
     asymmetric_enclosure(inner: one, outer: one) [1, 0] { min_one_side: Dbu = "min_one_side" }
     /// [`Rule::MaxEnclosure`](crate::drc::Rule::MaxEnclosure): `enclosure(inner, outer) <= limit`.
     max_enclosure(inner: one, outer: one) [1, 0] { limit: Dbu = "limit" }
+    /// [`Rule::AdjacentEnclosure`](crate::drc::Rule::AdjacentEnclosure):
+    /// `enclosure(inner, outer, adjacent) >= min_one_side`.
+    adjacent_enclosure(inner: one, outer: one) [1, 0] { min_one_side: Dbu = "min_one_side" }
     /// [`Rule::MinExtension`](crate::drc::Rule::MinExtension): `extension(layer, reference) >= limit`.
     min_extension(layer: one, reference: one) [] { limit: Dbu = "limit" }
     /// [`Rule::GateCorner`](crate::drc::Rule::GateCorner): `bend(layer, reference)`,

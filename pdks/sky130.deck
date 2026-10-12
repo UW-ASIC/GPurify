@@ -356,14 +356,18 @@ rule nsd.11 hole_area(nsdm) >= 0.265um2
 rule psd.11 hole_area(psdm) >= 0.265um2
 
 # --- Local interconnect contact [S1] ---
+# licon.5c/7/8a, li.5, m1.5, via.5a, m2.5, via2.5 and via3.5 enclose "on one of
+# two adjacent sides" [S1]: at each corner of the cut, one of the two sides
+# meeting there, read at that corner (`adjacent`), as the foundry's
+# sky130A_mr.drc checks (a corner where two short enclosed edges meet).
 rule licon.1 size(licon_std) == 170nm x 170nm
 rule licon.1b size(licon_prec) == 190nm x 2000nm
 rule licon.2 space(licon) >= 170nm
 rule licon.5a enclosure(licon_diff, diff) >= 40nm
-rule licon.5c enclosure(licon_diff, diff, opposite) >= 60nm
-rule licon.7 enclosure(licon_iso_tap, tap, opposite) >= 120nm
+rule licon.5c enclosure(licon_diff, diff, adjacent) >= 60nm
+rule licon.7 enclosure(licon_iso_tap, tap, adjacent) >= 120nm
 rule licon.8 enclosure(poly_licon, poly) >= 50nm
-rule licon.8a enclosure(poly_licon, poly, opposite) >= 80nm
+rule licon.8a enclosure(poly_licon, poly, adjacent) >= 80nm
 rule licon.9 space(poly_licon_nrpm, psdm) >= 110nm
 rule licon.10 space(licon_var_tap, var_channel) >= 250nm
 rule licon.11 space(licon_dt, gate_nsc) >= 55nm
@@ -376,7 +380,7 @@ rule licon.15 enclosure(poly_licon, npc) >= 100nm
 rule li.1 width(li) >= 170nm
 rule li.3 space(li) >= 170nm
 rule li.3.notch notch(li) >= 170nm
-rule li.5 enclosure(licon, li, opposite) >= 80nm
+rule li.5 enclosure(licon, li, adjacent) >= 80nm
 rule li.6 area(li) >= 0.0561um2
 rule li.7 width(li_res) >= 290nm
 rule ct.1 size(mcon) == 170nm x 170nm
@@ -409,22 +413,22 @@ rule m5.2.notch notch(met5) >= 1600nm
 rule m5.4 area(met5) >= 4um2
 
 rule m1.4 enclosure(mcon, met1) >= 30nm
-rule m1.5 enclosure(mcon, met1, opposite) >= 60nm
+rule m1.5 enclosure(mcon, met1, adjacent) >= 60nm
 rule via.1a size(via) == 150nm x 150nm
 rule via.2 space(via) >= 170nm
 rule via.4a enclosure(via, met1) >= 55nm
-rule via.5a enclosure(via, met1, opposite) >= 85nm
+rule via.5a enclosure(via, met1, adjacent) >= 85nm
 rule m2.4 enclosure(via, met2) >= 55nm
-rule m2.5 enclosure(via, met2, opposite) >= 85nm
+rule m2.5 enclosure(via, met2, adjacent) >= 85nm
 rule via2.1a size(via2) == 200nm x 200nm
 rule via2.2 space(via2) >= 200nm
 rule via2.4 enclosure(via2, met2) >= 40nm
-rule via2.5 enclosure(via2, met2, opposite) >= 85nm
+rule via2.5 enclosure(via2, met2, adjacent) >= 85nm
 rule m3.4 enclosure(via2, met3) >= 65nm
 rule via3.1 size(via3) == 200nm x 200nm
 rule via3.2 space(via3) >= 200nm
 rule via3.4 enclosure(via3, met3) >= 60nm
-rule via3.5 enclosure(via3, met3, opposite) >= 90nm
+rule via3.5 enclosure(via3, met3, adjacent) >= 90nm
 rule m4.3 enclosure(via3, met4) >= 65nm
 rule via4.1 size(via4) == 800nm x 800nm
 rule via4.2 space(via4) >= 800nm

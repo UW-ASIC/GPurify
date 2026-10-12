@@ -655,7 +655,8 @@ pub enum Rule {
     /// (LEF/DEF 5.8, "ENCLOSURE"); `KLayout` `enclosed` with `projection`.
     ///
     /// Limits: end-cap enclosure that depends on the host's end of line
-    /// (`LEF58_ENCLOSURE EOL`) is not modelled.
+    /// (`LEF58_ENCLOSURE EOL`) is not modelled. One of two adjacent sides,
+    /// read at each corner, is [`Rule::AdjacentEnclosure`].
     AsymmetricEnclosure {
         /// The enclosing layer, merged; the deck's second argument.
         outer: LayerId,
@@ -705,6 +706,40 @@ pub enum Rule {
         /// The furthest the outer figure may reach past what it holds, in
         /// grid units; positive.
         limit: Dbu,
+    },
+    /// An `inner` shape with a corner where neither side meeting it has
+    /// `min_one_side` of enclosure.
+    ///
+    /// Deck: `enclosure(inner, outer, adjacent) >= len`, kind
+    /// `adjacent_enclosure`: sky130 m1.5 "Mcon must be enclosed by Met1 on
+    /// one of two adjacent sides by at least 0.060 um" (periphery rules,
+    /// google/skywater-pdk docs/rules/periphery/periphery.csv; li.5, licon.5c,
+    /// licon.7, licon.8a, via.5a, m2.5, via2.5 and via3.5 alike). Hosts are
+    /// chosen as for [`Rule::MinEnclosure`]. Each edge of the inner polygon
+    /// is read straight out to the host at each of its two ends, and the rule
+    /// measures the least, over the inner's convex corners, of the better of
+    /// the two edges meeting there, each read at that corner. A rectangle in
+    /// a host that does not step along its sides measures what
+    /// [`Rule::AsymmetricEnclosure`] does; a host that steps is read at the
+    /// corner, as the foundry's `sky130A_mr.drc` does (a corner of short
+    /// enclosed edges flags), so an enclosing shape reaching far past one
+    /// corner but not another is held at each.
+    ///
+    /// One violation per offending inner polygon, on the `inner` layer, in the
+    /// middle of the strip past the better edge of the worst corner. `shapes`
+    /// is the inner row and the host's drawn row (`None` when unhosted).
+    /// `examined` counts inner polygons.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-042. Rules: sky130 li.5, m1.5, via.5a, licon.5c; Magic `surround
+    /// directional`.
+    AdjacentEnclosure {
+        /// The enclosing layer, merged; the deck's second argument.
+        outer: LayerId,
+        /// The enclosed layer; findings are reported on it.
+        inner: LayerId,
+        /// The enclosure one side at each corner needs, in grid units; positive.
+        min_one_side: Dbu,
     },
     /// `layer` not extending past `reference` by `limit`, as poly past
     /// diffusion.
@@ -1266,9 +1301,14 @@ pub enum Rule {
     /// of at most that column's cell in that row (the spacing it judges).
     /// It is held, for each row above the first, to that row's cell, measured
     /// from the part of either shape strictly wider than the row's width
-    /// (where a `width + 1` square fits in the merged layer), and to the first
-    /// row's cell measured from the whole shapes. A thin tab of a wide plate
-    /// is held to the first row only.
+    /// (where a `width + 1` square fits in the merged layer), the column
+    /// taken from that wide part's own run along the other figure; and to the
+    /// first row's cell measured from the whole shapes, the column from their
+    /// run. A thin tab of a wide plate is held to the first row only, and so
+    /// is a thin line beside a wide part too short to run past the column's
+    /// length (IHP M1.e "at least one line is wider than 0.3 um and the
+    /// parallel run is more than 1.0 um", SG13G2 layout rules 5.16; as
+    /// IHP's 5_16_metal1.drc measures it, projected from the wide part).
     ///
     /// One violation per pair, at its highest failing row, with `limit` that
     /// row's cell and `measured` the distance that row measured, at the
@@ -2735,6 +2775,14 @@ impl RuleSet {
                         limit: length(spec, "limit")?,
                     }
                 }
+                "adjacent_enclosure" => {
+                    let (outer, inner) = two(spec)?;
+                    Rule::AdjacentEnclosure {
+                        outer,
+                        inner,
+                        min_one_side: length(spec, "min_one_side")?,
+                    }
+                }
                 "min_extension" => {
                     let (layer, reference) = two(spec)?;
                     Rule::MinExtension {
@@ -3477,6 +3525,19 @@ impl RuleSet {
                     s,
                     out,
                 ),
+                Rule::AdjacentEnclosure {
+                    outer,
+                    inner,
+                    min_one_side,
+                } => overlay::enclosure(
+                    store,
+                    id,
+                    (outer, inner),
+                    (min_one_side, WireBand::ANY),
+                    overlay::Mode::Adjacent,
+                    s,
+                    out,
+                ),
                 Rule::MaxEnclosure {
                     outer,
                     inner,
@@ -3831,6 +3892,10 @@ impl Rule {
                 min_one_side: limit,
                 ..
             }
+            | Rule::AdjacentEnclosure {
+                min_one_side: limit,
+                ..
+            }
             | Rule::MinExtension { limit, .. }
             | Rule::Overlap { limit, .. }
             | Rule::MaxDistanceToTap { limit, .. }
@@ -4073,6 +4138,7 @@ impl Rule {
             Rule::FullWidth { .. } => "full_width",
             Rule::AsymmetricEnclosure { .. } => "asymmetric_enclosure",
             Rule::MaxEnclosure { .. } => "max_enclosure",
+            Rule::AdjacentEnclosure { .. } => "adjacent_enclosure",
             Rule::MinExtension { .. } => "min_extension",
             Rule::GateCorner { .. } => "gate_corner",
             Rule::Overlap { .. } => "overlap",
@@ -4180,6 +4246,9 @@ impl Rule {
                 outer: a, inner: b, ..
             }
             | Rule::MaxEnclosure {
+                outer: a, inner: b, ..
+            }
+            | Rule::AdjacentEnclosure {
                 outer: a, inner: b, ..
             }
             | Rule::NoncoincidentEnclosure {

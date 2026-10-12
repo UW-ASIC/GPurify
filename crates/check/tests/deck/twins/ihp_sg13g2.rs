@@ -2722,7 +2722,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
         "MIM.h",
         forbidden(l["topvia1"].interacting(l["mim"]).not(l["mim"])),
     );
-    d.rule("MIM.h.via", must_contain(l["mim"], l["topvia1"], 1));
+    d.rule("MIM.h.via", must_contain(l["mim"], l["topvia1"], 1, None));
     d.rule("Pad.i", must_be_inside(l["dfpad"], l["topmetal2"]));
     l.insert("metal1_pin", d.layer("metal1_pin", (8, 2)));
     d.rule("Pin.e", must_be_inside(l["metal1_pin"], l["metal1"]));

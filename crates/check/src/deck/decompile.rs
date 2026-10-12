@@ -239,6 +239,11 @@ impl CompiledDeck {
                 min_one_side,
                 wire,
             } => band(two(outer, inner).length("min_one_side", min_one_side), wire),
+            Rule::AdjacentEnclosure {
+                outer,
+                inner,
+                min_one_side,
+            } => two(outer, inner).length("min_one_side", min_one_side),
             Rule::MinExtension {
                 layer,
                 reference,

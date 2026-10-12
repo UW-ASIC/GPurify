@@ -48,7 +48,7 @@ licon.13	licon.13	licon.13 licon.13_a	agrees
 licon.17	licon.17	licon.17	agrees	
 li.1	li.1	li.1	agrees	
 li.3 li.3.notch	li.3	li.3	agrees	
-li.5	li.5	li.5	differs	Finding N-f2-2: GPurify flags 22 sky130_fd_sc_hd cells (a2111oi_1 licon at 1.12,0.645) where the li steps out along a licon side: it takes each side's smallest enclosure (75 nm left, 65 nm top), while the foundry deck flags only a licon corner whose two li edges are both short. The cells are foundry-clean, so GPurify is stricter than sign-off.
+li.5	li.5	li.5	agrees	
 li.6	li.6	li.6	agrees	
 li.7	li.7	MR_li.WID.4	agrees	
 ct.1	ct.1	MR_mcon.WID.1 MR_mcon.LEN.1	agrees	
@@ -58,8 +58,8 @@ m1.1	m1.1	MR_met1.WID.1	agrees
 m1.2 m1.2.notch	m1.2	MR_met1.SP.1	agrees	
 m1.3a m1.3b	m1.3a m1.3b	MRW_met1.SP.2	agrees	
 m1.4	m1.4	MR_met1.ENC.1 MR_met1.CON.1	agrees	
-m1.5	m1.5	m1.5	differs	An mcon outside met1 (test_violators' 6 x 11 nm mcon) is flagged by m1.5 as zero enclosure; the foundry deck leaves it to MR_met1.CON.1 (row m1.4), which both flag.
-m1.6	m1.6	MR_met1.AR.1	differs	Both decks flag the 0.29 x 0.23 um met1 pad of tapvgnd_1 and tapvgnd2_1 (0.067 um2 < 0.083): the tap cell is clean only abutting the VGND rail in a row.
+m1.5	m1.5	m1.5	differs	Documented implementation difference: an mcon outside met1 (test_violators' 6 x 11 nm mcon) has no enclosure, and GPurify flags it under m1.5 as well as m1.4; the foundry deck flags it only under MR_met1.CON.1 (row m1.4, which agrees). The manual's m1.5 ('Mcon must be enclosed by Met1 on one of two adjacent sides by at least 0.060') does not say whether an unenclosed mcon also breaks it.
+m1.6	m1.6	MR_met1.AR.1	differs	Not a GPurify difference: both decks flag the 0.29 x 0.23 um met1 pad of tapvgnd_1 and tapvgnd2_1, 0.067 um2 against the manual's m1.6 'Min metal 1 area 0.083 um2'; the cell is legal only abutting the VGND rail in a row, so the harness's clean-cell oracle does not hold for it.
 m1.7	m1.7	MR_met1.AR.2	agrees	
 via.1a	via.1a	via.1a via.1a_a via.1a_b	agrees	
 via.2	via.2	via.2	agrees	

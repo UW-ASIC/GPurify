@@ -92,6 +92,108 @@ fn strips(inner: Bbox, host: PolygonRef<'_>) -> [(Dbu, Side); 4] {
     ]
 }
 
+/// How far the host reaches past a box `inner` (an edge, as a degenerate
+/// box) at each end of each side: `[left, right, bottom, top]`, each
+/// `(low end, high end)`, read straight out from the side just inside that
+/// end (projection metric). A host whose edge steps along a side reaches
+/// different distances at the side's two ends; a host that does not step
+/// reaches its [`strips`] value at both.
+fn strip_ends(inner: Bbox, host: PolygonRef<'_>) -> [(Dbu, Dbu); 4] {
+    let mut ends = [(far(), far()); 4];
+    // An edge spanning `lo..hi` faces the end at `at` of a side `from..to`
+    // when it covers the side's last unit before that end.
+    let covers_low = |lo: Dbu, hi: Dbu, from: Dbu| lo <= from && hi > from;
+    let covers_high = |lo: Dbu, hi: Dbu, to: Dbu| lo < to && hi >= to;
+    let keep = |slot: &mut (Dbu, Dbu), low: bool, high: bool, d: Dbu| {
+        if low {
+            slot.0 = slot.0.min(d);
+        }
+        if high {
+            slot.1 = slot.1.min(d);
+        }
+    };
+    for ring in std::iter::once(host.outer()).chain(host.holes()) {
+        let (xs, ys) = ring.coords();
+        for e in ring_segs(xs, ys) {
+            if e.a.x == e.b.x {
+                let (lo, hi) = (e.a.y.min(e.b.y), e.a.y.max(e.b.y));
+                let (low, high) = (
+                    covers_low(lo, hi, inner.ylo),
+                    covers_high(lo, hi, inner.yhi),
+                );
+                if e.a.x <= inner.xlo {
+                    keep(&mut ends[0], low, high, inner.xlo - e.a.x);
+                }
+                if e.a.x >= inner.xhi {
+                    keep(&mut ends[1], low, high, e.a.x - inner.xhi);
+                }
+            } else {
+                let (lo, hi) = (e.a.x.min(e.b.x), e.a.x.max(e.b.x));
+                let (low, high) = (
+                    covers_low(lo, hi, inner.xlo),
+                    covers_high(lo, hi, inner.xhi),
+                );
+                if e.a.y <= inner.ylo {
+                    keep(&mut ends[2], low, high, inner.ylo - e.a.y);
+                }
+                if e.a.y >= inner.yhi {
+                    keep(&mut ends[3], low, high, e.a.y - inner.yhi);
+                }
+            }
+        }
+    }
+    ends
+}
+
+/// The enclosure of `inner` by one of the two sides at each convex corner:
+/// the least, over its convex corners, of the better of the two edges
+/// meeting there, each read straight out at that corner's end of the edge,
+/// and where to report it (the strip past the better edge of the worst
+/// corner). For a rectangle in a host that does not step along its sides
+/// this is `max(min(left, right), min(bottom, top))`, the opposite-sides
+/// value: `min` of the four corner `max`es distributes to it.
+fn adjacent_enclosure(inner: PolygonRef<'_>, host: PolygonRef<'_>) -> (Dbu, Point) {
+    // An edge's reading at its endpoint `p`, outward from the inner.
+    let at_end = |a: Point, b: Point, p: Point| {
+        let edge = Bbox::point(a.x, a.y).include(b.x, b.y);
+        let side = outward(a, b);
+        let (low, high) = strip_ends(edge, host)[side as usize];
+        let at_low = if a.x == b.x {
+            p.y == edge.ylo
+        } else {
+            p.x == edge.xlo
+        };
+        (if at_low { low } else { high }, side, edge)
+    };
+    let (xs, ys) = inner.outer().coords();
+    let n = xs.len();
+    let pt = |i: usize| Point {
+        x: xs[i % n],
+        y: ys[i % n],
+    };
+    let mut worst: Option<(Dbu, Side, Bbox)> = None;
+    for i in 0..n {
+        let (u, v, w) = (pt(i + n - 1), pt(i), pt(i + 1));
+        // Counter-clockwise outer ring: a left turn is a convex corner.
+        let turn = (v.x - u.x).raw() * (w.y - v.y).raw() - (v.y - u.y).raw() * (w.x - v.x).raw();
+        if turn <= 0 {
+            continue;
+        }
+        let (d1, s1, e1) = at_end(u, v, v);
+        let (d2, s2, e2) = at_end(v, w, v);
+        let better = if (d1, s2) >= (d2, s1) {
+            (d1, s1, e1)
+        } else {
+            (d2, s2, e2)
+        };
+        if worst.is_none_or(|(d, s, _)| (better.0, better.1) < (d, s)) {
+            worst = Some(better);
+        }
+    }
+    let (d, side, edge) = worst.expect("a validated polygon has a convex corner");
+    (d, side_midpoint(edge, d, side))
+}
+
 /// Squared distance from the inner region (its rectangles) to the host's
 /// boundary: the euclidean enclosure once the host contains it.
 fn boundary_dist2(inner: &[Bbox], host: PolygonRef<'_>) -> i128 {
@@ -117,6 +219,9 @@ pub(crate) enum Mode {
     /// The better axis's widest straight-out reading, which must be 0
     /// (`full_width`).
     FullWidth,
+    /// One of the two edges at each convex corner, read at that corner
+    /// (`adjacent_enclosure`).
+    Adjacent,
 }
 
 /// The least Euclidean distance between an edge of `inner` and a parallel
@@ -180,6 +285,10 @@ fn enclosure_of(
             || (far(), None),
             |(d2, at)| (isqrt(DbuArea::new(saturate(d2.raw()))), Some(at)),
         );
+    }
+    if mode == Mode::Adjacent {
+        let (value, at) = adjacent_enclosure(inner, host);
+        return (value, Some(at));
     }
     if mode == Mode::FullWidth {
         // Per axis (vertical edges, horizontal edges): the most enclosed edge.
