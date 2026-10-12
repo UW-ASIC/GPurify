@@ -62,7 +62,7 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 
 | Domain | implemented | expressible | partial | missing | verify | out of scope |
 |---|---:|---:|---:|---:|---:|---:|
-| DRC | 43 | 6 | 43 | 14 | 0 | 0 |
+| DRC | 49 | 6 | 44 | 7 | 0 | 0 |
 | LVS | 24 | 1 | 15 | 8 | 0 | 0 |
 | ERC | 53 | 4 | 13 | 11 | 0 | 0 |
 | PEX | 7 | 0 | 3 | 6 | 0 | 0 |
@@ -310,7 +310,9 @@ single oracle is a named gap that ledger P1 closes.
 | DRC-103 | Stitch legality | expressible | CAL; ICV | MR; SY |
 | DRC-105 | Trim / cut-metal layers | expressible | LEF58_TYPE TRIMMETAL; LEF58_TRIMMEDMETAL; A7:GCUT | FR; MR; SY |
 | DRC-110 | Recommended rules reported as warnings | implemented | IHP:R suffix,4.1; SKY:RR,RC; A7:type R; LEF:PREFERENCLOSURE | FR; SY; MR |
+| DRC-111 | DFM scoring of recommended rules | partial | CAL:YieldAnalyzer | SY; MR |
 | DRC-113 | Litho / CMP simulation hotspots | partial | CAL:LFD,CMPAnalyzer; PEG; Ouma2002 | CF; MR; SY |
+| DRC-124 | Layout input exceptions (missing cell reference, duplicate cell, magnified or angled placement, odd or zero path width, spike, vertex count) | partial | CAL:LAYOUT INPUT EXCEPTION SEVERITY,DRC MAXIMUM VERTEX | SY; MR |
 | LVS-005 | Short isolation / localisation | partial | CAL:LVS ISOLATE SHORT,LVS ISOLATE OPENS; ICV:ShortFinder; PEG | SY; MR |
 | LVS-020 | Undeclared parameter | implemented | - | SY; MR |
 | LVS-066 | Device flavour (HVT/LVT) by implant marker | expressible | GF:App.A; IHP LVS decks | SY; MR |
