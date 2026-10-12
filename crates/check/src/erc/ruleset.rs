@@ -867,6 +867,7 @@ impl RuleSet {
                     let per_cut = row.opt_number("max_current_per_cut")?.map(Qty::new);
                     let max_voltage = row.opt_number("max_voltage")?.map(Qty::new);
                     let min_width = row.opt_length("min_width")?;
+                    let clamp_voltage = row.opt_number("clamp_voltage")?.map(Qty::new);
                     let table = &mut set.esd_path;
                     row.head(&mut table.head)?;
                     table.pad.push(layers[0]);
@@ -883,6 +884,7 @@ impl RuleSet {
                     table.max_current_per_cut.push(per_cut);
                     table.max_voltage.push(max_voltage);
                     table.min_width.push(min_width);
+                    table.clamp_voltage.push(clamp_voltage);
                 }
                 "esd_pin_pair" => {
                     let layers = row.layers(1)?;
@@ -1635,6 +1637,9 @@ impl RuleSet {
                 }
                 if let Some(width) = t.min_width[r] {
                     c.length("min_width", width)?;
+                }
+                if let Some(held) = t.clamp_voltage[r] {
+                    c.positive("clamp_voltage", held.raw())?;
                 }
                 // A row bounding nothing would report clean forever.
                 if limits.iter().all(|(_, limit)| limit.is_none()) && t.min_width[r].is_none() {

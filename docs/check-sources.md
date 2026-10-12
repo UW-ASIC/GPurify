@@ -337,7 +337,7 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-C4 | Cross-domain signal ESD protection | implemented | TR18-01(2011):5.1.3; TR18-01:5.6.2; Hogan2012; Khazhinsky2012:Fig5; P15; P16 | SE:Part II pseudocode; SY; NV; MR |
 | ERC-C5 | Ground-domain coupling (anti-parallel diodes) | implemented | TR18-01:Fig5; Hogan2012:Fig1,IV; Khazhinsky2012:Fig2 | SY; NV; MR |
 | ERC-C7 | ESD-pulse current density | implemented | TR18-01:Fig58; TR22:4.4; Khazhinsky2012; CAL; ICV; PF | CF; MR; SY |
-| ERC-C8 | Path voltage vs device failure (ESD window) | partial | TR18-01:2.1; TR22:4.1,8; Khazhinsky2012:Fig4; GF:14.4 | CF; SY; MR; NV |
+| ERC-C8 | Path voltage vs device failure (ESD window) | partial | TR18-01:2.1; TR22:4.1,8; Khazhinsky2012:Fig4; GF:14.4; WP2:2.9.3 | CF; SY; MR; NV |
 | ERC-C9 | CDM checks (bus inductance, local clamps, driver/receiver ground R) | partial | TR18-01:5.6.3,6.6; JEP157A; Khazhinsky2012; PF; Etherton2015 | SY; MR |
 | ERC-C10 | Layout parasitic ESD paths | implemented | TR18-01:5.6.1; Khazhinsky2012; GF:14.4 | SY; MR |
 | ERC-C11 | ESD device geometry (DCGS, SCGS, fingers) | expressible | GF:LVESD.1-13; IHP:6.8 | FR; MR; SY |

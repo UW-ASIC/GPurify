@@ -916,6 +916,9 @@ impl CompiledDeck {
             if let Some(width) = t.min_width[r] {
                 row = row.length("min_width", width);
             }
+            if let Some(held) = t.clamp_voltage[r] {
+                row = row.number("clamp_voltage", held.raw());
+            }
             file(&t.head, r, row);
         }
         let t = &erc.esd_pin_pair;

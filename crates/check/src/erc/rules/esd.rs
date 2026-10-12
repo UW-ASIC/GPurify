@@ -36,7 +36,7 @@ use gpurify_ingest::StrId;
 /// clamp_resistance: resistance, max_resistance: resistance | none,
 /// clamp_it2: current per width | none, max_density: current per width |
 /// none, max_current_per_cut: current | none, max_voltage: voltage | none,
-/// min_width: len | none)`.
+/// min_width: len | none, clamp_voltage: voltage | none)`.
 ///
 /// Each polygon on `source` (`pad` when absent) is where a stress current
 /// enters: a pin, or with a source layer a guard ring under an injection
@@ -77,14 +77,23 @@ use gpurify_ingest::StrId;
 ///
 /// # Limits
 ///
-/// Pairs are pin to supply: two signal pins are stressed against each other
-/// only through the supplies between them, not as a pair. A clamp is linear,
-/// its on-resistance alone: a diode's turn-on or a snapback clamp's holding
-/// voltage is not modelled, and a transistor clamp is taken as wired whatever
-/// its gate is tied to. So `max_voltage` bounds the interconnect's and the
-/// clamps' resistive rise only; a deck folds a clamp's holding voltage into
-/// it (the protected device's failure voltage less the clamp's holding
-/// voltage). The pin's voltage is checked, not each device's own terminals.
+/// With `clamp_voltage`, each clamp that conducts holds that voltage across
+/// itself besides its on-resistance, a diode's turn-on or a snapback
+/// clamp's holding voltage: Industry Council White Paper 2 §2.9.3 writes the
+/// pad voltage as
+/// `Vdiode_on + (Rdiode_on * Icdm) + ((RVdd_buss + RVss_buss) * Icdm) + Vrcclamp_on + (Rrcclamp_on * Icdm)`,
+/// to stay below the protected device's `Vt1`. Each clamp is a source of `clamp_voltage` in
+/// series with `clamp_resistance`, pointing the way the resistive solve
+/// sends current through it, and the network is solved again; `max_voltage`
+/// reads that pin voltage, `clamp_it2` the clamps' currents, while
+/// `max_resistance` stays the resistive path's (a P2P resistance).
+///
+/// Pairs are pin to supply ([`EsdPinPairTable`] stresses two signal pins). A
+/// transistor clamp is taken as wired whatever its gate is tied to. A clamp
+/// the turned-on network would drive backwards (a parallel path the offset
+/// starves) is not modelled: the row is refused. One voltage serves every
+/// clamp of a row. The pin's voltage is checked, not each protected
+/// device's own terminals.
 /// The minimum ESD-path metal width is one of the ESD layout rules on
 /// recognised devices (ERC-C14); the clamp's distance to its pad is
 /// [`EsdClampResistanceTable`]'s. No public source states either limit's
@@ -152,6 +161,54 @@ pub struct EsdPathTable {
     /// Per row: the narrowest a wire carrying the stress current may be,
     /// database units; `None` is not checked.
     pub min_width: Vec<Option<Dbu>>,
+    /// Per row: the voltage a conducting clamp holds besides its
+    /// on-resistance, mV; `None` models a clamp as its resistance alone.
+    pub clamp_voltage: Vec<Option<Qty<Voltage, { prefix::MILLI }>>>,
+}
+
+/// Turns every clamp of a solved stress network on: a source of `held` in
+/// series with each clamp's resistance, pointing the way `solution` sends
+/// current through it, solved again into `solution`, whose clamp branch
+/// currents are then each clamp's own (the resistive part less the source's
+/// share). `false` when the solve fails or a clamp would carry current
+/// backwards (beyond a billionth of `forced`).
+fn turn_on(
+    stress: &mut StressGrid,
+    solution: &mut PowerSolution,
+    held: Qty<Voltage, { prefix::MILLI }>,
+    forced: Qty<Current, { prefix::MICRO }>,
+    scratch: &mut Scratch,
+) -> bool {
+    // mV / Ω is mA: 1000 µA.
+    const UA_PER_MV_OHM: f64 = 1_000.0;
+    let grid = &mut stress.grid;
+    let first = grid.edge_count() - stress.device.len();
+    let mut shift: Vec<(usize, f64, f64)> = Vec::new();
+    for edge in first..grid.edge_count() {
+        let sign = if solution.branch_current[edge].raw() >= 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        let source = UA_PER_MV_OHM * held.raw() / grid.edge_resistance[edge].raw();
+        let (from, to) = (grid.edge_from[edge] as usize, grid.edge_to[edge] as usize);
+        let (up, down) = if sign > 0.0 { (from, to) } else { (to, from) };
+        grid.node_load[up] = Qty::new(grid.node_load[up].raw() - source);
+        grid.node_load[down] = Qty::new(grid.node_load[down].raw() + source);
+        shift.push((edge, sign, source));
+    }
+    if solve_into(grid, &mut scratch.solve, solution).is_err() {
+        return false;
+    }
+    let floor = forced.raw().abs() * 1e-9;
+    for (edge, sign, source) in shift {
+        let along = sign * solution.branch_current[edge].raw() - source;
+        if along < -floor {
+            return false;
+        }
+        solution.branch_current[edge] = Qty::new(sign * along.max(0.0));
+    }
+    true
 }
 
 /// Runs every [`EsdPathTable`] row over every pin.
@@ -274,8 +331,16 @@ pub fn check_esd_path(
                     });
                 };
                 // Ohm's law in the grid's units: mV * 1000 / µA is Ω.
+                let resistive = solution.node_voltage[stress.entry as usize];
+                let ohms =
+                    Measurement::Resistance(Qty::new(resistive.raw() * 1000.0 / current.raw()));
+                if let Some(held) = table.clamp_voltage[row] {
+                    if !turn_on(&mut stress, &mut solution, held, current, scratch) {
+                        outcome = Outcome::Refused;
+                        break 'pins;
+                    }
+                }
                 let volts = solution.node_voltage[stress.entry as usize];
-                let ohms = Measurement::Resistance(Qty::new(volts.raw() * 1000.0 / current.raw()));
                 if let Some(limit) = max_resistance {
                     if ohms.violates(limit, LimitSense::Maximum) {
                         push(ohms, limit);
