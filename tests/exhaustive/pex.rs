@@ -2696,6 +2696,93 @@ fn stratified_coupling_lies_between_its_two_uniform_stacks() {
     assert_eq!(ran.summary.pex, StageStatus::Ran);
 }
 
+/// PEX-003: a conductor whose face lies on an interface, the common case of
+/// a real stack (a metal's bottom on the dielectric under it): an `m2`
+/// plate, 1250 nm up, its bottom on the interface between the 3.9 under it
+/// and the 5 around it, over 7 up to `m1`'s top at 750 nm.
+///
+/// Oracle: closed form, the parallel plate over a two-layer stack, the two
+/// layers in series: per area `ε₀ / (0.75 µm / 7 + 0.5 µm / 3.9)`, exact
+/// for a plate wide against its height. A square plate's capacitance is
+/// that area term, a term along its edges and a corner term, so the second
+/// difference over sides `L`, `2L`, `3L`, `(C(3L) − 2C(2L) + C(L)) / 2L²`,
+/// is the area term but for what of the edge fringe does not grow linearly
+/// (its top-face and logarithmic parts), of order `(h/L)/π`, 10 % at
+/// `L` = 4 µm: each stack's area term is held to that against its closed
+/// form. The same residual stands in the all-3.9 stack, whose area term is
+/// `ε₀·3.9 / 1.25 µm`, so the ratio of the two area terms is held to the
+/// closed forms' ratio, `(1.25 / 3.9) / (0.75 / 7 + 0.5 / 3.9)` = 1.362,
+/// to 2 %. Fails if the plate's bottom face reads the permittivity above
+/// the interface (5: a ratio of 1.547), or the polarisation of either
+/// interface is lost.
+///
+/// `FastCap` 2.0 is no oracle here: its dielectric solve returned
+/// non-physical matrices whenever a conductor's face lay on an interface
+/// (Nightly 38233408339 and 38242834781), and `FasterCap` is not in nixpkgs.
+#[test]
+fn a_plate_on_an_interface_reads_its_two_layers_in_series() {
+    let side = 4_000;
+    let plate = |n: i64| {
+        Layout::default()
+            .rect("m2", 0, 0, n * side, n * side)
+            .label("m2_label", 500, 500, "A")
+    };
+    let area_term = |stack: Stack| {
+        let c: Vec<f64> = (1..=3)
+            .map(|n| solved_matrix(stack, plate(n), &["A"]).0[0][0])
+            .collect();
+        let l = side as f64 / 1e3;
+        (c[2] - 2.0 * c[1] + c[0]) / (2.0 * l * l)
+    };
+    let eps0_ff_per_um = EPSILON0_AF_PER_UM / 1e3;
+    let height = COARSE.m2.height / 1e3;
+    let interface = COARSE.v1.height / 1e3;
+    let stack = Stack {
+        m1: Row {
+            k: 7.0,
+            ..COARSE.m1
+        },
+        v1: Row {
+            k: 3.9,
+            ..COARSE.v1
+        },
+        m2: Row {
+            k: 5.0,
+            ..COARSE.m2
+        },
+    };
+    let mut terms = Vec::new();
+    for (what, stack, want) in [
+        ("all 3.9", uniform(3.9), eps0_ff_per_um * 3.9 / height),
+        (
+            "7 / 3.9 / 5",
+            stack,
+            eps0_ff_per_um / (interface / 7.0 + (height - interface) / 3.9),
+        ),
+    ] {
+        let got = area_term(stack);
+        println!("{what}: {got} fF/um2, closed form {want}");
+        assert!(
+            relative(got, want) < PLATE_AREA,
+            "{what}: area term {got} fF/um2, the series plates {want}"
+        );
+        terms.push((got, want));
+    }
+    let (got, want) = (terms[1].0 / terms[0].0, terms[1].1 / terms[0].1);
+    assert!(
+        relative(got, want) < PLATE_RATIO,
+        "stratified over uniform area term {got}, the closed forms' {want}"
+    );
+}
+
+/// The second difference's area term against the parallel plate: what of
+/// the edge fringe it keeps, `(h/L)/π` at a 4 µm side.
+const PLATE_AREA: f64 = 1e-1;
+
+/// Two stacks' area terms' ratio against the closed forms': the fringe kept
+/// cancels but for its own dependence on the stack.
+const PLATE_RATIO: f64 = 2e-2;
+
 mod fastcap;
 mod fasthenry;
 mod magic;
