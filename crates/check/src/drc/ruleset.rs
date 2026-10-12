@@ -1046,7 +1046,7 @@ pub enum Rule {
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-022. Rules: sky130 capm.6 ("maximum aspect ratio (length/width)"
-    /// of a MiM capacitor) and li.2 ("max ratio of length to width of LI
+    /// of a `MiM` capacitor) and li.2 ("max ratio of length to width of LI
     /// without licon or mcon", 10); `KLayout` `with_bbox_aspect_ratio` and
     /// `bbox_aspect_ratio`.
     AspectRatio {
@@ -1209,7 +1209,7 @@ pub enum Rule {
     ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-015, DRC-090. Rules: sky130 rpm.1b to rpm.1f ("min/max
-    /// prec_resistor width" 0.35, 0.69, 1.41, 2.85, 5.73 µm, one per
+    /// `prec_resistor` width" 0.35, 0.69, 1.41, 2.85, 5.73 µm, one per
     /// resistor type: one rule per type with a one-width list, or one rule
     /// with all five); LEF58 `WIDTHTABLE`'s exact widths.
     ///
@@ -2359,16 +2359,6 @@ impl Rule {
             Rule::MinStep {
                 limit, length_sum, ..
             } => length(limit).and(length_sum.map_or(Ok(()), length)),
-            Rule::TotalArea { limit, .. } => area(limit),
-            Rule::AspectRatio { limit, .. }
-            | Rule::RegionDensity { limit, .. }
-            | Rule::MinInteriorAngle { limit, .. } => fraction(limit),
-            // A shape count of zero is a limit: none allowed, or at least none.
-            // The lists are checked where they are filed.
-            Rule::Count { .. }
-            | Rule::CutClass { .. }
-            | Rule::AllowedWidth { .. }
-            | Rule::PolygonValidity { .. } => Ok(()),
             Rule::CutSize { width, height, .. } => length(width).and(length(height)),
             Rule::EolSpacing {
                 eol_width: first,
@@ -2393,7 +2383,9 @@ impl Rule {
             } => length(width_threshold)
                 .and(length(attached))
                 .and(length(limit)),
-            Rule::MinArea { limit, .. } | Rule::MinEnclosedArea { limit, .. } => area(limit),
+            Rule::MinArea { limit, .. }
+            | Rule::MinEnclosedArea { limit, .. }
+            | Rule::TotalArea { limit, .. } => area(limit),
             Rule::Cheesing { max_unslotted, .. } => area(max_unslotted),
             Rule::Density {
                 window,
@@ -2401,7 +2393,10 @@ impl Rule {
                 limit,
                 ..
             } => length(window).and(length(step)).and(fraction(limit)),
-            Rule::GlobalDensity { limit, .. } => fraction(limit),
+            Rule::GlobalDensity { limit, .. }
+            | Rule::AspectRatio { limit, .. }
+            | Rule::RegionDensity { limit, .. }
+            | Rule::MinInteriorAngle { limit, .. } => fraction(limit),
             Rule::Angle { allowed, .. } => {
                 if allowed == 0 {
                     Err(DrcError::MissingParam {
@@ -2421,7 +2416,14 @@ impl Rule {
                 ..
             } => count(colors.into()).and(length(color_spacing)),
             Rule::MustContain { min_count, .. } => count(min_count),
-            Rule::Forbidden { .. } | Rule::MustBeInside { .. } => Ok(()),
+            // A shape count of zero is a limit: none allowed, or at least none.
+            // The cut and width lists are checked where they are filed.
+            Rule::Forbidden { .. }
+            | Rule::MustBeInside { .. }
+            | Rule::Count { .. }
+            | Rule::CutClass { .. }
+            | Rule::AllowedWidth { .. }
+            | Rule::PolygonValidity { .. } => Ok(()),
             Rule::SpacingTable { table, .. } => {
                 if tables
                     .get(table as usize)
