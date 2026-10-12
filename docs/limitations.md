@@ -24,7 +24,7 @@ result from them is weaker than it looks.
 
 ## Checks that do not exist yet
 
-- Derived layers have no selection by net or angle. Shape class
+- Derived layers have no selection by net. Shape class
   (`.rectangles()`, `.squares()`), direction (`.horizontal()`,
   `.vertical()`), bounding-box size (`.with_bbox_max()`), `.covering()`,
   `.overlapping()` and per-axis sizing (`.sized(dx, dy)`) are written in

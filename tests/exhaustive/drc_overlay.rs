@@ -3925,8 +3925,8 @@ fn trim_cut() -> Vec<Fixture> {
         "rule GCUT.W.1 width(GCUT) >= 17nm\n\
          rule GCUT.GATE.EX.1 extension(GCUT, GATE) >= 17nm\n\
          rule GCUT.AUX.1 forbidden(GCUT.not_interacting(GATE))\n\
-         rule GCUT.AUX.2 forbidden(GCUT.edges().with_angle(90deg).inside_part(GATE) \
-         or (GCUT.edges().with_angle(90deg) and GATE.edges()))\n",
+         rule GCUT.AUX.2 forbidden(GCUT.edges().vertical().inside_part(GATE) \
+         or (GCUT.edges().vertical() and GATE.edges()))\n",
     );
     let gate = || Layout::default().rect("GATE", 0, 0, 20, 200);
     let case = |name: &str, cut: Rect, rules: [Vec<Finding>; 4]| {

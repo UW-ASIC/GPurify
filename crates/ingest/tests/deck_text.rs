@@ -1148,6 +1148,14 @@ fn a_layer_operation_checks_its_arguments() {
         "layer x = met1.sized(10nm, -10nm)\n",
         "grows or shrinks both axes",
     );
+    one_error(
+        "layer x = met1.edges().extended(begin: 0nm, end: 0nm, out: 0nm, in: 0nm)\n",
+        "a box needs a width",
+    );
+    one_error(
+        "layer x = met1.edges().extended(begin: 0nm, end: 0nm, in: 5nm, out: 5nm)\n",
+        "in that order",
+    );
 }
 
 /// Oracle: `docs/deck.md`, Rules: the id is how violations are reported, so it
