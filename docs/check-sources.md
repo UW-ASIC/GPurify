@@ -65,8 +65,8 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 | DRC | 43 | 6 | 43 | 14 | 0 | 0 |
 | LVS | 24 | 1 | 15 | 8 | 0 | 0 |
 | ERC | 53 | 4 | 13 | 11 | 0 | 0 |
-| PEX | 7 | 0 | 3 | 6 | 0 | 0 |
-| Flow | 2 | 0 | 2 | 6 | 0 | 0 |
+| PEX | 9 | 0 | 5 | 2 | 0 | 0 |
+| Flow | 2 | 0 | 5 | 3 | 0 | 0 |
 
 These numbers come from the TSV. Once `tests/catalog.rs` exists, it computes
 them, so this table cannot go stale unnoticed (the plan's F5 problem).
@@ -364,11 +364,16 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-G7 | Gate tied directly to a rail | implemented | CAL (weak sourcing) | SY; NV; MR |
 | ERC-H1 | Static leakage / HiZ / floating in power-down | implemented | IA | SY; NV |
 | ERC-H4 | Fanout limits | implemented | ICV; GF:14.1.4.1 | SY; NV |
-| PEX-009 | PEX netlist diff / qualification | partial | SIL:PEX Certify | CF; MR; SY |
+| PEX-009 | PEX netlist diff / qualification | implemented | SIL:PEX Certify | CF; MR; SY |
 | PEX-010 | SPEF output | implemented | IEEE1481 | CF; SE; MR; golden |
+| PEX-011 | Device-region (MEOL/FEOL) parasitics: gate-to-contact and gate-to-diffusion C, trench contact, via-location gate R | partial | SRC:datasheet | SY; MR |
+| PEX-012 | Metal-fill treatment (floating or grounded fill, virtual fill) | partial | SRC:datasheet | CF; SY |
+| PEX-016 | Point-to-point resistance and net-to-net coupling report between arbitrary points | partial | SRC:datasheet; CAL:PERC P2P | CF; NV |
 | FLOW-001 | Geometric / hierarchy-invariant waivers | implemented | CAL:Auto-Waivers; PEG | SY; MR |
 | FLOW-002 | Early / dirty-design staged runs | implemented | CAL:Recon; ICV:Explorer | SY; MR |
+| FLOW-003 | SoC integration (macro sync, ports off grid, fill outside boundary, block/pad-ring overlap) | partial | ICV | SY; CF |
 | FLOW-005 | In-design / live DRC | partial | CAL:RealTime; ICV:Live; PEG | FR; MR |
+| FLOW-010 | Clustering and triage of very large result sets | partial | CAL:Vision AI | SY; NV |
 
 <!-- end of generated block -->
 
