@@ -43,6 +43,36 @@ pub(super) enum Stage {
     Met3,
 }
 
+/// Which kind of row, and with what parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Profile {
+    /// `antenna` at [`LIMIT`].
+    Plain,
+    /// `antenna_electrical` with LEF's every diode term ([`H5`]) at
+    /// [`LIMIT`]: every gate reported with its value.
+    H5,
+    /// The same at [`H5_MAX`], with [`H5_DIODE_MAX`] for a gate with a
+    /// diode: the verdicts.
+    H5Limited,
+}
+
+/// The `antenna_electrical` parameters of the [`Profile::H5`] rows: a cut
+/// area factor, `area_minus_diode`, `gate_plus_diode`, and the
+/// `diode_reduce` table as `(nm², factor)`. Small enough that no layer's
+/// partial ratio goes negative, so the truncation at zero never applies.
+pub(super) const H5: (f64, f64, f64, [(i64, f64); 3]) = (
+    2.5,
+    0.1,
+    3.0,
+    [(0, 1.0), (300_000, 0.6), (100_000_000, 0.6)],
+);
+
+/// The [`Profile::H5Limited`] rows' `max_ratio`.
+pub(super) const H5_MAX: f64 = 5.0;
+
+/// The [`Profile::H5Limited`] rows' `diode_max_ratio`, `(nm², limit)`.
+pub(super) const H5_DIODE_MAX: [(i64, f64); 3] = [(0, 1.0), (600_000, 40.0), (100_000_000, 40.0)];
+
 /// One row of the board deck: its id, collectors, sidewall and diode, and
 /// the finest stage among its collectors' (the gates it groups).
 pub(super) struct BoardRow {
@@ -56,6 +86,8 @@ pub(super) struct BoardRow {
     pub diode: bool,
     /// Gates on one net at this stage share the row's ratio.
     pub grouped_at: Stage,
+    /// The kind of row.
+    pub profile: Profile,
 }
 
 const fn row(
@@ -71,13 +103,30 @@ const fn row(
         sidewall,
         diode,
         grouped_at,
+        profile: Profile::Plain,
+    }
+}
+
+const fn h5(
+    id: &'static str,
+    collectors: &'static str,
+    grouped_at: Stage,
+    profile: Profile,
+) -> BoardRow {
+    BoardRow {
+        id,
+        collectors,
+        sidewall: false,
+        diode: true,
+        grouped_at,
+        profile,
     }
 }
 
 /// Every row a board is run with: each layer's own ratio (LEF PAR/PSR), the
 /// cumulative ratios over the metals and over the cuts (CAR/CSR, IHP
 /// `AreaRatio`), and the metals with the diffusion as a protection diode.
-pub(super) const ROWS: [BoardRow; 16] = [
+pub(super) const ROWS: [BoardRow; 27] = [
     row("par.poly", "poly", false, false, Stage::Poly),
     row("par.cont", "cont", false, false, Stage::Poly),
     row("par.met1", "met1", false, false, Stage::Met1),
@@ -94,7 +143,27 @@ pub(super) const ROWS: [BoardRow; 16] = [
     row("dio.met1", "met1", false, true, Stage::Met1),
     row("dio.met2", "met2", false, true, Stage::Met2),
     row("dio.met3", "met3", false, true, Stage::Met3),
+    h5("h5.cont", "cont", Stage::Poly, Profile::H5),
+    h5("h5.met1", "met1", Stage::Met1, Profile::H5),
+    h5("h5.via1", "via1", Stage::Met1, Profile::H5),
+    h5("h5.met2", "met2", Stage::Met2, Profile::H5),
+    h5("h5.via2", "via2", Stage::Met2, Profile::H5),
+    h5("h5.met3", "met3", Stage::Met3, Profile::H5),
+    h5("h5car.met", "met1, met2, met3", Stage::Met1, Profile::H5),
+    h5("h5car.via", "cont, via1, via2", Stage::Poly, Profile::H5),
+    h5("h5lim.met1", "met1", Stage::Met1, Profile::H5Limited),
+    h5("h5lim.met2", "met2", Stage::Met2, Profile::H5Limited),
+    h5("h5lim.met3", "met3", Stage::Met3, Profile::H5Limited),
 ];
+
+/// A table as the deck writes it: `[(a nm2, v), ..]`.
+fn table(points: &[(i64, f64)]) -> String {
+    let p: Vec<String> = points
+        .iter()
+        .map(|(a, v)| format!("({a}nm2, {v})"))
+        .collect();
+    format!("[{}]", p.join(", "))
+}
 
 /// The board deck: [`super::ANTENNA_PROCESS`] and every row of [`ROWS`] at
 /// [`LIMIT`].
@@ -108,9 +177,25 @@ pub(super) fn deck() -> String {
                 "none".to_owned()
             };
             let diode = if r.diode { "diff" } else { "none" };
+            let (cut, minus, plus, reduce) = H5;
+            let (max, diode_max) = match r.profile {
+                Profile::Plain => {
+                    return format!(
+                        "rule {} antenna(gate, {}; max_ratio: {LIMIT}, sidewall: {sidewall}, diode: {diode})",
+                        r.id, r.collectors
+                    )
+                }
+                Profile::H5 => (LIMIT, "none".to_owned()),
+                Profile::H5Limited => (H5_MAX, table(&H5_DIODE_MAX)),
+            };
             format!(
-                "rule {} antenna(gate, {}; max_ratio: {LIMIT}, sidewall: {sidewall}, diode: {diode})",
-                r.id, r.collectors
+                "rule {} antenna_electrical(gate, {}; max_ratio: {max}, sidewall: none, \
+                 cut_factor: {cut}, diode: diff, diode_credit: 0, diode_bonus: 0, \
+                 area_minus_diode: {minus}, gate_plus_diode: {plus}, diode_reduce: {}, \
+                 diode_max_ratio: {diode_max}, exempt: none)",
+                r.id,
+                r.collectors,
+                table(&reduce)
             )
         })
         .collect();

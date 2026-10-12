@@ -44,6 +44,22 @@
 //! second run sets a tiny `ANTENNAAREARATIO` on the metals and reads which
 //! gates the checker flags (`dio.<metal>`).
 //!
+//! **H5's diode terms** (`antenna_electrical`, the `h5*` rows). Two more
+//! runs carry, on every layer, `ANTENNAAREAMINUSDIFF` (`area_minus_diode`,
+//! times the factor), `ANTENNAGATEPLUSDIFF` (`gate_plus_diode`),
+//! `ANTENNAAREADIFFREDUCEPWL` (`diode_reduce`), and on the cuts the factor
+//! times `cut_factor` (`ANTENNAAREAFACTOR`); the second adds `max_ratio` and
+//! the `ANTENNADIFFAREARATIO PWL` table (`diode_max_ratio`) on the metals,
+//! both times the factor, for the `h5lim` verdicts. `calculateWirePar` and
+//! `calculateViaPar` then give a node with diffusion `(factor · area ·
+//! reduce − minus · diff) / (gate + plus · diff)`, `GPurify`'s partial ratio.
+//! Three of H5's terms have no counterpart here and are not compared:
+//! `ANTENNACUMROUTINGPLUSCUT` (OpenROAD 26Q2 sums metals and cuts apart, so
+//! the cumulative `h5` rows list only metals or only cuts), the truncation
+//! of a negative running sum at zero (the parameters keep every partial
+//! ratio positive, so it never applies), and sky130's credit, bonus and
+//! exemption, which LEF does not state.
+//!
 //! **Compared.** Per row, per group of gates on one net at the row's stage
 //! (the board's construction, [`Board::group`]): the checker gives every
 //! gate of the group the same ratio; the group carries exactly one `GPurify`
@@ -51,7 +67,10 @@
 //! and none otherwise; the two ratios agree to `0.0051 / 1000` (two printed
 //! decimals at the factor) plus 1e-9 relative.
 
-use super::antenna_board::{area, contains, Board, BoardRow, Findings, LIMIT, ROWS, THICKNESS};
+use super::antenna_board::{
+    area, contains, Board, BoardRow, Findings, Profile, H5, H5_DIODE_MAX, H5_MAX, LIMIT, ROWS,
+    THICKNESS,
+};
 use super::Rect;
 use crate::harness;
 use gpurify::check::report::Measurement;
@@ -102,9 +121,33 @@ fn um(nm: i64) -> String {
     format!("{v}")
 }
 
-/// The technology and every cell, for one run. `verdict` swaps the ratios
-/// for a tiny `ANTENNAAREARATIO` on the metals (the diode run).
-fn lef(boards: &[Board], verdict: bool) -> String {
+/// Which of the four runs a LEF is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Run {
+    /// Every ratio printed, nothing flagged: the plain rows' values.
+    Values,
+    /// A tiny `ANTENNAAREARATIO` on the metals: the plain diode verdicts.
+    Verdicts,
+    /// LEF's diode terms ([`H5`]) on every layer, nothing flagged.
+    H5Values,
+    /// The same, with [`H5_MAX`] and the [`H5_DIODE_MAX`] table on the
+    /// metals: the `h5lim` verdicts.
+    H5Verdicts,
+}
+
+/// A piecewise-linear table as LEF writes it, areas in µm², each value
+/// scaled by `scale`.
+fn pwl(points: &[(i64, f64)], scale: f64) -> String {
+    #[allow(clippy::cast_precision_loss, reason = "areas far below 2^53")]
+    let p: Vec<String> = points
+        .iter()
+        .map(|&(a, v)| format!("( {} {} )", a as f64 / 1e6, v * scale))
+        .collect();
+    format!("( {} )", p.join(" "))
+}
+
+/// The technology and every cell, for one run.
+fn lef(boards: &[Board], run: Run) -> String {
     let mut s = String::from(
         "VERSION 5.8 ;\nBUSBITCHARS \"[]\" ;\nDIVIDERCHAR \"/\" ;\n\
          UNITS\n  DATABASE MICRONS 1000 ;\nEND UNITS\nMANUFACTURINGGRID 0.001 ;\n",
@@ -125,15 +168,33 @@ fn lef(boards: &[Board], verdict: bool) -> String {
             let _ = writeln!(s, "  TYPE CUT ;");
         }
         if name != "poly" {
-            let ratio = if verdict && metal {
-                "0.000001"
-            } else {
-                "1000000000"
+            let h5 = matches!(run, Run::H5Values | Run::H5Verdicts);
+            let ratio = match run {
+                Run::Verdicts if metal => "0.000001".to_owned(),
+                Run::H5Verdicts if metal => format!("{}", H5_MAX * FACTOR),
+                _ => "1000000000".to_owned(),
             };
+            let (cut, minus, plus, reduce) = H5;
+            let factor = if h5 && !metal { cut * FACTOR } else { FACTOR };
             let _ = writeln!(
                 s,
-                "  ANTENNAAREAFACTOR {FACTOR} ;\n  ANTENNAAREARATIO {ratio} ;"
+                "  ANTENNAAREAFACTOR {factor} ;\n  ANTENNAAREARATIO {ratio} ;"
             );
+            if h5 {
+                let _ = writeln!(
+                    s,
+                    "  ANTENNAAREAMINUSDIFF {} ;\n  ANTENNAGATEPLUSDIFF {plus} ;\n  ANTENNAAREADIFFREDUCEPWL {} ;",
+                    minus * FACTOR,
+                    pwl(&reduce, 1.0)
+                );
+            }
+            if run == Run::H5Verdicts && metal {
+                let _ = writeln!(
+                    s,
+                    "  ANTENNADIFFAREARATIO PWL {} ;",
+                    pwl(&H5_DIODE_MAX, FACTOR)
+                );
+            }
             if metal {
                 let _ = writeln!(
                     s,
@@ -423,27 +484,32 @@ fn batch(openroad: &Path, seeds: &[u64]) -> Tally {
     };
     write("boards.def", &def(&boards));
     let mut reports = Vec::new();
-    for (run, verdict) in [("values", false), ("verdicts", true)] {
-        write(&format!("{run}.lef"), &lef(&boards, verdict));
+    for (name, run) in [
+        ("values", Run::Values),
+        ("verdicts", Run::Verdicts),
+        ("h5values", Run::H5Values),
+        ("h5verdicts", Run::H5Verdicts),
+    ] {
+        write(&format!("{name}.lef"), &lef(&boards, run));
         write(
-            &format!("{run}.tcl"),
+            &format!("{name}.tcl"),
             &format!(
-                "read_lef {run}.lef\nread_def boards.def\n\
-                 check_antennas -verbose -report_file {run}.rpt\n"
+                "read_lef {name}.lef\nread_def boards.def\n\
+                 check_antennas -verbose -report_file {name}.rpt\n"
             ),
         );
         oracle::run(
             openroad,
-            &["-no_init", "-no_splash", "-exit", &format!("{run}.tcl")],
+            &["-no_init", "-no_splash", "-exit", &format!("{name}.tcl")],
             &dir,
             LIMIT_TIME,
         );
-        let text = std::fs::read_to_string(dir.join(format!("{run}.rpt"))).unwrap_or_default();
+        let text = std::fs::read_to_string(dir.join(format!("{name}.rpt"))).unwrap_or_default();
         reports.push(parse(&text));
     }
     let mut tally = Tally::default();
-    match (&reports[0], &reports[1]) {
-        (Ok(values), Ok(verdicts)) => {
+    match (&reports[0], &reports[1], &reports[2], &reports[3]) {
+        (Ok(values), Ok(verdicts), Ok(h5values), Ok(h5verdicts)) => {
             for (k, board) in boards.iter().enumerate() {
                 tally.boards += 1;
                 let found = gpurify(board.seed);
@@ -452,37 +518,37 @@ fn batch(openroad: &Path, seeds: &[u64]) -> Tally {
                         continue;
                     }
                     let findings = found.get(row.id).map_or(&[][..], Vec::as_slice);
-                    if row.diode {
-                        let layer = row.collectors;
-                        compare_row(
-                            board,
-                            row,
-                            findings,
-                            |g| reported(values, k, g, row),
-                            |g| {
-                                verdicts
-                                    .get(&(format!("g{k}_{g}"), layer.to_owned(), Kind::Par))
-                                    .is_some_and(|v| v.1)
-                            },
-                            &mut tally,
-                        );
-                    } else {
-                        compare_row(
-                            board,
-                            row,
-                            findings,
-                            |g| reported(values, k, g, row),
-                            |g| reported(values, k, g, row) > LIMIT * FACTOR,
-                            &mut tally,
-                        );
-                    }
+                    let violated = |report: &Report, g: usize| {
+                        report
+                            .get(&(format!("g{k}_{g}"), row.collectors.to_owned(), Kind::Par))
+                            .is_some_and(|v| v.1)
+                    };
+                    let (from, verdict) = match (row.profile, row.diode) {
+                        (Profile::Plain, true) => (values, Some(verdicts)),
+                        (Profile::Plain, false) => (values, None),
+                        (Profile::H5, _) => (h5values, None),
+                        (Profile::H5Limited, _) => (h5values, Some(h5verdicts)),
+                    };
+                    compare_row(
+                        board,
+                        row,
+                        findings,
+                        |g| reported(from, k, g, row),
+                        |g| match verdict {
+                            Some(report) => violated(report, g),
+                            None => reported(from, k, g, row) > LIMIT * FACTOR,
+                        },
+                        &mut tally,
+                    );
                 }
             }
         }
-        (a, b) => tally.broken.push(format!(
-            "OpenROAD's reports do not read: {:?} {:?}",
+        (a, b, c, d) => tally.broken.push(format!(
+            "OpenROAD's reports do not read: {:?} {:?} {:?} {:?}",
             a.as_ref().err(),
-            b.as_ref().err()
+            b.as_ref().err(),
+            c.as_ref().err(),
+            d.as_ref().err()
         )),
     }
     if tally.broken.is_empty() {
@@ -548,6 +614,56 @@ fn openroad_antenna_differential_on_random_boards() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every row of the board deck runs on 40 boards, and the H5 rows read
+    /// as the plain ones where LEF's diode terms vanish: on a gate with no
+    /// diode, `h5.cont` is `cut_factor` (2.5) times `par.cont`, and each
+    /// `h5.<metal>` is `par.<metal>`.
+    ///
+    /// Oracle: LEF/DEF 5.8 Appendix C's PAR with `diff_area = 0`
+    /// (`ANTENNAAREAMINUSDIFF` and `ANTENNAGATEPLUSDIFF` multiply it, and
+    /// `ANTENNAAREADIFFREDUCEPWL` is 1 at 0 in [`H5`]), against `GPurify`'s
+    /// own plain rows.
+    #[test]
+    fn the_board_deck_runs_and_its_h5_rows_reduce_to_the_plain_ones() {
+        let mut compared = 0;
+        for seed in 0..40 {
+            let found = gpurify(seed);
+            let board = Board::random(seed);
+            for g in 0..board.gates.len() {
+                let at_gate = |id: &str| {
+                    found.get(id).and_then(|f| {
+                        f.iter()
+                            .find(|(_, p)| contains(board.gates[g].marker, *p))
+                            .map(|v| v.0)
+                    })
+                };
+                if board.gates[g].diode.is_some() {
+                    continue;
+                }
+                if let (Some(h5), Some(par)) = (at_gate("h5.cont"), at_gate("par.cont")) {
+                    assert!(
+                        (h5 - H5.0 * par).abs() <= 1e-9 * h5,
+                        "board {seed} gate {g}"
+                    );
+                    compared += 1;
+                }
+                // A met1 run without any diode: the terms vanish on it.
+                let run = board.gates[g].run;
+                let diode_free = board
+                    .gates
+                    .iter()
+                    .all(|o| o.run != run || o.diode.is_none());
+                if diode_free {
+                    if let (Some(h5), Some(par)) = (at_gate("h5.met1"), at_gate("par.met1")) {
+                        assert!((h5 - par).abs() <= 1e-9 * h5, "board {seed} gate {g}");
+                        compared += 1;
+                    }
+                }
+            }
+        }
+        assert!(compared > 40, "too few gates compared: {compared}");
+    }
 
     /// The report reader on the checker's own format
     /// (`AntennaChecker::checkPAR` and its siblings), a pin with a violated
