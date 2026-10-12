@@ -408,7 +408,8 @@ fn the_electrical_queries_read_what_the_deck_states() {
     let layer = |name| deck.layers.id(&strings, name).expect("a sky130 layer");
     let id = |name| strings.get(name).expect("interned");
 
-    // rule ar.met1.1 antenna(gate, met1; max_ratio: 400, sidewall: 350nm, diode: none)
+    // rule ar.met1.1 antenna_electrical(gate, met1; max_ratio: 400, sidewall: 350nm, ..
+    //     diode: antenna_diode, ..)
     let met1: Vec<_> = deck.antenna(layer("met1")).collect();
     assert_eq!(met1.len(), 1, "{met1:?}");
     assert_eq!(met1[0].rule, id("ar.met1.1"));
@@ -418,9 +419,9 @@ fn the_electrical_queries_read_what_the_deck_states() {
         met1[0].measure,
         AntennaMeasure::Sidewall { thickness: nm(350) }
     );
-    assert_eq!(met1[0].diode, None);
+    assert_eq!(met1[0].diode, Some(layer("antenna_diode")));
 
-    // rule EM.met1_mcon em_current_density(met1, mcon; max_density: 2.8mA/um, max_current_per_cut: 0.36mA)
+    // rule EM.met1_mcon em_current_density(met1, mcon; max_density: 2.8mA/um, max_current_per_cut: 0.36mA, narrow: none)
     let em: Vec<_> = deck.em_limit(layer("mcon")).collect();
     assert_eq!(em.len(), 1, "{em:?}");
     assert_eq!(em[0].rule, id("EM.met1_mcon"));

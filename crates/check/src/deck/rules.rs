@@ -177,6 +177,22 @@ impl Arg for &[(Dbu, Dbu)] {
     }
 }
 
+/// A piecewise-linear table of `(diode area, number)` points: each area
+/// row under `<name>_area` before its number under `name`.
+impl Arg for &[(DbuArea, f64)] {
+    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
+        // ponytail: the two tables `antenna_electrical` has; a third adds its arm.
+        let area = match name {
+            "diode_reduce" => "diode_reduce_area",
+            _ => "diode_max_ratio_area",
+        };
+        for &(at, value) in self {
+            at.put(area, params);
+            value.put(name, params);
+        }
+    }
+}
+
 /// LEF `MINSTEP`'s variant: `max_edges`, or a `corner` by its index.
 impl Arg for StepKind {
     fn put(self, _: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
@@ -402,12 +418,22 @@ kinds! {
         diode: Option<LayerRef> = "diode_layer",
     }
     /// [`AntennaElectricalTable`](crate::erc::rules::antenna::AntennaElectricalTable):
-    /// `antenna_electrical(gate, collectors..; max_ratio, diode, diode_credit, diode_bonus)`.
+    /// `antenna_electrical(gate, collectors..; max_ratio, sidewall, cut_factor,
+    /// diode, diode_credit, diode_bonus, area_minus_diode, gate_plus_diode,
+    /// diode_reduce, diode_max_ratio, exempt)`; the two tables are
+    /// `(diode area, number)` points, empty for `none`.
     antenna_electrical(gate: one, collectors: many) [] {
         max_ratio: f64 = "max_ratio",
+        sidewall: Option<Dbu> = "sidewall_thickness",
+        cut_factor: f64 = "cut_factor",
         diode: Option<LayerRef> = "diode_layer",
         diode_credit: f64 = "diode_credit",
         diode_bonus: f64 = "diode_bonus",
+        area_minus_diode: f64 = "area_minus_diode",
+        gate_plus_diode: f64 = "gate_plus_diode",
+        diode_reduce: &[(DbuArea, f64)] = "diode_reduce",
+        diode_max_ratio: &[(DbuArea, f64)] = "diode_max_ratio",
+        exempt: Option<LayerRef> = "exempt_layer",
     }
     /// [`DensityCmpTable`](crate::erc::rules::antenna::DensityCmpTable):
     /// `density_cmp(layer; window: x x y, step: x x y, min, max, max_delta,
@@ -444,10 +470,14 @@ kinds! {
         current_exponent: f64 = "current_exponent",
     }
     /// [`EmCurrentDensityTable`](crate::erc::rules::electrical::EmCurrentDensityTable):
-    /// `em_current_density(layers..; max_density, max_current_per_cut)`, in A/m and µA.
+    /// `em_current_density(layers..; max_density, max_current_per_cut,
+    /// narrow: (width, current) | none)`, in A/m and µA; the narrow band's
+    /// two values are both stated or both `None`.
     em_current_density(layers: many) [] {
         max_density: f64 = "max_density",
         max_current_per_cut: f64 = "max_current_per_cut",
+        narrow_width: Option<Dbu> = "narrow_width",
+        narrow_current: Option<f64> = "narrow_current",
     }
     /// [`EsdLatchupTable`](crate::erc::rules::reliability::EsdLatchupTable):
     /// `esd_latchup(pad, guard_ring; min_guard_ring_width, max_tap_distance, clamps)`.

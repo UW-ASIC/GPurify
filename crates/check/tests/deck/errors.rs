@@ -301,6 +301,11 @@ connect conductors [a, b]
 device mos a model \"nfet\" terminals [a, b, b, b]
 ";
 
+/// An `antenna_electrical` row's values, each legal.
+const ANTENNA_ELECTRICAL: &str = "max_ratio: 400, sidewall: 10nm, cut_factor: 1, \
+    diode: none, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, \
+    diode_reduce: none, diode_max_ratio: [(0nm2, 400), (100nm2, 800)], exempt: none";
+
 /// One value written into a rule template: zero, which the kind refuses, and
 /// a legal positive value.
 const LEN: (&str, &str) = ("0nm", "10nm");
@@ -399,11 +404,28 @@ fn every_positive_erc_value_written_as_zero_is_refused() {
             "sidewall_thickness",
         ),
         (
-            "antenna_electrical(a, b; max_ratio: 400, diode: none, diode_credit: 0, diode_bonus: 0)"
-                .into(),
-            "400",
-            "0",
+            format!("antenna_electrical(a, b; {ANTENNA_ELECTRICAL})"),
+            "max_ratio: 400",
+            "max_ratio: 0",
             "max_ratio",
+        ),
+        (
+            format!("antenna_electrical(a, b; {ANTENNA_ELECTRICAL})"),
+            "10nm",
+            "0nm",
+            "sidewall_thickness",
+        ),
+        (
+            format!("antenna_electrical(a, b; {ANTENNA_ELECTRICAL})"),
+            "cut_factor: 1",
+            "cut_factor: 0",
+            "cut_factor",
+        ),
+        (
+            format!("antenna_electrical(a, b; {ANTENNA_ELECTRICAL})"),
+            "(0nm2, 400)",
+            "(0nm2, 0)",
+            "diode_max_ratio",
         ),
         (
             format!("density_cmp(a; {DENSITY}, cmp: none)").replacen("10nm", "77nm", 1),
@@ -454,10 +476,25 @@ fn every_positive_erc_value_written_as_zero_is_refused() {
             "current_exponent",
         ),
         (
-            "em_current_density(a; max_density: 1000A/m, max_current_per_cut: 80uA)".into(),
+            "em_current_density(a; max_density: 1000A/m, max_current_per_cut: 80uA, narrow: (width: 30nm, current: 50uA))"
+                .into(),
             "80uA",
             "0uA",
             "max_current_per_cut",
+        ),
+        (
+            "em_current_density(a; max_density: 1000A/m, max_current_per_cut: 80uA, narrow: (width: 30nm, current: 50uA))"
+                .into(),
+            "30nm",
+            "0nm",
+            "narrow_width",
+        ),
+        (
+            "em_current_density(a; max_density: 1000A/m, max_current_per_cut: 80uA, narrow: (width: 30nm, current: 50uA))"
+                .into(),
+            "50uA",
+            "0uA",
+            "narrow_current",
         ),
         (
             "esd_latchup(a, b; min_guard_ring_width: 10nm, max_tap_distance: 20nm, clamps: [\"nfet\"])"

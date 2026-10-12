@@ -661,6 +661,24 @@ impl Printer<'_> {
                     .collect::<Result<Vec<_>, PrintError>>()?;
                 Ok(format!("[{}]", pairs.join(", ")))
             }
+            Dim::AreaTable(second) => {
+                let numbers = stated(second);
+                if values.len() != numbers.len() {
+                    return Err(missing());
+                }
+                let points = values
+                    .iter()
+                    .zip(&numbers)
+                    .map(|(area, value)| match (area, value) {
+                        (
+                            ParamSource::Value(ParamValue::Area(area)),
+                            ParamSource::Value(ParamValue::Ratio(value)),
+                        ) => Ok(format!("({}, {})", self.area(*area)?, number(*value)?)),
+                        _ => Err(wrong()),
+                    })
+                    .collect::<Result<Vec<_>, PrintError>>()?;
+                Ok(format!("[{}]", points.join(", ")))
+            }
             Dim::LengthRows => {
                 let columns = stated("prl").len().max(1);
                 let cells = list(&values)?;

@@ -40,6 +40,15 @@ impl Row {
     }
 }
 
+/// A row's sidewall thickness: the measure of any collector that has one
+/// (a cut collects by area whatever the row states).
+fn sidewall(measures: &[AntennaMeasure]) -> Option<gpurify_geom::Dbu> {
+    measures.iter().find_map(|measure| match *measure {
+        AntennaMeasure::Sidewall { thickness } => Some(thickness),
+        AntennaMeasure::Area => None,
+    })
+}
+
 impl CompiledDeck {
     /// The deck as names, in the form the parser reads text into: what
     /// [`lower`](gpurify_ingest::deck::lower) and
@@ -375,9 +384,7 @@ impl CompiledDeck {
             let mut layers = vec![t.gate[r]];
             layers.extend_from_slice(&t.collector[collectors.clone()]);
             let mut row = Row::new("antenna", &layers).number("max_ratio", t.max_ratio[r]);
-            if let Some(&AntennaMeasure::Sidewall { thickness }) =
-                t.collector_measure.get(collectors.start)
-            {
+            if let Some(thickness) = sidewall(&t.collector_measure[collectors]) {
                 row = row.length("sidewall_thickness", thickness);
             }
             if let Some(diode) = t.diode[r] {
@@ -387,16 +394,38 @@ impl CompiledDeck {
         }
         let t = &erc.antenna_electrical;
         for r in 0..t.head.len() {
+            let collectors = span(&t.collector_start, r);
             let mut layers = vec![t.gate[r]];
-            layers.extend_from_slice(&t.collector[span(&t.collector_start, r)]);
+            layers.extend_from_slice(&t.collector[collectors.clone()]);
             let mut row =
                 Row::new("antenna_electrical", &layers).number("max_ratio", t.max_ratio[r]);
+            if let Some(thickness) = sidewall(&t.collector_measure[collectors]) {
+                row = row.length("sidewall_thickness", thickness);
+            }
+            row = row.number("cut_factor", t.cut_factor[r]);
             if let Some(diode) = t.diode[r] {
                 row = row.value("diode_layer", ParamValue::Layer(diode));
             }
             row = row
                 .number("diode_credit", t.diode_credit[r])
-                .number("diode_bonus", t.diode_bonus[r]);
+                .number("diode_bonus", t.diode_bonus[r])
+                .number("area_minus_diode", t.area_minus_diode[r])
+                .number("gate_plus_diode", t.gate_plus_diode[r]);
+            for (area, value, table) in [
+                ("diode_reduce_area", "diode_reduce", &t.diode_reduce[r]),
+                (
+                    "diode_max_ratio_area",
+                    "diode_max_ratio",
+                    &t.diode_max_ratio[r],
+                ),
+            ] {
+                for &(at, of) in table {
+                    row = row.value(area, ParamValue::Area(at)).number(value, of);
+                }
+            }
+            if let Some(exempt) = t.exempt[r] {
+                row = row.value("exempt_layer", ParamValue::Layer(exempt));
+            }
             file(&t.head, r, row);
         }
         let t = &erc.density_cmp;
@@ -467,9 +496,14 @@ impl CompiledDeck {
         for r in 0..t.head.len() {
             let layers = span(&t.layer_start, r);
             let first = layers.start;
-            let row = Row::new("em_current_density", &t.layer[layers])
+            let mut row = Row::new("em_current_density", &t.layer[layers])
                 .number("max_density", t.max_density[first].raw())
                 .number("max_current_per_cut", t.max_current_per_cut[first].raw());
+            if let Some((width, current)) = t.narrow[first] {
+                row = row
+                    .length("narrow_width", width)
+                    .number("narrow_current", current.raw());
+            }
             file(&t.head, r, row);
         }
         let t = &erc.esd_latchup;

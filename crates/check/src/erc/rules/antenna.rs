@@ -229,7 +229,7 @@ pub struct AntennaTable {
 /// (gate + gate_plus_diode * diode)`,
 ///
 /// where `factor` is `cut_factor` on a cut layer (`ANTENNAAREAFACTOR`, its
-/// Example 1's "10 x cut_area") and 1 on a conductor, `reduce` is
+/// Example 1's `10 x cut_area`) and 1 on a conductor, `reduce` is
 /// `diode_reduce`'s piecewise-linear factor
 /// (`ANTENNAAREADIFFREDUCEPWL`, 1 without one), every area the node's when
 /// that layer is etched, `diode` being the `diode` layer's
