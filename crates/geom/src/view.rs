@@ -311,10 +311,42 @@ pub fn validate_layer_with(
         Ok::<(), ValidityError>(())
     })?;
 
-    // Pass two: bind each hole to the innermost outer containing it. Distance-zero
-    // candidates are every touching pair, and containment implies touching.
+    // Pass two: bind each hole to its outer. A reader stores a polygon's
+    // holes right after its outer (a GDSII keyhole, a boolean's result), so
+    // the nearest outer row before a hole is its own when it contains it;
+    // where shapes overlap (cells placed over one another) another outer may
+    // contain the hole too, and a smaller one would steal it. Failing that,
+    // the innermost outer containing it. Distance-zero candidates are every
+    // touching pair, and containment implies touching.
     let mut owned: Vec<(usize, PolyId)> = Vec::with_capacity(holes.len());
     if !holes.is_empty() {
+        let contains = |outer: PolyId, hole: PolyId| {
+            let (hole_xs, hole_ys) = store.poly_verts(hole);
+            let (outer_xs, outer_ys) = store.poly_verts(outer);
+            let probe = Point {
+                x: hole_xs[0],
+                y: hole_ys[0],
+            };
+            store.poly_bbox(outer).contains(store.poly_bbox(hole))
+                && point_in_coords(outer_xs, outer_ys, probe)
+        };
+        // Per row: the slot of the nearest outer row at or before it.
+        let mut before = NOT_OUTER;
+        let mut own_slot = vec![NOT_OUTER; rows_len];
+        for row in 0..rows_len {
+            if outer_slot[row] == NOT_OUTER {
+                if before != NOT_OUTER
+                    && contains(
+                        outers[before as usize],
+                        PolyId(u32::try_from(first + row).expect("a row id")),
+                    )
+                {
+                    own_slot[row] = before;
+                }
+            } else {
+                before = outer_slot[row];
+            }
+        }
         let mut index = SpatialIndex::default();
         SpatialIndex::build_into(store, layer, &mut index);
         let mut pairs: Vec<(PolyId, PolyId)> = Vec::new();
@@ -345,14 +377,7 @@ pub fn validate_layer_with(
             } else {
                 (a, b, a_slot)
             };
-
-            let (hole_xs, hole_ys) = store.poly_verts(hole);
-            let (outer_xs, outer_ys) = store.poly_verts(outer);
-            let probe = Point {
-                x: hole_xs[0],
-                y: hole_ys[0],
-            };
-            if !point_in_coords(outer_xs, outer_ys, probe) {
+            if own_slot[hole.idx() - first] != NOT_OUTER || !contains(outer, hole) {
                 continue;
             }
             // Innermost = smallest containing box. Strict `<` over ascending pairs:
@@ -366,7 +391,12 @@ pub fn validate_layer_with(
         }
 
         for &hole in &holes {
-            let slot = best_slot[hole.idx() - first];
+            let row = hole.idx() - first;
+            let slot = if own_slot[row] == NOT_OUTER {
+                best_slot[row]
+            } else {
+                own_slot[row]
+            };
             if slot == NOT_OUTER {
                 return Err(ValidityError::OrphanHole(hole));
             }

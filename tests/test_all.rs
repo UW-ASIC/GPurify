@@ -1280,3 +1280,56 @@ fn extracting_the_split_corpus_twice_is_bit_identical() {
         "the determinism above would be vacuous if the split were not in force"
     );
 }
+
+/// N-s2-2, reduced from IHP's `sg13g2_stdcell.gds` read whole (every top cell
+/// placed at the origin): `sg13g2_dfrbpq_2`'s Activ is one keyhole
+/// `BOUNDARY` around a hole, and another cell's Activ drawn earlier over the
+/// hole holds its corners but not its middle. Read back, the hole is the
+/// keyhole's and every polygon's rectangles cover exactly its area (the
+/// debug assertion in `decompose_into` tripped on the file).
+///
+/// Oracle: construct-from-answer. A square notched from its top to its
+/// middle, `[35, 65]²` less `[45, 55] x [50, 65]`, then `[0, 100]²` around
+/// the hole `[40, 60]²` as one keyhole ring: areas `30² - 10·15` and `100² -
+/// 20²`, the hole bound to the second.
+#[test]
+fn a_keyhole_keeps_its_hole_under_an_overlapping_shape() {
+    let mut strings = gpurify::ingest::StrTable::default();
+    let deck = gpurify::ingest::deck::parse_deck(
+        "grid 1nm\nlayer m = gds(1, 0)\n",
+        gpurify::geom::Grid::new(1000).expect("a 1 nm grid"),
+        &mut strings,
+    )
+    .expect("a one-layer deck");
+    let m = gpurify::geom::LayerId(0);
+    let mut layout = gpurify_testgen::LayoutBuilder::new(1);
+    layout.push(
+        m,
+        &[35, 65, 65, 55, 55, 45, 45, 35],
+        &[35, 35, 65, 65, 50, 50, 65, 65],
+    );
+    layout.push(
+        m,
+        &[40, 100, 100, 0, 0, 40, 40, 40, 60, 60, 40],
+        &[0, 0, 100, 100, 0, 0, 40, 60, 60, 40, 40],
+    );
+    let mut bytes = Vec::new();
+    gpurify_testgen::gds::write_store(&layout.finish().0, &deck.layers, "TOP", &mut bytes)
+        .expect("writable");
+    let read = common::load_bytes(&bytes, &deck).expect("reads");
+    let mut layer = gpurify::geom::ValidatedLayer::default();
+    gpurify::geom::view::validate_layer_into(&read, m, &mut layer).expect("valid");
+    let (mut rects, mut start) = (Vec::new(), Vec::new());
+    gpurify::geom::rects::decompose_into(&layer, &mut rects, &mut start);
+    let found: Vec<(usize, i128)> = (0..2u32)
+        .map(|i| {
+            let poly = layer.get(i);
+            let range = start[i as usize] as usize..start[i as usize + 1] as usize;
+            (
+                poly.holes().count(),
+                gpurify::geom::rects::covered_area(&rects[range]).raw(),
+            )
+        })
+        .collect();
+    assert_eq!(found, [(0, 30 * 30 - 10 * 15), (1, 100 * 100 - 20 * 20)]);
+}

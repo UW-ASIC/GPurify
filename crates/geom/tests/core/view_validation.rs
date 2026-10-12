@@ -9,6 +9,7 @@
 //! told the two failures apart.
 
 use gpurify_geom::ops::{self_intersects, winding_of, Winding};
+use gpurify_geom::rects::{covered_area, decompose_into};
 use gpurify_geom::view::{
     ring_defect, validate_layer_into, validate_layer_with, Angles, RingRef, ValidatedLayer,
     ValidityError,
@@ -425,4 +426,52 @@ fn a_ring_meeting_itself_at_a_diagonal_vertex_is_a_pinch_only_if_it_alternates()
         validate_layer_with(&straight, LAYER, Angles::Octilinear, &mut out),
         Err(ValidityError::SelfIntersecting(PolyId(0)))
     );
+}
+
+/// N-s2-2: a hole stays with the outer it was stored after when a smaller
+/// outer drawn over it also holds its first vertex, as where a library's top
+/// cells are all placed at the origin (IHP's `sg13g2_stdcell.gds`: the
+/// keyhole Activ of `sg13g2_dfrbpq_2` under other cells' Activ). Bound by
+/// smallest box alone, the hole went to the overlapping shape, which does not
+/// cover it, and the rectangle decomposition of that shape covered more than
+/// its claimed area.
+///
+/// Oracle: construct-from-answer. Row order: a 30-square with a notch from
+/// its top down to its middle (it holds the hole's corners but not its
+/// middle), then a 100-square, then the hole `[40, 60]²` stored after it.
+/// The hole belongs to the 100-square (area `100² - 20²`); the notched
+/// square keeps its own area, `30² - 10·15`; each decomposes into
+/// rectangles of exactly its area.
+#[test]
+fn a_hole_stays_with_the_outer_stored_before_it() {
+    let notched = (
+        LAYER,
+        vec![35, 65, 65, 55, 55, 45, 45, 35],
+        vec![35, 35, 65, 65, 50, 50, 65, 65],
+    );
+    let big = (LAYER, vec![0, 100, 100, 0], vec![0, 0, 100, 100]);
+    let hole = (LAYER, vec![40, 40, 60, 60], vec![40, 60, 60, 40]);
+    let store = store_of(&[notched, big, hole]);
+    let layer = validate(&store, LAYER).expect("both shapes are valid");
+    let areas: Vec<(usize, DbuArea)> = (0..2)
+        .map(|i| {
+            let poly = layer.get(i);
+            (poly.holes().count(), polygon_area(poly))
+        })
+        .collect();
+    assert_eq!(
+        areas,
+        [
+            (0, DbuArea::new(30 * 30 - 10 * 15)),
+            (1, DbuArea::new(100 * 100 - 20 * 20)),
+        ]
+    );
+    let (mut rects, mut start) = (Vec::new(), Vec::new());
+    decompose_into(&layer, &mut rects, &mut start);
+    for (i, &(_, area)) in areas.iter().enumerate() {
+        assert_eq!(
+            covered_area(&rects[start[i] as usize..start[i + 1] as usize]),
+            area
+        );
+    }
 }
