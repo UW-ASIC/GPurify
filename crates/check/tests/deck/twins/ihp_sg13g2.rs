@@ -9,11 +9,11 @@
 
 use gpurify_check::deck::rules::{
     angle, antenna, antenna_electrical, asymmetric_enclosure, cut_size, density, drain_source,
-    edge_width, em_current_density, esd_topological, floating_gate, floating_well, forbidden,
-    gate_oxide, global_density, ir_drop, max_width, min_area, min_enclosed_area, min_enclosure,
-    min_extension, min_spacing, min_spacing_diff, min_width, missing_tie, multiple_drivers,
-    must_be_inside, notch, off_grid, spacing_table, supply_short, tie_high_low, unconnected_pin,
-    via_array_spacing,
+    edge_spacing, edge_width, em_current_density, esd_topological, floating_gate, floating_well,
+    forbidden, gate_oxide, global_density, ir_drop, max_width, min_area, min_enclosed_area,
+    min_enclosure, min_extension, min_spacing, min_spacing_diff, min_width, missing_tie,
+    multiple_drivers, must_be_inside, must_contain, notch, off_grid, spacing_table, supply_short,
+    tie_high_low, unconnected_pin, via_array_spacing,
 };
 use gpurify_check::deck::{Bound, BuildError, CompiledDeck, DeckBuilder, LayerRef};
 use gpurify_geom::{Dbu, DbuArea, Grid, StrTable};
@@ -766,11 +766,15 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     );
     d.rule(
         "AFil.d.NWell",
-        min_spacing_diff(l["activ_filler"], l["nwell"], nm(1000)),
+        edge_spacing(
+            l["activ_filler"].edges(),
+            Some(l["nwell"].edges()),
+            nm(1000),
+        ),
     );
     d.rule(
         "AFil.d.nBuLay",
-        min_spacing_diff(l["activ_filler"], l["nbl"], nm(1000)),
+        edge_spacing(l["activ_filler"].edges(), Some(l["nbl"].edges()), nm(1000)),
     );
     d.rule(
         "AFil.e",
@@ -778,11 +782,19 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     );
     d.rule(
         "AFil.j.nSDblock",
-        min_enclosure(l["afil_in_pwb"], l["nsd_block"], nm(250)),
+        min_enclosure(
+            l["afil_in_pwb"].interacting(l["nsd_block"]),
+            l["nsd_block"],
+            nm(250),
+        ),
     );
     d.rule(
         "AFil.j.SalBlock",
-        min_enclosure(l["afil_in_pwb"], l["salblock"], nm(250)),
+        min_enclosure(
+            l["afil_in_pwb"].interacting(l["salblock"]),
+            l["salblock"],
+            nm(250),
+        ),
     );
     d.rule(
         "AFil.g",
@@ -2710,6 +2722,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
         "MIM.h",
         forbidden(l["topvia1"].interacting(l["mim"]).not(l["mim"])),
     );
+    d.rule("MIM.h.via", must_contain(l["mim"], l["topvia1"], 1));
     d.rule("Pad.i", must_be_inside(l["dfpad"], l["topmetal2"]));
     l.insert("metal1_pin", d.layer("metal1_pin", (8, 2)));
     d.rule("Pin.e", must_be_inside(l["metal1_pin"], l["metal1"]));

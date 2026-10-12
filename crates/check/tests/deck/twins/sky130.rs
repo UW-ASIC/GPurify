@@ -94,7 +94,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     l.insert("nwell_label", d.layer("nwell_label", (64, 5)));
     l.insert("nwell_pin", d.layer("nwell_pin", (64, 16)));
     l.insert("pwell_label", d.layer("pwell_label", (64, 59)));
-    l.insert("pwell_pin", d.layer("pwell_pin", (122, 16)));
+    d.ignore((122, 16));
     l.insert("pwell_drawing", d.layer("pwell_drawing", (64, 44)));
     l.insert("prBoundary", d.layer("prBoundary", (235, 4)));
     l.insert(
