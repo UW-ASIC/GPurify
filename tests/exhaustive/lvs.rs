@@ -911,6 +911,57 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool, controls: &Controls) ->
         for i in 0..devs.len() {
             for j in 0..devs.len() {
                 let (a, b) = (&devs[i], &devs[j]);
+                // Relaxed, deck.md's: two resistors or capacitors stating
+                // their value chain through a net only they touch, no port,
+                // their far ends two other nets; `r` adds and `c` combines
+                // harmonically. Ordered plates chain plate to plate. The
+                // fixtures state no other parameter on such a passive, so
+                // this oracle refuses one that does.
+                let passive = i != j
+                    && a.model == b.model
+                    && matches!(a.model, Model::R | Model::C)
+                    && controls.value_law(a.model).is_some()
+                    && a.value.is_some()
+                    && b.value.is_some()
+                    && a.params.is_empty()
+                    && b.params.is_empty()
+                    && a.area.is_none()
+                    && b.area.is_none();
+                if passive {
+                    let ordered = controls.classes(a.model).len() == 4;
+                    for ea in 0..2 {
+                        for eb in 0..2 {
+                            let x = a.pins[ea];
+                            let (far_a, far_b) = (a.pins[1 - ea], b.pins[1 - eb]);
+                            if x != b.pins[eb]
+                                || c.ports[x]
+                                || touches(&devs, x) != 2
+                                || far_a == x
+                                || far_b == x
+                                || far_a == far_b
+                                || (ordered && ea == eb)
+                            {
+                                continue;
+                            }
+                            let (va, vb) = (a.value.unwrap_or(0.0), b.value.unwrap_or(0.0));
+                            let value = if a.model == Model::R {
+                                va + vb
+                            } else {
+                                1.0 / (1.0 / va + 1.0 / vb)
+                            };
+                            let mut pins = vec![far_a, far_b];
+                            if ordered {
+                                pins[1 - ea] = far_a;
+                                pins[ea] = far_b;
+                            }
+                            devs[i].pins = pins;
+                            devs[i].value = Some(value);
+                            devs.remove(j);
+                            alive[x] = false;
+                            continue 'pass;
+                        }
+                    }
+                }
                 #[allow(clippy::float_cmp, reason = "equal means drawn or written the same")]
                 let mergeable = i != j
                     && a.model.is_mos()
@@ -1370,7 +1421,10 @@ fn equivalent(layout: &Circuit, reference: &Circuit) -> bool {
 fn equivalent_under(layout: &Circuit, reference: &Circuit, controls: &Controls) -> bool {
     let reference = controls.strip(reference);
     let declared = Declared::of(&reference);
-    let (layout, reference) = (controls.kept(layout, true), controls.kept(&reference, false));
+    let (layout, reference) = (
+        controls.kept(layout, true),
+        controls.kept(&reference, false),
+    );
     matches(
         &reduce(&layout, &declared, true, controls),
         &reduce(&reference, &declared, false, controls),
@@ -1398,7 +1452,11 @@ fn matches(a: &Reduction, b: &Reduction, controls: &Controls) -> bool {
         .same_nets
         .iter()
         .map(|&(la, rb)| {
-            let layout = a.live.iter().copied().find(|&k| a.ports[k] && a.names[k] == la);
+            let layout = a
+                .live
+                .iter()
+                .copied()
+                .find(|&k| a.ports[k] && a.names[k] == la);
             let reference = b.live.iter().copied().find(|&r| b.names[r] == rb);
             (layout, reference)
         })
@@ -2981,6 +3039,71 @@ fn controlled() -> Vec<Fixture> {
             ));
         }
     }
+    // LVS-043, LVS-044, LVS-049: relaxed series. Two resistors drawn in
+    // series through an internal net, 200 ohm each, are one of 400 ohm, and
+    // two capacitors of 0.56 fF chained plate to plate one of 0.28 fF;
+    // two written resistors of 100 ohm in series are the 200 ohm drawn.
+    // Strict, nothing merges in series. A net that is a port stops the
+    // chain, and capacitors meeting tail to tail do not chain.
+    let chain = |model, second: [usize; 2]| {
+        Circuit::new(
+            3,
+            vec![Dev::pins(model, &[0, 1]), Dev::pins(model, &second)],
+        )
+        .internal(1)
+    };
+    let written_chain = Circuit::new(
+        3,
+        vec![
+            Dev::pins(R, &[0, 2]).value(100.0),
+            Dev::pins(R, &[2, 1]).value(100.0),
+        ],
+    )
+    // Not `n1`, which the layout labels: a labelled node stops a merge
+    // on both sides (`lvs::compare`).
+    .internal(2);
+    let series: [(&str, Circuit, Circuit); 6] = [
+        (
+            "R_chain_vs_sum",
+            chain(R, [1, 2]),
+            card(Dev::pins(R, &[0, 1]).value(400.0)),
+        ),
+        (
+            "R_chain_through_port_vs_sum",
+            Circuit::new(3, vec![Dev::pins(R, &[0, 1]), Dev::pins(R, &[1, 2])]),
+            card(Dev::pins(R, &[0, 1]).value(400.0)),
+        ),
+        (
+            "R_one_vs_written_chain",
+            card(Dev::pins(R, &[0, 1])),
+            written_chain,
+        ),
+        (
+            "C_chain_vs_series",
+            chain(C, [1, 2]),
+            card(Dev::pins(C, &[0, 1]).value(2.8e-16)),
+        ),
+        (
+            "C_tail_to_tail_vs_series",
+            chain(C, [2, 1]),
+            card(Dev::pins(C, &[0, 1]).value(2.8e-16)),
+        ),
+        (
+            "D_chain_vs_one",
+            chain(D, [1, 2]),
+            card(Dev::pins(D, &[0, 1])),
+        ),
+    ];
+    for (name, layout, reference) in series {
+        for (label, controls) in [("relaxed", &relaxed), ("strict", &Controls::default())] {
+            out.push(compared_under(
+                &format!("topology/series/{name}/{label}"),
+                &["LVS-049", "LVS-043", "LVS-044"],
+                (&layout, &reference),
+                controls,
+            ));
+        }
+    }
     // A diode's value is its area: two drawn in parallel, 0.32 um² each,
     // are one of 0.64 um² relaxed, and two strict (derived by hand from
     // [`draw_pins`]).
@@ -3023,7 +3146,12 @@ fn controlled() -> Vec<Fixture> {
         ("drawn_R_default", &drawn_r, &alone, Controls::default()),
         ("drawn_R_max_100ohm", &drawn_r, &alone, res("100ohm", 100.0)),
         ("drawn_R_max_300ohm", &drawn_r, &alone, res("300ohm", 300.0)),
-        ("written_R_max_100kohm", &alone, &written_r, res("100kohm", 1e5)),
+        (
+            "written_R_max_100kohm",
+            &alone,
+            &written_r,
+            res("100kohm", 1e5),
+        ),
         ("written_R_max_2Mohm", &alone, &written_r, res("2Mohm", 2e6)),
         ("drawn_C_min_1fF", &drawn_c, &alone, caps("1fF", 1e-15)),
         ("drawn_C_min_100aF", &drawn_c, &alone, caps("100aF", 1e-16)),

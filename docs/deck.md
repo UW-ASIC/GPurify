@@ -854,8 +854,16 @@ adding (two of 0.5 fF are one of 1 fF); a resistor's `w`, and `area`,
 `perim` and `pe`, add along. A card's `m` folds into the value first, so
 `c=0.5f m=2` is `c=1f`. One that states no value keeps its count. `lvs
 topology strict`, the default, never combines values: two capacitors are
-one of the same value with `m=2`. Passives never merge in series either
-way.
+one of the same value with `m=2`.
+
+Relaxed, a resistor or capacitor stating its value also merges in series
+with another of its model through a net that only the two touch and that
+is no port: resistances add (two of 200 ohm are one of 400), as do a
+resistor's `l`, and capacitances combine harmonically (two of 2 fF are one
+of 1 fF), with `area` and `perim` adding, as KLayout combines them. A
+resistor's `w` must agree. A capacitor's plates must chain top to bottom,
+unless `lvs permute` makes them interchangeable. Diodes and bipolars never
+merge in series, and under the strict policy nothing passive does.
 
 **`lvs connect_implicit "pattern"`** declares must-connect nets, as
 KLayout's `connect_implicit` does: layout nets whose label matches the

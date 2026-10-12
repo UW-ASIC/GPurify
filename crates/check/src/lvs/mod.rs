@@ -113,8 +113,10 @@
 //!   its own ([`check_param_ranges`], catalog LVS-068).
 //! - `lvs topology relaxed`: a passive or bipolar stating its value merges
 //!   in parallel by the value's law, `r` harmonically and `c`, `area`, `ae`
-//!   by adding (catalog LVS-043, LVS-044, LVS-049; Netgen's `property
-//!   topology relaxed`); strict, the default, keeps a count.
+//!   by adding, and a resistor or capacitor in series by the opposite law
+//!   (catalog LVS-043, LVS-044, LVS-049; Netgen's `property topology
+//!   relaxed`, `KLayout`'s serial combiners); strict, the default, keeps a
+//!   count.
 //! - `lvs connect_implicit "pattern"` and `lvs connect_explicit "a" "b"`:
 //!   must-connect nets, joined for the comparison ([`join_must_connect`],
 //!   catalog LVS-002; `KLayout`'s `connect_implicit` and
@@ -198,7 +200,8 @@
 //!   into one device of the same value with a count `m`, so two capacitors
 //!   of `c` do not match one card of `2c`, which `KLayout`, adding the
 //!   capacitance, would pass ([`reduce`]). The deck's `lvs topology
-//!   relaxed` combines them. Passives never merge in series.
+//!   relaxed` combines them, and chains resistors and capacitors in
+//!   series by their law.
 
 pub mod checks;
 mod compare;
