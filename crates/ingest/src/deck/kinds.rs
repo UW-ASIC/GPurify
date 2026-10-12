@@ -248,6 +248,17 @@ const EM_NARROW: &[Param] = &[
     p("width", "narrow_width", Dim::Length),
     p("current", "narrow_current", Dim::Current),
 ];
+/// `esd_path`'s parameters, the same with a source layer or without.
+const ESD_PATH: &[Param] = &[
+    opt("clamps", "clamp", Dim::Models),
+    p("current", "current", Dim::Current),
+    p("clamp_resistance", "clamp_resistance", Dim::Resistance),
+    opt("max_resistance", "max_resistance", Dim::Resistance),
+    opt("clamp_it2", "clamp_it2", Dim::CurrentPerWidth),
+    opt("max_density", "max_density", Dim::CurrentPerWidth),
+    opt("max_current_per_cut", "max_current_per_cut", Dim::Current),
+    opt("max_voltage", "max_voltage", Dim::Voltage),
+];
 /// An enclosure's wire band: the wire widths the rule holds.
 const WIRE_WIDTH: &[Param] = &[p("width", "wire_width", Dim::Length)];
 const WIRE_BELOW: &[Param] = &[p("below", "wire_below", Dim::Length)];
@@ -990,6 +1001,16 @@ pub(crate) const KINDS: &[Kind] = &[
         ],
     ),
     erc(
+        "conditional_tie",
+        &[0, 1, 2, 3],
+        false,
+        &[
+            p("within", "within", Dim::Length),
+            p("spacing", "spacing", Dim::LengthList),
+            p("max_distance", "max_distance", Dim::LengthList),
+        ],
+    ),
+    erc(
         "density_cmp",
         &[0],
         false,
@@ -1041,6 +1062,41 @@ pub(crate) const KINDS: &[Kind] = &[
         ],
     ),
     erc(
+        "esd_cross_domain",
+        &[],
+        false,
+        &[
+            p("diodes", "diode", Dim::Models),
+            opt("local", "local", Dim::Models),
+        ],
+    ),
+    erc(
+        "esd_exposed",
+        &[0],
+        false,
+        &[
+            p("clamps", "clamp", Dim::Models),
+            opt("resistors", "resistor", Dim::Models),
+            opt("rated", "rated", Dim::Models),
+        ],
+    ),
+    erc(
+        "esd_ground_coupling",
+        &[],
+        false,
+        &[p("diodes", "diode", Dim::Models)],
+    ),
+    erc(
+        "esd_parasitic",
+        &[0, 1],
+        false,
+        &[p("min_spacing", "min_spacing", Dim::Length)],
+    ),
+    erc("esd_path", &[0], false, ESD_PATH),
+    // The current enters at a second layer's polygons: a guard ring under an
+    // injection stress (JESD78).
+    erc("esd_path", &[0, 1], false, ESD_PATH),
+    erc(
         "esd_topological",
         &[0],
         false,
@@ -1054,6 +1110,30 @@ pub(crate) const KINDS: &[Kind] = &[
     ),
     erc("floating_well", &[0, 1], false, &[]),
     erc("fanout", &[], false, &[p("max", "max_gates", Dim::Count)]),
+    erc(
+        "forward_diode",
+        &[0],
+        false,
+        &[p("models", "model", Dim::Models)],
+    ),
+    erc(
+        "guard_ring",
+        &[0, 1],
+        false,
+        &[
+            opt("max_space", "max_space", Dim::Length),
+            opt("min_width", "min_width", Dim::Length),
+            opt("pad", "pad", Dim::Layer),
+            opt("near", "near", Dim::Layer),
+            opt("within", "within", Dim::Length),
+        ],
+    ),
+    erc(
+        "guard_ring_bias",
+        &[0],
+        false,
+        &[p("power", "power", Dim::Bool)],
+    ),
     erc(
         "hv_domain",
         &[],
@@ -1089,6 +1169,16 @@ pub(crate) const KINDS: &[Kind] = &[
             p("sigma", "sigma", Dim::Scalar),
             p("limit_failure", "limit_failure", Dim::Fraction),
             p("max_failure", "max_failure", Dim::Fraction),
+        ],
+    ),
+    erc(
+        "latchup_victim",
+        &[0, 1, 2],
+        false,
+        &[
+            p("within", "within", Dim::Length),
+            p("max_distance", "max_distance", Dim::Length),
+            opt("pad", "pad", Dim::Layer),
         ],
     ),
     erc(
@@ -1131,6 +1221,12 @@ pub(crate) const KINDS: &[Kind] = &[
     erc("soft_connection", &[0], true, &[]),
     erc("supply_short", &[0, 1], false, &[]),
     erc("supply_short", &[0, 1, 2], false, &[]),
+    erc(
+        "tie_area",
+        &[0, 1, 2],
+        false,
+        &[p("min_ratio", "min_ratio", Dim::Fraction)],
+    ),
     erc("tie_high_low", &[], false, &[]),
     erc("unconnected_pin", &[0], true, &[]),
     erc(

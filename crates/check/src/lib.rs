@@ -115,6 +115,7 @@
 //! |---|---|---|---|---|
 //! | `antenna(gate, collectors..; max_ratio, sidewall, diode)` | `antenna` | [`erc::RuleSet::antenna`] | collector area above `max_ratio` times the gate area, a gate on a `diode` net skipped | ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A9, ERC-A11, ERC-A12, ERC-A13 |
 //! | `antenna_electrical(gate, collectors..; ..)` | `antenna_electrical` | [`erc::RuleSet::antenna_electrical`] | the cumulative ratio, with diode credit | ERC-A4, ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A9, ERC-A12, ERC-A13 |
+//! | `conditional_tie(region, tap, well, other; within, spacing, max_distance)` | `conditional_tie` | [`erc::RuleSet::conditional_tie`] | a region too far from a tap for the band its neighbours' well spacing puts it in | ERC-D1a |
 //! | `density_cmp(L; window, step, ..)` | `density_cmp` | [`erc::RuleSet::density_cmp`] | metal density, or CMP thickness, out of range | DRC-071, DRC-113, ERC-B1 |
 //! | `electromigration(layers..; ..)` | `electromigration` | [`erc::RuleSet::electromigration`] | a wire or cut above its rated current at temperature | ERC-E4, ERC-E5, ERC-E6 |
 //! | `em_current_density(layers..; ..)` | `em_current_density` | [`erc::RuleSet::em_current_density`] | a wire or cut above its instantaneous current limit | ERC-C7, ERC-D4, ERC-E1, ERC-E2, ERC-E3, ERC-E10 |
@@ -123,6 +124,9 @@
 //! | `em_thermal(layers..; ..)` | `em_thermal` | [`erc::RuleSet::em_thermal`] | a wire or cut above its rated current at its self-heated temperature, or a chip too likely to fail by EM | ERC-E13 |
 //! | `p2p_resistance(; max)` | `p2p_resistance` | [`erc::RuleSet::p2p_resistance`] | two points on one net too far apart in resistance | ERC-C6, ERC-D4 |
 //! | `reliability(; ..)` | `reliability` | [`erc::RuleSet::reliability`] | a device whose predicted lifetime is too short | ERC-E5, ERC-F5 |
+//! | `forward_diode(marker; models)` | `forward_diode` | [`erc::RuleSet::forward_diode`] | a diode the supplies can forward-bias that no latch-up marker covers | ERC-D8 |
+//! | `guard_ring(target, ring; max_space, min_width, pad, near, within)` | `guard_ring` | [`erc::RuleSet::guard_ring`] | a target no closed ring surrounds, one too far inside its ring, or a ring too narrow | ERC-D2, ERC-D6, ERC-D7, ERC-D8 |
+//! | `guard_ring_bias(ring; power)` | `guard_ring_bias` | [`erc::RuleSet::guard_ring_bias`] | an n-type ring or tap off the most positive supply, a p-type one off ground | ERC-D3, ERC-D6 |
 //! | `hv_domain(; max_delta, isolation)` | `hv_domain` | [`erc::RuleSet::hv_domain`] | a device spanning supply domains too far apart | DRC-083, ERC-F10 |
 //! | `hv_tag(L, tag; voltage)` | `hv_tag` | [`erc::RuleSet::hv_tag`] | a figure on a net that can reach `voltage` or more, not inside `tag` | DRC-083 |
 //! | `undriven_gate()` | `undriven_gate` | [`erc::RuleSet::undriven_gate`] | a gate net that floats in a declared power state | ERC-F8 |
@@ -130,13 +134,20 @@
 //! | `mixed_tag(L, tag)` | `mixed_tag` | [`erc::RuleSet::mixed_tag`] | an untagged figure on a net that also holds a tagged one | ERC-F10 |
 //! | `esd_latchup(pad, guard_ring; ..)` | `esd_latchup` | [`erc::RuleSet::esd_latchup`] | a narrow or untapped guard ring, or an unclamped pad | ERC-C1, ERC-D2 |
 //! | `esd_topological(pad; clamps)` | `esd_topological` | [`erc::RuleSet::esd_topological`] | a pad with no clamp path to both supplies | ERC-C1 |
+//! | `esd_cross_domain(; diodes, local)` | `esd_cross_domain` | [`erc::RuleSet::esd_cross_domain`] | a gate driven from another power domain whose ground is not coupled to its own by anti-parallel diodes, or that has no local clamp to its own ground | ERC-C4, ERC-C9 |
+//! | `esd_exposed(pad; clamps, resistors, rated)` | `esd_exposed` | [`erc::RuleSet::esd_exposed`] | a gate a pad exposes with no clamp path of its own, or an output driver at a pad that is not ESD-rated | ERC-C3 |
+//! | `esd_ground_coupling(; diodes)` | `esd_ground_coupling` | [`erc::RuleSet::esd_ground_coupling`] | a ground domain no chain of anti-parallel diodes couples to the others | ERC-C5 |
+//! | `esd_parasitic(pad, diffusion; min_spacing)` | `esd_parasitic` | [`erc::RuleSet::esd_parasitic`] | a pad's junction closer to another net's than a parasitic device allows | ERC-C10 |
+//! | `esd_path(pad[, source]; clamps, current, clamp_resistance, max_resistance, clamp_it2, max_density, max_current_per_cut, max_voltage)` | `esd_path` | [`erc::RuleSet::esd_path`] | under a forced current, a pin-to-supply discharge path (or a guard ring's path to its supply) too resistive, a pin rising too high, or a clamp, wire or cut too small for its share | ERC-C2, ERC-C6, ERC-C7, ERC-C8, ERC-D4 |
 //! | `floating_gate(; labels_are_ports)` | `floating_gate` | [`erc::RuleSet::floating_gate`] | a net that only reaches gates | ERC-G1 |
 //! | `fanout(; max)` | `fanout` | [`erc::RuleSet::fanout`] | a net driving more than `max` transistor gates | ERC-H4 |
 //! | `floating_well(well, tap)` | `floating_well` | [`erc::RuleSet::floating_well`] | a well with no tap | DRC-085, ERC-G2 |
+//! | `latchup_victim(aggressor, region, tap; within, max_distance, pad)` | `latchup_victim` | [`erc::RuleSet::latchup_victim`] | a region near an injecting (pad-connected) junction too far from a tap | ERC-D5 |
 //! | `missing_tie(region, tap; max_distance)` | `missing_tie` | [`erc::RuleSet::missing_tie`] | a region too far from a tap | ERC-D1 |
 //! | `multiple_drivers(; max)` | `multiple_drivers` | [`erc::RuleSet::multiple_drivers`] | a net with too many drivers | ERC-G3 |
 //! | `soft_connection(layers..)` | `soft_connection` | [`erc::RuleSet::soft_connection`] | a net held together only through high-resistance layers | LVS-003, ERC-G5 |
 //! | `supply_short(tap_a, tap_b[, within])` | `supply_short` | [`erc::RuleSet::supply_short`] | a net touching both kinds of tap | ERC-G4 |
+//! | `tie_area(region, contact, channel; min_ratio)` | `tie_area` | [`erc::RuleSet::tie_area`] | a well or ring whose tap contact area is too small a share of its channel area | ERC-D1b |
 //! | `tie_high_low()` | `tie_high_low` | [`erc::RuleSet::tie_high_low`] | a gate tied straight to a rail | ERC-G7 |
 //! | `unconnected_pin(layers..)` | `unconnected_pin` | [`erc::RuleSet::unconnected_pin`] | a shape that reaches no device | DRC-084, ERC-E9, ERC-G6 |
 //! | `gate_oxide(; models, max)` | `gate_oxide` | [`erc::RuleSet::gate_oxide`] | a gate that can differ from its channel by more than max | ERC-F2 |

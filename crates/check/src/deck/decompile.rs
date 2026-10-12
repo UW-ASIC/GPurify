@@ -6,7 +6,7 @@ use crate::drc::{Rule, StepKind};
 use crate::erc::rules::antenna::AntennaMeasure;
 use crate::report::LimitSense;
 use crate::report::Severity;
-use gpurify_geom::{LayerId, StrId, StrTable};
+use gpurify_geom::{LayerId, Qty, StrId, StrTable};
 use gpurify_ingest::deck::{DeckSource, LvsSrc, ParamSource, ParamValue, RuleSource};
 use std::collections::HashMap;
 
@@ -762,6 +762,139 @@ impl CompiledDeck {
             for &id in &t.clamp[span(&t.clamp_start, r)] {
                 row.params.push(("clamp", model(id)));
             }
+            file(&t.head, r, row);
+        }
+        let t = &erc.conditional_tie;
+        for r in 0..t.head.len() {
+            let mut row = Row::new(
+                "conditional_tie",
+                &[t.region[r], t.tap[r], t.well[r], t.other[r]],
+            )
+            .length("within", t.within[r]);
+            for &value in &t.spacing[span(&t.spacing_start, r)] {
+                row = row.length("spacing", value);
+            }
+            for &value in &t.max_distance[span(&t.max_distance_start, r)] {
+                row = row.length("max_distance", value);
+            }
+            file(&t.head, r, row);
+        }
+        let t = &erc.esd_cross_domain;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("esd_cross_domain", &[]);
+            for &id in &t.diode[span(&t.diode_start, r)] {
+                row.params.push(("diode", model(id)));
+            }
+            for &id in &t.local[span(&t.local_start, r)] {
+                row.params.push(("local", model(id)));
+            }
+            file(&t.head, r, row);
+        }
+        let t = &erc.esd_exposed;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("esd_exposed", &[t.pad[r]]);
+            for &id in &t.clamp[span(&t.clamp_start, r)] {
+                row.params.push(("clamp", model(id)));
+            }
+            for &id in &t.resistor[span(&t.resistor_start, r)] {
+                row.params.push(("resistor", model(id)));
+            }
+            for &id in &t.rated[span(&t.rated_start, r)] {
+                row.params.push(("rated", model(id)));
+            }
+            file(&t.head, r, row);
+        }
+        let t = &erc.esd_ground_coupling;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("esd_ground_coupling", &[]);
+            for &id in &t.diode[span(&t.diode_start, r)] {
+                row.params.push(("diode", model(id)));
+            }
+            file(&t.head, r, row);
+        }
+        let t = &erc.esd_parasitic;
+        for r in 0..t.head.len() {
+            let row = Row::new("esd_parasitic", &[t.pad[r], t.diffusion[r]])
+                .length("min_spacing", t.min_spacing[r]);
+            file(&t.head, r, row);
+        }
+        let t = &erc.esd_path;
+        for r in 0..t.head.len() {
+            let layers: Vec<LayerId> = if t.source[r] == t.pad[r] {
+                vec![t.pad[r]]
+            } else {
+                vec![t.pad[r], t.source[r]]
+            };
+            let mut row = Row::new("esd_path", &layers)
+                .number("current", t.current[r].raw())
+                .number("clamp_resistance", t.clamp_resistance[r].raw());
+            for &id in &t.clamp[span(&t.clamp_start, r)] {
+                row.params.push(("clamp", model(id)));
+            }
+            let limits = [
+                ("max_resistance", t.max_resistance[r].map(Qty::raw)),
+                ("clamp_it2", t.clamp_it2[r].map(Qty::raw)),
+                ("max_density", t.max_density[r].map(Qty::raw)),
+                (
+                    "max_current_per_cut",
+                    t.max_current_per_cut[r].map(Qty::raw),
+                ),
+                ("max_voltage", t.max_voltage[r].map(Qty::raw)),
+            ];
+            for (name, limit) in limits {
+                if let Some(value) = limit {
+                    row = row.number(name, value);
+                }
+            }
+            file(&t.head, r, row);
+        }
+        let t = &erc.forward_diode;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("forward_diode", &[t.marker[r]]);
+            for &id in &t.model[span(&t.model_start, r)] {
+                row.params.push(("model", model(id)));
+            }
+            file(&t.head, r, row);
+        }
+        let t = &erc.guard_ring;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("guard_ring", &[t.target[r], t.ring[r]]);
+            if let Some(space) = t.max_space[r] {
+                row = row.length("max_space", space);
+            }
+            if let Some(width) = t.min_width[r] {
+                row = row.length("min_width", width);
+            }
+            if let Some(pad) = t.pad[r] {
+                row = row.value("pad", ParamValue::Layer(pad));
+            }
+            if let Some((near, within)) = t.near[r] {
+                row = row
+                    .value("near", ParamValue::Layer(near))
+                    .length("within", within);
+            }
+            file(&t.head, r, row);
+        }
+        let t = &erc.guard_ring_bias;
+        for r in 0..t.head.len() {
+            let row = Row::new("guard_ring_bias", &[t.ring[r]])
+                .value("power", ParamValue::Flag(t.power[r]));
+            file(&t.head, r, row);
+        }
+        let t = &erc.latchup_victim;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("latchup_victim", &[t.aggressor[r], t.region[r], t.tap[r]])
+                .length("within", t.within[r])
+                .length("max_distance", t.max_distance[r]);
+            if let Some(pad) = t.pad[r] {
+                row = row.value("pad", ParamValue::Layer(pad));
+            }
+            file(&t.head, r, row);
+        }
+        let t = &erc.tie_area;
+        for r in 0..t.head.len() {
+            let row = Row::new("tie_area", &[t.region[r], t.contact[r], t.channel[r]])
+                .number("min_ratio", t.min_ratio[r]);
             file(&t.head, r, row);
         }
         let t = &erc.floating_gate;

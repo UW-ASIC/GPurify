@@ -608,6 +608,14 @@ kinds! {
         diode_max_ratio: &[(DbuArea, f64)] = "diode_max_ratio",
         exempt: Option<LayerRef> = "exempt_layer",
     }
+    /// [`ConditionalTieTable`](crate::erc::rules::latchup::ConditionalTieTable):
+    /// `conditional_tie(region, tap, well, other; within, spacing, max_distance)`,
+    /// one more distance than spacing threshold.
+    conditional_tie(region: one, tap: one, well: one, other: one) [] {
+        within: Dbu = "within",
+        spacing: &[Dbu] = "spacing",
+        max_distance: &[Dbu] = "max_distance",
+    }
     /// [`DensityCmpTable`](crate::erc::rules::antenna::DensityCmpTable):
     /// `density_cmp(layer; window: x x y, step: x x y, min, max, max_delta,
     /// partial_windows, cmp: (target, sensitivity, max_delta) | none)`, the
@@ -675,12 +683,42 @@ kinds! {
         limit_failure: f64 = "limit_failure",
         max_failure: f64 = "max_failure",
     }
+    /// [`EsdCrossDomainTable`](crate::erc::rules::esd::EsdCrossDomainTable):
+    /// `esd_cross_domain(; diodes, local: models | none)`.
+    esd_cross_domain() [] { diodes: &[&str] = "diode", local: &[&str] = "local" }
+    /// [`EsdExposedTable`](crate::erc::rules::esd::EsdExposedTable):
+    /// `esd_exposed(pad; clamps, resistors: models | none, rated: models | none)`.
+    esd_exposed(pad: one) [] {
+        clamps: &[&str] = "clamp",
+        resistors: &[&str] = "resistor",
+        rated: &[&str] = "rated",
+    }
+    /// [`EsdGroundCouplingTable`](crate::erc::rules::esd::EsdGroundCouplingTable):
+    /// `esd_ground_coupling(; diodes)`.
+    esd_ground_coupling() [] { diodes: &[&str] = "diode" }
     /// [`EsdLatchupTable`](crate::erc::rules::reliability::EsdLatchupTable):
     /// `esd_latchup(pad, guard_ring; min_guard_ring_width, max_tap_distance, clamps)`.
     esd_latchup(pad: one, guard_ring: one) [] {
         min_guard_ring_width: Dbu = "min_guard_ring_width",
         max_tap_distance: Dbu = "max_tap_distance",
         clamps: &[&str] = "clamp",
+    }
+    /// [`EsdParasiticTable`](crate::erc::rules::esd::EsdParasiticTable):
+    /// `esd_parasitic(pad, diffusion; min_spacing)`.
+    esd_parasitic(pad: one, diffusion: one) [] { min_spacing: Dbu = "min_spacing" }
+    /// [`EsdPathTable`](crate::erc::rules::esd::EsdPathTable):
+    /// `esd_path(pad[, source]; clamps, current, clamp_resistance, ..)`, the
+    /// current in µA, resistances in ohms, densities in A/m, the voltage in
+    /// mV; each limit `None` when the deck writes `none`.
+    esd_path(pad: one, source: opt) [] {
+        clamps: &[&str] = "clamp",
+        current: f64 = "current",
+        clamp_resistance: f64 = "clamp_resistance",
+        max_resistance: Option<f64> = "max_resistance",
+        clamp_it2: Option<f64> = "clamp_it2",
+        max_density: Option<f64> = "max_density",
+        max_current_per_cut: Option<f64> = "max_current_per_cut",
+        max_voltage: Option<f64> = "max_voltage",
     }
     /// [`EsdTopologicalTable`](crate::erc::rules::supply::EsdTopologicalTable):
     /// `esd_topological(pad; clamps)`.
@@ -692,9 +730,25 @@ kinds! {
     floating_gate() [] { labels_are_ports: bool = "labels_are_ports" }
     /// [`FloatingWellTable`](crate::erc::rules::topology::FloatingWellTable): `floating_well(well, tap)`.
     floating_well(well: one, tap: one) [] {}
+    /// [`ForwardDiodeTable`](crate::erc::rules::latchup::ForwardDiodeTable):
+    /// `forward_diode(marker; models)`.
+    forward_diode(marker: one) [] { models: &[&str] = "model" }
     /// [`ModelLimitTable`](crate::erc::rules::domain::ModelLimitTable):
     /// `gate_oxide(; models, max)`, `max_voltage` in mV.
     gate_oxide() [] { models: &[&str] = "model", max_voltage: f64 = "max_voltage" }
+    /// [`GuardRingTable`](crate::erc::rules::latchup::GuardRingTable):
+    /// `guard_ring(target, ring; max_space, min_width, pad, near, within)`,
+    /// `near` and `within` both stated or both `None`.
+    guard_ring(target: one, ring: one) [] {
+        max_space: Option<Dbu> = "max_space",
+        min_width: Option<Dbu> = "min_width",
+        pad: Option<LayerRef> = "pad",
+        near: Option<LayerRef> = "near",
+        within: Option<Dbu> = "within",
+    }
+    /// [`GuardRingBiasTable`](crate::erc::rules::latchup::GuardRingBiasTable):
+    /// `guard_ring_bias(ring; power)`.
+    guard_ring_bias(ring: one) [] { power: bool = "power" }
     /// [`HvDomainTable`](crate::erc::rules::reliability::HvDomainTable):
     /// `hv_domain(; max_delta, isolation: layer | none)`, in mV.
     hv_domain() [] { max_domain_delta: f64 = "max_domain_delta", isolation: Option<LayerRef> = "isolation" }
@@ -703,6 +757,13 @@ kinds! {
     hv_tag(layer: one, tag: one) [] { voltage: f64 = "voltage" }
     /// [`IrDropTable`](crate::erc::rules::electrical::IrDropTable): `ir_drop()`.
     ir_drop() [] {}
+    /// [`LatchupVictimTable`](crate::erc::rules::latchup::LatchupVictimTable):
+    /// `latchup_victim(aggressor, region, tap; within, max_distance, pad)`.
+    latchup_victim(aggressor: one, region: one, tap: one) [] {
+        within: Dbu = "within",
+        max_distance: Dbu = "max_distance",
+        pad: Option<LayerRef> = "pad",
+    }
     /// [`MissingIsolationTable`](crate::erc::rules::domain::MissingIsolationTable):
     /// `missing_isolation(; isolation: models | none)`.
     missing_isolation() [] { isolation: &[&str] = "isolation" }
@@ -739,6 +800,9 @@ kinds! {
     /// [`SupplyShortTable`](crate::erc::rules::supply::SupplyShortTable):
     /// `supply_short(tap_a, tap_b[, within])`.
     supply_short(tap_a: one, tap_b: one, within: opt) [] {}
+    /// [`TieAreaTable`](crate::erc::rules::latchup::TieAreaTable):
+    /// `tie_area(region, contact, channel; min_ratio)`, a fraction.
+    tie_area(region: one, contact: one, channel: one) [] { min_ratio: f64 = "min_ratio" }
     /// [`TieHighLowTable`](crate::erc::rules::supply::TieHighLowTable): `tie_high_low()`.
     tie_high_low() [] {}
     /// [`UnconnectedPinTable`](crate::erc::rules::topology::UnconnectedPinTable):

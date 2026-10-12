@@ -15,8 +15,10 @@ use crate::common;
 
 use common::{head, manufacturing_grid, operating_temperature, rule};
 use gpurify_check::erc::facts::{IntentMap, NetFacts};
-use gpurify_check::erc::power::{NetNetworks, PowerError};
-use gpurify_check::erc::rules::{antenna, domain, electrical, reliability, supply, topology};
+use gpurify_check::erc::power::{NetNetworks, PowerError, Process};
+use gpurify_check::erc::rules::{
+    antenna, domain, electrical, esd, latchup, reliability, supply, topology,
+};
 use gpurify_check::erc::ruleset::{RuleSet, RunInputs, KINDS};
 use gpurify_check::erc::voltage::NetVoltage;
 use gpurify_check::erc::{Design, ErcError, Scratch};
@@ -42,17 +44,23 @@ fn id_of(kind: &str) -> StrId {
 }
 
 /// The kinds that cannot answer their question without design intent.
-const INTENT_GATED: [&str; 21] = [
+const INTENT_GATED: [&str; 27] = [
     "dielectric_field",
     "domain_crossing",
     "drain_source",
     "dynamic_ir_drop",
     "electromigration",
     "em_current_density",
+    "esd_cross_domain",
+    "esd_exposed",
+    "esd_ground_coupling",
     "em_thermal",
     "esd_latchup",
+    "esd_path",
     "esd_topological",
+    "forward_diode",
     "gate_oxide",
+    "guard_ring_bias",
     "hv_domain",
     "hv_tag",
     "ir_drop",
@@ -264,6 +272,97 @@ fn every_kind() -> RuleSet {
             clamp: vec![rule(900)],
         },
 
+        esd_path: esd::EsdPathTable {
+            head: head(id_of("esd_path")),
+            pad: vec![LayerId(0)],
+            source: vec![LayerId(0)],
+            clamp_start: vec![0, 1],
+            clamp: vec![rule(900)],
+            current: vec![microamps(1_330_000.0)],
+            clamp_resistance: vec![ohms(1.0)],
+            max_resistance: vec![Some(ohms(2.0))],
+            clamp_it2: vec![None],
+            max_density: vec![None],
+            max_current_per_cut: vec![None],
+            max_voltage: vec![None],
+        },
+        esd_ground_coupling: esd::EsdGroundCouplingTable {
+            head: head(id_of("esd_ground_coupling")),
+            diode_start: vec![0, 1],
+            diode: vec![rule(900)],
+        },
+        esd_parasitic: esd::EsdParasiticTable {
+            head: head(id_of("esd_parasitic")),
+            pad: vec![base],
+            diffusion: vec![other],
+            min_spacing: vec![dbu(5_000)],
+        },
+        esd_exposed: esd::EsdExposedTable {
+            head: head(id_of("esd_exposed")),
+            pad: vec![base],
+            clamp_start: vec![0, 1],
+            clamp: vec![rule(900)],
+            resistor_start: vec![0, 0],
+            resistor: Vec::new(),
+            rated_start: vec![0, 0],
+            rated: Vec::new(),
+        },
+        esd_cross_domain: esd::EsdCrossDomainTable {
+            head: head(id_of("esd_cross_domain")),
+            diode_start: vec![0, 1],
+            diode: vec![rule(900)],
+            local_start: vec![0, 0],
+            local: Vec::new(),
+        },
+        guard_ring_bias: latchup::GuardRingBiasTable {
+            head: head(id_of("guard_ring_bias")),
+            ring: vec![base],
+            power: vec![true],
+        },
+        guard_ring: latchup::GuardRingTable {
+            head: head(id_of("guard_ring")),
+            target: vec![base],
+            ring: vec![other],
+            max_space: vec![None],
+            min_width: vec![None],
+            pad: vec![None],
+            near: vec![None],
+        },
+        forward_diode: latchup::ForwardDiodeTable {
+            head: head(id_of("forward_diode")),
+            marker: vec![other],
+            model_start: vec![0, 1],
+            model: vec![rule(900)],
+        },
+        conditional_tie: latchup::ConditionalTieTable {
+            head: head(id_of("conditional_tie")),
+            region: vec![base],
+            tap: vec![other],
+            well: vec![base],
+            other: vec![other],
+            within: vec![dbu(50_000)],
+            spacing_start: vec![0, 1],
+            spacing: vec![dbu(1_000)],
+            max_distance_start: vec![0, 2],
+            max_distance: vec![dbu(15_000), dbu(30_000)],
+        },
+        latchup_victim: latchup::LatchupVictimTable {
+            head: head(id_of("latchup_victim")),
+            aggressor: vec![base],
+            region: vec![other],
+            tap: vec![base],
+            within: vec![dbu(15_000)],
+            max_distance: vec![dbu(2_000)],
+            pad: vec![None],
+        },
+        tie_area: latchup::TieAreaTable {
+            head: head(id_of("tie_area")),
+            region: vec![base],
+            contact: vec![other],
+            channel: vec![base],
+            min_ratio: vec![0.03],
+        },
+
         gate_oxide: domain::ModelLimitTable {
             head: head(id_of("gate_oxide")),
             model_start: vec![0, 1],
@@ -332,6 +431,8 @@ struct Cell {
     ports: PortTable,
     voltage: NetVoltage,
     networks: NetNetworks,
+    stack: ProcessStack,
+    connectivity: Connectivity,
 }
 
 impl Cell {
@@ -348,6 +449,8 @@ impl Cell {
             ports: PortTable::default(),
             voltage: NetVoltage::default(),
             networks: NetNetworks::default(),
+            stack: ProcessStack::default(),
+            connectivity: Connectivity::default(),
         }
     }
 
@@ -371,7 +474,11 @@ impl Cell {
                 xhi: dbu(2_000),
                 yhi: dbu(2_000),
             },
-            grid: manufacturing_grid(),
+            process: Process {
+                grid: manufacturing_grid(),
+                stack: &self.stack,
+                connectivity: &self.connectivity,
+            },
             operating_temperature: operating_temperature(),
         }
     }

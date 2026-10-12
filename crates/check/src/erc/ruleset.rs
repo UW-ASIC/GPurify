@@ -1,16 +1,16 @@
-//! The thirty-three tables, the deck parser that fills them, and the dispatcher.
+//! The forty-four tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
 
 use crate::erc::facts::{IntentMap, NetFacts};
-use crate::erc::power::{NetNetworks, Power, PowerError};
-use crate::erc::rules::{antenna, domain, electrical, reliability, supply, topology};
+use crate::erc::power::{NetNetworks, Power, PowerError, Process};
+use crate::erc::rules::{antenna, domain, electrical, esd, latchup, reliability, supply, topology};
 use crate::erc::voltage::NetVoltage;
 use crate::erc::{Design, ErcError, Scratch};
 use crate::report::{RuleRun, Severity, Violations};
 use crate::topology::PortTable;
-use gpurify_geom::{prefix, Dbu, DbuArea, Grid, Qty, Temperature, Voltage};
+use gpurify_geom::{prefix, Dbu, DbuArea, Qty, Temperature, Voltage};
 use gpurify_geom::{Bbox, LayerId};
 use gpurify_ingest::deck::{Deck, DeviceKind, ParamValue, ProcessStack, RuleSpec, RuleTable};
 use gpurify_ingest::{StrId, StrTable};
@@ -96,6 +96,30 @@ pub struct RuleSet {
     /// `esd_latchup` rows: [`reliability::EsdLatchupTable`].
     pub esd_latchup: reliability::EsdLatchupTable,
 
+    /// `esd_path` rows: [`esd::EsdPathTable`].
+    pub esd_path: esd::EsdPathTable,
+    /// `esd_ground_coupling` rows: [`esd::EsdGroundCouplingTable`].
+    pub esd_ground_coupling: esd::EsdGroundCouplingTable,
+    /// `esd_cross_domain` rows: [`esd::EsdCrossDomainTable`].
+    pub esd_cross_domain: esd::EsdCrossDomainTable,
+    /// `esd_parasitic` rows: [`esd::EsdParasiticTable`].
+    pub esd_parasitic: esd::EsdParasiticTable,
+    /// `esd_exposed` rows: [`esd::EsdExposedTable`].
+    pub esd_exposed: esd::EsdExposedTable,
+
+    /// `guard_ring_bias` rows: [`latchup::GuardRingBiasTable`].
+    pub guard_ring_bias: latchup::GuardRingBiasTable,
+    /// `tie_area` rows: [`latchup::TieAreaTable`].
+    pub tie_area: latchup::TieAreaTable,
+    /// `guard_ring` rows: [`latchup::GuardRingTable`].
+    pub guard_ring: latchup::GuardRingTable,
+    /// `forward_diode` rows: [`latchup::ForwardDiodeTable`].
+    pub forward_diode: latchup::ForwardDiodeTable,
+    /// `conditional_tie` rows: [`latchup::ConditionalTieTable`].
+    pub conditional_tie: latchup::ConditionalTieTable,
+    /// `latchup_victim` rows: [`latchup::LatchupVictimTable`].
+    pub latchup_victim: latchup::LatchupVictimTable,
+
     /// `gate_oxide` rows: [`domain::ModelLimitTable`], checked by
     /// [`domain::check_gate_oxide`].
     pub gate_oxide: domain::ModelLimitTable,
@@ -146,10 +170,11 @@ pub struct RunInputs<'a> {
     pub power: Power<'a>,
     /// The die boundary: the denominator of every density.
     pub die: Bbox,
-    /// The layout's grid, which turns a width in database units into metres
-    /// for a current-density limit, and a diode's area into the square
-    /// micrometres an antenna credit is stated per.
-    pub grid: Grid,
+    /// The deck's grid, stack and connectivity. The grid turns a width in
+    /// database units into metres for a current-density limit, and a diode's
+    /// area into the square micrometres an antenna credit is stated per; the
+    /// stack and connectivity build the ESD stress networks.
+    pub process: Process<'a>,
     /// The applied sign-off temperature, absolute; distinct from each row's
     /// characterisation temperature.
     pub operating_temperature: Qty<Temperature, { prefix::BASE }>,
@@ -314,6 +339,24 @@ impl Row<'_> {
             Some(ParamValue::Layer(value)) => Ok(Some(value)),
             Some(_) => Err(self.wrong_type(param)),
         }
+    }
+
+    /// Every length named by a repeated `param`, in deck order; empty when
+    /// absent.
+    fn lengths(&self, param: &'static str) -> Result<Vec<Dbu>, ErcError> {
+        let Some(name) = self.strings.get(param) else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for &(key, value) in self.rules.params_of(self.spec) {
+            if key == name {
+                match value {
+                    ParamValue::Length(length) => out.push(length),
+                    _ => return Err(self.wrong_type(param)),
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Every model named by a repeated `param`, in deck order; empty when absent.
@@ -660,6 +703,171 @@ impl RuleSet {
                     table.min_guard_ring_width.push(min_guard_ring_width);
                     table.max_tap_distance.push(max_tap_distance);
                 }
+                "conditional_tie" => {
+                    let layers = row.layers(4)?;
+                    let within = row.length("within")?;
+                    let spacing = row.lengths("spacing")?;
+                    let max_distance = row.lengths("max_distance")?;
+                    let table = &mut set.conditional_tie;
+                    row.head(&mut table.head)?;
+                    table.region.push(layers[0]);
+                    table.tap.push(layers[1]);
+                    table.well.push(layers[2]);
+                    table.other.push(layers[3]);
+                    table.within.push(within);
+                    table.spacing.extend(spacing);
+                    close_csr(&mut table.spacing_start, table.spacing.len());
+                    table.max_distance.extend(max_distance);
+                    close_csr(&mut table.max_distance_start, table.max_distance.len());
+                }
+                "esd_cross_domain" => {
+                    row.layers(0)?;
+                    let diodes = row.models("diode")?;
+                    let local = row.models("local")?;
+                    let table = &mut set.esd_cross_domain;
+                    row.head(&mut table.head)?;
+                    table.diode.extend(diodes);
+                    close_csr(&mut table.diode_start, table.diode.len());
+                    table.local.extend(local);
+                    close_csr(&mut table.local_start, table.local.len());
+                }
+                "esd_exposed" => {
+                    let layers = row.layers(1)?;
+                    let clamps = row.models("clamp")?;
+                    let resistors = row.models("resistor")?;
+                    let rated = row.models("rated")?;
+                    let table = &mut set.esd_exposed;
+                    row.head(&mut table.head)?;
+                    table.pad.push(layers[0]);
+                    table.clamp.extend(clamps);
+                    close_csr(&mut table.clamp_start, table.clamp.len());
+                    table.resistor.extend(resistors);
+                    close_csr(&mut table.resistor_start, table.resistor.len());
+                    table.rated.extend(rated);
+                    close_csr(&mut table.rated_start, table.rated.len());
+                }
+                "esd_ground_coupling" => {
+                    row.layers(0)?;
+                    let diodes = row.models("diode")?;
+                    let table = &mut set.esd_ground_coupling;
+                    row.head(&mut table.head)?;
+                    table.diode.extend(diodes);
+                    close_csr(&mut table.diode_start, table.diode.len());
+                }
+                "esd_parasitic" => {
+                    let layers = row.layers(2)?;
+                    let min_spacing = row.length("min_spacing")?;
+                    let table = &mut set.esd_parasitic;
+                    row.head(&mut table.head)?;
+                    table.pad.push(layers[0]);
+                    table.diffusion.push(layers[1]);
+                    table.min_spacing.push(min_spacing);
+                }
+                "esd_path" => {
+                    let layers = row.layers_from(1)?;
+                    if layers.len() > 2 {
+                        return Err(ErcError::WrongLayerCount {
+                            rule: row.name(),
+                            expected: 2,
+                            found: narrow(layers.len()),
+                        });
+                    }
+                    let clamps = row.models("clamp")?;
+                    let current = Qty::new(row.number("current")?);
+                    let clamp_resistance = Qty::new(row.number("clamp_resistance")?);
+                    let max_resistance = row.opt_number("max_resistance")?.map(Qty::new);
+                    let clamp_it2 = row.opt_number("clamp_it2")?.map(Qty::new);
+                    let max_density = row.opt_number("max_density")?.map(Qty::new);
+                    let per_cut = row.opt_number("max_current_per_cut")?.map(Qty::new);
+                    let max_voltage = row.opt_number("max_voltage")?.map(Qty::new);
+                    let table = &mut set.esd_path;
+                    row.head(&mut table.head)?;
+                    table.pad.push(layers[0]);
+                    table
+                        .source
+                        .push(layers.get(1).copied().unwrap_or(layers[0]));
+                    table.clamp.extend(clamps);
+                    close_csr(&mut table.clamp_start, table.clamp.len());
+                    table.current.push(current);
+                    table.clamp_resistance.push(clamp_resistance);
+                    table.max_resistance.push(max_resistance);
+                    table.clamp_it2.push(clamp_it2);
+                    table.max_density.push(max_density);
+                    table.max_current_per_cut.push(per_cut);
+                    table.max_voltage.push(max_voltage);
+                }
+                "forward_diode" => {
+                    let layers = row.layers(1)?;
+                    let models = row.models("model")?;
+                    let table = &mut set.forward_diode;
+                    row.head(&mut table.head)?;
+                    table.marker.push(layers[0]);
+                    table.model.extend(models);
+                    close_csr(&mut table.model_start, table.model.len());
+                }
+                "guard_ring" => {
+                    let layers = row.layers(2)?;
+                    let max_space = row.opt_length("max_space")?;
+                    let min_width = row.opt_length("min_width")?;
+                    let pad = row.opt_layer("pad")?;
+                    // `near` and `within` are one condition: both or neither.
+                    let near = match (row.opt_layer("near")?, row.opt_length("within")?) {
+                        (Some(layer), Some(within)) => Some((layer, within)),
+                        (None, None) => None,
+                        (Some(_), None) => {
+                            return Err(ErcError::MissingParam {
+                                rule: row.name(),
+                                param: "within",
+                            })
+                        }
+                        (None, Some(_)) => {
+                            return Err(ErcError::MissingParam {
+                                rule: row.name(),
+                                param: "near",
+                            })
+                        }
+                    };
+                    let table = &mut set.guard_ring;
+                    row.head(&mut table.head)?;
+                    table.target.push(layers[0]);
+                    table.ring.push(layers[1]);
+                    table.max_space.push(max_space);
+                    table.min_width.push(min_width);
+                    table.pad.push(pad);
+                    table.near.push(near);
+                }
+                "guard_ring_bias" => {
+                    let layers = row.layers(1)?;
+                    let power = row.flag("power", true)?;
+                    let table = &mut set.guard_ring_bias;
+                    row.head(&mut table.head)?;
+                    table.ring.push(layers[0]);
+                    table.power.push(power);
+                }
+                "latchup_victim" => {
+                    let layers = row.layers(3)?;
+                    let within = row.length("within")?;
+                    let max_distance = row.length("max_distance")?;
+                    let pad = row.opt_layer("pad")?;
+                    let table = &mut set.latchup_victim;
+                    row.head(&mut table.head)?;
+                    table.aggressor.push(layers[0]);
+                    table.region.push(layers[1]);
+                    table.tap.push(layers[2]);
+                    table.within.push(within);
+                    table.max_distance.push(max_distance);
+                    table.pad.push(pad);
+                }
+                "tie_area" => {
+                    let layers = row.layers(3)?;
+                    let min_ratio = row.number("min_ratio")?;
+                    let table = &mut set.tie_area;
+                    row.head(&mut table.head)?;
+                    table.region.push(layers[0]);
+                    table.contact.push(layers[1]);
+                    table.channel.push(layers[2]);
+                    table.min_ratio.push(min_ratio);
+                }
                 "esd_topological" => {
                     let layers = row.layers(1)?;
                     let clamps = row.models("clamp")?;
@@ -985,6 +1193,17 @@ impl RuleSet {
             "em_thermal" => &self.em_thermal.head,
             "esd_latchup" => &self.esd_latchup.head,
             "esd_topological" => &self.esd_topological.head,
+            "esd_path" => &self.esd_path.head,
+            "esd_ground_coupling" => &self.esd_ground_coupling.head,
+            "esd_cross_domain" => &self.esd_cross_domain.head,
+            "esd_parasitic" => &self.esd_parasitic.head,
+            "esd_exposed" => &self.esd_exposed.head,
+            "guard_ring_bias" => &self.guard_ring_bias.head,
+            "tie_area" => &self.tie_area.head,
+            "guard_ring" => &self.guard_ring.head,
+            "forward_diode" => &self.forward_diode.head,
+            "conditional_tie" => &self.conditional_tie.head,
+            "latchup_victim" => &self.latchup_victim.head,
             "floating_gate" => &self.floating_gate.head,
             "floating_well" => &self.floating_well.head,
             "gate_oxide" => &self.gate_oxide.head,
@@ -1144,6 +1363,82 @@ impl RuleSet {
             "esd_topological" if span(&self.esd_topological.clamp_start).is_empty() => {
                 return Err(c.missing("clamp"));
             }
+            "esd_path" => {
+                let t = &self.esd_path;
+                c.positive("current", t.current[r].raw())?;
+                c.positive("clamp_resistance", t.clamp_resistance[r].raw())?;
+                let limits = [
+                    ("max_resistance", t.max_resistance[r].map(Qty::raw)),
+                    ("clamp_it2", t.clamp_it2[r].map(Qty::raw)),
+                    ("max_density", t.max_density[r].map(Qty::raw)),
+                    (
+                        "max_current_per_cut",
+                        t.max_current_per_cut[r].map(Qty::raw),
+                    ),
+                    ("max_voltage", t.max_voltage[r].map(Qty::raw)),
+                ];
+                for (param, limit) in limits {
+                    if let Some(value) = limit {
+                        c.positive(param, value)?;
+                    }
+                }
+                // A row bounding nothing would report clean forever.
+                if limits.iter().all(|(_, limit)| limit.is_none()) {
+                    return Err(c.missing("max_resistance"));
+                }
+            }
+            "esd_ground_coupling" if span(&self.esd_ground_coupling.diode_start).is_empty() => {
+                return Err(c.missing("diode"));
+            }
+            "esd_cross_domain" if span(&self.esd_cross_domain.diode_start).is_empty() => {
+                return Err(c.missing("diode"));
+            }
+            "esd_exposed" if span(&self.esd_exposed.clamp_start).is_empty() => {
+                return Err(c.missing("clamp"));
+            }
+            "esd_parasitic" => c.length("min_spacing", self.esd_parasitic.min_spacing[r])?,
+            "forward_diode" if span(&self.forward_diode.model_start).is_empty() => {
+                return Err(c.missing("model"));
+            }
+            "guard_ring" => {
+                let t = &self.guard_ring;
+                if let Some(space) = t.max_space[r] {
+                    c.length("max_space", space)?;
+                }
+                if let Some(width) = t.min_width[r] {
+                    c.length("min_width", width)?;
+                }
+                if let Some((_, within)) = t.near[r] {
+                    c.length("within", within)?;
+                }
+            }
+            "tie_area" => c.fraction("min_ratio", self.tie_area.min_ratio[r])?,
+            "conditional_tie" => {
+                let t = &self.conditional_tie;
+                c.length("within", t.within[r])?;
+                let spacing = &t.spacing[span(&t.spacing_start)];
+                let limits = &t.max_distance[span(&t.max_distance_start)];
+                for &value in spacing {
+                    c.length("spacing", value)?;
+                }
+                for &value in limits {
+                    c.length("max_distance", value)?;
+                }
+                // One more limit than thresholds, thresholds ascending.
+                if limits.len() != spacing.len() + 1
+                    || spacing.windows(2).any(|pair| pair[0] >= pair[1])
+                {
+                    return Err(ErcError::WrongParamType {
+                        rule: c.rule.to_owned(),
+                        param: "max_distance",
+                    });
+                }
+            }
+            "latchup_victim" => {
+                let t = &self.latchup_victim;
+                c.length("within", t.within[r])?;
+                c.length("max_distance", t.max_distance[r])?;
+            }
             "gate_oxide" | "drain_source" => {
                 let t = if kind == "gate_oxide" {
                     &self.gate_oxide
@@ -1272,6 +1567,17 @@ impl RuleSet {
             &self.undriven_gate.head,
             &self.missing_isolation.head,
             &self.dielectric_field.head,
+            &self.esd_path.head,
+            &self.esd_ground_coupling.head,
+            &self.esd_cross_domain.head,
+            &self.esd_parasitic.head,
+            &self.esd_exposed.head,
+            &self.guard_ring_bias.head,
+            &self.tie_area.head,
+            &self.guard_ring.head,
+            &self.forward_diode.head,
+            &self.conditional_tie.head,
+            &self.latchup_victim.head,
         ]
         .iter()
         .map(|head| head.len())
@@ -1308,9 +1614,10 @@ impl RuleSet {
             networks,
             power,
             die,
-            grid,
+            process,
             operating_temperature,
         } = inputs;
+        let grid = process.grid;
 
         topology::check_floating_gate(design, facts, ports, &self.floating_gate, out, runs);
         topology::check_floating_well(design, &self.floating_well, scratch, out, runs);
@@ -1390,6 +1697,19 @@ impl RuleSet {
         );
         reliability::check_hv_domain(design, intent, voltage, &self.hv_domain, out, runs);
         reliability::check_esd_latchup(design, intent, &self.esd_latchup, scratch, out, runs);
+
+        esd::check_esd_path(design, intent, process, &self.esd_path, scratch, out, runs);
+        esd::check_esd_ground_coupling(design, intent, &self.esd_ground_coupling, out, runs);
+        esd::check_esd_cross_domain(design, intent, voltage, &self.esd_cross_domain, out, runs);
+        esd::check_esd_parasitic(design, &self.esd_parasitic, out, runs);
+        esd::check_esd_exposed(design, intent, &self.esd_exposed, out, runs);
+
+        latchup::check_guard_ring_bias(design, intent, &self.guard_ring_bias, out, runs);
+        latchup::check_tie_area(design, &self.tie_area, scratch, out, runs);
+        latchup::check_guard_ring(design, &self.guard_ring, scratch, out, runs);
+        latchup::check_forward_diode(design, intent, voltage, &self.forward_diode, out, runs);
+        latchup::check_conditional_tie(design, &self.conditional_tie, scratch, out, runs);
+        latchup::check_latchup_victim(design, &self.latchup_victim, scratch, out, runs);
 
         domain::check_gate_oxide(design, intent, voltage, &self.gate_oxide, out, runs);
         domain::check_drain_source(design, intent, voltage, &self.drain_source, out, runs);

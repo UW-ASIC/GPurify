@@ -4,6 +4,7 @@
 mod builder;
 mod custom;
 mod errors;
+mod esd_kinds;
 mod kinds;
 mod printer;
 mod query;

@@ -138,7 +138,7 @@ pub fn check(
             networks: built.map(|()| &networks),
             power,
             die,
-            grid: process.grid,
+            process,
             operating_temperature: temperature,
         },
         &mut scratch,
