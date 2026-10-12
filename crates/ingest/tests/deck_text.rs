@@ -824,6 +824,29 @@ fn lvs_ignore_names_any_model_once() {
     );
 }
 
+/// Oracle: the language spec (deck.md, "Devices"). An `inductor` device
+/// states its inductance in pH, nH or uH, kept in nH; `inductance` on any
+/// other kind, or a value in another unit, is refused. Breaks if the unit is
+/// mis-scaled or the key accepted on a resistor.
+#[test]
+fn an_inductor_states_its_inductance() {
+    let (deck, _) =
+        ok("device inductor met2 model \"spiral\" terminals [met2, met2] inductance 1.5uH\n");
+    assert_eq!(
+        deck.devices.kind,
+        [gpurify_ingest::deck::DeviceKind::Inductor]
+    );
+    assert_eq!(deck.devices.value[0].inductance_nh, Some(1500.0));
+    one_error(
+        "device resistor met2 model \"r\" terminals [met2, met2] inductance 1nH\n",
+        "an inductor's value",
+    );
+    one_error(
+        "device inductor met2 model \"l\" terminals [met2, met2] inductance 1fF\n",
+        "inductance",
+    );
+}
+
 /// Oracle: the language spec (deck.md, "LVS controls"). `lvs max_res` reads
 /// a resistance in ohms and `lvs min_caps` a capacitance in aF, each stated
 /// once and positive, and either interns the value name LVS computes it

@@ -374,6 +374,7 @@ impl Printer<'_> {
                 DeviceKind::Resistor => "resistor",
                 DeviceKind::Capacitor => "capacitor",
                 DeviceKind::Diode => "diode",
+                DeviceKind::Inductor => "inductor",
             };
             let _ = write!(
                 out,
@@ -387,6 +388,7 @@ impl Printer<'_> {
                 ("sheet", value.sheet_ohm_sq, "ohm"),
                 ("area_cap", value.area_cap_af_um2, "aF/um2"),
                 ("fringe_cap", value.fringe_cap_af_um, "aF/um"),
+                ("inductance", value.inductance_nh, "nH"),
                 ("on_gate_min", value.on_gate_min_mv, "mV"),
                 ("on_gate_max", value.on_gate_max_mv, "mV"),
             ] {

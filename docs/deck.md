@@ -645,16 +645,18 @@ a via into it needs a sheet resistance, and it cannot also be listed in
 device mos ngate model "sky130_fd_pr__nfet_01v8" terminals [poly, diff_active, diff_active]
 device resistor rbody model "rpoly" terminals [poly_c, poly_c] sheet 300ohm
 device capacitor cmim model "cmim" terminals [met4, met3] area_cap 2fF/um2 fringe_cap 0.2fF/um
+device inductor ind2n model "spiral_2n" terminals [met5, met5] inductance 2nH
 ```
 
 A device is found wherever its marker layer (`ngate`) has shapes. Its
 terminals are the listed layers, in order: gate, source, drain for `mos`;
 base, emitter, collector for `bjt`; anode, cathode for `diode`, which LVS
 compares as polar (a reversed diode is a mismatch), as it does a capacitor's
-two plates. A resistor's two ends may be written either way round.
-Kinds: `mos`, `bjt`, `resistor`, `capacitor`, `diode`. The model name is what
-LVS compares against your schematic; a schematic resistor, capacitor or
-diode card that names no model is the deck's one `device` of its kind. A `mos` row's gate terminal is also where
+two plates. A resistor's or an inductor's two ends may be written either way
+round. Kinds: `mos`, `bjt`, `resistor`, `capacitor`, `diode`, `inductor`. The model name is what
+LVS compares against your schematic; a schematic resistor, capacitor,
+diode or inductor card that names no model is the deck's one `device` of
+its kind. A `mos` row's gate terminal is also where
 an `antenna` row's gate connects.
 
 Each terminal needs a shape of its own under the marker, and shapes that
@@ -664,8 +666,10 @@ reports the marker (`lvs.terminal_net`).
 
 A resistor may give its body's resistance per square, `sheet`, and a
 capacitor its capacitance per area and per perimeter, `area_cap` and
-`fringe_cap`, in the units of a `pex` line. Each is optional, given once,
-and only on its own kind. LVS measures every device from what is drawn, and
+`fringe_cap`, in the units of a `pex` line, and an inductor its
+inductance, `inductance` (`pH`, `nH`, `uH`): what every device of the
+recogniser stands for, as a foundry's fixed inductor cell has one value.
+Each is optional, given once, and only on its own kind. LVS measures every device from what is drawn, and
 compares each value a schematic card states under the card's name for it:
 
 | Name | Device | Measured |
@@ -677,6 +681,7 @@ compares each value a schematic card states under the card's name for it:
 | `ae`, `pe` | `bjt` | The area and perimeter of the emitter's polygon, the second terminal layer's. |
 | `r` | `resistor` with `sheet` | `sheet × l / w`. |
 | `c` | `capacitor` with `area_cap` or `fringe_cap` | `area_cap × area + fringe_cap × perim`, of the terms given. |
+| `ind` | `inductor` with `inductance` | The inductance the deck states. A schematic `L` card's value, positional or `l=`, is compared as `ind`, never as a length. |
 
 A source, drain or emitter is measured only where it is one polygon that no
 other polygon of its layer touches; drawn in pieces, it is not measured.
@@ -771,6 +776,7 @@ collector may be wired either way. Pins are named as Netgen names them:
 | `resistor` | `end_a`, `end_b` |
 | `capacitor` | `top`, `bottom` |
 | `diode` | `anode`, `cathode` |
+| `inductor` | `end_a`, `end_b` |
 
 Pins already interchangeable stay so (a transistor's source and drain, a
 resistor's ends), and permutations chain: permuting `gate` with `source`
@@ -808,17 +814,17 @@ a deck that states a range, and runs with LVS.
 Netgen's `property topology relaxed` does: a resistor, capacitor, diode or
 bipolar whose schematic states its value (`r`, `c`, `area`, `ae`) merges
 with others of its model on the same nets into one of the combined value,
-resistances harmonically (two of 200 ohm are one of 100) and the rest by
-adding (two of 0.5 fF are one of 1 fF); a resistor's `w`, and `area`,
+resistances and inductances harmonically (two of 200 ohm are one of 100)
+and the rest by adding (two of 0.5 fF are one of 1 fF); a resistor's `w`, and `area`,
 `perim` and `pe`, add along. A card's `m` folds into the value first, so
 `c=0.5f m=2` is `c=1f`. One that states no value keeps its count. `lvs
 topology strict`, the default, never combines values: two capacitors are
 one of the same value with `m=2`.
 
-Relaxed, a resistor or capacitor stating its value also merges in series
+Relaxed, a resistor, capacitor or inductor stating its value also merges in series
 with another of its model through a net that only the two touch and that
-is no port: resistances add (two of 200 ohm are one of 400), as do a
-resistor's `l`, and capacitances combine harmonically (two of 2 fF are one
+is no port: resistances and inductances add (two of 200 ohm are one of
+400), as do a resistor's `l`, and capacitances combine harmonically (two of 2 fF are one
 of 1 fF), with `area` and `perim` adding, as KLayout combines them. A
 resistor's `w` must agree. A capacitor's plates must chain top to bottom,
 unless `lvs permute` makes them interchangeable. Diodes and bipolars never

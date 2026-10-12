@@ -805,3 +805,33 @@ fn a_diodes_pj_and_klayouts_a_and_p_are_its_area_and_perimeter() {
         other => panic!("a perimeter stated twice read as {other:?}"),
     }
 }
+
+/// Oracle: construct-from-answer (catalog LVS-065; Netgen reads an `L` card
+/// as an inductor with its positional value, `base/spice.c`, and Spectre's
+/// `inductor` primitive takes `l`). `L1 a b 2n spiral`, `L2 a b spiral
+/// l=3n` and a model-less `L3 a b 1n` are inductors of the deck's one
+/// inductor `spiral`, their inductance compared as `ind`, never as the
+/// length `l`; the Spectre twin reads the same. Breaks if an `L` card is
+/// refused, its value read as `r`, or its `l` as a length.
+#[test]
+fn an_l_card_is_an_inductor_whose_l_is_its_inductance() {
+    let mut strings = StrTable::default();
+    let deck = DeviceRecognition {
+        kind: vec![DeviceKind::Inductor],
+        model: vec![strings.intern("spiral")],
+        ..DeviceRecognition::default()
+    };
+    let source = ".subckt top a b\nL1 a b 2n spiral\nL2 a b spiral l=3n\nL3 a b 1n\n.ends\n";
+    let netlist = spice::read(source, &mut strings, &deck).expect("inductors read");
+    assert_eq!(netlist.device_kind, [DeviceKind::Inductor; 3]);
+    let spiral = strings.intern("spiral");
+    assert_eq!(netlist.device_model, [spiral; 3]);
+    let ind = strings.intern("ind");
+    // `3n` is 3 times 1e-9, as the reader scales every suffix.
+    assert_eq!(netlist.param, [(ind, 2e-9), (ind, 3.0 * 1e-9), (ind, 1e-9)]);
+    let spectre_text = "subckt top a b\nL1 (a b) inductor l=2n\nends top\n";
+    let twin = spectre::read(spectre_text, &mut strings, &deck).expect("the Spectre twin reads");
+    assert_eq!(twin.device_kind, [DeviceKind::Inductor]);
+    assert_eq!(twin.device_model, [spiral]);
+    assert_eq!(twin.param, [(ind, 2e-9)]);
+}

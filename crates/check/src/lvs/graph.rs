@@ -248,7 +248,9 @@ pub fn from_layout(
             .iter()
             .any(Option::is_some)
             .then(|| terms.iter().flatten().sum());
-        for (name, value) in [("r", r), ("c", c)] {
+        // nH to henries; every device of the recogniser has it.
+        let ind = law.inductance_nh.map(|nh| nh * 1e-9);
+        for (name, value) in [("r", r), ("c", c), ("ind", ind)] {
             if let (Some(name), Some(value)) = (strings.get(name), value) {
                 graph.param.push((name, value));
             }
@@ -494,7 +496,7 @@ pub(crate) fn keep_declared_params(reference: &Graph, layout: &mut Graph) {
 /// is a different circuit, and Netgen does not permute capacitor plates either).
 fn comparable(kind: DeviceKind, role: TerminalRole) -> TerminalRole {
     match (kind, role) {
-        (DeviceKind::Resistor, TerminalRole::Pin(_)) => TerminalRole::Pin(0),
+        (DeviceKind::Resistor | DeviceKind::Inductor, TerminalRole::Pin(_)) => TerminalRole::Pin(0),
         _ => role,
     }
 }

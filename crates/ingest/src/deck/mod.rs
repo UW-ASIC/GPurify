@@ -766,6 +766,10 @@ pub struct DeviceValue {
     /// perimeter, aF/µm. `c` is `area_cap * area + fringe_cap * perim`, of
     /// the terms the statement gives.
     pub fringe_cap_af_um: Option<f64>,
+    /// `inductance`: an inductor's inductance, nH: what every device of the
+    /// recogniser stands for, as a fixed inductor cell of a foundry's
+    /// library has one inductance. LVS compares it as `ind`.
+    pub inductance_nh: Option<f64>,
     /// `on_gate_min`: a `mos` conducts only when its gate can reach this
     /// voltage or more (an n-channel switch), mV. At most one of this and
     /// `on_gate_max` is set; with neither, the channel always conducts.
@@ -776,7 +780,7 @@ pub struct DeviceValue {
 }
 
 /// The device families this tool recognises, in the deck as `mos`, `bjt`,
-/// `resistor`, `capacitor` and `diode`.
+/// `resistor`, `capacitor`, `diode` and `inductor`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceKind {
     /// A MOS transistor; a SPICE `M` card.
@@ -789,6 +793,9 @@ pub enum DeviceKind {
     Capacitor,
     /// A two-pin diode; a SPICE `D` card.
     Diode,
+    /// A two-pin inductor; a SPICE `L` card. Its ends are interchangeable,
+    /// as `KLayout`'s `DeviceClassInductor` declares them (catalog LVS-065).
+    Inductor,
 }
 
 /// The `lvs` statements: what the layout-versus-schematic comparison does
@@ -914,7 +921,7 @@ pub const fn pin_names(kind: DeviceKind) -> &'static [&'static str] {
     match kind {
         DeviceKind::Mos => &["gate", "source", "drain", "bulk"],
         DeviceKind::Bjt => &["base", "emitter", "collector"],
-        DeviceKind::Resistor => &["end_a", "end_b"],
+        DeviceKind::Resistor | DeviceKind::Inductor => &["end_a", "end_b"],
         DeviceKind::Capacitor => &["top", "bottom"],
         DeviceKind::Diode => &["anode", "cathode"],
     }
@@ -952,6 +959,7 @@ pub fn absolute_unit(param: &str) -> Option<(&'static str, f64)> {
         "area" | "as" | "ad" | "ae" => Some(("nm2", 1e-18)),
         "r" => Some(("ohm", 1.0)),
         "c" => Some(("aF", 1e-18)),
+        "ind" => Some(("nH", 1e-9)),
         "m" | "nf" => Some(("", 1.0)),
         _ => None,
     }

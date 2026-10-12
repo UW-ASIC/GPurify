@@ -522,20 +522,20 @@ pub fn record_unpaired_instances(
 }
 
 /// Legal terminal counts per device kind, as a bitmask indexed by count. Rows past
-/// `Diode` admit nothing, so an unknown kind fails closed.
+/// `Inductor` admit nothing, so an unknown kind fails closed.
 const LEGAL_WIDTHS: [u32; 8] = [
     (1 << 3) | (1 << 4), // Mos: gate, source, drain, and optionally bulk
     1 << 3,              // Bjt
     1 << 2,              // Resistor
     1 << 2,              // Capacitor
     1 << 2,              // Diode
-    0,
+    1 << 2,              // Inductor
     0,
     0,
 ];
 
 /// The full terminal count each kind is reported against.
-const FULL_WIDTHS: [u32; 8] = [4, 3, 2, 2, 2, 0, 0, 0];
+const FULL_WIDTHS: [u32; 8] = [4, 3, 2, 2, 2, 2, 0, 0];
 
 fn graph_violation(
     rule: StrId,

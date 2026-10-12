@@ -184,6 +184,7 @@ pub fn write_spice(
             DeviceKind::Resistor => 'R',
             DeviceKind::Capacitor => 'C',
             DeviceKind::Diode => 'D',
+            DeviceKind::Inductor => 'L',
         };
         // Parasitic elements below carry a `p` in the same slot, so an
         // extracted `R0` and a parasitic `Rp0` cannot collide.

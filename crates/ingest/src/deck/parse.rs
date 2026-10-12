@@ -21,12 +21,13 @@ const OPS: [(&str, DerivedOp); 3] = [
     ("not", DerivedOp::Not),
 ];
 
-const DEVICES: [(&str, DeviceKind); 5] = [
+const DEVICES: [(&str, DeviceKind); 6] = [
     ("mos", DeviceKind::Mos),
     ("bjt", DeviceKind::Bjt),
     ("resistor", DeviceKind::Resistor),
     ("capacitor", DeviceKind::Capacitor),
     ("diode", DeviceKind::Diode),
+    ("inductor", DeviceKind::Inductor),
 ];
 
 /// One error, located in the deck text.
@@ -1136,7 +1137,7 @@ impl<'a> Parser<'a> {
             return Err(self.err(
                 span,
                 &format!(
-                    "unknown device kind `{kind}`; expected mos, bjt, resistor, capacitor or diode"
+                    "unknown device kind `{kind}`; expected mos, bjt, resistor, capacitor, diode or inductor"
                 ),
             ));
         };
@@ -1177,6 +1178,11 @@ impl<'a> Parser<'a> {
                     Dim::CapPerLength,
                     DeviceKind::Capacitor,
                 ),
+                "inductance" => (
+                    &mut value.inductance_nh,
+                    Dim::Inductance,
+                    DeviceKind::Inductor,
+                ),
                 "on_gate_min" => (&mut value.on_gate_min_mv, Dim::Voltage, DeviceKind::Mos),
                 "on_gate_max" => (&mut value.on_gate_max_mv, Dim::Voltage, DeviceKind::Mos),
                 _ => {
@@ -1184,8 +1190,8 @@ impl<'a> Parser<'a> {
                         span,
                         &format!(
                             "unknown device value `{key}`; expected sheet (a resistor), \
-                             area_cap or fringe_cap (a capacitor), on_gate_min or \
-                             on_gate_max (a mos)"
+                             area_cap or fringe_cap (a capacitor), inductance (an \
+                             inductor), on_gate_min or on_gate_max (a mos)"
                         ),
                     ))
                 }
@@ -1193,9 +1199,20 @@ impl<'a> Parser<'a> {
             if owner != kind {
                 let word = |of| DEVICES.iter().find(|&&(_, k)| k == of).map_or("", |d| d.0);
                 let (owner, kind) = (word(owner), word(kind));
+                let article = |word: &str| {
+                    if word.starts_with(['a', 'e', 'i', 'o', 'u']) {
+                        "an"
+                    } else {
+                        "a"
+                    }
+                };
                 return Err(self.err(
                     span,
-                    &format!("`{key}` is a {owner}'s value, not a {kind}'s"),
+                    &format!(
+                        "`{key}` is {} {owner}'s value, not {} {kind}'s",
+                        article(owner),
+                        article(kind)
+                    ),
                 ));
             }
             let stated = self.value()?;
@@ -2837,6 +2854,7 @@ fn absolute_dim(param: &str) -> Option<Dim> {
         "nm2" => Dim::Area,
         "ohm" => Dim::Resistance,
         "aF" => Dim::Capacitance,
+        "nH" => Dim::Inductance,
         _ => Dim::Count,
     })
 }
@@ -2866,6 +2884,7 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::PerKelvin => "a coefficient per kelvin",
         Dim::PerKelvin2 => "a coefficient per kelvin squared",
         Dim::Capacitance => "a capacitance",
+        Dim::Inductance => "an inductance",
         Dim::Fraction => "a fraction",
         Dim::Angle => "an angle",
         Dim::Scalar => "a number",
