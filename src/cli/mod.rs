@@ -74,7 +74,7 @@ fn render(cli: &args::Cli, decks: &[(&str, DeckFn)]) -> Result<(Summary, String)
         let reference = cli
             .inputs
             .reference
-            .as_deref()
+            .first()
             .expect("the parser requires a system netlist");
         let run = crate::engine::system::run(system, reference).map_err(|error| fail(&error))?;
         // A system has no one deck or layout: both name the system file.
