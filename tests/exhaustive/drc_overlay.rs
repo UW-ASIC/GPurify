@@ -84,6 +84,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         cover_density(),
         cut_area_change(),
         pattern_match(),
+        dfm_score(),
         critical_area(),
         stitch(),
         trim_cut(),
@@ -4688,6 +4689,101 @@ fn critical_area() -> Vec<Fixture> {
             [vec![], vec![], vec![], vec![]],
         ),
     ])
+}
+
+/// DFM scoring (`dfm_score`, DRC-111, arXiv:1805.10016 with deck-supplied
+/// values): required 100 nm, recommended 200 nm, failure rate 0.5, sign-off
+/// 0.9, over `space(m)`, `width(m)` and `enclosure(v, m)`.
+///
+/// Oracle: the score by hand: a finding at `g` scores `(g - 100) / 100`,
+/// clamped to `[0, 1]`, and the design `Π 1 - 0.5 (1 - score)`: a gap of
+/// 179, 180, 181 (0.895, found; 0.9 and 0.905 pass), 200 (no finding of the
+/// check), two gaps of 150 (0.75², 0.5625; scoring each alone passes neither
+/// of them past the product), a gap of 50 (below the required value: 0.5); a
+/// bar 150 wide (0.75); a via enclosed by 150 (0.75).
+fn dfm_score() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["m", "v"],
+        "rule ds dfm_score(m; check: space, required: 100nm, recommended: 200nm, rate: 0.5) >= 0.9\n\
+         rule dw dfm_score(m; check: width, required: 100nm, recommended: 200nm, rate: 0.5) >= 0.9\n\
+         rule de dfm_score(v, m; check: enclosure, required: 100nm, recommended: 200nm, rate: 0.5) >= 0.9\n",
+    );
+    let design = |gaps: &[i32]| -> f64 {
+        gaps.iter()
+            .map(|&g| {
+                let s = (f64::from(g - 100) / 100.0).clamp(0.0, 1.0);
+                1.0 - 0.5 * (1.0 - s)
+            })
+            .product()
+    };
+    let score = |gaps: &[i32]| -> Vec<Finding> {
+        let d = design(gaps);
+        if gaps.is_empty() || d >= 0.9 {
+            Vec::new()
+        } else {
+            vec![Finding {
+                measured: Some(Measurement::Ratio(d)),
+                at: None,
+            }]
+        }
+    };
+    // Every layout also holds a plate far off with a via 300 inside it, so
+    // each check has shapes to read and finds nothing there.
+    let case = |name: &str, layout: Layout, rows: [Vec<Finding>; 3]| {
+        let [ds, dw, de] = rows;
+        fixture(
+            &format!("dfm_score/{name}"),
+            &["DRC-111"],
+            &deck,
+            layout
+                .rect("m", 9000, 0, 10_000, 1000)
+                .rect("v", 9300, 300, 9400, 400),
+            &[("ds", ds), ("dw", dw), ("de", de)],
+        )
+    };
+    // Bars 1000 wide and tall, `gaps` apart in a row.
+    let bars = |gaps: &[i32]| {
+        let mut x = 0;
+        let mut layout = Layout::default().rect("m", 0, 0, 1000, 1000);
+        for &g in gaps {
+            x += 1000 + i64::from(g);
+            layout = layout.rect("m", x, 0, x + 1000, 1000);
+        }
+        layout
+    };
+    let mut cases = Vec::new();
+    for gaps in [
+        vec![179],
+        vec![180],
+        vec![181],
+        vec![200],
+        vec![150, 150],
+        vec![50],
+    ] {
+        let name = gaps
+            .iter()
+            .map(i32::to_string)
+            .collect::<Vec<_>>()
+            .join("_");
+        cases.push(case(
+            &format!("space/{name}"),
+            bars(&gaps),
+            [score(&gaps), Vec::new(), Vec::new()],
+        ));
+    }
+    cases.push(case(
+        "width/150",
+        Layout::default().rect("m", 0, 0, 150, 1000),
+        [Vec::new(), score(&[150]), Vec::new()],
+    ));
+    cases.push(case(
+        "enclosure/150",
+        Layout::default()
+            .rect("m", 0, 0, 400, 400)
+            .rect("v", 150, 150, 250, 250),
+        [Vec::new(), Vec::new(), score(&[150])],
+    ));
+    every_placement(cases)
 }
 
 /// Pattern matching (`pattern`, DRC-114): a 300 nm window holding an L of

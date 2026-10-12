@@ -4,7 +4,9 @@ use crate::drc::rules::{
     area, edge, facing, grid, overlay, pattern, patterning, presence, spacing, via, width,
 };
 use crate::drc::{DrcError, Scratch};
-use crate::report::{record_run, LimitSense, Outcome, RuleRun, Severity, Violations};
+use crate::report::{
+    record_run, LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations,
+};
 use crate::topology::NetTable;
 use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId};
 use gpurify_ingest::deck::{Deck, ParamValue, RuleSpec};
@@ -1803,6 +1805,53 @@ pub enum Rule {
         /// Index into [`RuleSet::widths`].
         widths: u32,
     },
+    /// A design whose DFM score over a recommended rule's findings is below
+    /// `limit`.
+    ///
+    /// Deck: `dfm_score(L[, outer]; check: space | width | enclosure,
+    /// required: len, recommended: len, rate: frac) >= score`, kind
+    /// `dfm_score`. The check runs at the recommended value (`space(L)`,
+    /// `width(L)`, or `enclosure(L, outer)`, as [`Rule::MinSpacing`],
+    /// [`Rule::MinWidth`] and [`Rule::MinEnclosure`] measure them); each of
+    /// its findings scores 0 at or below the required value and 1 at the
+    /// recommended one, linearly between, and the design's score is the
+    /// product over the findings of `1 - rate * (1 - score)`. This is the DFM
+    /// scoring of Tripathi et al., "In Design DFM Rule Scoring and Fixing
+    /// Method using ICV" (SNUG 2017, arXiv:1805.10016): a violation "at DRC
+    /// margin or below" scores 0, one "meeting DFM requirement" 1, "between
+    /// 0-1" between, and the design score is a product over violations of a
+    /// function of each score and the rule's failure rate (its Equation 2,
+    /// a Poisson yield model), signed off at a value such as 0.99. The paper
+    /// prints neither the curve between the margins nor that function: the
+    /// line between them and `1 - rate * (1 - score)` (each finding fails
+    /// with the rule's failure rate at the required value, never at the
+    /// recommended one) are GPurify's reading. Values deck-supplied; no
+    /// public deck states them.
+    ///
+    /// At most one violation, on `L`, at the lowest-scoring finding's
+    /// marker, `measured` the design's score against `limit`, naming that
+    /// finding's shapes. `examined` is the check's.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-111. Rules: GlobalFoundries' DFM scoring with IC Validator
+    /// (arXiv:1805.10016), Calibre `YieldAnalyzer`'s recommended-rule scoring.
+    DfmScore {
+        /// The check the score reads.
+        check: DfmCheck,
+        /// The layer measured; the inner layer of an enclosure.
+        layer: LayerId,
+        /// The outer layer of an enclosure; `None` for the others.
+        outer: Option<LayerId>,
+        /// The rule's required value (a score of 0), in grid units;
+        /// positive and below `recommended`.
+        required: Dbu,
+        /// The recommended value (a score of 1), in grid units.
+        recommended: Dbu,
+        /// The rule's failure rate, from 0 to 1.
+        rate: f64,
+        /// The least score that signs off, from 0 to 1.
+        limit: f64,
+    },
     /// A place where the layer matches a deck-supplied pattern.
     ///
     /// Deck: `pattern(L; window: w x h, shapes: [x0 x y0, x1 x y1, ..],
@@ -2481,6 +2530,17 @@ pub enum Rule {
         /// The exact centre-to-centre distance, in grid units; positive.
         pitch: Dbu,
     },
+}
+
+/// The measurement a [`Rule::DfmScore`] scores.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DfmCheck {
+    /// Space between shapes of one layer, as [`Rule::MinSpacing`].
+    Space,
+    /// A shape's width, as [`Rule::MinWidth`].
+    Width,
+    /// Enclosure of the inner layer by the outer, as [`Rule::MinEnclosure`].
+    Enclosure,
 }
 
 /// A pattern of [`Rule::PatternMatch`]: a window from the origin, the
@@ -3255,6 +3315,34 @@ impl RuleSet {
                     radius: length(spec, "radius")?,
                     limit: area_limit(spec, "limit")?,
                 },
+                "dfm_score" => {
+                    let check = match count(spec, "check", 2)? {
+                        0 => DfmCheck::Space,
+                        1 => DfmCheck::Width,
+                        _ => DfmCheck::Enclosure,
+                    };
+                    let outer = if check == DfmCheck::Enclosure {
+                        layers(spec, 2)?;
+                        Some(layer(spec, 1))
+                    } else {
+                        layers(spec, 1)?;
+                        None
+                    };
+                    let (required, recommended) =
+                        (length(spec, "required")?, length(spec, "recommended")?);
+                    if required >= recommended {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    Rule::DfmScore {
+                        check,
+                        layer: layer(spec, 0),
+                        outer,
+                        required,
+                        recommended,
+                        rate: ratio(spec, "rate")?,
+                        limit: ratio(spec, "limit")?,
+                    }
+                }
                 "pattern_match" => {
                     let layer = one(spec)?;
                     // Rectangles by two opposite corners each, in order.
@@ -4214,6 +4302,36 @@ impl RuleSet {
                         radius,
                         limit,
                     } => area::critical_area(store, id, layer, radius, limit, s, out),
+                    Rule::DfmScore {
+                        check,
+                        layer,
+                        outer,
+                        required,
+                        recommended,
+                        rate,
+                        limit,
+                    } => {
+                        let found = match (check, outer) {
+                            (DfmCheck::Space, _) => {
+                                spacing::min_spacing(store, id, layer, recommended, s, out)
+                            }
+                            (DfmCheck::Width, _) => {
+                                width::facing(store, id, layer, recommended, true, s, out)
+                            }
+                            (DfmCheck::Enclosure, Some(outer)) => overlay::enclosure(
+                                store,
+                                id,
+                                (outer, layer),
+                                (recommended, WireBand::ANY),
+                                overlay::Mode::EverySide,
+                                s,
+                                out,
+                            ),
+                            (DfmCheck::Enclosure, None) => (Outcome::Refused, 0),
+                        };
+                        dfm_scored(out, before, (required, recommended), rate, limit);
+                        found
+                    }
                     Rule::PatternMatch {
                         layer,
                         pattern: index,
@@ -4674,6 +4792,45 @@ impl RuleSet {
     }
 }
 
+/// A [`Rule::DfmScore`]'s rows: the check's findings past `before` are
+/// replaced by at most one, the design's score, at the lowest-scoring
+/// finding's marker, when it is below `limit`.
+fn dfm_scored(
+    out: &mut Violations,
+    before: usize,
+    (required, recommended): (Dbu, Dbu),
+    rate: f64,
+    limit: f64,
+) {
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "grid lengths are far below 2^52"
+    )]
+    let score = |measured: Measurement| match measured {
+        Measurement::Length(m) => {
+            let span = (recommended - required).raw() as f64;
+            (((m - required).raw() as f64) / span).clamp(0.0, 1.0)
+        }
+        _ => 0.0,
+    };
+    let scores: Vec<f64> = out.measured[before..].iter().map(|&m| score(m)).collect();
+    let worst = scores
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.total_cmp(b.1))
+        .map(|(at, _)| before + at);
+    let design: f64 = scores.iter().map(|s| 1.0 - rate * (1.0 - s)).product();
+    let kept = worst.filter(|_| design < limit).map(|at| out.get(at));
+    out.truncate(before);
+    if let Some(row) = kept {
+        out.push(Violation {
+            measured: Measurement::Ratio(design),
+            limit: Measurement::Ratio(limit),
+            ..row
+        });
+    }
+}
+
 impl Rule {
     /// The layers a rule reads past [`Self::layers`]: the anchors of
     /// [`Rule::AnchoredPatterning`], the boundary of
@@ -4825,6 +4982,16 @@ impl Rule {
             // The bands are checked where they are filed.
             Rule::CoverDensity { window, step, .. } => length(window).and(length(step)),
             Rule::CutAreaChange { .. } | Rule::PatternMatch { .. } => Ok(()),
+            Rule::DfmScore {
+                required,
+                recommended,
+                rate,
+                limit,
+                ..
+            } => length(required)
+                .and(length(recommended - required))
+                .and(fraction(rate))
+                .and(fraction(limit)),
             Rule::GlobalDensity { limit, .. }
             | Rule::AspectRatio { limit, .. }
             | Rule::RegionDensity { limit, .. }
@@ -5070,6 +5237,7 @@ impl Rule {
             Rule::CoverDensity { .. } => "cover_density",
             Rule::CutAreaChange { .. } => "cut_area_change",
             Rule::PatternMatch { .. } => "pattern_match",
+            Rule::DfmScore { .. } => "dfm_score",
             Rule::Forbidden { .. } => "forbidden",
             Rule::MustContain { .. } => "must_contain",
             Rule::MustBeInside { .. } => "must_be_inside",
@@ -5217,6 +5385,7 @@ impl Rule {
             Rule::CutAreaChange {
                 pre, post, lower, ..
             } => [Some(pre), Some(post), Some(lower)],
+            Rule::DfmScore { layer, outer, .. } => [Some(layer), outer, None],
             Rule::Angle { layer, .. }
             | Rule::MinInteriorAngle { layer, .. }
             | Rule::PolygonValidity { layer } => [layer, None, None],

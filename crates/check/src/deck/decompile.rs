@@ -2,6 +2,7 @@
 //! would read it into, so the deck can be printed or overridden.
 
 use super::CompiledDeck;
+use crate::drc::ruleset::DfmCheck;
 use crate::drc::{Rule, StepKind};
 use crate::erc::rules::antenna::AntennaMeasure;
 use crate::report::LimitSense;
@@ -398,6 +399,29 @@ impl CompiledDeck {
             } => one(layer)
                 .length("radius", radius)
                 .value("limit", ParamValue::Area(limit)),
+            Rule::DfmScore {
+                check,
+                layer,
+                outer,
+                required,
+                recommended,
+                rate,
+                limit,
+            } => {
+                let mut layers = vec![layer];
+                layers.extend(outer);
+                let check = match check {
+                    DfmCheck::Space => 0,
+                    DfmCheck::Width => 1,
+                    DfmCheck::Enclosure => 2,
+                };
+                Row::new(rule.kind(), &layers)
+                    .value("check", ParamValue::Count(check))
+                    .length("required", required)
+                    .length("recommended", recommended)
+                    .number("rate", rate)
+                    .number("limit", limit)
+            }
             Rule::PatternMatch { layer, pattern } => {
                 let mut row = one(layer);
                 if let Some(pattern) = self.drc.patterns.get(pattern as usize) {

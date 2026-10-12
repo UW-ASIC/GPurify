@@ -7,15 +7,15 @@ use super::grid;
 use super::printer::assert_round_trip;
 use gpurify_check::deck::rules::{
     allowed_width, aspect_ratio, asymmetric_enclosure, convex_corner_spacing, count, cover_density,
-    cut_area_change, cut_class, cut_class_spacing, cut_spacing, edge_facing_space, edge_width,
-    eol_keep_out, eol_within_spacing, exact_pitch, forbidden, forbidden_spacing, full_width,
-    gate_corner, keep_out_zone, max_enclosure, min_enclosure, min_interior_angle, min_step,
-    minimum_cut, must_contain, noncoincident_enclosure, origin, pattern_match, polygon_validity,
-    projection_spacing, protrusion_width, region_density, span_length, tip_spacing_table,
-    total_area, two_width_spacing_table, via_stack,
+    cut_area_change, cut_class, cut_class_spacing, cut_spacing, dfm_score, edge_facing_space,
+    edge_width, eol_keep_out, eol_within_spacing, exact_pitch, forbidden, forbidden_spacing,
+    full_width, gate_corner, keep_out_zone, max_enclosure, min_enclosure, min_interior_angle,
+    min_step, minimum_cut, must_contain, noncoincident_enclosure, origin, pattern_match,
+    polygon_validity, projection_spacing, protrusion_width, region_density, span_length,
+    tip_spacing_table, total_area, two_width_spacing_table, via_stack,
 };
 use gpurify_check::deck::{compile, Bound, CompiledDeck, DeckBuilder};
-use gpurify_check::drc::ruleset::EolParallel;
+use gpurify_check::drc::ruleset::{DfmCheck, EolParallel};
 use gpurify_check::drc::{StepKind, WireBand};
 use gpurify_geom::{Dbu, DbuArea, StrTable};
 use gpurify_ingest::deck::StackSource;
@@ -59,6 +59,8 @@ rule eol.w eol_space(m; eol_width: 60nm, within: 20nm, parallel: none, end_to_en
 rule eol.p eol_space(m; eol_width: 60nm, within: 20nm, parallel: (space: 120nm, within: 50nm, two_edges: true), end_to_end: 70nm) >= 80nm
 rule ko eol_keep_out(m; eol_width: 60nm, backward: 0nm, side: 30nm, forward: 90nm)
 rule or origin(r)
+rule dfm dfm_score(m; check: space, required: 180nm, recommended: 220nm, rate: 0.01) >= 0.99
+rule dfm.enc dfm_score(v, m; check: enclosure, required: 10nm, recommended: 40nm, rate: 0.5) >= 0.9
 rule pat pattern(m; window: 300nm x 300nm, shapes: [0nm x 0nm, 300nm x 100nm, 0nm x 100nm, 100nm x 300nm], ignore: [150nm x 150nm, 300nm x 300nm])
 rule pat.none pattern(m; window: 300nm x 300nm, shapes: [0nm x 0nm, 300nm x 100nm, 0nm x 100nm, 100nm x 300nm], ignore: none)
 rule ir cut_area_change(v, v2, m, m2; cuts: [1, 11, 101], change: [200000nm2, 300000nm2, 700000nm2])
@@ -174,6 +176,22 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     );
     d.rule("ko", eol_keep_out(m, nm(60), nm(0), nm(30), nm(90)));
     d.rule("or", origin(r));
+    d.rule(
+        "dfm",
+        dfm_score(m, None, DfmCheck::Space, nm(180), nm(220), 0.01, 0.99),
+    );
+    d.rule(
+        "dfm.enc",
+        dfm_score(
+            v,
+            Some(m.into()),
+            DfmCheck::Enclosure,
+            nm(10),
+            nm(40),
+            0.5,
+            0.9,
+        ),
+    );
     let l_x = [nm(0), nm(300), nm(0), nm(100)];
     let l_y = [nm(0), nm(100), nm(100), nm(300)];
     d.rule(
