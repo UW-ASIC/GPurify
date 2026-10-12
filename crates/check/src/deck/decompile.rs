@@ -608,6 +608,9 @@ impl CompiledDeck {
                 }
                 row.length("limit", limit)
             }
+            Rule::ProtrusionWidth { layer, wide, limit } => {
+                one(layer).length("wide", wide).length("limit", limit)
+            }
             Rule::KeepOutZone {
                 layer,
                 class,

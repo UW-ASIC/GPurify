@@ -57,6 +57,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         adjacent_cut_spacing(),
         cut_class_spacing(),
         keep_out_zone(),
+        protrusion_width(),
         global_density(),
         density(depth),
         cheesing(),
@@ -2362,6 +2363,82 @@ fn adjacent_cut_spacing() -> Vec<Fixture> {
             (299, 299, 399, 399),
         ],
         vec![],
+    ));
+    every_placement(cases)
+}
+
+/// LEF 5.8 `PROTRUSIONWIDTH 0.28 LENGTH 0 WIDTH 1.20` (`protrusion_width`,
+/// DRC-125): `protrusion_width(m; wide: 1200nm) >= 280nm`, one finding per
+/// narrow part attached to a wide part, measuring its width.
+///
+/// Oracle: widths drawn by construction against LEF's statement: a stub 279,
+/// 280, 281 wide on a 2000 plate (one finding of 279); a 200 stub on a plate
+/// 1199, 1200, 1201 wide (a plate exactly 1200 wide is wide); the stub drawn
+/// as two abutting 100 halves (one finding of 200: an unmerged reading gives
+/// two of 100); a 200 neck joining two plates (one); a lone 200 wire and a
+/// 200 tip on a 500 stub on the plate (none: neither touches a wide part).
+fn protrusion_width() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["m"],
+        "rule pw protrusion_width(m; wide: 1200nm) >= 280nm\n",
+    );
+    let plate = || Layout::default().rect("m", 0, 0, 2000, 2000);
+    let case = |name: &str, layout: Layout, found: Vec<Finding>| {
+        fixture(
+            &format!("protrusion_width/{name}"),
+            &["DRC-125"],
+            &deck,
+            layout,
+            &[("pw", found)],
+        )
+    };
+    let mut cases = Vec::new();
+    for (w, side) in sweep(280) {
+        cases.push(case(
+            &format!("stub/{side}"),
+            plate().rect("m", 500, 2000, 500 + w, 2600),
+            below(w, 280),
+        ));
+    }
+    for (p, side) in sweep(1200) {
+        let found = if p >= 1200 {
+            lengths(&[200])
+        } else {
+            Vec::new()
+        };
+        cases.push(case(
+            &format!("plate/{side}"),
+            Layout::default()
+                .rect("m", 0, 0, p, 3000)
+                .rect("m", p, 1000, p + 600, 1200),
+            found,
+        ));
+    }
+    cases.push(case(
+        "stub_halves",
+        plate()
+            .rect("m", 500, 2000, 600, 2600)
+            .rect("m", 600, 2000, 700, 2600),
+        lengths(&[200]),
+    ));
+    cases.push(case(
+        "neck",
+        plate()
+            .rect("m", 2600, 0, 4600, 2000)
+            .rect("m", 2000, 900, 2600, 1100),
+        lengths(&[200]),
+    ));
+    cases.push(case(
+        "lone_wire",
+        Layout::default().rect("m", 0, 0, 200, 3000),
+        Vec::new(),
+    ));
+    cases.push(case(
+        "tip_on_a_stub",
+        plate()
+            .rect("m", 800, 2000, 1300, 2600)
+            .rect("m", 950, 2600, 1150, 3000),
+        Vec::new(),
     ));
     every_placement(cases)
 }

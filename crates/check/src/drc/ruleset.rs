@@ -1803,6 +1803,46 @@ pub enum Rule {
         /// Index into [`RuleSet::widths`].
         widths: u32,
     },
+    /// A narrow part of a shape attached to its wide part: a protrusion
+    /// narrower than `limit` from a wire at least `wide` wide.
+    ///
+    /// Deck: `protrusion_width(L; wide: len) >= len`, kind
+    /// `protrusion_width`. The layer is merged first. A figure's wide part is
+    /// where a `wide` square fits in it, as for [`Rule::WideDependentSpacing`];
+    /// its narrow parts are what no `limit` square covers. Each narrow part
+    /// that touches the wide part, a corner counting, is a protrusion
+    /// narrower than `limit` from a wire at least `wide` wide, and a
+    /// violation: LEF `PROTRUSIONWIDTH width1 LENGTH 0 WIDTH width2`, which
+    /// LEF/DEF 5.8 (p. 76-77) defines as "the width of the protrusion wire
+    /// should always be checked independent of the length of the wire" when
+    /// the protrusion "connects to a wire that has a width greater than or
+    /// equal to width2". A part exactly `limit` wide is legal, and a wire
+    /// exactly `wide` wide is wide.
+    ///
+    /// One violation per protrusion, at the centre of its bounding box
+    /// (floored), `measured` its narrowest width as [`Rule::MinWidth`]
+    /// measures it (floored). `shapes.0` is the lowest drawn row under it.
+    /// `examined` counts merged figures.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-125. Rules: LEF `PROTRUSIONWIDTH`.
+    ///
+    /// Limits: a positive `LENGTH`, which exempts a protrusion at least that
+    /// long, is not modelled: LEF/DEF 5.8 measures the length "by the
+    /// shortest possible path among all of the protrusion wires with width
+    /// smaller width1 ... by the shortest outside edges of the wires" and
+    /// settles the reading only by figure; no open tool checks it
+    /// (`OpenROAD` parses and stores the statement and checks nothing).
+    ProtrusionWidth {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// The width from which a wire is wide (LEF `width2`), in grid
+        /// units; positive.
+        wide: Dbu,
+        /// The least legal protrusion width (LEF `width1`), in grid units;
+        /// positive.
+        limit: Dbu,
+    },
     /// A corner whose angle inside its shape is below `limit` degrees: an
     /// acute angle.
     ///
@@ -3569,6 +3609,11 @@ impl RuleSet {
                         ),
                     }
                 }
+                "protrusion_width" => Rule::ProtrusionWidth {
+                    layer: one(spec)?,
+                    wide: length(spec, "wide")?,
+                    limit: length(spec, "limit")?,
+                },
                 "eol_keep_out" => Rule::EolKeepOut {
                     layer: one(spec)?,
                     eol_width: length(spec, "eol_width")?,
@@ -4072,6 +4117,9 @@ impl RuleSet {
                         s,
                         out,
                     ),
+                    Rule::ProtrusionWidth { layer, wide, limit } => {
+                        width::protrusion_width(store, id, layer, wide, limit, s, out)
+                    }
                     Rule::MinInteriorAngle { layer, limit } => {
                         grid::min_interior_angle(store, id, (layer, drawn), limit, out)
                     }
@@ -4427,6 +4475,7 @@ impl Rule {
             Rule::EolKeepOut {
                 eol_width, forward, ..
             } => length(eol_width).and(length(forward)),
+            Rule::ProtrusionWidth { wide, limit, .. } => length(wide).and(length(limit)),
             Rule::KeepOutZone {
                 class: (short, long),
                 to,
@@ -4603,6 +4652,7 @@ impl Rule {
             Rule::ForbiddenSpacing { .. } => "forbidden_spacing",
             Rule::EolWithinSpacing { .. } => "eol_within_spacing",
             Rule::EolKeepOut { .. } => "eol_keep_out",
+            Rule::ProtrusionWidth { .. } => "protrusion_width",
             Rule::KeepOutZone { .. } => "keep_out_zone",
             Rule::TwoWidthSpacingTable { .. } => "two_width_spacing_table",
             Rule::SpanLength { .. } => "span_length",
@@ -4653,6 +4703,7 @@ impl Rule {
             | Rule::EolWithinSpacing { layer, .. }
             | Rule::EolKeepOut { layer, .. }
             | Rule::KeepOutZone { layer, .. }
+            | Rule::ProtrusionWidth { layer, .. }
             | Rule::TwoWidthSpacingTable { layer, .. }
             | Rule::SpanLength { layer, .. }
             | Rule::ConvexCornerSpacing { layer, .. }

@@ -11,6 +11,7 @@ use crate::drc::ruleset::StepKind;
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::boolean::{subtraction_into, union_into, BooleanError};
+use gpurify_geom::derive::interacting_into;
 use gpurify_geom::ops::isqrt;
 use gpurify_geom::ops::Point;
 use gpurify_geom::rects::decompose_into;
@@ -289,6 +290,57 @@ pub(crate) fn allowed_width(
             at: centre(s.rects[s.rect_start[idx as usize] as usize]),
             measured: Measurement::Length(width),
             limit: Measurement::Length(nearest),
+            shapes: (owner, None),
+        });
+    }
+    (Outcome::Ran, s.layer_out.len() as u64)
+}
+
+/// LEF `PROTRUSIONWIDTH width1 LENGTH 0 WIDTH width2` (`limit`, `wide`): each
+/// narrow part of a merged figure (no `limit` square covers it) touching the
+/// figure's wide part (a `wide` square fits there) is one violation,
+/// measuring its narrowest width, at the centre of its box, on the lowest
+/// drawn row under it. `examined` counts merged figures.
+pub(crate) fn protrusion_width(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    wide: Dbu,
+    limit: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(drawn) = s.validated.get(store, layer) else {
+        return REFUSED;
+    };
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return REFUSED;
+    }
+    s.rects_a.build(store, layer, drawn);
+    let figures = &s.layer_out;
+    let protrusions = || -> Result<ValidatedLayer, BooleanError> {
+        let mut rects = Vec::new();
+        wide_rects_into(figures, limit, &mut rects)?;
+        let mut narrow = ValidatedLayer::default();
+        subtraction_into(figures, &rects_layer(&rects)?, &mut narrow)?;
+        wide_rects_into(figures, wide, &mut rects)?;
+        let mut attached = ValidatedLayer::default();
+        interacting_into(&narrow, &rects_layer(&rects)?, true, &mut attached);
+        Ok(attached)
+    };
+    let Ok(attached) = protrusions() else {
+        return REFUSED;
+    };
+    let owners = owners_of(&attached, &s.rects_a);
+    for (idx, owner) in (0u32..).zip(owners) {
+        let part = attached.get(idx);
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(part.bbox()),
+            measured: Measurement::Length(isqrt(narrowest_width2(part, &mut s.facing))),
+            limit: Measurement::Length(limit),
             shapes: (owner, None),
         });
     }

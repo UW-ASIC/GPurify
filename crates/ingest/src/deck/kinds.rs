@@ -344,6 +344,16 @@ pub(crate) const KINDS: &[Kind] = &[
         None,
         &[p("allowed", "width", Dim::LengthList)],
     ),
+    // A protrusion narrower than the limit from a wire at least `wide` wide
+    // (LEF `PROTRUSIONWIDTH width1 LENGTH 0 WIDTH width2`).
+    drc(
+        "protrusion_width",
+        Cmp::Ge,
+        "protrusion_width",
+        &[0],
+        LIMIT,
+        &[p("wide", "wide", Dim::Length)],
+    ),
     drc("notch", Cmp::Ge, "notch", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "min_spacing", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "min_spacing_diff", &[0, 1], LIMIT, &[]),
