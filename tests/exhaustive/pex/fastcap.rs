@@ -71,6 +71,13 @@ const DEFAULT_MESH: f64 = 2.5e-2;
 /// of these stacks (500 nm) at the centre of a face, finer toward its edges.
 const PANEL_UM: f64 = 0.25;
 
+/// The stratified plate's interior panel edge, µm: an eighth of its side.
+/// At [`PANEL_UM`] the 8 µm plate, mirrored and cut by its interface, was
+/// 15 000 panels and ran `FastCap` past its 20 minutes; its capacitance is
+/// mostly its area's, which panels this size, finer toward the edges, still
+/// resolve well inside [`STRATIFIED`].
+const PLATE_PANEL_UM: f64 = 1.0;
+
 /// One conductor as `FastCap` reads it: a named box, corners in µm.
 struct Conductor {
     name: String,
@@ -113,16 +120,17 @@ fn conductors(stack: Stack, layout: &Layout) -> Vec<Conductor> {
         .collect()
 }
 
-/// `lo..hi` cut at Chebyshev–Lobatto points: panels about
-/// [`PANEL_UM`] in the middle, quadratically finer toward both ends, where a
-/// conductor's surface charge is singular. At least four.
-fn cuts(lo: f64, hi: f64) -> Vec<f64> {
+/// `lo..hi` cut at Chebyshev–Lobatto points: panels about `panel` µm
+/// ([`PANEL_UM`] but in [`PLATE_PANEL_UM`]'s case) in the middle,
+/// quadratically finer toward both ends, where a conductor's surface charge
+/// is singular. At least four.
+fn cuts(lo: f64, hi: f64, panel: f64) -> Vec<f64> {
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         reason = "a few hundred cuts"
     )]
-    let n = ((PI * (hi - lo) / (2.0 * PANEL_UM)).ceil() as usize).max(4);
+    let n = ((PI * (hi - lo) / (2.0 * panel)).ceil() as usize).max(4);
     (0..=n)
         .map(|k| lo + (hi - lo) * (1.0 - (PI * k as f64 / n as f64).cos()) / 2.0)
         .collect()
@@ -133,14 +141,15 @@ fn cuts(lo: f64, hi: f64) -> Vec<f64> {
 fn panels(out: &mut String, c: &Conductor, name: &str, mirror: f64) {
     for axis in 0..3 {
         for at in [c.lo[axis], c.hi[axis]] {
-            face(out, c.lo, c.hi, axis, at, name, mirror);
+            face(out, c.lo, c.hi, axis, at, name, mirror, PANEL_UM);
         }
     }
 }
 
 /// Appends the face of the box `lo..hi` normal to `axis` at `at`, cut at
-/// [`cuts`] on both of its axes, as panels named `name`, every `z` times
-/// `mirror`.
+/// [`cuts`] of `panel` µm on both of its axes, as panels named `name`, every
+/// `z` times `mirror`.
+#[allow(clippy::too_many_arguments, reason = "one face, stated in full")]
 fn face(
     out: &mut String,
     lo: [f64; 3],
@@ -149,9 +158,10 @@ fn face(
     at: f64,
     name: &str,
     mirror: f64,
+    panel: f64,
 ) {
     let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
-    let (us, vs) = (cuts(lo[u], hi[u]), cuts(lo[v], hi[v]));
+    let (us, vs) = (cuts(lo[u], hi[u], panel), cuts(lo[v], hi[v], panel));
     for i in 0..us.len() - 1 {
         for j in 0..vs.len() - 1 {
             let _ = write!(out, "Q {name}");
@@ -533,14 +543,14 @@ fn permittivity(bands: &[(f64, f64)], z: f64, above: bool) -> f64 {
 }
 
 /// Grid lines through every edge, [`cuts`] between neighbouring edges and
-/// growing by half again out to `lo` and `hi`.
-fn window_lines(mut edges: Vec<f64>, lo: f64, hi: f64) -> Vec<f64> {
+/// growing by half again out to `lo` and `hi`, from `panel` µm.
+fn window_lines(mut edges: Vec<f64>, lo: f64, hi: f64, panel: f64) -> Vec<f64> {
     edges.sort_by(f64::total_cmp);
     edges.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
     let mut out = vec![lo];
     let (first, last) = (edges[0], edges[edges.len() - 1]);
     let mut outside = Vec::new();
-    let (mut at, mut gap) = (first, PANEL_UM);
+    let (mut at, mut gap) = (first, panel);
     while at - gap > lo + 1e-9 {
         at -= gap;
         outside.push(at);
@@ -549,11 +559,11 @@ fn window_lines(mut edges: Vec<f64>, lo: f64, hi: f64) -> Vec<f64> {
     outside.reverse();
     out.extend(outside);
     for pair in edges.windows(2) {
-        let lines = cuts(pair[0], pair[1]);
+        let lines = cuts(pair[0], pair[1], panel);
         out.extend(&lines[..lines.len() - 1]);
     }
     out.push(last);
-    let (mut at, mut gap) = (last, PANEL_UM);
+    let (mut at, mut gap) = (last, panel);
     while at + gap < hi - 1e-9 {
         at += gap;
         out.push(at);
@@ -569,7 +579,12 @@ fn window_lines(mut edges: Vec<f64>, lo: f64, hi: f64) -> Vec<f64> {
 /// group; each interface (and its mirror in the substrate, between the same
 /// permittivities upside down) a dielectric surface over [`WINDOW`], metal
 /// cut out.
-fn fastcap_stratified(tool: &Path, stack: Stack, conductors: &[Conductor]) -> Vec<Vec<f64>> {
+fn fastcap_stratified(
+    tool: &Path,
+    stack: Stack,
+    conductors: &[Conductor],
+    panel: f64,
+) -> Vec<Vec<f64>> {
     let bands = bands(stack);
     let interfaces: Vec<(f64, f64, f64)> = bands
         .windows(2)
@@ -588,12 +603,12 @@ fn fastcap_stratified(tool: &Path, stack: Stack, conductors: &[Conductor]) -> Ve
                 None => by_k.push((k, text)),
             };
             let mut text = String::new();
-            face(&mut text, c.lo, c.hi, 2, c.lo[2], &name, mirror);
+            face(&mut text, c.lo, c.hi, 2, c.lo[2], &name, mirror, panel);
             put(
                 permittivity(&bands, c.lo[2], false),
                 std::mem::take(&mut text),
             );
-            face(&mut text, c.lo, c.hi, 2, c.hi[2], &name, mirror);
+            face(&mut text, c.lo, c.hi, 2, c.hi[2], &name, mirror, panel);
             put(
                 permittivity(&bands, c.hi[2], true),
                 std::mem::take(&mut text),
@@ -611,7 +626,7 @@ fn fastcap_stratified(tool: &Path, stack: Stack, conductors: &[Conductor]) -> Ve
                 hi[2] = slab[1];
                 for axis in 0..2 {
                     for at in [c.lo[axis], c.hi[axis]] {
-                        face(&mut text, lo, hi, axis, at, &name, mirror);
+                        face(&mut text, lo, hi, axis, at, &name, mirror, panel);
                     }
                 }
                 put(
@@ -654,8 +669,8 @@ fn fastcap_stratified(tool: &Path, stack: Stack, conductors: &[Conductor]) -> Ve
                 .flat_map(|c| [c.lo[axis], c.hi[axis]])
                 .collect::<Vec<f64>>()
         };
-        let xs = window_lines(edges(0), xlo - margin, xhi + margin);
-        let ys = window_lines(edges(1), ylo - margin, yhi + margin);
+        let xs = window_lines(edges(0), xlo - margin, xhi + margin, panel);
+        let ys = window_lines(edges(1), ylo - margin, yhi + margin, panel);
         for (mirror, outer, inner) in [(1.0, above, below), (-1.0, below, above)] {
             let mut body = format!("0 interface {index} {mirror}\n");
             for x in xs.windows(2) {
@@ -712,13 +727,12 @@ fn fastcap_stratified(tool: &Path, stack: Stack, conductors: &[Conductor]) -> Ve
     grounded_matrix(&out, conductors, 1.0)
 }
 
-/// PEX-003: every entry of two stratified geometries within
-/// [`STRATIFIED`] of `FastCap`'s multi-dielectric solve: two coupled `m1`
+/// PEX-003: every entry of three stratified geometries within
+/// [`STRATIFIED`] of `FastCap`'s multi-dielectric solve: an 8 um `m1`
+/// plate (its reference cut at [`PLATE_PANEL_UM`]) and two coupled `m1`
 /// bars, the stack 7 up to `m1`'s top and 3.9 over it, and an `m1` bar
 /// under a crossing `m2` bar, 7 up to `m1`'s top, 3.9 to `m2`'s bottom and
-/// 5 over it (two interfaces). (An 8 um plate's 15 000 panels ran `FastCap`
-/// past its 20 minutes; the stratified plate is proved against its closed
-/// form in `pex.rs`.)
+/// 5 over it (two interfaces).
 /// Oracle: differential against `FastCap` 2.0, an independent
 /// multi-dielectric boundary-element solver given the same windows.
 #[test]
@@ -730,12 +744,22 @@ fn fastcap_differential_stratified_dielectrics() {
         v1: Row { k: v1, ..COARSE.v1 },
         m2: Row { k: m2, ..COARSE.m2 },
     };
-    let cases: Vec<(&str, Stack, Layout, Vec<&str>)> = vec![
+    let cases: Vec<(&str, Stack, Layout, Vec<&str>, f64)> = vec![
+        (
+            "plate",
+            with(7.0, 3.9, 3.9),
+            Layout::default()
+                .rect("m1", 0, 0, 8_000, 8_000)
+                .label("m1_label", 500, 500, "A"),
+            vec!["A"],
+            PLATE_PANEL_UM,
+        ),
         (
             "pair",
             with(7.0, 3.9, 3.9),
             parallel(Metal::M1, 3_000, 500, 500, 0),
             vec!["A", "B"],
+            PANEL_UM,
         ),
         (
             "crossing",
@@ -746,12 +770,13 @@ fn fastcap_differential_stratified_dielectrics() {
                 .label("m1_label", 250, 250, "A")
                 .label("m2_label", 2_000, 1_900, "B"),
             vec!["A", "B"],
+            PANEL_UM,
         ),
     ];
     let mut broken = Vec::new();
     let mut compared = 0;
-    for (name, stack, layout, labels) in cases {
-        let reference = fastcap_stratified(&tool, stack, &conductors(stack, &layout));
+    for (name, stack, layout, labels, panel) in cases {
+        let reference = fastcap_stratified(&tool, stack, &conductors(stack, &layout), panel);
         let ours = gpurify(stack, layout, &labels, None);
         for (i, (row, want)) in ours.iter().zip(&reference).enumerate() {
             for (j, (&got, &want)) in row.iter().zip(want).enumerate() {
@@ -769,6 +794,6 @@ fn fastcap_differential_stratified_dielectrics() {
             }
         }
     }
-    assert_eq!(compared, 8, "every entry compared");
+    assert_eq!(compared, 9, "every entry compared");
     assert!(broken.is_empty(), "{}", broken.join("\n"));
 }
