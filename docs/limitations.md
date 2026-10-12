@@ -317,7 +317,6 @@ says which foundry manual, standard or tool defines each one.
 | PEX-011 | Device-region (MEOL/FEOL) parasitics: gate-to-contact and gate-to-diffusion C, trench contact, via-location gate R | partial | Deck `pex_device "<model>" gate_contact_cap <c> gate_diffusion_cap <c>` (gpurify_extract::device_region): every MOS of that model gets (gate_contact + gate_diffusion)·W from its gate net to its source net and to its drain net. Values deck-supplied; no public deck states them (they come from the foundry's device cross-section). Not done: trench-contact resistance and the gate resistance a gate contact's position sets, which need a node inside the device; the exported netlists attach a device at its net's first node |
 | PEX-012 | Metal-fill treatment (floating or grounded fill, virtual fill) | partial | Deck `pex_fill <layer> floating\|grounded\|ignored` (gpurify_extract::fill): a net drawn only on that conductor is a fill piece; floating pieces are eliminated from the capacitive network by Kron reduction (series couplings, coupled pieces together), grounded ones turn couplings to ground, ignored ones are dropped; the fill nets leave the output. The treatment is deck-supplied; no public deck states one. Not done: virtual fill (fill a tool would insert), and fill in the field solve (a solved net's coupling to fill is the closed form's) |
 | PEX-013 | Substrate network extraction (substrate and well resistance and coupling) | missing | — |
-| PEX-014 | Route-level (gate-level) extraction from LEF/DEF | missing | Needs a DEF reader |
 | PEX-015 | 3D-IC extraction (TSV, micro-bump, interposer, TSV-TSV coupling) | missing | — |
 | PEX-016 | Point-to-point resistance and net-to-net coupling report between arbitrary points | partial | `pex --p2p NET:X,Y:X,Y…` reports the effective resistance between every two points on a net (gpurify::engine::p2p over erc::power::extract_points_into: each conducting shape a chain along its long axis, sheet × squares, each cut its layer's resistance, Kron reduction to the points), and `--coupling A:B` the total coupling between two nets. Not done: current spreading across a wide shape (the chain model's), and coupling between points rather than nets |
 
@@ -332,6 +331,6 @@ says which foundry manual, standard or tool defines each one.
 | FLOW-007 | Fill insertion (density-driven, timing-aware) | missing | DRC-073 checks fill; this generates it |
 | FLOW-008 | Incremental / ECO re-verification (changed regions or nets only) | missing | Metamorphic: an incremental run equals a full run |
 | FLOW-009 | Automated DRC-clean layout enhancement (via and power-grid insertion) | missing | — |
-| FLOW-010 | Clustering and triage of very large result sets | missing | — |
+| FLOW-010 | Clustering and triage of very large result sets | partial | `--cluster <µm>` (gpurify::engine::triage): single-linkage clusters (Sibson 1973) of each rule's violation markers at a reach, listed largest first with count and bounding box. Not done: Vision AI's other signatures (shape, context, root cause), whose definitions are not public |
 
 <!-- end of generated block -->

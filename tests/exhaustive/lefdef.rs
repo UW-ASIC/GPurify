@@ -64,7 +64,7 @@ fn ours(lef_text: &str, def_text: &str) -> BTreeMap<String, Boxes> {
             }
         }
         entry.0.sort();
-        entry.1.sort();
+        entry.1.sort_unstable();
     }
     out
 }
@@ -125,7 +125,7 @@ fn openroad_lefdef_differential_on_special_wiring() {
                     theirs.entry(net.to_owned()).or_default().0.push((
                         layer.to_owned(),
                         [number(a), number(b), number(c), number(d)],
-                    ))
+                    ));
                 }
                 ["V", net, a, b, c, d] => theirs.entry(net.to_owned()).or_default().1.push([
                     number(a),
@@ -138,7 +138,7 @@ fn openroad_lefdef_differential_on_special_wiring() {
         }
         for boxes in theirs.values_mut() {
             boxes.0.sort();
-            boxes.1.sort();
+            boxes.1.sort_unstable();
         }
         let ours = ours(&lef_text, &def_text);
         compared += ours.values().map(|b| b.0.len() + b.1.len()).sum::<usize>();

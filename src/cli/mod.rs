@@ -132,14 +132,7 @@ fn render(cli: &args::Cli, decks: &[(&str, DeckFn)]) -> Result<(Summary, String)
             format::write_violations(&outputs, &loaded.strings, loaded.grid, &mut text);
             format::write_summary(&summary, &mut text);
             if let Some(extracted) = &extracted {
-                reports(
-                    cli,
-                    &loaded,
-                    extracted,
-                    outputs.parasitics.as_ref(),
-                    &mut text,
-                )
-                .map_err(|why| {
+                reports(cli, &loaded, extracted, &outputs, &mut text).map_err(|why| {
                     eprintln!("error: {why}");
                     ExitCode::FAILURE
                 })?;
@@ -196,21 +189,46 @@ fn render(cli: &args::Cli, decks: &[(&str, DeckFn)]) -> Result<(Summary, String)
     Ok((summary, text))
 }
 
-/// The `--p2p` and `--coupling` reports, one line per pair (PEX-016).
+/// The `--p2p` and `--coupling` reports, one line per pair (PEX-016), and
+/// the `--cluster` list, one line per cluster (FLOW-010).
 fn reports(
     cli: &args::Cli,
     loaded: &crate::engine::Loaded,
     extracted: &crate::engine::Extracted,
-    network: Option<&gpurify_extract::ParasiticNetwork>,
+    outputs: &crate::engine::Outputs,
     text: &mut String,
 ) -> Result<(), String> {
     use std::fmt::Write as _;
+    let network = outputs.parasitics.as_ref();
     for (net, points) in &cli.p2p {
         for (i, j, ohms) in crate::engine::p2p::resistance(loaded, extracted, net, points)? {
             let ((xa, ya), (xb, yb)) = (points[i], points[j]);
             let _ = writeln!(
                 text,
                 "p2p {net} ({xa}, {ya}) um to ({xb}, {yb}) um: {ohms:.6} ohm"
+            );
+        }
+    }
+    if let Some(reach_um) = cli.cluster {
+        #[expect(clippy::cast_precision_loss, reason = "a resolution is a small count")]
+        let per_um = loaded.grid.dbu_per_um() as f64;
+        #[expect(clippy::cast_possible_truncation, reason = "a reach in database units")]
+        let reach = gpurify_geom::Dbu::new_unchecked((reach_um * per_um).round() as i64);
+        let um = |d: gpurify_geom::Dbu| {
+            #[expect(clippy::cast_precision_loss, reason = "a coordinate")]
+            let v = d.raw() as f64 / per_um;
+            v
+        };
+        for c in crate::engine::triage::cluster(&outputs.violations, reach) {
+            let _ = writeln!(
+                text,
+                "cluster {} {} violations within ({}, {})-({}, {}) um",
+                loaded.strings.resolve(c.rule),
+                c.rows.len(),
+                um(c.lo.x),
+                um(c.lo.y),
+                um(c.hi.x),
+                um(c.hi.y)
             );
         }
     }

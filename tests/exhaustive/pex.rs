@@ -2786,3 +2786,4 @@ const PLATE_RATIO: f64 = 2e-2;
 mod fastcap;
 mod fasthenry;
 mod magic;
+mod openrcx;
