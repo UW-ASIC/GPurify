@@ -74,6 +74,7 @@
 //! | `redundant_via(L; within: len) >= count` | `redundant_via` | [`drc::Rule::RedundantVia`] | a cut with too few neighbours | DRC-066, DRC-117 |
 //! | `min_cuts(cut, wide, other; width: len[, within: len]) >= count` | `minimum_cut` | [`drc::Rule::MinimumCut`] | a via on a wide wire with too few cuts | DRC-066 |
 //! | `via_stack(cut1, cut2, ..) <= count` | `via_stack` | [`drc::Rule::ViaStack`] | a stack of overlapping cuts too tall | DRC-065 |
+//! | `max_space(C[, A]) <= len` | `max_cut_spacing` | [`drc::Rule::MaxCutSpacing`] | a cut with no other cut's centre within the limit (`LEF58_MAXSPACING`) | DRC-034 |
 //! | `via_array_space(L; array: count) >= len` | `via_array_spacing` | [`drc::Rule::ViaArraySpacing`] | cuts in a large cluster too close | DRC-062 |
 //! | `space(L, center) >= len`, `adjacent_space(L[, center]; cuts: count, within: len) >= len` | `cut_spacing` | [`drc::Rule::CutSpacing`] | cut centres too close, or cuts with many close neighbours too close | DRC-061, DRC-062 |
 //! | `cut_class_space(L; short: [..], long: [..], space: [[..]])` | `cut_class_spacing` | [`drc::Rule::CutClassSpacing`] | two cuts closer than their cut-class cell | DRC-063, DRC-064 |

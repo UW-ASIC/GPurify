@@ -324,6 +324,7 @@ explains (kind 30).
 | 75 | via_redundancy | `via_redundancy(cut, lower, upper; pitch, space) >= r` | POINT | EXACT (scripted) | exact | new |
 | 76 | mean_critical_area | `critical_area(L; radii, weights) <= a` | POINT | EXACT (scripted) | exact (keys) | new |
 | 77 | min_step_adjacent | `min_step(L; adjacent \| between_eol ..) >= l` | — | NONE | reported as not mirrored | — |
+| 78 | max_cut_spacing | `max_space(C[, A]) <= l` | ROW | EXACT (scripted) | exact | — |
 
 51 kinds are EXACT (thirteen scripted over KLayout's polygons), 16 APPROX and nine NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
@@ -1376,6 +1377,21 @@ emit(id, O.enclosing(I, LIM, euclidian, transparent, without_touching_edges)) ; 
   orientation filter, which this repository has not run against the per-edge definition, so the
   comparison is the safe bracket until a run settles it. Key FIG by shape (inner); the
   measurement is not compared.
+
+### 69. max_cut_spacing — EXACT (scripted)
+
+**GPurify** (`via.rs` `max_cut_spacing`): each drawn cut of `C` needs a drawn cut of `A` (or of `C`),
+other than itself (a different box), whose box centre is at most the limit from its own, as
+OpenROAD's `getLonelyVias` reads `LEF58_MAXSPACING`; a lonely cut is one finding.
+
+**KLayout**
+
+```ruby
+max_cut_spacing(id, C.dup.raw, A.dup.raw, LIM)
+```
+
+- The prelude's `max_cut_spacing` sums each box's sides (twice the centre) and compares squared
+  distances against `(2·LIM)²`, exactly. Key ROW, the cut's box; the measurement is not compared.
 
 ### 61. via_stack — EXACT (scripted)
 

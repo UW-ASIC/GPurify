@@ -29,6 +29,92 @@ fn measured_pairs(store: &GeometryStore, layer: LayerId, radius: Dbu, s: &mut Sc
     pair_distances_into(store, &s.pairs, radius, &mut s.dists);
 }
 
+/// `LEF58_MAXSPACING` as `OpenROAD` reads it (DRC-034): every row of `cut`
+/// needs another cut (a row of `others`, or of `cut` when `None`, with a
+/// different box) whose box centre is at most `limit` from its own. One
+/// violation per lonely cut, at its centre. `examined` counts cuts.
+pub(crate) fn max_cut_spacing(
+    store: &GeometryStore,
+    rule: StrId,
+    (cut, others): (LayerId, Option<LayerId>),
+    limit: Dbu,
+    out: &mut Violations,
+) -> Verdict {
+    // Centres doubled, so a half-unit centre stays exact.
+    let doubled = |b: Bbox| ((b.xlo + b.xhi).raw(), (b.ylo + b.yhi).raw());
+    let mut near: Vec<((i64, i64), Bbox)> = store
+        .polys_on_layer(others.unwrap_or(cut))
+        .map(|row| {
+            let b = store.poly_bbox(PolyId(row));
+            (doubled(b), b)
+        })
+        .collect();
+    near.sort_unstable_by_key(|&((x, y), _)| (x, y));
+    let reach = 2 * i128::from(limit.raw());
+    let mut examined = 0u64;
+    for row in store.polys_on_layer(cut) {
+        examined += 1;
+        let b = store.poly_bbox(PolyId(row));
+        let (cx, cy) = doubled(b);
+        // ponytail: a scan of the centres within `limit` along x; quadratic
+        // only where many cuts share one column.
+        let from = near.partition_point(|&((x, _), _)| i128::from(x) < i128::from(cx) - reach);
+        let nearest2 = near[from..]
+            .iter()
+            .take_while(|&&((x, _), _)| i128::from(x) <= i128::from(cx) + reach)
+            .filter(|&&(_, other)| other != b)
+            .map(|&((x, y), _)| {
+                let (dx, dy) = (i128::from(x - cx), i128::from(y - cy));
+                dx * dx + dy * dy
+            })
+            .min();
+        if nearest2.is_some_and(|d2| d2 <= reach * reach) {
+            continue;
+        }
+        let nearest = near
+            .iter()
+            .filter(|&&(_, other)| other != b)
+            .map(|&((x, y), _)| {
+                let (dx, dy) = (i128::from(x - cx), i128::from(y - cy));
+                dx * dx + dy * dy
+            })
+            .min();
+        let (measured, limit) = match nearest {
+            // The doubled distance halved, rounded up.
+            Some(d2) => {
+                let d = isqrt_up(d2);
+                (
+                    Measurement::Length(Dbu::new_unchecked(
+                        i64::try_from((d + 1) / 2).expect("a distance inside the domain"),
+                    )),
+                    Measurement::Length(limit),
+                )
+            }
+            None => (Measurement::Count(0), Measurement::Count(1)),
+        };
+        out.push(Violation {
+            rule,
+            layer: cut,
+            severity: Severity::Error,
+            at: centre(b),
+            measured,
+            limit,
+            shapes: (PolyId(row), None),
+        });
+    }
+    (Outcome::Ran, examined)
+}
+
+/// The least integer whose square is at least `n`, for `n >= 0`.
+fn isqrt_up(n: i128) -> i128 {
+    let r = n.isqrt();
+    if r * r == n {
+        r
+    } else {
+        r + 1
+    }
+}
+
 /// Every cut needs `min_count` cuts (itself included) within `within`, nearest
 /// point to nearest point. One violation per under-served cut, at its centre.
 /// `examined` counts cuts.

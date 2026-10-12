@@ -877,6 +877,11 @@ pub(crate) const KINDS: &[Kind] = &[
         ],
     ),
     // LEF MAXVIASTACK over the cut layers listed, bottom to top:
+    // A cut with no other cut within the limit, centre to centre
+    // (`LEF58_MAXSPACING`): `max_space(via1) <= 2um`, or a cut class's cuts
+    // against the whole cut layer, `max_space(via1_class, via1) <= 2um`.
+    drc("max_space", Cmp::Le, "max_cut_spacing", &[0], LIMIT, &[]),
+    drc("max_space", Cmp::Le, "max_cut_spacing", &[0, 1], LIMIT, &[]),
     // `via_stack(via1, via2, via3) <= 2`.
     Kind {
         more: true,

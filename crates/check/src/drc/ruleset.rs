@@ -1100,6 +1100,46 @@ pub enum Rule {
         /// The tallest legal stack; at least 1.
         max_height: u16,
     },
+    /// A cut with no other cut within `limit` of it, centre to centre: a
+    /// maximum spacing between cuts.
+    ///
+    /// Deck: `max_space(C) <= len`, or `max_space(C, A) <= len`, kind
+    /// `max_cut_spacing`. Cuts are the rows of each layer, as drawn, each
+    /// read by its bounding box's centre. A cut of `cut` needs another cut
+    /// whose centre is at most `limit` from its own, Euclidean: a different
+    /// row of `cut` itself, or with `others` a cut of `others` whose box is
+    /// not its own (a cut-class layer `C` selected out of the whole cut
+    /// layer `A` finds itself there). `LEF58_MAXSPACING maxSpacing CUTCLASS
+    /// className` has no public LEF text; this is `OpenROAD`'s reading
+    /// (`FlexDR::fixMaxSpacing` and `getLonelyVias`, `FlexDR.cpp`): a via of
+    /// the class is "lonely", and repaired, when no other via cut on the
+    /// layer, of any class or net, has its centre within the spacing
+    /// (`KDTree` radius search, distance squared at most the spacing squared).
+    ///
+    /// One violation per lonely cut, on the `cut` layer at its centre:
+    /// `measured` the distance to the nearest other centre, rounded up (an
+    /// exceeded limit never reads as met), against `limit`, or `Count(0)`
+    /// against `Count(1)` when the layer has no other cut at all. `shapes.0`
+    /// is the cut's row. `examined` counts the cuts of `cut`. The layers are
+    /// not validated, so this rule never records `Refused`.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-034. Rules: `LEF58_MAXSPACING` (`OpenROAD` `MaxSpacingParser`,
+    /// cut layers only).
+    ///
+    /// Limits: `TritonRoute`'s detailed-routing checker (`FlexGC`) never
+    /// reports it; only the router's repair pass reads it, so `OpenROAD`'s
+    /// reading is the only public one. A maximum spacing between wires on a
+    /// routing layer is not this rule.
+    MaxCutSpacing {
+        /// The cuts held; findings are reported on it.
+        cut: LayerId,
+        /// The cuts that may be a neighbour; `None` for `cut` itself.
+        others: Option<LayerId>,
+        /// The furthest the nearest other centre may be, in grid units;
+        /// positive.
+        limit: Dbu,
+    },
     /// Cuts in a large array closer than `limit`.
     ///
     /// Deck: `via_array_space(L; array: count) >= len`, kind
@@ -3882,6 +3922,14 @@ impl RuleSet {
                         max_height: u16::try_from(max_height).expect("checked against the ceiling"),
                     }
                 }
+                "max_cut_spacing" => {
+                    let (cut, others) = bounded(spec)?;
+                    Rule::MaxCutSpacing {
+                        cut,
+                        others,
+                        limit: length(spec, "limit")?,
+                    }
+                }
                 "via_array_spacing" => {
                     let layer = one(spec)?;
                     // Zero is legal: it makes every cluster an array.
@@ -4840,6 +4888,9 @@ impl RuleSet {
                         s,
                         out,
                     ),
+                    Rule::MaxCutSpacing { cut, others, limit } => {
+                        via::max_cut_spacing(store, id, (cut, others), limit, out)
+                    }
                     Rule::ViaStack { stack, max_height } => {
                         via::via_stack(store, id, &self.stacks[stack as usize], max_height, out)
                     }
@@ -5280,7 +5331,8 @@ impl Rule {
             | Rule::EdgeSpacing { limit, .. }
             | Rule::EdgeEnclosure { limit, .. }
             | Rule::EdgeWidth { limit, .. }
-            | Rule::EdgeFacingSpace { limit, .. } => length(limit),
+            | Rule::EdgeFacingSpace { limit, .. }
+            | Rule::MaxCutSpacing { limit, .. } => length(limit),
             Rule::MinStep {
                 limit, length_sum, ..
             } => length(limit).and(length_sum.map_or(Ok(()), length)),
@@ -5593,6 +5645,7 @@ impl Rule {
             Rule::RedundantVia { .. } => "redundant_via",
             Rule::MinimumCut { .. } => "minimum_cut",
             Rule::ViaStack { .. } => "via_stack",
+            Rule::MaxCutSpacing { .. } => "max_cut_spacing",
             Rule::ViaArraySpacing { .. } => "via_array_spacing",
             Rule::CutSpacing { .. } => "cut_spacing",
             Rule::CutClassSpacing { .. } => "cut_class_spacing",
@@ -5765,6 +5818,7 @@ impl Rule {
             | Rule::PolygonValidity { layer } => [layer, None, None],
             // Raw rows, never validated: nothing to forget.
             Rule::OffGrid { .. } | Rule::ViaStack { .. } => [None, None, None],
+            Rule::MaxCutSpacing { cut, others, .. } => [Some(cut), others, None],
         }
     }
 }

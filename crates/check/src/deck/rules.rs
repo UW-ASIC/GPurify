@@ -572,6 +572,9 @@ kinds! {
     /// [`Rule::ViaStack`](crate::drc::Rule::ViaStack):
     /// `via_stack(cuts..) <= max_height`, the cut layers bottom to top.
     via_stack(cuts: many) [] { max_height: u32 = "max_height" }
+    /// [`Rule::MaxCutSpacing`](crate::drc::Rule::MaxCutSpacing):
+    /// `max_space(cut[, others]) <= limit`.
+    max_cut_spacing(cut: one, others: opt) [] { limit: Dbu = "limit" }
     /// [`Rule::ViaArraySpacing`](crate::drc::Rule::ViaArraySpacing):
     /// `via_array_space(layer; array: array_threshold) >= limit`.
     via_array_spacing(layer: one) [] { array_threshold: u32 = "array_threshold", limit: Dbu = "limit" }
