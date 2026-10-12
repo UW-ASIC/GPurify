@@ -875,6 +875,11 @@ nets the same way (`--quasistatic` too), and SPEF writes each value as the
 nominal, the nominal, and the largest. DSPF, which has no triplets, is the
 nominal stack's.
 
+Every corner is at the deck's one `temperature`. A corner's `sheet`, like a
+row's, is the value at the nominal temperature, and is read at the operating
+one by the corner line's `tc1` and `tc2` if it gives them (both, or
+neither), else by the row's.
+
 ### Extraction type
 
 ```
