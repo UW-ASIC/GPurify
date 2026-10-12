@@ -678,7 +678,7 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 let name = fig(layer, &mut reads);
                 writeln!(
                     body,
-                    "emit({q}, {}.width({}, euclidian, shielded))",
+                    "emit({q}, {}.width({}, euclidian, shielded, angle_limit(1)))",
                     var(layer),
                     lim(limit)
                 )
@@ -728,7 +728,7 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 let name = fig(layer, &mut reads);
                 writeln!(
                     body,
-                    "emit({q}, {}.notch({}, projection))",
+                    "emit({q}, {}.notch({}, projection, angle_limit(1)))",
                     var(layer),
                     lim(limit)
                 )

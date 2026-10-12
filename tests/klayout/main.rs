@@ -473,7 +473,7 @@ rule a area(met1) >= 30000nm2
 rule ha hole_area(met1) >= 30000nm2
 rule f forbidden(met2.with_area(< 20000nm2))
 rule ba area(both) >= 10000nm2
-rule cw width(cut) >= 100nm
+rule cn notch(cut) >= 100nm
 rule as space(all) >= 100nm
 rule ang angle(; allowed: [0deg, 45deg, 90deg, 135deg])
 ";

@@ -215,10 +215,17 @@ Three differences are documented, not defects, and the deck and lattice keep the
   (`docs/deck.md`), which moves a diagonal edge `d·√2`; KLayout moves it `d`. The deck has no
   `sized` layer.
 - **A chamfer's end and the far side.** KLayout's Euclidean `width` at its default
-  `ignore_angle` pairs two edges at 135 degrees, such as a chamfer and the opposite side;
-  GPurify's width is facing edges, necks and acute tips only (`width::narrowest_pair2`). The
-  mirror passes `shielded`, under which the material between them shields such a pair; a
-  remaining difference would show here as a disagreement.
+  `angle_limit` (90) pairs two edges at 135 degrees, such as a chamfer and the opposite side,
+  and its `notch` pairs the two edges of a 225-degree inside corner at distance 0; GPurify's
+  width is antiparallel facing edges, necks and acute tips (`width::narrowest_pair2`), and its
+  notch antiparallel facing edges. The first octilinear run showed both (1265 width, 128
+  notch rows), so the mirror's `width` and `notch` pass `angle_limit(1)`: only antiparallel
+  pairs, which on rectilinear layouts is every pair the default took (no two edges there meet
+  at an angle under 90 degrees but parallel ones). An acute tip, which only a pair at 45
+  degrees finds, is then outside the mirror: the random shapes have none, the deck measures no
+  boolean that could make one, and `tests/drc_octilinear.rs` holds tips by hand.
+- **Edge length** is compared as the Euclidean length, floored (a 45-degree edge `k` steps
+  long is `k·√2`); the harness read `|dx| + |dy|` before, which a 45-degree edge exceeds.
 
 ## (b) Per kind
 
@@ -323,7 +330,7 @@ The counts were measured on 990376b (after B20 and B24), with the translator rec
 **KLayout**
 
 ```ruby
-emit(id, L.width(LIM, euclidian, shielded))
+emit(id, L.width(LIM, euclidian, shielded, angle_limit(1)))
 ```
 
 - Euclidean width covers both GPurify measures. (v T4: two 100-DBU squares offset by 70 give a
@@ -390,7 +397,7 @@ narrowest notch.
 **KLayout**
 
 ```ruby
-emit(id, L.notch(LIM, projection))
+emit(id, L.notch(LIM, projection, angle_limit(1)))
 ```
 
 - Key FIG by shape: the marker lies in the void, so it is in no figure.
