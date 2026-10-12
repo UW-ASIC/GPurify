@@ -321,10 +321,14 @@ impl CompiledDeck {
                 wide,
                 other,
                 width,
+                thin,
                 within,
                 min_count,
             } => {
                 let mut row = Row::new(rule.kind(), &[cut, wide, other]).length("width", width);
+                if let Some((length, distance)) = thin {
+                    row = row.length("length", length).length("distance", distance);
+                }
                 if let Some(within) = within {
                     row = row.length("within", within);
                 }

@@ -1040,6 +1040,20 @@ pub enum Rule {
     /// part of `wide` wider than `width`: where a `width + 1` square fits,
     /// strictly wider, as LEF says.
     ///
+    /// With `length: len, distance: len` the rule holds the thin wires
+    /// instead, LEF `MINIMUMCUT ... LENGTH length WITHIN distance`: it
+    /// "applies for thin wires directly connected to wide wires, if the wide
+    /// wire has a width that is greater than width and a length that is
+    /// greater than length, and the vias on the thin wire are less than
+    /// distance from the wide wire ... and does not check the wide wire
+    /// itself" (LEF/DEF 5.8, Example 1-14, Minimum Cut Rule Example 4 and
+    /// Figure 1-11). A wide wire is a connected region of the wide part, and
+    /// its length the longer side of its bounding box (the side of LEF's
+    /// figure); a via is held when none of its cuts overlaps the wide part,
+    /// its `wide` figure is the wide wire's (directly connected), and one of
+    /// its cuts is less than `distance` from that wire, box to region,
+    /// Euclidean.
+    ///
     /// One violation per cut of a held via with too few cuts, at the cut's
     /// centre, `measured` the via's cut count. `examined` counts the held
     /// vias. Records [`Outcome::Refused`] when `wide` or `other` fails
@@ -1051,8 +1065,12 @@ pub enum Rule {
     /// cannot exist under the thick (3um thick) metal", is `width: 1nm` with
     /// `>= 2` on the thick metal.
     ///
-    /// Limits: the `LENGTH length WITHIN distance` form (thin wires near a
-    /// wide one) and `LEF58_MINIMUMCUT`'s cut classes and `AREA` are missing.
+    /// `LEF58_MINIMUMCUT`'s `CUTCLASS className numCuts` is this rule on a
+    /// layer of that class's cuts (`v.squares()`, `v.with_bbox_max(..)`).
+    ///
+    /// Limits: `LEF58_MINIMUMCUT`'s `AREA`, `SAMEMETALOVERLAP` and
+    /// `FULLYENCLOSED` have no public definition (absent from the LEF 5.8
+    /// text; `TritonRoute` skips them), so they are missing.
     MinimumCut {
         /// The cut layer.
         cut: LayerId,
@@ -1063,6 +1081,10 @@ pub enum Rule {
         /// The wire width, in grid units, strictly above which the rule
         /// holds a via; positive.
         width: Dbu,
+        /// `LENGTH length WITHIN distance`: the wide wire's length must exceed
+        /// the first, and a held via on a thin wire lie closer than the
+        /// second, in grid units; `None` holds the vias on the wide part.
+        thin: Option<(Dbu, Dbu)>,
         /// How close, in grid units, cuts must be to count together; `None`
         /// counts every cut of a via.
         within: Option<Dbu>,
@@ -3915,11 +3937,16 @@ impl RuleSet {
                         None => None,
                     };
                     let min_count = count(spec, "min_count", u16::MAX.into())?;
+                    let thin = match optional(spec, "length") {
+                        Some(_) => Some((length(spec, "length")?, length(spec, "distance")?)),
+                        None => None,
+                    };
                     Rule::MinimumCut {
                         cut: layer(spec, 0),
                         wide: layer(spec, 1),
                         other: layer(spec, 2),
                         width,
+                        thin,
                         within,
                         min_count: u16::try_from(min_count).expect("checked against the ceiling"),
                     }
@@ -4900,13 +4927,14 @@ impl RuleSet {
                         wide,
                         other,
                         width,
+                        thin,
                         within,
                         min_count,
                     } => via::minimum_cut(
                         store,
                         id,
                         (cut, wide, other),
-                        (width, within),
+                        (width, thin, within),
                         min_count,
                         s,
                         out,
@@ -5463,10 +5491,12 @@ impl Rule {
             Rule::CriticalArea { radius, limit, .. } => length(radius).and(area(limit)),
             Rule::MinimumCut {
                 width,
+                thin,
                 within,
                 min_count,
                 ..
             } => length(width)
+                .and(thin.map_or(Ok(()), |(l, d)| length(l).and(length(d))))
                 .and(within.map_or(Ok(()), length))
                 .and(count(min_count.into())),
             Rule::ViaStack { max_height, .. } => count(max_height.into()),

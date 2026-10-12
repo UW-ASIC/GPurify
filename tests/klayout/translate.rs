@@ -332,9 +332,26 @@ end
 # groups closer than `within` (nil: one group); a group with a cut on the part
 # of `wide` where a square T + 1 fits (x2) and fewer than `n` cuts reports
 # every cut, with the count.
-def minimum_cut(rule, cuts, wide, other, t, n, within)
+# With `thin` ([length, distance], doubled), LEF's LENGTH WITHIN: a via on
+# no wide part, on the figure of a wide region whose box's longer side
+# exceeds `length`, with a cut box closer than `distance` to that region.
+def minimum_cut(rule, cuts, wide, other, t, n, within, thin = nil)
   part = wide.data.merged.sized(-t).sized(t)
   wf = wide.data.merged.each.to_a
+  long = thin.nil? ? [] : part.merged.each.select { |p| [p.bbox.width, p.bbox.height].max > thin[0] }
+  gap2 = lambda do |a, b|
+    dx = [b.left - a.right, a.left - b.right, 0].max
+    dy = [b.bottom - a.top, a.bottom - b.top, 0].max
+    dx * dx + dy * dy
+  end
+  near = lambda do |c, w|
+    long.any? do |g|
+      next false if (RBA::Region.new(g) & RBA::Region.new(wf[w])).is_empty?
+      d2 = g.each_edge.map { |e| gap2.(c.bbox, e.bbox) }.min
+      d2 = 0 unless (RBA::Region.new(g) & RBA::Region.new(c.bbox)).is_empty?
+      d2 < thin[1] * thin[1]
+    end
+  end
   of = other.data.merged.each.to_a
   first = lambda { |figs, c| figs.index { |f| !(RBA::Region.new(f) & RBA::Region.new(c)).is_empty? } }
   vias = Hash.new { |h, k| h[k] = [] }
@@ -342,7 +359,7 @@ def minimum_cut(rule, cuts, wide, other, t, n, within)
     w = first.(wf, c)
     vias[[w, first.(of, c)]] << c unless w.nil?
   end
-  vias.each_value do |cs|
+  vias.each do |key, cs|
     group = (0...cs.size).to_a
     root = lambda { |i| group[i] == i ? i : (group[i] = root.(group[i])) }
     cs.each_index do |i|
@@ -354,7 +371,8 @@ def minimum_cut(rule, cuts, wide, other, t, n, within)
       end
     end
     cs.each_index.group_by { |i| root.(i) }.each_value do |members|
-      held = members.any? { |i| !(part & RBA::Region.new(cs[i])).is_empty? }
+      on = members.any? { |i| !(part & RBA::Region.new(cs[i])).is_empty? }
+      held = thin.nil? ? on : (!on && members.any? { |i| near.(cs[i], key[0]) })
       next if !held || members.size >= n
       members.each { |i| put({ rule: rule }.merge(poly(cs[i])).merge({ v: members.size })) }
     end
@@ -1534,6 +1552,7 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 wide,
                 other,
                 width,
+                thin,
                 within,
                 min_count,
             } => {
@@ -1542,14 +1561,15 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 layers.reads(other, &mut reads);
                 writeln!(
                     body,
-                    "minimum_cut({q}, {}.dup.raw, {}, {}, {}, {min_count}, {})",
+                    "minimum_cut({q}, {}.dup.raw, {}, {}, {}, {min_count}, {}, {})",
                     var(cut),
                     var(wide),
                     var(other),
                     // A `width + 1` square fits where sizing by `width`
                     // at x2 leaves material.
                     width.raw(),
-                    within.map_or("nil".to_owned(), |w| lim(w).to_string())
+                    within.map_or("nil".to_owned(), |w| lim(w).to_string()),
+                    thin.map_or("nil".to_owned(), |(l, d)| format!("[{}, {}]", lim(l), lim(d)))
                 )
                 .expect("a String");
                 exact("minimum_cut", Key::Row(None), Value::Count)

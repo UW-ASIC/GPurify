@@ -88,6 +88,7 @@ rule en.max enclosure(v, m) <= 95nm
 rule bend bend(m, r)
 rule corner covers_corner(m, r)
 rule mc min_cuts(v, m2, m; width: 1000nm, within: 300nm) >= 2
+rule mc.thin min_cuts(v, m2, m; width: 1000nm, length: 20000nm, distance: 5000nm) >= 2
 rule mc.any min_cuts(v, m, m2; width: 500nm) >= 3
 rule stack via_stack(v, v2) <= 2
 rule cs.center space(v, center) >= 250nm
@@ -343,6 +344,10 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     d.rule("bend", gate_corner(m, r, false));
     d.rule("corner", gate_corner(m, r, true));
     d.rule("mc", minimum_cut(v, m2, m, nm(1000), Some(nm(300)), 2));
+    d.rule(
+        "mc.thin",
+        minimum_cut(v, m2, m, nm(1000), None, 2).thin_wires(nm(20_000), nm(5000)),
+    );
     d.rule("mc.any", minimum_cut(v, m, m2, nm(500), None, 3));
     d.rule("stack", via_stack(&[v, v2], 2));
     d.rule("cs.center", cut_spacing(v, true, None, nm(250)));

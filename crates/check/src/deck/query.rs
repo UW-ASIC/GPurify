@@ -356,7 +356,8 @@ impl CompiledDeck {
     /// The fewest cuts on `cut` a via needs where it lands on a `wide` wire
     /// `wire_width` wide: the largest [`Rule::MinimumCut`] count among the
     /// rules whose `width` the wire is strictly wider than, whatever their
-    /// far-side metal. `None` when none holds it.
+    /// far-side metal; a `LENGTH WITHIN` rule holds the thin wires beside
+    /// it, not the wire, and is not counted. `None` when none holds it.
     pub fn minimum_cuts(&self, cut: LayerId, wide: LayerId, wire_width: Dbu) -> Option<u16> {
         self.drc_on(cut)
             .filter_map(|(_, rule)| match *rule {
@@ -364,6 +365,7 @@ impl CompiledDeck {
                     cut: c,
                     wide: w,
                     width,
+                    thin: None,
                     min_count,
                     ..
                 } if (c, w) == (cut, wide) && wire_width > width => Some(min_count),

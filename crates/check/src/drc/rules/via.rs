@@ -5,7 +5,7 @@
 //! an array cluster or around a cut with many neighbours.
 
 use super::spacing::whole_at;
-use super::width::wide_rects_into;
+use super::width::{rects_layer, wide_rects_into};
 use super::{
     bbox_gap2, centre, join_nested, label_pairs_into, merged, pair_distances_into, SortedRects,
     Verdict, REFUSED,
@@ -13,7 +13,7 @@ use super::{
 use crate::drc::ruleset::CutAreaBands;
 use crate::drc::{CutClassTable, Scratch};
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
-use gpurify_geom::boolean::{intersection_into, BooleanError};
+use gpurify_geom::boolean::{BooleanError, intersection_into, union_into};
 use gpurify_geom::connectivity::components_into;
 use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, Point};
@@ -402,12 +402,16 @@ fn figure_rects(figures: &ValidatedLayer) -> SortedRects<u32> {
 /// LEF `MINIMUMCUT`: every via held by the wide part of `wide` (where a
 /// `width + 1` square fits) needs `min_count` cuts, a via being the cuts that
 /// join one `wide` figure to one `other` figure, split by `within` when given.
-/// One violation per cut of a short via. `examined` counts held vias.
+/// With `thin` (`LENGTH length WITHIN distance`), the vias held are instead
+/// those on no wide part, on a wide wire's own figure, closer than
+/// `distance` to that wire, whose wide region's longer box side exceeds
+/// `length`. One violation per cut of a short via. `examined` counts held
+/// vias.
 pub(crate) fn minimum_cut(
     store: &GeometryStore,
     rule: StrId,
     (cut, wide, other): (LayerId, LayerId, LayerId),
-    (width, within): (Dbu, Option<Dbu>),
+    (width, thin, within): (Dbu, Option<(Dbu, Dbu)>, Option<Dbu>),
     min_count: u16,
     s: &mut Scratch,
     out: &mut Violations,
@@ -422,8 +426,32 @@ pub(crate) fn minimum_cut(
     if wide_rects_into(drawn, width + Dbu::new_unchecked(1), &mut part).is_err() {
         return REFUSED;
     }
-    let part = SortedRects::new(part.into_iter().map(|r| (r, ())).collect());
     let (on_wide, on_other) = (figure_rects(&wide_figures), figure_rects(&other_figures));
+    // The wide wires LENGTH holds: regions of the wide part longer than
+    // `length`, each rectangle labelled with its `wide` figure.
+    let mut long = Vec::new();
+    if let Some((length, _)) = thin {
+        let mut regions = ValidatedLayer::default();
+        let built = rects_layer(&part)
+            .and_then(|r| union_into(&r, &ValidatedLayer::default(), &mut regions));
+        if built.is_err() {
+            return REFUSED;
+        }
+        let (mut rects, mut start) = (Vec::new(), Vec::new());
+        decompose_into(&regions, &mut rects, &mut start);
+        for (idx, span) in (0u32..).zip(start.windows(2)) {
+            let b = regions.get(idx).bbox();
+            if b.width().max(b.height()) <= length {
+                continue;
+            }
+            let pieces = &rects[span[0] as usize..span[1] as usize];
+            let Some((_, figure)) = on_wide.overlapping(pieces[0]).next() else {
+                continue;
+            };
+            long.extend(pieces.iter().map(|&r| (r, figure)));
+        }
+    }
+    let part = SortedRects::new(part.into_iter().map(|r| (r, ())).collect());
     // Each cut on a wide figure, keyed by the figures it joins.
     let mut keyed: Vec<((u32, Option<u32>), PolyId)> = store
         .polys_on_layer(cut)
@@ -464,9 +492,23 @@ pub(crate) fn minimum_cut(
             .collect();
         groups.sort_unstable();
         for group in groups.chunk_by(|p, q| p.0 == q.0) {
-            let held = group
-                .iter()
-                .any(|&(_, row)| part.overlapping(store.poly_bbox(row)).next().is_some());
+            let on_part =
+                |&(_, row): &(u32, PolyId)| part.overlapping(store.poly_bbox(row)).next().is_some();
+            let held = match thin {
+                None => group.iter().any(on_part),
+                // A thin wire's via: on no wide part, near a long wide wire
+                // of its own figure.
+                Some((_, distance)) => {
+                    let figure = via[0].0 .0;
+                    let reach = distance.mul_wide(distance);
+                    !group.iter().any(on_part)
+                        && group.iter().any(|&(_, row)| {
+                            let b = store.poly_bbox(row);
+                            long.iter()
+                                .any(|&(r, f)| f == figure && bbox_gap2(b, r) < reach)
+                        })
+                }
+            };
             if !held {
                 continue;
             }

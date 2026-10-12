@@ -1320,8 +1320,12 @@ raw cuts by the merged figures they overlap, with the wide part `W.merged.sized(
 (kind 11's wide part for `w + 1`):
 
 ```ruby
-minimum_cut(id, C.dup.raw, W, O, w, N, D2 or nil)   # one polygon per reported cut, v = its count
+minimum_cut(id, C.dup.raw, W, O, w, N, D2 or nil, [L2, DIST2] or nil)   # one polygon per reported cut, v = its count
 ```
+
+- With `length` and `distance` (LEF `LENGTH WITHIN`) the prelude keeps the wide part's merged
+  regions whose box's longer side exceeds `L2` and holds a via on no wide part, on such a
+  region's figure, with a cut box closer than `DIST2` to the region's edges (0 when they touch).
 
 - Key ROW, the cut's box; the count is compared exactly. A cut that bridges two figures of one
   layer is grouped by a figure each tool picks in its own order, so the random deck carries no
