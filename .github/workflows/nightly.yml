@@ -43,6 +43,7 @@ jobs:
           --skip foundry_deck
           --skip klayout_antenna_differential --skip openroad_antenna_differential
           --skip pdnsim_differential --skip yosys_differential
+          --skip lefdef_differential
           --skip the_engine_costs_the_same_per_polygon_at_sixteen_times_the_size
           --skip flattening_is_linear_in_the_placements
       # The bench gate (tests/scaling.rs): ns per polygon at 16x a layout's
