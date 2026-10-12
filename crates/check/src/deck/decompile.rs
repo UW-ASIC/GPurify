@@ -887,6 +887,18 @@ impl CompiledDeck {
                     row = row.number(name, value);
                 }
             }
+            if let Some(width) = t.min_width[r] {
+                row = row.length("min_width", width);
+            }
+            file(&t.head, r, row);
+        }
+        let t = &erc.esd_clamp_resistance;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("esd_clamp_resistance", &[t.pad[r]])
+                .number("max_resistance", t.max_resistance[r].raw());
+            for &id in &t.clamp[span(&t.clamp_start, r)] {
+                row.params.push(("clamp", model(id)));
+            }
             file(&t.head, r, row);
         }
         let t = &erc.forward_diode;

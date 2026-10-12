@@ -735,6 +735,13 @@ kinds! {
         max_density: Option<f64> = "max_density",
         max_current_per_cut: Option<f64> = "max_current_per_cut",
         max_voltage: Option<f64> = "max_voltage",
+        min_width: Option<Dbu> = "min_width",
+    }
+    /// [`EsdClampResistanceTable`](crate::erc::rules::esd::EsdClampResistanceTable):
+    /// `esd_clamp_resistance(pad; clamps, max_resistance)`, in ohms.
+    esd_clamp_resistance(pad: one) [] {
+        clamps: &[&str] = "clamp",
+        max_resistance: f64 = "max_resistance",
     }
     /// [`EsdTopologicalTable`](crate::erc::rules::supply::EsdTopologicalTable):
     /// `esd_topological(pad; clamps)`.

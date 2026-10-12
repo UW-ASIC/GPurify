@@ -96,6 +96,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(esd_path());
     out.extend(esd_clamp_size());
     out.extend(esd_interconnect());
+    out.extend(esd_layout_rules());
     out.extend(esd_window());
     out.extend(ring_injection());
     out.extend(ground_coupling());
@@ -5133,12 +5134,13 @@ fn esd_wiring() -> Vec<Fixture> {
 }
 
 /// The limits an `esd_path` row states, each `none` unless a fixture sets it.
-const ESD_LIMITS: [&str; 5] = [
+const ESD_LIMITS: [&str; 6] = [
     "max_resistance",
     "clamp_it2",
     "max_density",
     "max_current_per_cut",
     "max_voltage",
+    "min_width",
 ];
 
 /// A deck of [`ESD_PROCESS`] with one `esd_path` row `ep`, 1.33 A forced, each
@@ -5234,7 +5236,7 @@ fn esd_path() -> Vec<Fixture> {
                 };
                 let mut f = Fixture::new(
                     &format!("erc/esd_path/{name}/{k}/{}", side(limit, value)),
-                    &["ERC-C6", "ERC-C14"],
+                    &["ERC-C6"],
                     &esd_path_deck(&[("max_resistance", format!("{limit}ohm"))]),
                     ERC,
                 )
@@ -5347,7 +5349,7 @@ fn esd_interconnect() -> Vec<Fixture> {
             };
             let mut f = Fixture::new(
                 &format!("erc/esd_path/max_density/{k}/{}", side(density, per_um)),
-                &["ERC-C7", "ERC-C14"],
+                &["ERC-C7"],
                 &esd_path_deck(&[("max_density", format!("{density}A/m"))]),
                 ERC,
             )
@@ -5389,6 +5391,84 @@ fn esd_interconnect() -> Vec<Fixture> {
         ));
         f.intent = Some(esd_intent());
         out.push(f);
+    }
+    out
+}
+
+/// The ESD layout rules on recognised devices (ERC-C14), hand-derived on
+/// [`esd_layout`]'s strips, limits deck-supplied:
+///
+/// - `esd_clamp_resistance`: a unit current from the pad, tapped at its
+///   strip's centre (10 µm), to each `down` clamp's attach point on the pad
+///   strip: `0.0625 Ω/sq × |x − 10 µm| / 1 µm`, 0.5 Ω for a clamp at 2 µm
+///   and 0.25 Ω at 14 µm, swept either side; a clamp of an unlisted model
+///   is not measured.
+/// - `esd_path`'s `min_width`: 1.33 A from the pad through the clamp at
+///   2 µm to VSS's feed point at its centre crosses the pad strip and the
+///   VSS strip between 2 and 10 µm; with both 1 µm wide a limit of 1001 nm
+///   flags both, 1000 nm (strict) and 999 nm neither, and with the pad strip
+///   2 µm wide a 1500 nm limit flags only VSS. The strips' dead ends past
+///   the taps carry no current and are never flagged.
+fn esd_layout_rules() -> Vec<Fixture> {
+    let mut out = Vec::new();
+    let clamp_deck = |limit: f64| {
+        format!(
+            "{ESD_PROCESS}rule cr esd_clamp_resistance(pad; clamps: [\"down\"], max_resistance: {limit}ohm)\n"
+        )
+    };
+    for (name, diodes, values) in [
+        ("one", vec![(Diode::Down, 2000)], vec![0.5]),
+        (
+            "two",
+            vec![(Diode::Down, 2000), (Diode::Down, 14_000)],
+            vec![0.5, 0.25],
+        ),
+        (
+            "unlisted",
+            vec![(Diode::Down, 14_000), (Diode::Up, 2000)],
+            vec![0.25],
+        ),
+    ] {
+        let layout = esd_layout([1000; 3], &diodes);
+        let mut limits = Vec::new();
+        for &v in &values {
+            limits.extend(sweep(v));
+        }
+        for limit in limits {
+            let f = Fixture::new(
+                &format!("erc/esd_clamp_resistance/{name}/{limit}"),
+                &["ERC-C14"],
+                &clamp_deck(limit),
+                ERC,
+            )
+            .layout(layout.clone())
+            .expect(Expect::rule(
+                "cr",
+                values
+                    .iter()
+                    .filter(|&&v| v > limit)
+                    .map(|&v| ohms(v))
+                    .collect(),
+            ));
+            out.extend(every_placement(&[f]));
+        }
+    }
+    for (name, widths, min_width, flagged) in [
+        ("below", [1000, 1000, 1000], 999, 0),
+        ("at", [1000, 1000, 1000], 1000, 0),
+        ("above", [1000, 1000, 1000], 1001, 2),
+        ("wide_pad", [2000, 1000, 1000], 1500, 1),
+    ] {
+        let mut f = Fixture::new(
+            &format!("erc/esd_path/min_width/{name}"),
+            &["ERC-C14"],
+            &esd_path_deck(&[("min_width", format!("{min_width}nm"))]),
+            ERC,
+        )
+        .layout(esd_layout(widths, &[(Diode::Down, 2000)]))
+        .expect(Expect::rule("ep", vec![length(1000); flagged]));
+        f.intent = Some(esd_intent());
+        out.extend(every_placement(&[f]));
     }
     out
 }
@@ -6486,7 +6566,7 @@ fn ring_injection() -> Vec<Fixture> {
         format!(
             "{ESD_PROCESS}rule ring esd_path(pad, met1; clamps: none, current: 100mA, \
              clamp_resistance: 1ohm, {limits}, clamp_it2: none, max_current_per_cut: none, \
-             max_voltage: none)\n"
+             max_voltage: none, min_width: none)\n"
         )
     };
     let pinned = {

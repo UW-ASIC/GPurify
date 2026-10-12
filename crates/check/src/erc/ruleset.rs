@@ -1,4 +1,4 @@
-//! The fifty tables, the deck parser that fills them, and the dispatcher.
+//! The fifty-one tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
@@ -112,6 +112,8 @@ pub struct RuleSet {
 
     /// `esd_path` rows: [`esd::EsdPathTable`].
     pub esd_path: esd::EsdPathTable,
+    /// `esd_clamp_resistance` rows: [`esd::EsdClampResistanceTable`].
+    pub esd_clamp_resistance: esd::EsdClampResistanceTable,
     /// `esd_ground_coupling` rows: [`esd::EsdGroundCouplingTable`].
     pub esd_ground_coupling: esd::EsdGroundCouplingTable,
     /// `esd_cross_domain` rows: [`esd::EsdCrossDomainTable`].
@@ -805,6 +807,7 @@ impl RuleSet {
                     let max_density = row.opt_number("max_density")?.map(Qty::new);
                     let per_cut = row.opt_number("max_current_per_cut")?.map(Qty::new);
                     let max_voltage = row.opt_number("max_voltage")?.map(Qty::new);
+                    let min_width = row.opt_length("min_width")?;
                     let table = &mut set.esd_path;
                     row.head(&mut table.head)?;
                     table.pad.push(layers[0]);
@@ -820,6 +823,18 @@ impl RuleSet {
                     table.max_density.push(max_density);
                     table.max_current_per_cut.push(per_cut);
                     table.max_voltage.push(max_voltage);
+                    table.min_width.push(min_width);
+                }
+                "esd_clamp_resistance" => {
+                    let layers = row.layers(1)?;
+                    let clamps = row.models("clamp")?;
+                    let max_resistance = Qty::new(row.number("max_resistance")?);
+                    let table = &mut set.esd_clamp_resistance;
+                    row.head(&mut table.head)?;
+                    table.pad.push(layers[0]);
+                    table.clamp.extend(clamps);
+                    close_csr(&mut table.clamp_start, table.clamp.len());
+                    table.max_resistance.push(max_resistance);
                 }
                 "forward_diode" => {
                     let layers = row.layers(1)?;
@@ -1246,6 +1261,7 @@ impl RuleSet {
             "esd_latchup" => &self.esd_latchup.head,
             "esd_topological" => &self.esd_topological.head,
             "esd_path" => &self.esd_path.head,
+            "esd_clamp_resistance" => &self.esd_clamp_resistance.head,
             "esd_ground_coupling" => &self.esd_ground_coupling.head,
             "esd_cross_domain" => &self.esd_cross_domain.head,
             "esd_parasitic" => &self.esd_parasitic.head,
@@ -1420,6 +1436,13 @@ impl RuleSet {
                     return Err(c.missing("clamp"));
                 }
             }
+            "esd_clamp_resistance" => {
+                let t = &self.esd_clamp_resistance;
+                if span(&t.clamp_start).is_empty() {
+                    return Err(c.missing("clamp"));
+                }
+                c.positive("max_resistance", t.max_resistance[r].raw())?;
+            }
             "esd_topological" if span(&self.esd_topological.clamp_start).is_empty() => {
                 return Err(c.missing("clamp"));
             }
@@ -1442,8 +1465,11 @@ impl RuleSet {
                         c.positive(param, value)?;
                     }
                 }
+                if let Some(width) = t.min_width[r] {
+                    c.length("min_width", width)?;
+                }
                 // A row bounding nothing would report clean forever.
-                if limits.iter().all(|(_, limit)| limit.is_none()) {
+                if limits.iter().all(|(_, limit)| limit.is_none()) && t.min_width[r].is_none() {
                     return Err(c.missing("max_resistance"));
                 }
             }
@@ -1634,6 +1660,7 @@ impl RuleSet {
             &self.missing_isolation.head,
             &self.dielectric_field.head,
             &self.esd_path.head,
+            &self.esd_clamp_resistance.head,
             &self.esd_ground_coupling.head,
             &self.esd_cross_domain.head,
             &self.esd_parasitic.head,
@@ -1781,6 +1808,14 @@ impl RuleSet {
         reliability::check_esd_latchup(design, intent, &self.esd_latchup, scratch, out, runs);
 
         esd::check_esd_path(design, intent, process, &self.esd_path, scratch, out, runs);
+        esd::check_esd_clamp_resistance(
+            design,
+            process,
+            &self.esd_clamp_resistance,
+            scratch,
+            out,
+            runs,
+        );
         esd::check_esd_ground_coupling(design, intent, &self.esd_ground_coupling, out, runs);
         esd::check_esd_cross_domain(design, intent, voltage, &self.esd_cross_domain, out, runs);
         esd::check_esd_parasitic(design, &self.esd_parasitic, out, runs);

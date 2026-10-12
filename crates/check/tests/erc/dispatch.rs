@@ -322,6 +322,14 @@ fn every_kind() -> RuleSet {
             max_density: vec![None],
             max_current_per_cut: vec![None],
             max_voltage: vec![None],
+            min_width: vec![None],
+        },
+        esd_clamp_resistance: esd::EsdClampResistanceTable {
+            head: head(id_of("esd_clamp_resistance")),
+            pad: vec![LayerId(0)],
+            clamp_start: vec![0, 1],
+            clamp: vec![rule(900)],
+            max_resistance: vec![ohms(2.0)],
         },
         esd_ground_coupling: esd::EsdGroundCouplingTable {
             head: head(id_of("esd_ground_coupling")),

@@ -35,7 +35,8 @@ use gpurify_ingest::StrId;
 /// `esd_path(pad[, source]; clamps: models | none, current: current,
 /// clamp_resistance: resistance, max_resistance: resistance | none,
 /// clamp_it2: current per width | none, max_density: current per width |
-/// none, max_current_per_cut: current | none, max_voltage: voltage | none)`.
+/// none, max_current_per_cut: current | none, max_voltage: voltage | none,
+/// min_width: len | none)`.
 ///
 /// Each polygon on `source` (`pad` when absent) is where a stress current
 /// enters: a pin, or with a source layer a guard ring under an injection
@@ -67,8 +68,12 @@ use gpurify_ingest::StrId;
 /// times its width (the narrowest width its cross-section finds), and a via
 /// cut that carries more than `max_current_per_cut`: the interconnect's
 /// rating for the ESD pulse, which a foundry states apart from its DC
-/// electromigration limits. A limit written `none` is not checked; a row must
-/// state one.
+/// electromigration limits. With `min_width`, it flags a wire segment that
+/// carries the stress current (more than a millionth of it, the solve's
+/// floor) and is narrower than that: the minimum ESD metal width
+/// ([Khazhinsky 2012], "violations of minimum ESD metal width"), a
+/// segment's width being the narrowest its cross section finds. A limit
+/// written `none` is not checked; a row must state one.
 ///
 /// # Limits
 ///
@@ -80,15 +85,13 @@ use gpurify_ingest::StrId;
 /// clamps' resistive rise only; a deck folds a clamp's holding voltage into
 /// it (the protected device's failure voltage less the clamp's holding
 /// voltage). The pin's voltage is checked, not each device's own terminals.
-/// The ESD layout rules on recognised devices (ERC-C14) are two of these
-/// limits: a clamp's distance to its pad is held as a resistance
-/// ([Bakhali 2020]'s pin-to-clamp check, "Resistance of the bus line from
-/// ggnmos to the closest PowerClamp less than 1 Ohm"), here the pin-to-supply
-/// path through the clamp, not the pin-to-clamp bus alone; and the minimum
-/// ESD-path metal width is `max_density`, a current per width. No public
-/// source states either limit's value.
+/// The minimum ESD-path metal width is one of the ESD layout rules on
+/// recognised devices (ERC-C14); the clamp's distance to its pad is
+/// [`EsdClampResistanceTable`]'s. No public source states either limit's
+/// value: the deck supplies it.
 ///
-/// Catalog: ERC-C2, ERC-C6, ERC-C7, ERC-C8, ERC-C14 (partial), ERC-D4 in the [check catalog]. Defined by
+/// Catalog: ERC-C2, ERC-C6, ERC-C7, ERC-C8, ERC-C14, ERC-D4 in the [check
+/// catalog]. Defined by
 /// [ESDA TR18.0-01] §2.1, Fig. 23, Fig. 24 and Fig. 58; [ESDA TR22] §4.1
 /// and §8 (the design window), §4.4 (ESD current density); [ESDA TR18.0-02] Fig. 21
 /// and §2.3 (guard-ring resistance under injection); [JESD78] Table 1;
@@ -146,6 +149,9 @@ pub struct EsdPathTable {
     /// Per row: the highest voltage a pin may rise to under the stress, mV;
     /// `None` is not checked.
     pub max_voltage: Vec<Option<Qty<Voltage, { prefix::MILLI }>>>,
+    /// Per row: the narrowest a wire carrying the stress current may be,
+    /// database units; `None` is not checked.
+    pub min_width: Vec<Option<Dbu>>,
 }
 
 /// Runs every [`EsdPathTable`] row over every pin.
@@ -293,6 +299,16 @@ pub fn check_esd_path(
                 }
                 let rating = (table.max_density[row], table.max_current_per_cut[row]);
                 interconnect_capacity(&stress, &solution, process, rating, (rule, severity), out);
+                if let Some(min_width) = table.min_width[row] {
+                    narrow_wires(
+                        &stress,
+                        &solution,
+                        current,
+                        min_width,
+                        (rule, severity),
+                        out,
+                    );
+                }
             }
         }
         record_run(runs, out, before, rule, outcome, examined);
@@ -422,6 +438,189 @@ fn interconnect_capacity(
             limit,
             shapes: (grid.node_poly[from], Some(grid.node_poly[to])),
         });
+    }
+}
+
+/// Holds every wire segment of a solved pair that carries the stress current
+/// to `min_width`: one violation per narrower segment, at its first node,
+/// measuring its width. A segment carries the current when its share is above
+/// a millionth of `forced`: a dead-end stub carries nothing but the solve's
+/// rounding.
+fn narrow_wires(
+    stress: &StressGrid,
+    solution: &PowerSolution,
+    forced: Qty<Current, { prefix::MICRO }>,
+    min_width: Dbu,
+    head: (StrId, Severity),
+    out: &mut Violations,
+) {
+    let grid = &stress.grid;
+    let floor = forced.raw().abs() * 1e-6;
+    for edge in 0..grid.edge_count() {
+        if grid.edge_kind[edge] != EdgeKind::Metal
+            || solution.branch_current[edge].raw().abs() <= floor
+        {
+            continue;
+        }
+        let measured = Measurement::Length(grid.edge_width[edge]);
+        let limit = Measurement::Length(min_width);
+        if !measured.violates(limit, LimitSense::Minimum) {
+            continue;
+        }
+        let (from, to) = (grid.edge_from[edge] as usize, grid.edge_to[edge] as usize);
+        out.push(Violation {
+            rule: head.0,
+            layer: grid.edge_layer[edge],
+            severity: head.1,
+            at: grid.node_at[from],
+            measured,
+            limit,
+            shapes: (grid.node_poly[from], Some(grid.node_poly[to])),
+        });
+    }
+}
+
+/// A clamp too far from its pad: deck kind `esd_clamp_resistance`, written
+/// `esd_clamp_resistance(pad; clamps: models, max_resistance: resistance)`.
+///
+/// Public ESD verification material states a clamp's distance to its pad as
+/// the resistance of the interconnect between them: [Bakhali 2020]'s
+/// pin-to-clamp check "finds all possible combinations between all pins ...
+/// and all specified clamp types. The check then calculates the parasitic
+/// resistance on each combination" (its example rule ESD.CDM.SEC.1, "less
+/// than 1 Ohm"), measured as a unit current forced in at the pin over the
+/// voltage it raises ([US11714117B2]: "Rpath = VIO / IESD"). For every
+/// polygon of `pad` on a net and every device of a listed model with a
+/// terminal on that net, a current is forced in at the pad (tapped at the
+/// net's shape nearest its centre) and out at the clamp's attach point (the
+/// net's shape nearest its marker's centre, as [`EsdPathTable`] attaches a
+/// clamp), the net's conductors a chain of resistors as
+/// [`P2pResistanceTable`] models them; the resistance is the pad's rise over
+/// that current. A row flags each pair above `max_resistance`. The clamp
+/// itself is not in the path. Needs no design intent.
+///
+/// # Limits
+///
+/// Only the pad's own net is read: a clamp reached through a resistor or
+/// another device is not this check's. The limit is deck-supplied; no public
+/// deck states one.
+///
+/// Catalog: ERC-C14 in the [check catalog]. Defined by [Bakhali 2020];
+/// [US11714117B2]; [Khazhinsky 2012]; Calibre PERC LDL (public material
+/// only). Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [Bakhali 2020]: https://semiengineering.com/esd-p2p-and-cd-verification-doesnt-have-to-be-hard/
+/// [US11714117B2]: https://patents.google.com/patent/US11714117B2/en
+/// [Khazhinsky 2012]: https://www.esda.org/assets/News/8df611267c/ESDEDA-InCompliance-part1.pdf
+/// [`P2pResistanceTable`]: crate::erc::rules::electrical::P2pResistanceTable
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct EsdClampResistanceTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// Per row: the layer whose polygons are pins.
+    pub pad: Vec<LayerId>,
+    /// Clamp device models per row, CSR.
+    pub clamp_start: Vec<u32>,
+    /// Clamp models, CSR by `clamp_start`; at least one per row.
+    pub clamp: Vec<StrId>,
+    /// Per row: the largest pin-to-clamp resistance, Ω. Positive from a deck.
+    pub max_resistance: Vec<Qty<Resistance, { prefix::BASE }>>,
+}
+
+/// Runs every [`EsdClampResistanceTable`] row over every pin and clamp on
+/// its net.
+///
+/// `examined` counts pin-clamp pairs solved. A violation sits at the first
+/// vertex of the pin, on the pad layer, names the pin and the clamp's
+/// marker, and measures the resistance in Ω against `max_resistance`. A row
+/// is refused at the first pair whose network cannot be built (a conductor
+/// with no sheet resistance) or solved; violations it found before that stay
+/// in `out`.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_esd_clamp_resistance(
+    design: Design<'_>,
+    process: Process<'_>,
+    table: &EsdClampResistanceTable,
+    scratch: &mut Scratch,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    let (store, nets, devices) = (design.store, design.nets, design.devices);
+    // A unit current: the resistance is the rise over it.
+    let unit = Qty::<Current, { prefix::MICRO }>::new(1e6);
+    let mut stress = StressGrid::default();
+    let mut solution = PowerSolution::default();
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let (rule, severity) = (table.head.rule[row], table.head.severity[row]);
+        let clamps =
+            &table.clamp[table.clamp_start[row] as usize..table.clamp_start[row + 1] as usize];
+        let pad_layer = table.pad[row];
+        let limit = Measurement::Resistance(table.max_resistance[row]);
+        let mut examined = 0u64;
+        let mut outcome = Outcome::Ran;
+        // With no extracted nets no pin is on one.
+        let pins = if nets.net_count() == 0 {
+            0..0
+        } else {
+            store.polys_on_layer(pad_layer)
+        };
+        'pins: for poly in pins {
+            let pin = PolyId(poly);
+            let net = nets.net_of(pin);
+            if net == NetId::NONE || nets.holes.is_hole(pin) {
+                continue;
+            }
+            for &clamp in devices.devices_on(net) {
+                if !clamps.contains(&devices.model[clamp.0 as usize]) {
+                    continue;
+                }
+                let marker = devices.marker[clamp.0 as usize];
+                let built = extract_stress_into(
+                    store,
+                    nets,
+                    devices,
+                    process,
+                    Stress {
+                        nets: &[net],
+                        source: pin,
+                        current: unit,
+                        sink: net,
+                        pins: &[marker],
+                        devices: &[],
+                        device_resistance: Qty::new(1.0),
+                    },
+                    &mut stress,
+                );
+                if built.is_err()
+                    || solve_into(&stress.grid, &mut scratch.solve, &mut solution).is_err()
+                {
+                    outcome = Outcome::Refused;
+                    break 'pins;
+                }
+                examined += 1;
+                // mV * 1000 / µA is Ω.
+                let volts = solution.node_voltage[stress.entry as usize];
+                let measured = Measurement::Resistance(Qty::new(volts.raw() * 1000.0 / unit.raw()));
+                if measured.violates(limit, LimitSense::Maximum) {
+                    out.push(Violation {
+                        rule,
+                        layer: pad_layer,
+                        severity,
+                        at: first_vertex(store, pin),
+                        measured,
+                        limit,
+                        shapes: (pin, Some(marker)),
+                    });
+                }
+            }
+        }
+        record_run(runs, out, before, rule, outcome, examined);
     }
 }
 
