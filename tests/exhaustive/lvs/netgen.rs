@@ -906,7 +906,8 @@ fn netgen_differential_system_stacks() {
         std::fs::write(dir.join(name), text).expect("the scratch directory is writable");
     };
     let tolerance = 2.0 * TOLERANCE / (2.0 - TOLERANCE);
-    write("setup.tcl", &SETUP.replace("TOL", &tolerance.to_string()));
+    let setup = SETUP.replace("TOL", &tolerance.to_string());
+    write("setup.tcl", &netgen_setup(&setup, &Controls::default()));
     let mut batch = String::new();
     for (i, (_, _, layout, reference)) in cases.iter().enumerate() {
         write(&format!("l{i}.spice"), &for_netgen(&spice(layout)));
