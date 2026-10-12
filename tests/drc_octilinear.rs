@@ -252,14 +252,15 @@ fn an_edge_a_tip_touches_is_one_edge() {
     assert_eq!(found.of("e60"), vec![(len(50), len(60)); 2]);
 }
 
-/// Oracle: hand-derived, as `KLayout`'s Euclidean `width` reads a tip on an
-/// edge. A 100 x 50 box with a diamond (90-degree corners, `30·√2 ≈ 42.4`
-/// across) standing on its top edge by one corner, at (50, 50), is one
-/// figure (the connected corner model), but the corner on the middle of an
-/// edge is no 0-wide neck: no two edges there are antiparallel on one line.
-/// `width >= 45nm` flags the figure at the diamond's 42 (floored).
+/// Oracle: hand-derived, as `KLayout`'s Euclidean `width` reads a corner on
+/// an edge (its zero distance when touching; the mirror differential's
+/// layouts 683, 716, 820 and 1038 found it). A 100 x 50 box with a diamond
+/// (90-degree corners, `30·√2 ≈ 42.4` across) standing on its top edge by one
+/// corner, at (50, 50), is one figure (the connected corner model) with a
+/// 0-wide neck there: the diamond's lower edges are at 135 degrees to the
+/// box's top and touch it. Without that pair it would be 42.
 #[test]
-fn a_corner_on_an_edge_is_no_neck() {
+fn a_corner_on_an_edge_is_a_neck() {
     let found = run(
         "rule w45 width(met1) >= 45nm",
         &[
@@ -267,7 +268,7 @@ fn a_corner_on_an_edge_is_no_neck() {
             vec![(50, 50), (80, 80), (50, 110), (20, 80)],
         ],
     );
-    assert_eq!(found.of("w45"), [(len(42), len(45))]);
+    assert_eq!(found.of("w45"), [(len(0), len(45))]);
 }
 
 /// Oracle: hand-derived. A 40 square with a diamond hole of radius 5 (area

@@ -294,8 +294,9 @@ fn neck2(poly: PolygonRef<'_>, limit: Dbu) -> Option<(i128, Point)> {
 ///   edges), end to end past each other (a neck, as at the inner corners of
 ///   two overlapping rectangles);
 /// - two antiparallel edges on one line that touch, where the figure meets
-///   itself across a point (the connected corner model): width 0; a tip
-///   touching the middle of an edge is not such a pair;
+///   itself across a point (the connected corner model): width 0; so too a
+///   corner on an edge where one of its edges is at 135 degrees to it (below,
+///   `KLayout`'s zero distance when touching);
 /// - an acute tip, a corner of less than 90 degrees: width 0;
 /// - two edges at 135 degrees to each other, an axis edge and a 45-degree one
 ///   (a chamfer and the side across from it, a 45-degree corner cut across an
@@ -395,6 +396,14 @@ fn slanted(e: Seg, f: Seg) -> Option<(Seg, Seg)> {
         let (lx, ly) = dir(line);
         lx * i128::from(of.y.raw() - line.a.y.raw()) - ly * i128::from(of.x.raw() - line.a.x.raw())
     };
+    // Two edges that touch and do not follow one another, as where a corner
+    // lies on an edge (the connected corner model): `KLayout`'s zero distance
+    // when touching counts the line itself as the material side, so the pair
+    // is at 0 unless one lies wholly off the other's material side.
+    if crate::ops::segments_intersect(e, f) && e.b != f.a && e.a != f.b {
+        let off = |s: Seg, line: Seg| side(line, s.a) < 0 && side(line, s.b) < 0;
+        return (!off(e, f) && !off(f, e)).then_some((e, f));
+    }
     // `s` cut to `line`'s material side; it has an end strictly there.
     let cut = |s: Seg, line: Seg| {
         let (a, b) = (side(line, s.a), side(line, s.b));
