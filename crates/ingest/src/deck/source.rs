@@ -227,10 +227,15 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
             continue;
         };
         selections += 1;
-        let patterns = (first.checked_add(count).filter(|&end| count > 0 && end <= texts))
-            .map(|end| &doc.texts[first as usize..end as usize]);
+        let patterns = (first
+            .checked_add(count)
+            .filter(|&end| count > 0 && end <= texts))
+        .map(|end| &doc.texts[first as usize..end as usize]);
         let Some(patterns) = patterns else {
-            return malformed(format!("layer {}: its cell-name patterns are missing", row.name));
+            return malformed(format!(
+                "layer {}: its cell-name patterns are missing",
+                row.name
+            ));
         };
         if patterns
             .iter()
