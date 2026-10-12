@@ -96,9 +96,26 @@ impl CompiledDeck {
     /// ([`Rule::AllowedWidth`]), sorted; `None` when no rule lists them.
     pub fn allowed_widths(&self, layer: LayerId) -> Option<&[Dbu]> {
         self.drc_on(layer).find_map(|(_, rule)| match *rule {
-            Rule::AllowedWidth { layer: on, widths } if on == layer => {
-                self.drc.widths.get(widths as usize).map(Vec::as_slice)
-            }
+            Rule::AllowedWidth {
+                layer: on, widths, ..
+            } if on == layer => self.drc.widths.get(widths as usize).map(Vec::as_slice),
+            _ => None,
+        })
+    }
+
+    /// The width from which every wider width of `layer` is legal too: the
+    /// last of [`allowed_widths`](Self::allowed_widths) when its rule leaves
+    /// it open (LEF58 `WIDTHTABLE`), `None` when the list is exact or there
+    /// is none.
+    pub fn allowed_widths_from(&self, layer: LayerId) -> Option<Dbu> {
+        self.drc_on(layer).find_map(|(_, rule)| match *rule {
+            Rule::AllowedWidth {
+                layer: on,
+                widths,
+                open_last,
+            } if on == layer => open_last
+                .then(|| self.drc.widths.get(widths as usize)?.last().copied())
+                .flatten(),
             _ => None,
         })
     }

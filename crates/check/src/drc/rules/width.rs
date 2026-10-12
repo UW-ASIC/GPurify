@@ -250,16 +250,17 @@ pub(crate) fn cut_class(
     (Outcome::Ran, figures.len() as u64)
 }
 
-/// Allowed widths (sky130 rpm.1b-1f, LEF58 `WIDTHTABLE`'s exact widths): each
-/// merged figure's narrowest width, as `width` measures it, must be one of
-/// `allowed`, compared squared and so exactly. One violation per figure in
-/// none, at the centre of its first rectangle, measuring the width (floored)
-/// against the nearest allowed one. `examined` counts figures.
+/// Allowed widths (sky130 rpm.1b-1f, LEF58 `WIDTHTABLE`): each merged
+/// figure's narrowest width, as `width` measures it, must be one of
+/// `allowed`, or with `open_last` at least the last of them, compared squared
+/// and so exactly. One violation per figure in none, at the centre of its
+/// first rectangle, measuring the width (floored) against the nearest
+/// allowed one. `examined` counts figures.
 pub(crate) fn allowed_width(
     store: &GeometryStore,
     rule: StrId,
     layer: LayerId,
-    allowed: &[Dbu],
+    (allowed, open_last): (&[Dbu], bool),
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
@@ -274,7 +275,10 @@ pub(crate) fn allowed_width(
     decompose_into(&s.layer_out, &mut s.rects, &mut s.rect_start);
     for (idx, owner) in (0u32..).zip(owners) {
         let width2 = narrowest_width2(s.layer_out.get(idx), &mut s.facing);
-        if allowed.iter().any(|&w| w.mul_wide(w) == width2) {
+        let last = *allowed.last().expect("an allowed list is never empty");
+        if allowed.iter().any(|&w| w.mul_wide(w) == width2)
+            || (open_last && width2 >= last.mul_wide(last))
+        {
             continue;
         }
         let width = isqrt(width2);

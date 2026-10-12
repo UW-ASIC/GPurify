@@ -114,6 +114,23 @@ impl RuleRow {
         self
     }
 
+    /// An [`allowed_width`] row whose last width is open: it and every wider
+    /// width are legal (the deck's `open_last: true`, LEF58 `WIDTHTABLE`).
+    ///
+    /// # Panics
+    ///
+    /// On a row of any other kind.
+    #[must_use]
+    pub fn open_last(mut self) -> Self {
+        assert_eq!(
+            self.kind, "allowed_width",
+            "{} has no open last width",
+            self.kind
+        );
+        true.put("open_last", &mut self.params);
+        self
+    }
+
     /// A rule reported as a warning, not an error: the deck's
     /// `rule <id> warning ...`, as a foundry's recommended design rule is
     /// carried (catalog DRC-110).

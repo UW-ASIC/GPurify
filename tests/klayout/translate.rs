@@ -2006,13 +2006,25 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 Value::Ignore,
                 vec![],
             ),
-            Rule::AllowedWidth { layer, widths } => {
+            Rule::AllowedWidth {
+                layer,
+                widths,
+                open_last,
+            } => {
                 let name = fig(layer, &mut reads);
-                let kept: Vec<String> = set.widths[widths as usize]
+                let listed = &set.widths[widths as usize];
+                let kept: Vec<String> = listed
                     .iter()
-                    .map(|w| {
+                    .enumerate()
+                    .map(|(i, w)| {
                         let w2 = 4 * i128::from(w.raw()) * i128::from(w.raw());
-                        format!("with_width2({}, {w2}, {})", var(layer), w2 + 1)
+                        // An open last width keeps it and every wider shape.
+                        let hi = if open_last && i + 1 == listed.len() {
+                            "nil".to_owned()
+                        } else {
+                            (w2 + 1).to_string()
+                        };
+                        format!("with_width2({}, {w2}, {hi})", var(layer))
                     })
                     .collect();
                 writeln!(

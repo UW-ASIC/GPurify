@@ -57,6 +57,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         cut_size(depth),
         cut_class(depth),
         allowed_width(depth),
+        allowed_width_open_last(depth),
         min_edge_length(depth),
         min_step(depth),
         edge_length_of_edges(depth),
@@ -963,6 +964,57 @@ fn allowed_width(depth: Depth) -> Vec<Fixture> {
         &["aw"],
     ));
     out
+}
+
+/// `width(met1; allowed: [100nm, 200nm], open_last: true)` (`allowed_width`,
+/// DRC-015): LEF58 `WIDTHTABLE 0.10 0.20`, "all the given widths are exact
+/// width values, except for the last one, which is equal to or greater than
+/// the value".
+///
+/// Oracle: the LEF text, widths fixed by construction. Bars swept one step
+/// around 100 (exact: 99 and 101 fail) and 200 (open: 199 fails against 200,
+/// 200 and 201 pass); a 1000 square passes, as LEF's 0.42 under a last 0.40
+/// does (Figure 1-32 b); a 150 square, between the two, fails; an L of a 100
+/// and a 1000 arm is judged by its narrower, and passes.
+fn allowed_width_open_last(depth: Depth) -> Vec<Fixture> {
+    let deck = one_layer_deck("rule aw width(met1; allowed: [100nm, 200nm], open_last: true)");
+    let mut cases = Vec::new();
+    let mut case = |name: String, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("allowed_width_open_last/{name}"),
+            &["DRC-015"],
+            &deck,
+            layout,
+            vec![("aw", findings)],
+        ));
+    };
+    for listed in [100, 200] {
+        for w in sweep(depth, listed) {
+            let legal = w == 100 || w >= 200;
+            let findings = if legal {
+                Vec::new()
+            } else {
+                vec![pin(Finding::length(w), w, 1000)]
+            };
+            case(
+                format!("bar_{listed}/{}", side(w, listed)),
+                met1(&[[0, 0, w, 1000]]),
+                findings,
+            );
+        }
+    }
+    case("wide".into(), met1(&[[0, 0, 1000, 1000]]), Vec::new());
+    case(
+        "between".into(),
+        met1(&[[0, 0, 150, 150]]),
+        vec![Finding::length(150).at(75, 75)],
+    );
+    case(
+        "l_of_exact_and_wide".into(),
+        met1(&[[0, 0, 3000, 100], [0, 100, 1000, 1100]]),
+        Vec::new(),
+    );
+    every_placement(cases)
 }
 
 // ------------------------------------------------------------ min_edge_length

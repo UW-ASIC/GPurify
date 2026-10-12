@@ -399,6 +399,19 @@ pub(crate) const KINDS: &[Kind] = &[
         &[0],
         LIMIT,
         &[p("wide", "wide", Dim::Length)],
+    // The same with the last width open (LEF58 `WIDTHTABLE`: "all the given
+    // widths are exact width values, except for the last one, which is equal
+    // to or greater than the value"): `open_last: true`.
+    drc(
+        "width",
+        Cmp::Absent,
+        "allowed_width",
+        &[0],
+        None,
+        &[
+            p("allowed", "width", Dim::LengthList),
+            p("open_last", "open_last", Dim::Bool),
+        ],
     ),
     drc("notch", Cmp::Ge, "notch", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "min_spacing", &[0], LIMIT, &[]),

@@ -1794,7 +1794,15 @@ pub enum Rule {
     /// shorter side. A figure with parts of several widths is judged by its
     /// narrowest.
     ///
-    /// One violation per figure whose width is not listed, at the centre of
+    /// `width(L; allowed: [w, ..], open_last: true)` leaves the last width
+    /// open: it and any wider width are legal, the others exact. This is
+    /// LEF58 `WIDTHTABLE {width} ...` (LEF/DEF 5.8 Language Reference, "Width
+    /// Table Rules": "All the given widths are exact width values, except
+    /// for the last one, which is equal to or greater than the value"; in its
+    /// Figure 1-32 `WIDTHTABLE 0.10 0.15 0.20 0.25 0.30 0.40` admits 0.42,
+    /// which only `MAXWIDTH 0.40`, a [`Rule::MaxWidth`] row, rejects).
+    ///
+    /// One violation per figure whose width is not legal, at the centre of
     /// its first rectangle, `measured` the width (floored) against the nearest
     /// listed width (the smaller on a tie). `shapes.0` is the lowest drawn
     /// row under the figure. `examined` counts figures.
@@ -1803,16 +1811,26 @@ pub enum Rule {
     /// DRC-015, DRC-090. Rules: sky130 rpm.1b to rpm.1f ("min/max
     /// `prec_resistor` width" 0.35, 0.69, 1.41, 2.85, 5.73 µm, one per
     /// resistor type: one rule per type with a one-width list, or one rule
-    /// with all five); LEF58 `WIDTHTABLE`'s exact widths.
+    /// with all five); LEF58 `WIDTHTABLE`.
     ///
-    /// Limits: LEF58 `WIDTHTABLE` fractures a polygon into rectangles and
-    /// admits any width from its last value up; ASAP7 M4.W.3 and M4.W.4
-    /// (no even multiple of the minimum width) are not a list.
+    /// Limits: LEF58 `WIDTHTABLE` checks "only the shorter dimension of the
+    /// rectangles" a polygon "will be fractured into", and neither the LEF
+    /// text nor `OpenROAD` (whose `TritonRoute` reads only an `ORTHOGONAL`
+    /// table's first width) says how to fracture: maximal rectangles give
+    /// two overlapping bars a width neither has, and slabs depend on their
+    /// axis. So a figure is judged by its narrowest width, which is LEF's
+    /// reading on a rectangle. `WRONGDIRECTION` (a list for wires across the
+    /// layer's direction) needs a wire's direction, which is that fracture's,
+    /// and `ORTHOGONAL` is not checked. ASAP7 M4.W.3 and M4.W.4 (no even
+    /// multiple of the minimum width) are not a list.
     AllowedWidth {
         /// The layer measured, drawn or derived.
         layer: LayerId,
         /// Index into [`RuleSet::widths`].
         widths: u32,
+        /// Whether the last width and every wider one are legal, rather
+        /// than the last exactly.
+        open_last: bool,
     },
     /// A design whose redundant-via rate is below `limit`.
     ///
@@ -4060,6 +4078,8 @@ impl RuleSet {
                         layer,
                         widths: u32::try_from(set.widths.len() - 1)
                             .expect("a deck has few width lists"),
+                        open_last: optional(spec, "open_last").is_some()
+                            && flag(spec, "open_last")?,
                     }
                 }
                 "min_interior_angle" => Rule::MinInteriorAngle {
@@ -4857,11 +4877,15 @@ impl RuleSet {
                         limit,
                         sense,
                     } => area::region_density(store, id, (layer, region), limit, sense, s, out),
-                    Rule::AllowedWidth { layer, widths } => width::allowed_width(
+                    Rule::AllowedWidth {
+                        layer,
+                        widths,
+                        open_last,
+                    } => width::allowed_width(
                         store,
                         id,
                         layer,
-                        &self.widths[widths as usize],
+                        (&self.widths[widths as usize], open_last),
                         s,
                         out,
                     ),

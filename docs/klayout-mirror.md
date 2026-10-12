@@ -1066,6 +1066,8 @@ emit(id, L.merged - [with_width2(L, W1², W1² + 1), with_width2(L, W2², W2² +
 
 - `with_width2` (c) keeps the figures whose narrowest width squared is in the range, measured
   exactly; the figures in no range are the findings. Key FIG by marker; the width is not compared.
+- `open_last: true` (LEF58 `WIDTHTABLE`'s last width, "equal to or greater than the value") keeps
+  the last range open: `with_width2(L, Wn², nil)`.
 
 ### 44. min_interior_angle — EXACT
 
