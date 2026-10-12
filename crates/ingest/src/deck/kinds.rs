@@ -262,6 +262,13 @@ const ESD_PATH: &[Param] = &[
 /// An enclosure's wire band: the wire widths the rule holds.
 const WIRE_WIDTH: &[Param] = &[p("width", "wire_width", Dim::Length)];
 const WIRE_BELOW: &[Param] = &[p("below", "wire_below", Dim::Length)];
+/// LEF `ENCLOSURE ... WIDTH minWidth EXCEPTEXTRACUT cutWithin`, the metal on
+/// the cuts' far side named.
+const WIRE_EXTRA: &[Param] = &[
+    p("width", "wire_width", Dim::Length),
+    p("except_extra_cut", "extra_cut_within", Dim::Length),
+    p("other", "extra_cut_other", Dim::Layer),
+];
 const WIRE: &[Param] = &[
     p("width", "wire_width", Dim::Length),
     p("below", "wire_below", Dim::Length),
@@ -611,6 +618,14 @@ pub(crate) const KINDS: &[Kind] = &[
         WIRE_BELOW,
     ),
     drc("enclosure", Cmp::Ge, "min_enclosure", &[1, 0], LIMIT, WIRE),
+    drc(
+        "enclosure",
+        Cmp::Ge,
+        "min_enclosure",
+        &[1, 0],
+        LIMIT,
+        WIRE_EXTRA,
+    ),
     // Coincident edges exempt, `enclosure(lvtn, nwell, noncoincident)`
     // (sky130 lvtn.10).
     Kind {
@@ -633,6 +648,7 @@ pub(crate) const KINDS: &[Kind] = &[
     opposite(WIRE_WIDTH),
     opposite(WIRE_BELOW),
     opposite(WIRE),
+    opposite(WIRE_EXTRA),
     Kind {
         modifier: Some("adjacent"),
         ..drc(

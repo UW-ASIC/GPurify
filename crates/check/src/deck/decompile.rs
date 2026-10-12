@@ -188,6 +188,20 @@ impl CompiledDeck {
             }
             row
         };
+        // An enclosure's `EXCEPTEXTRACUT`, which its row states beside a
+        // width (0 when the band has none).
+        let extra = |row: Row, wire: crate::drc::WireBand, extra: Option<crate::drc::ExtraCut>| {
+            let Some(extra) = extra else {
+                return row;
+            };
+            let row = if wire.from.raw() > 0 {
+                row
+            } else {
+                row.length("wire_width", Dbu::new_unchecked(0))
+            };
+            row.length("extra_cut_within", extra.within)
+                .value("extra_cut_other", ParamValue::Layer(extra.other))
+        };
         match rule {
             Rule::MinWidth { layer, limit }
             | Rule::MaxWidth { layer, limit }
@@ -262,7 +276,12 @@ impl CompiledDeck {
                 inner,
                 limit,
                 wire,
-            } => band(two(outer, inner).length("limit", limit), wire),
+                extra_cut,
+            } => extra(
+                band(two(outer, inner).length("limit", limit), wire),
+                wire,
+                extra_cut,
+            ),
             Rule::NoncoincidentEnclosure {
                 outer,
                 inner,
@@ -279,7 +298,12 @@ impl CompiledDeck {
                 inner,
                 min_one_side,
                 wire,
-            } => band(two(outer, inner).length("min_one_side", min_one_side), wire),
+                extra_cut,
+            } => extra(
+                band(two(outer, inner).length("min_one_side", min_one_side), wire),
+                wire,
+                extra_cut,
+            ),
             Rule::AdjacentEnclosure {
                 outer,
                 inner,

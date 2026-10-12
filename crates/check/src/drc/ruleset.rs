@@ -608,6 +608,16 @@ pub enum Rule {
     /// `ENCLOSURE ... WIDTH minWidth`, an enclosure that applies by the width
     /// of the wire around the cut.
     ///
+    /// `.., except_extra_cut: len, other: layer` with `width:` adds LEF
+    /// `EXCEPTEXTRACUT cutWithin`: "if there is another via cut having same
+    /// metal shapes on both metal layers less than or equal to cutWithin
+    /// distance away, this ENCLOSURE with WIDTH rule is ignored" (LEF/DEF
+    /// 5.8, `ENCLOSURE`, and Example 1-4): an inner polygon is not held when
+    /// another drawn polygon of its layer, on the same merged figure of the
+    /// outer layer and of `other` (the metal on the cuts' far side), lies at
+    /// most `except_extra_cut` from it, box to box. The rows without
+    /// `width:`, which LEF then applies, are rows of their own.
+    ///
     /// One violation per offending inner polygon, reported on the `inner`
     /// layer. A rectangle is marked in the middle of the strip on its least
     /// enclosed side, any other shape at the centre of its bounding box.
@@ -628,6 +638,9 @@ pub enum Rule {
         limit: Dbu,
         /// The wire widths at which the rule holds an inner polygon.
         wire: WireBand,
+        /// `EXCEPTEXTRACUT`: an inner polygon with a redundant cut is not
+        /// held; `None` holds every one the band does.
+        extra_cut: Option<ExtraCut>,
     },
     /// An `inner` shape closer than `limit` to `outer`'s boundary, edges that
     /// coincide with it apart.
@@ -719,7 +732,8 @@ pub enum Rule {
     ///
     /// With `width:` and `below:`, the rule holds only the inner polygons its
     /// [`WireBand`] selects, as [`Rule::MinEnclosure`]'s: LEF `ENCLOSURE
-    /// overhang1 overhang2 WIDTH minWidth`.
+    /// overhang1 overhang2 WIDTH minWidth`, and `except_extra_cut:` and
+    /// `other:` are its `EXCEPTEXTRACUT`, as [`Rule::MinEnclosure`]'s.
     ///
     /// One violation per offending inner polygon, on the `inner` layer, in the
     /// middle of the strip past the least enclosed edge of the better axis.
@@ -743,6 +757,8 @@ pub enum Rule {
         min_one_side: Dbu,
         /// The wire widths at which the rule holds an inner polygon.
         wire: WireBand,
+        /// `EXCEPTEXTRACUT`, as [`Rule::MinEnclosure`]'s.
+        extra_cut: Option<ExtraCut>,
     },
     /// An `outer` shape reaching further than `limit` from the `inner` shapes
     /// it holds.
@@ -2609,6 +2625,18 @@ pub enum StepNeighbour {
     BetweenEol(Dbu),
 }
 
+/// LEF `ENCLOSURE ... WIDTH minWidth EXCEPTEXTRACUT cutWithin`: a cut with
+/// another cut of its layer on the same two metal figures at most `within`
+/// away is not held by the `WIDTH` rule ([`Rule::MinEnclosure`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExtraCut {
+    /// How far the other cut may be, box to box, inclusive, in grid units;
+    /// positive.
+    pub within: Dbu,
+    /// The metal on the cuts' far side from the enclosing layer.
+    pub other: LayerId,
+}
+
 /// The wire widths at which an enclosure rule holds an inner polygon (LEF
 /// `ENCLOSURE ... WIDTH minWidth`: "the enclosure rule only applies when the
 /// width of the routing layer is greater than or equal to minWidth").
@@ -3061,6 +3089,19 @@ impl RuleSet {
                 _ => Err(wrong_type(spec, param)),
             }
         };
+        // An enclosure's optional `EXCEPTEXTRACUT`.
+        let extra_cut = |spec: &RuleSpec| -> Result<Option<ExtraCut>, DrcError> {
+            if optional(spec, "extra_cut_within").is_none() {
+                return Ok(None);
+            }
+            let Some(ParamValue::Layer(other)) = optional(spec, "extra_cut_other") else {
+                return Err(wrong_type(spec, "other"));
+            };
+            Ok(Some(ExtraCut {
+                within: length(spec, "extra_cut_within")?,
+                other,
+            }))
+        };
         let sense = |spec: &RuleSpec| -> Result<LimitSense, DrcError> {
             let ParamValue::Flag(maximum) = value(spec, "maximum")? else {
                 return Err(wrong_type(spec, "maximum"));
@@ -3202,6 +3243,7 @@ impl RuleSet {
                         inner,
                         limit: length(spec, "limit")?,
                         wire: wire(spec)?,
+                        extra_cut: extra_cut(spec)?,
                     }
                 }
                 "full_width" => {
@@ -3223,6 +3265,7 @@ impl RuleSet {
                         inner,
                         min_one_side: length(spec, "min_one_side")?,
                         wire: wire(spec)?,
+                        extra_cut: extra_cut(spec)?,
                     }
                 }
                 "max_enclosure" => {
@@ -4103,11 +4146,12 @@ impl RuleSet {
                         inner,
                         limit,
                         wire,
+                        extra_cut,
                     } => overlay::enclosure(
                         store,
                         id,
                         (outer, inner),
-                        (limit, wire),
+                        (limit, wire, extra_cut),
                         overlay::Mode::EverySide,
                         s,
                         out,
@@ -4116,7 +4160,7 @@ impl RuleSet {
                         store,
                         id,
                         (outer, inner),
-                        (Dbu::new_unchecked(0), WireBand::ANY),
+                        (Dbu::new_unchecked(0), WireBand::ANY, None),
                         overlay::Mode::FullWidth,
                         s,
                         out,
@@ -4129,7 +4173,7 @@ impl RuleSet {
                         store,
                         id,
                         (outer, inner),
-                        (limit, WireBand::ANY),
+                        (limit, WireBand::ANY, None),
                         overlay::Mode::NonCoincident,
                         s,
                         out,
@@ -4139,11 +4183,12 @@ impl RuleSet {
                         inner,
                         min_one_side,
                         wire,
+                        extra_cut,
                     } => overlay::enclosure(
                         store,
                         id,
                         (outer, inner),
-                        (min_one_side, wire),
+                        (min_one_side, wire, extra_cut),
                         overlay::Mode::Opposite,
                         s,
                         out,
@@ -4156,7 +4201,7 @@ impl RuleSet {
                         store,
                         id,
                         (outer, inner),
-                        (min_one_side, WireBand::ANY),
+                        (min_one_side, WireBand::ANY, None),
                         overlay::Mode::Adjacent,
                         s,
                         out,
@@ -5023,16 +5068,22 @@ impl Rule {
             | Rule::GlobalDensity {
                 layer, boundary, ..
             } => [Some(layer), boundary, None],
+            Rule::MinEnclosure {
+                outer: a,
+                inner: b,
+                extra_cut,
+                ..
+            }
+            | Rule::AsymmetricEnclosure {
+                outer: a,
+                inner: b,
+                extra_cut,
+                ..
+            } => [Some(a), Some(b), extra_cut.map(|extra| extra.other)],
             Rule::MinSpacingDiff { a, b, .. }
             | Rule::ProjectionSpacing { a, b, .. }
             | Rule::DensityBalance { a, b, .. }
             | Rule::Overlap { a, b, .. }
-            | Rule::MinEnclosure {
-                outer: a, inner: b, ..
-            }
-            | Rule::AsymmetricEnclosure {
-                outer: a, inner: b, ..
-            }
             | Rule::MaxEnclosure {
                 outer: a, inner: b, ..
             }

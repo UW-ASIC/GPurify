@@ -11,10 +11,10 @@
 use super::presence::{hosts, inside_point, rects_of};
 use super::width::{rects_layer, wide_rects_into};
 use super::{
-    centre, gap_midpoint, merged, mid, owners_of, rects_ring_dist2, ring_segs, SortedRects,
-    Verdict, REFUSED,
+    bbox_gap2, centre, gap_midpoint, merged, mid, owners_of, rects_ring_dist2, ring_segs,
+    SortedRects, Verdict, REFUSED,
 };
-use crate::drc::{Scratch, WireBand};
+use crate::drc::{ExtraCut, Scratch, WireBand};
 use crate::erc::rules::supply::untied_points;
 use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
@@ -438,6 +438,57 @@ pub(crate) fn metal_width_via(
     (Outcome::Ran, examined)
 }
 
+/// `EXCEPTEXTRACUT` (DRC-043): per drawn row of `inner`, whether another row
+/// of it lies on the same merged figure of `outer` and of `extra.other`
+/// (the lowest figure of each its box overlaps) at most `extra.within`
+/// away, box to box. `None` when a metal fails validation.
+fn redundant_cuts(
+    store: &GeometryStore,
+    (inner, outer): (LayerId, LayerId),
+    extra: ExtraCut,
+    s: &mut Scratch,
+) -> Option<Vec<bool>> {
+    let mut on = Vec::new();
+    for metal in [outer, extra.other] {
+        let figures = merged(store, metal, s)?;
+        let (mut rects, mut start) = (Vec::new(), Vec::new());
+        decompose_into(&figures, &mut rects, &mut start);
+        on.push(SortedRects::new(
+            start
+                .windows(2)
+                .zip(0u32..)
+                .flat_map(|(span, f)| {
+                    rects[span[0] as usize..span[1] as usize]
+                        .iter()
+                        .map(move |&r| (r, f))
+                })
+                .collect(),
+        ));
+    }
+    let cuts: Vec<(Bbox, Option<u32>, Option<u32>)> = store
+        .polys_on_layer(inner)
+        .map(|row| {
+            let b = store.poly_bbox(PolyId(row));
+            let figure = |k: usize| on[k].overlapping(b).map(|(_, f)| f).min();
+            (b, figure(0), figure(1))
+        })
+        .collect();
+    let reach = extra.within.mul_wide(extra.within);
+    // ponytail: every pair of cuts; index them if a layer holds many.
+    Some(
+        cuts.iter()
+            .enumerate()
+            .map(|(i, &(b, o, x))| {
+                o.is_some()
+                    && x.is_some()
+                    && cuts.iter().enumerate().any(|(j, &(c, p, y))| {
+                        j != i && (p, y) == (o, x) && bbox_gap2(b, c) <= reach
+                    })
+            })
+            .collect(),
+    )
+}
+
 /// Below the most negative real margin (`-2 * MAX_ABS_DBU`): seeds the host fold.
 const UNHOSTED: i64 = -(1 << 42);
 
@@ -476,14 +527,22 @@ pub(crate) fn enclosure(
     store: &GeometryStore,
     rule: StrId,
     (outer, inner_layer): (LayerId, LayerId),
-    (limit, wire): (Dbu, WireBand),
+    (limit, wire, extra_cut): (Dbu, WireBand, Option<ExtraCut>),
     mode: Mode,
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
+    let exempt = match extra_cut {
+        None => Vec::new(),
+        Some(extra) => match redundant_cuts(store, (inner_layer, outer), extra, s) {
+            Some(exempt) => exempt,
+            None => return REFUSED,
+        },
+    };
     if !pair_layers(store, inner_layer, outer, Dbu::new_unchecked(0), s) {
         return REFUSED;
     }
+    let inner_first = store.polys_on_layer(inner_layer).start;
     let Scratch {
         validated,
         pairs,
@@ -540,6 +599,13 @@ pub(crate) fn enclosure(
             covered.fold(DbuArea::new(0), |sum, (clip, ())| sum + clip.area()) == area
         };
         if from.as_ref().is_some_and(|wide| !on(wide)) || below.as_ref().is_some_and(on) {
+            continue;
+        }
+        if exempt
+            .get((inner.0 - inner_first) as usize)
+            .copied()
+            .unwrap_or(false)
+        {
             continue;
         }
         examined += 1;

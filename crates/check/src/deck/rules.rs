@@ -205,6 +205,26 @@ impl RuleRow {
         self
     }
 
+    /// An enclosure row whose `WIDTH` rule a redundant cut lifts: LEF
+    /// `EXCEPTEXTRACUT cutWithin` (the deck's `except_extra_cut:` and
+    /// `other:`), `other` the metal on the cuts' far side. Give it a
+    /// [`wire`](Self::wire) band from a width.
+    ///
+    /// # Panics
+    ///
+    /// On a row of any other kind.
+    #[must_use]
+    pub fn except_extra_cut(mut self, within: Dbu, other: LayerRef) -> Self {
+        assert!(
+            matches!(self.kind, "min_enclosure" | "asymmetric_enclosure"),
+            "{} has no extra-cut exception",
+            self.kind
+        );
+        within.put("extra_cut_within", &mut self.params);
+        other.put("extra_cut_other", &mut self.params);
+        self
+    }
+
     /// A rule reported as a warning, not an error: the deck's
     /// `rule <id> warning ...`, as a foundry's recommended design rule is
     /// carried (catalog DRC-110).
