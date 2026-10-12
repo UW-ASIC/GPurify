@@ -33,6 +33,8 @@ pub struct Cli {
     pub p2p: Vec<(String, Vec<(f64, f64)>)>,
     /// `pex --coupling A:B`: two nets to report the coupling between.
     pub coupling: Vec<(String, String)>,
+    /// `--cluster <µm>`: list the violations' clusters at this reach.
+    pub cluster: Option<f64>,
 }
 
 /// What `lib` was asked for.
@@ -51,6 +53,11 @@ pub struct ArgError(String);
 
 fn usage<T>(message: String) -> Result<T, ArgError> {
     Err(ArgError(message))
+}
+
+/// A command that writes no violation report.
+fn is_lib_or_compare(subcommand: &str) -> bool {
+    matches!(subcommand, "lib" | "compare")
 }
 
 /// Parse `argv` (without the program name). An option a subcommand has no use
@@ -81,6 +88,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     let mut lef: Vec<&str> = Vec::new();
     let mut p2p: Vec<(String, Vec<(f64, f64)>)> = Vec::new();
     let mut coupling: Vec<(String, String)> = Vec::new();
+    let mut cluster: Option<f64> = None;
 
     let mut tokens = rest.iter().map(String::as_str);
     while let Some(token) = tokens.next() {
@@ -116,6 +124,18 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
                     ));
                 };
                 p2p.push((net, points));
+            }
+            "--cluster" => {
+                let text = value()?;
+                let reach = text
+                    .trim_end_matches("um")
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|r| r.is_finite() && *r >= 0.0);
+                let Some(reach) = reach else {
+                    return usage(format!("--cluster {text}: expected a distance in µm"));
+                };
+                cluster = Some(reach);
             }
             "--coupling" => {
                 let text = value()?;
@@ -214,6 +234,9 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     let reports = !p2p.is_empty() || !coupling.is_empty();
     if reports && (subcommand != "pex" || format != Format::Text) {
         return usage("--p2p and --coupling report with `pex` in text format".to_string());
+    }
+    if cluster.is_some() && (is_lib_or_compare(subcommand) || format != Format::Text) {
+        return usage("--cluster lists a check's violations in text format".to_string());
     }
     if is_lib && format != Format::Text {
         return usage("lib writes its files under --output-dir and takes no --format".to_string());
@@ -332,6 +355,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         system: None,
         p2p,
         coupling,
+        cluster,
     })
 }
 
@@ -443,6 +467,10 @@ mod tests {
     /// `pex` in text, and a malformed value is refused.
     #[test]
     fn the_p2p_and_coupling_reports_take_their_nets_and_points() {
+        let clustered = parse_str("drc t --deck d --cluster 2.5um").expect("legal");
+        assert_eq!(clustered.cluster, Some(2.5));
+        assert!(parse_str("drc t --deck d --cluster -1").is_err());
+        assert!(parse_str("drc t --deck d --format json --cluster 1").is_err());
         let cli = parse_str("pex t --deck d --p2p VDD:1,2:3.5,-4 --coupling a:b").expect("legal");
         assert_eq!(cli.p2p, [("VDD".to_owned(), vec![(1.0, 2.0), (3.5, -4.0)])]);
         assert_eq!(cli.coupling, [("a".to_owned(), "b".to_owned())]);

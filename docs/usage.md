@@ -34,6 +34,7 @@ standard output.
 | `--lef <file>` | A LEF a DEF layout reads (technology first, then cells). Repeat for more. Only with a `.def` layout. |
 | `--p2p <net>:<x>,<y>:<x>,<y>…` | `pex`, text report: the resistance between every two of these points (µm) on the net, see [below](#point-to-point-and-net-to-net). Repeat for more nets. |
 | `--coupling <net>:<net>` | `pex`, text report: the total coupling capacitance between two nets. Repeat for more pairs. |
+| `--cluster <µm>` | Text report: after the violations, one line per cluster: the violations of one rule whose markers lie within this distance of each other, chained (single linkage), largest first, with their count and bounding box. For triage of a large result set. |
 
 A shape on a GDS layer the deck neither declares nor ignores refuses the
 layout, naming the layer. A layout whose database unit is not a whole fraction

@@ -43,7 +43,7 @@ jobs:
           --skip foundry_deck
           --skip klayout_antenna_differential --skip openroad_antenna_differential
           --skip pdnsim_differential --skip yosys_differential
-          --skip lefdef_differential
+          --skip lefdef_differential --skip openrcx_differential
           --skip the_engine_costs_the_same_per_polygon_at_sixteen_times_the_size
           --skip flattening_is_linear_in_the_placements
       # The bench gate (tests/scaling.rs): ns per polygon at 16x a layout's
@@ -72,6 +72,7 @@ jobs:
           --ignored --test-threads=1
           klayout_antenna_differential openroad_antenna_differential
           pdnsim_differential yosys_differential openroad_lefdef_differential
+          openrcx_differential
       # The KLayout mirror (L6): corpus, merge-depth DRC fixtures and 3000
       # random layouts; and `gpurify xor` against KLayout's XOR on 1000
       # random layout pairs. One test at a time; each runs at most four klayouts.
