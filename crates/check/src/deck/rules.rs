@@ -214,6 +214,9 @@ impl Arg for &[(DbuArea, f64)] {
             at.put(area, params);
             value.put(name, params);
         }
+    }
+}
+
 /// LEF `ADJACENTCUTS count WITHIN distance`: the count under `name`, the
 /// distance under `within`.
 impl Arg for (u32, Dbu) {
