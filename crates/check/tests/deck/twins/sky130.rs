@@ -2008,7 +2008,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
                 .interacting(l["licon"].not(l["tap"])),
         ),
     );
-    d.rule("licon.16", must_contain(l["tap"], l["licon"], 1));
+    d.rule("licon.16", must_contain(l["tap"], l["licon"], 1, None));
     d.rule(
         "licon.17",
         forbidden(l["licon"].and(l["poly"]).group().and(l["difftap"])),
