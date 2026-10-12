@@ -356,6 +356,7 @@ class is the last `length` it reaches, here below 24 nm, 24 to 36 nm, or
 `length` starts at 0 and rises, `space` has one row and one column per class,
 and the table is symmetric; it need not rise. Edges that meet only at a
 diagonal do not face: `corner_space` measures those.
+
 A cut-class table, as sky130 licon.2 to licon.2d (square licons 170 nm
 apart; slotted 0.19 x 2.0 µm licons 350 nm apart end to end, 510 nm
 otherwise, and 510 nm from a square licon):

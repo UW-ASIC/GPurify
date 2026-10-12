@@ -239,11 +239,6 @@ const EM_NARROW: &[Param] = &[
     p("width", "narrow_width", Dim::Length),
     p("current", "narrow_current", Dim::Current),
 ];
-/// LEF `PARALLELEDGE parSpace WITHIN parWithin [TWOEDGES]`.
-const EOL_PARALLEL: &[Param] = &[
-    p("space", "par_space", Dim::Length),
-    p("within", "par_within", Dim::Length),
-    p("two_edges", "two_edges", Dim::Bool),
 /// An enclosure's wire band: the wire widths the rule holds.
 const WIRE_WIDTH: &[Param] = &[p("width", "wire_width", Dim::Length)];
 const WIRE_BELOW: &[Param] = &[p("below", "wire_below", Dim::Length)];
@@ -269,6 +264,12 @@ const fn opposite(params: &'static [Param]) -> Kind {
 const ADJACENT: &[Param] = &[
     p("cuts", "adjacent", Dim::Count),
     p("within", "within", Dim::Length),
+];
+/// LEF `PARALLELEDGE parSpace WITHIN parWithin [TWOEDGES]`.
+const EOL_PARALLEL: &[Param] = &[
+    p("space", "par_space", Dim::Length),
+    p("within", "par_within", Dim::Length),
+    p("two_edges", "two_edges", Dim::Bool),
 ];
 const CMP_MODEL: &[Param] = &[
     p("target", "cmp_target_density", Dim::Fraction),

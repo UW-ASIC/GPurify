@@ -1789,13 +1789,6 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
 
 type Spec = (&'static str, Verdict, Compare, Key, Value, Vec<String>);
 
-/// Lengths doubled for the ×2 layout, as a Ruby list's items.
-fn doubled(lengths: &[gpurify::geom::Dbu]) -> String {
-    lengths
-        .iter()
-        .map(|length| (2 * length.raw()).to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
 /// The inner layer `inner` restricted to an enclosure's wire band: the shapes
 /// inside the part of `outer` at least `from` wide (`sized(-(w - 1))` and back
 /// at x2, as for wide spacing) and not inside the part `below` wide.
@@ -1812,6 +1805,15 @@ fn banded(inner: String, outer: &str, wire: WireBand) -> String {
         out = format!("{out}.not_inside({})", wide(below));
     }
     out
+}
+
+/// Lengths doubled for the ×2 layout, as a Ruby list's items.
+fn doubled(lengths: &[gpurify::geom::Dbu]) -> String {
+    lengths
+        .iter()
+        .map(|length| (2 * length.raw()).to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn exact(kind: &'static str, key: Key, value: Value) -> Spec {
