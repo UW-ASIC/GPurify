@@ -436,7 +436,7 @@ end
 # don't-care boxes, anchor; every placement in the eight orientations with
 # the anchor on a corner of the merged layer where the layer clipped to the
 # window equals the shapes outside the don't-care boxes, once per window.
-def pattern(rule, layer, w, h, shapes, ignore, anchor)
+def pattern_match(rule, layer, w, h, shapes, ignore, anchor)
   m = layer.data.merged
   s = RBA::Region.new
   shapes.each { |b| s.insert(RBA::Box.new(*b)) }
@@ -1140,7 +1140,7 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                     .expect("a pattern a deck holds has an anchor");
                 writeln!(
                     body,
-                    "pattern({q}, {}, {}, {}, {}, {}, [{}, {}])",
+                    "pattern_match({q}, {}, {}, {}, {}, {}, [{}, {}])",
                     var(layer),
                     lim(pattern.window.0),
                     lim(pattern.window.1),

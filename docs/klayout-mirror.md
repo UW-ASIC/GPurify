@@ -1489,7 +1489,7 @@ values; fixtures `cut_area_change/*`.
 (the least corner of its merged shapes inside the window and off every don't-care box) is put on
 each corner of the merged layer; the placed window matches when the layer clipped to it and the
 placed shapes, both less the don't-care boxes, have no symmetric difference. One finding per
-distinct window, at its centre. **KLayout** (prelude `pattern`): the same placements with
+distinct window, at its centre. **KLayout** (prelude `pattern_match`): the same placements with
 `RBA::Trans` (four turns, with and without the mirror), the same comparison by `Region#^`.
 **Key**: POINT. **Oracle**: US7757190B2's definition with deck-supplied patterns; fixtures
 `pattern/*`.
