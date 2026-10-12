@@ -3617,6 +3617,7 @@ fn silvaco_wpe(sc: [f64; 4], w: f64, l: f64, scref: f64) -> [f64; 3] {
 /// drain end 350 nm from it and the rest past `max`, 5000 nm. The cards
 /// state these, or one of them 5 % off.
 fn lde_fixtures() -> Vec<Fixture> {
+    type Case = (&'static str, Layout, Vec<(&'static str, f64)>, bool);
     let one = Circuit::new(3, vec![Dev::mos(Model::N, 0, 1, 2)]);
     let deck = format!(
         "{}layer wellm = gds(31, 0)\nlvs lde \"nmos\" od diff max 5000nm well wellm scref 1000nm\n",
@@ -3656,7 +3657,6 @@ fn lde_fixtures() -> Vec<Fixture> {
     let right = |layout: Layout| layout.rect("wellm", 1000, -3000, 3000, 4000);
     let drawn = draw(&one).rect("diff", -300, 0, 0, 500);
     // Name, drawing, the card's parameters, whether it matches.
-    type Case = (&'static str, Layout, Vec<(&'static str, f64)>, bool);
     let cases: [Case; 7] = [
         ("enclosed", around(drawn.clone()), lde(enclosed), true),
         (
