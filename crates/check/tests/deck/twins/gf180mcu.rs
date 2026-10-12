@@ -2560,6 +2560,8 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             nm(15000),
             nm(2000),
             pad,
+            None,
+            None,
         ),
     );
     d.rule(
@@ -2598,6 +2600,8 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             nm(10000),
             nm(5000),
             pad,
+            None,
+            None,
         ),
     );
     d.rule(

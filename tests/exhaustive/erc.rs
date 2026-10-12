@@ -110,6 +110,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(forward_diode());
     out.extend(conditional_tie());
     out.extend(latchup_victim());
+    out.extend(voltage_aggressor());
     out.extend(esd_parasitic());
     out.extend(esd_exposed());
     out.extend(esd_secondary());
@@ -6900,7 +6901,8 @@ fn conditional_tie() -> Vec<Fixture> {
 /// the same diffusion is an aggressor only on a net that carries a pad.
 fn latchup_victim() -> Vec<Fixture> {
     let deck = "grid 1nm\nlayer agg = gds(1, 0)\nlayer pv = gds(2, 0)\nlayer tap = gds(3, 0)\n\
-                rule io1 latchup_victim(agg, pv, tap; within: 15um, max_distance: 2um, pad: none)\n";
+                rule io1 latchup_victim(agg, pv, tap; within: 15um, max_distance: 2um, pad: none, \
+                bias: none, forward: none)\n";
     let board = |gap: i64, reach: i64| {
         let mut l = Layout::default();
         rect(&mut l, "agg", (0, 0, 1000, 1000));
@@ -6934,7 +6936,8 @@ fn latchup_victim() -> Vec<Fixture> {
     // With pad selection, on the domain fixtures' tracks: a diffusion on a
     // net with a pad is an aggressor, the same on another net is not.
     let pad_deck = format!(
-        "{}rule io1 latchup_victim(diff, nwpm, ntap; within: 15um, max_distance: 2um, pad: pad)\n",
+        "{}rule io1 latchup_victim(diff, nwpm, ntap; within: 15um, max_distance: 2um, pad: pad, \
+         bias: none, forward: none)\n",
         diode_process()
     );
     let (pad_net, other) = (5, 6);
@@ -6964,6 +6967,99 @@ fn latchup_victim() -> Vec<Fixture> {
         ));
         out.extend(every_placement(&[f]));
     }
+    out
+}
+
+/// `latchup_victim` with `bias` and `forward` (ERC-D5): an aggressor is a
+/// diffusion the intent's voltages can forward-bias against the well it
+/// lies in, hand-derived. A `pdiff` square sits in an `nw` well labelled
+/// VDD (1.8 V); the victim 1.2 µm to its right has its tap on its far
+/// edge, so its worst point is 1 µm from a tap, flagged against 500 nm
+/// whenever the diffusion is an aggressor.
+///
+/// - `forward: above`, the diffusion on VDDH (3.3 V): 3300 > 1800, flagged;
+/// - the diffusion on VDD itself: 1800 is not above 1800, clean;
+/// - the diffusion on VDDH with the well drawn away from it: no well holds
+///   it, clean;
+/// - `forward: below`, the diffusion on VSS: 0 < 1800, flagged;
+/// - without intent the row is skipped.
+fn voltage_aggressor() -> Vec<Fixture> {
+    let deck = |forward: &str| {
+        format!(
+            "grid 1nm
+layer pdiff = gds(1, 0)
+layer nw = gds(2, 0)
+layer victim = gds(3, 0)
+layer tap = gds(4, 0)
+layer pdtxt = gds(1, 1)
+layer nwtxt = gds(2, 1)
+connect conductors [pdiff, nw]
+connect label pdtxt names pdiff
+connect label nwtxt names nw
+rule lv latchup_victim(pdiff, victim, tap; within: 2um, max_distance: 500nm, pad: none, \
+bias: nw, forward: {forward})
+"
+        )
+    };
+    let board = |net: &str, well_round: bool| {
+        let mut l = Layout::default();
+        let well = if well_round {
+            (0, 0, 2000, 2000)
+        } else {
+            (-5000, 0, -3000, 2000)
+        };
+        rect(&mut l, "nw", well);
+        l = l.label("nwtxt", well.0 + 100, 100, "VDD");
+        rect(&mut l, "pdiff", (500, 500, 1000, 1000));
+        l = l.label("pdtxt", 600, 600, net);
+        rect(&mut l, "victim", (2200, 0, 3200, 1000));
+        rect(&mut l, "tap", (3200, 0, 3300, 1000));
+        l
+    };
+    let supplies = intent(
+        &[("a", 1800.0), ("b", 3300.0)],
+        &[
+            ("VDD", "a", "power"),
+            ("VSS", "a", "ground"),
+            ("VDDH", "b", "power"),
+        ],
+        &[],
+    );
+    let mut out = Vec::new();
+    for (name, forward, net, round, flagged) in [
+        ("above", "above", "VDDH", true, true),
+        ("same", "above", "VDD", true, false),
+        ("no_well", "above", "VDDH", false, false),
+        ("below", "below", "VSS", true, true),
+    ] {
+        let mut f = Fixture::new(
+            &format!("erc/latchup_victim/voltage/{name}"),
+            &["ERC-D5"],
+            &deck(forward),
+            ERC,
+        )
+        .layout(board(net, round))
+        .expect(Expect::rule(
+            "lv",
+            if flagged {
+                vec![length(1000)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(supplies.clone());
+        out.extend(every_placement(&[f]));
+    }
+    out.push(
+        Fixture::new(
+            "erc/latchup_victim/voltage/no_intent",
+            &["ERC-D5"],
+            &deck("above"),
+            ERC,
+        )
+        .layout(board("VDDH", true))
+        .expect(Expect::outcome("lv", Want::Skipped)),
+    );
     out
 }
 

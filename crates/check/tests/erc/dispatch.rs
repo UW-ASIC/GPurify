@@ -430,6 +430,7 @@ fn every_kind() -> RuleSet {
             within: vec![dbu(15_000)],
             max_distance: vec![dbu(2_000)],
             pad: vec![None],
+            bias: vec![None],
         },
         tie_area: latchup::TieAreaTable {
             head: head(id_of("tie_area")),

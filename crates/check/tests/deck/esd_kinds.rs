@@ -42,7 +42,8 @@ rule gr.near guard_ring(mk, ring; max_space: none, min_width: none, pad: none, n
 rule fd forward_diode(mk; models: [\"dio\"])
 rule ct conditional_tie(diff, cont, well, gate; within: 50um, spacing: [1um, 2um], \
 max_distance: [15um, 30um, 50um])
-rule lv latchup_victim(pad, diff, cont; within: 15um, max_distance: 2um, pad: pad)
+rule lv latchup_victim(pad, diff, cont; within: 15um, max_distance: 2um, pad: pad, bias: none, forward: none)
+rule lv.bias latchup_victim(pad, diff, cont; within: 15um, max_distance: 2um, pad: none, bias: well, forward: below)
 ";
 
 fn um(value: i64) -> Dbu {
@@ -150,7 +151,11 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     );
     d.rule(
         "lv",
-        latchup_victim(pad, diff, cont, um(15), um(2), Some(pad)),
+        latchup_victim(pad, diff, cont, um(15), um(2), Some(pad), None, None),
+    );
+    d.rule(
+        "lv.bias",
+        latchup_victim(pad, diff, cont, um(15), um(2), None, Some(well), Some(1)),
     );
     d.finish().expect("the Rust deck builds")
 }

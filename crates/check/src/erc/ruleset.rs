@@ -966,6 +966,28 @@ impl RuleSet {
                     let within = row.length("within")?;
                     let max_distance = row.length("max_distance")?;
                     let pad = row.opt_layer("pad")?;
+                    // `bias` and `forward` are one condition: both or neither.
+                    let forward = match row.find("forward") {
+                        None => None,
+                        Some(ParamValue::Count(at)) => Some(at == 0),
+                        Some(_) => return Err(row.wrong_type("forward")),
+                    };
+                    let bias = match (row.opt_layer("bias")?, forward) {
+                        (Some(layer), Some(above)) => Some((layer, above)),
+                        (None, None) => None,
+                        (Some(_), None) => {
+                            return Err(ErcError::MissingParam {
+                                rule: row.name(),
+                                param: "forward",
+                            })
+                        }
+                        (None, Some(_)) => {
+                            return Err(ErcError::MissingParam {
+                                rule: row.name(),
+                                param: "bias",
+                            })
+                        }
+                    };
                     let table = &mut set.latchup_victim;
                     row.head(&mut table.head)?;
                     table.aggressor.push(layers[0]);
@@ -974,6 +996,7 @@ impl RuleSet {
                     table.within.push(within);
                     table.max_distance.push(max_distance);
                     table.pad.push(pad);
+                    table.bias.push(bias);
                 }
                 "tie_area" => {
                     let layers = row.layers(3)?;
@@ -2028,7 +2051,15 @@ impl RuleSet {
         latchup::check_guard_ring(design, &self.guard_ring, scratch, out, runs);
         latchup::check_forward_diode(design, intent, voltage, &self.forward_diode, out, runs);
         latchup::check_conditional_tie(design, &self.conditional_tie, scratch, out, runs);
-        latchup::check_latchup_victim(design, &self.latchup_victim, scratch, out, runs);
+        latchup::check_latchup_victim(
+            design,
+            intent,
+            voltage,
+            &self.latchup_victim,
+            scratch,
+            out,
+            runs,
+        );
 
         domain::check_gate_oxide(design, intent, voltage, &self.gate_oxide, out, runs);
         domain::check_drain_source(design, intent, voltage, &self.drain_source, out, runs);

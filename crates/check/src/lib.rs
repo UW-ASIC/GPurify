@@ -152,7 +152,7 @@
 //! | `combinational_loop()` | `combinational_loop` | [`erc::RuleSet::combinational_loop`] | a cycle of channel-connected components, each driving the next through a gate | ERC-G8 |
 //! | `gate_path(; ground, max_devices)` | `gate_path` | [`erc::RuleSet::gate_path`] | a transistor gate whose shortest path to ground (or power) passes more than `max_devices` devices | ERC-H3 |
 //! | `floating_well(well, tap)` | `floating_well` | [`erc::RuleSet::floating_well`] | a well with no tap | DRC-085, ERC-G2 |
-//! | `latchup_victim(aggressor, region, tap; within, max_distance, pad)` | `latchup_victim` | [`erc::RuleSet::latchup_victim`] | a region near an injecting (pad-connected) junction too far from a tap | ERC-D5 |
+//! | `latchup_victim(aggressor, region, tap; within, max_distance, pad, bias, forward)` | `latchup_victim` | [`erc::RuleSet::latchup_victim`] | a region near an injecting (pad-connected) junction too far from a tap | ERC-D5 |
 //! | `missing_tie(region, tap; max_distance)` | `missing_tie` | [`erc::RuleSet::missing_tie`] | a region too far from a tap | ERC-D1 |
 //! | `multiple_drivers(; max)` | `multiple_drivers` | [`erc::RuleSet::multiple_drivers`] | a net with too many drivers | ERC-G3 |
 //! | `soft_connection(layers..)` | `soft_connection` | [`erc::RuleSet::soft_connection`] | a net held together only through high-resistance layers | LVS-003, ERC-G5 |
