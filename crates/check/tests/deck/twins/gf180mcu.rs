@@ -8,11 +8,12 @@
 #![allow(clippy::unreadable_literal, reason = "values as the deck writes them")]
 
 use gpurify_check::deck::rules::{
-    angle, antenna, cut_size, drain_source, edge_min_length, em_current_density, esd_topological,
-    floating_gate, floating_well, forbidden, gate_oxide, global_density, ir_drop,
-    max_distance_to_tap, max_width, min_area, min_enclosed_area, min_enclosure, min_extension,
-    min_spacing, min_spacing_diff, min_width, multiple_drivers, must_be_inside, off_grid, overlap,
-    supply_short, tie_high_low, unconnected_pin, via_array_spacing, wide_dependent_spacing,
+    angle, antenna, antenna_electrical, cut_size, drain_source, edge_min_length,
+    em_current_density, esd_topological, floating_gate, floating_well, forbidden, gate_oxide,
+    global_density, ir_drop, max_distance_to_tap, max_width, min_area, min_enclosed_area,
+    min_enclosure, min_extension, min_spacing, min_spacing_diff, min_width, multiple_drivers,
+    must_be_inside, off_grid, overlap, supply_short, tie_high_low, unconnected_pin,
+    via_array_spacing, wide_dependent_spacing,
 };
 use gpurify_check::deck::{BuildError, CompiledDeck, DeckBuilder, LayerRef};
 use gpurify_geom::{Dbu, DbuArea, Grid, StrTable};
@@ -1259,45 +1260,428 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     );
     d.rule("OFFGRID", off_grid(nm(5)));
     d.rule("ACUTE", angle(None, &[0, 45, 90, 135]));
+    l.insert(
+        "gate_thin",
+        d.derived("gate_thin", l["gate"].not(l["dualgate"])),
+    );
+    l.insert("ant_comp", d.derived("ant_comp", l["comp"].not(l["poly2"])));
     d.rule(
         "ANT.1",
-        antenna(l["gate"], &[l["poly2_con"]], 200.0, Some(nm(200)), None),
+        antenna(
+            l["gate_thin"],
+            &[l["poly2_con"]],
+            200.0,
+            Some(nm(200)),
+            None,
+        ),
+    );
+    d.rule(
+        "ANT.1.DG",
+        antenna(l["gate_hv"], &[l["poly2_con"]], 200.0, Some(nm(200)), None),
     );
     d.rule(
         "ANT.2",
-        antenna(l["gate"], &[l["metal1_con"]], 400.0, Some(nm(540)), None),
+        antenna_electrical(
+            l["gate_thin"],
+            &[l["metal1_con"]],
+            400.0,
+            Some(nm(540)),
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "ANT.2.DG",
+        antenna_electrical(
+            l["gate_hv"],
+            &[l["metal1_con"]],
+            400.0,
+            Some(nm(540)),
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            15.0,
+            &[],
+            &[],
+            None,
+        ),
     );
     d.rule(
         "ANT.3",
-        antenna(l["gate"], &[l["metal2_con"]], 400.0, Some(nm(540)), None),
+        antenna_electrical(
+            l["gate_thin"],
+            &[l["metal2_con"]],
+            400.0,
+            Some(nm(540)),
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "ANT.3.DG",
+        antenna_electrical(
+            l["gate_hv"],
+            &[l["metal2_con"]],
+            400.0,
+            Some(nm(540)),
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            15.0,
+            &[],
+            &[],
+            None,
+        ),
     );
     d.rule(
         "ANT.4",
-        antenna(l["gate"], &[l["metal3_con"]], 400.0, Some(nm(540)), None),
+        antenna_electrical(
+            l["gate_thin"],
+            &[l["metal3_con"]],
+            400.0,
+            Some(nm(540)),
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "ANT.4.DG",
+        antenna_electrical(
+            l["gate_hv"],
+            &[l["metal3_con"]],
+            400.0,
+            Some(nm(540)),
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            15.0,
+            &[],
+            &[],
+            None,
+        ),
     );
     d.rule(
         "ANT.5",
-        antenna(l["gate"], &[l["metal4"]], 400.0, Some(nm(540)), None),
+        antenna_electrical(
+            l["gate_thin"],
+            &[l["metal4"]],
+            400.0,
+            Some(nm(540)),
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "ANT.5.DG",
+        antenna_electrical(
+            l["gate_hv"],
+            &[l["metal4"]],
+            400.0,
+            Some(nm(540)),
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            15.0,
+            &[],
+            &[],
+            None,
+        ),
     );
     d.rule(
         "ANT.6",
-        antenna(l["gate"], &[l["metal5"]], 400.0, Some(nm(540)), None),
+        antenna_electrical(
+            l["gate_thin"],
+            &[l["metal5"]],
+            400.0,
+            Some(nm(540)),
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "ANT.6.DG",
+        antenna_electrical(
+            l["gate_hv"],
+            &[l["metal5"]],
+            400.0,
+            Some(nm(540)),
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            15.0,
+            &[],
+            &[],
+            None,
+        ),
     );
     d.rule(
         "ANT.7",
-        antenna(l["gate"], &[l["metaltop_con"]], 400.0, Some(nm(990)), None),
+        antenna_electrical(
+            l["gate_thin"],
+            &[l["metaltop_con"]],
+            400.0,
+            Some(nm(990)),
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "ANT.7.DG",
+        antenna_electrical(
+            l["gate_hv"],
+            &[l["metaltop_con"]],
+            400.0,
+            Some(nm(990)),
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            15.0,
+            &[],
+            &[],
+            None,
+        ),
     );
     d.rule(
         "ANT.8",
-        antenna(l["gate"], &[l["contact"]], 10.0, None, None),
+        antenna(l["gate_thin"], &[l["contact"]], 10.0, None, None),
     );
-    d.rule("ANT.9", antenna(l["gate"], &[l["via1"]], 20.0, None, None));
-    d.rule("ANT.10", antenna(l["gate"], &[l["via2"]], 20.0, None, None));
-    d.rule("ANT.11", antenna(l["gate"], &[l["via3"]], 20.0, None, None));
-    d.rule("ANT.12", antenna(l["gate"], &[l["via4"]], 20.0, None, None));
+    d.rule(
+        "ANT.8.DG",
+        antenna(l["gate_hv"], &[l["contact"]], 10.0, None, None),
+    );
+    d.rule(
+        "ANT.9",
+        antenna_electrical(
+            l["gate_thin"],
+            &[l["via1"]],
+            20.0,
+            None,
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "ANT.9.DG",
+        antenna_electrical(
+            l["gate_hv"],
+            &[l["via1"]],
+            20.0,
+            None,
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            15.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "ANT.10",
+        antenna_electrical(
+            l["gate_thin"],
+            &[l["via2"]],
+            20.0,
+            None,
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "ANT.10.DG",
+        antenna_electrical(
+            l["gate_hv"],
+            &[l["via2"]],
+            20.0,
+            None,
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            15.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "ANT.11",
+        antenna_electrical(
+            l["gate_thin"],
+            &[l["via3"]],
+            20.0,
+            None,
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "ANT.11.DG",
+        antenna_electrical(
+            l["gate_hv"],
+            &[l["via3"]],
+            20.0,
+            None,
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            15.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "ANT.12",
+        antenna_electrical(
+            l["gate_thin"],
+            &[l["via4"]],
+            20.0,
+            None,
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "ANT.12.DG",
+        antenna_electrical(
+            l["gate_hv"],
+            &[l["via4"]],
+            20.0,
+            None,
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            15.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
     d.rule(
         "ANT.13",
-        antenna(l["gate"], &[l["via5_nomim"]], 20.0, None, None),
+        antenna_electrical(
+            l["gate_thin"],
+            &[l["via5_nomim"]],
+            20.0,
+            None,
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "ANT.13.DG",
+        antenna_electrical(
+            l["gate_hv"],
+            &[l["via5_nomim"]],
+            20.0,
+            None,
+            1.0,
+            Some(l["ant_comp"]),
+            0.0,
+            0.0,
+            0.0,
+            15.0,
+            &[],
+            &[],
+            None,
+        ),
     );
     d.rule(
         "EM.14.3_Mn",
@@ -1311,11 +1695,13 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             ],
             2090.0,
             580.0,
+            None,
+            None,
         ),
     );
     d.rule(
         "EM.14.3_MT",
-        em_current_density(&[l["metaltop_con"]], 3770.0, 580.0),
+        em_current_density(&[l["metaltop_con"]], 3770.0, 580.0, None, None),
     );
     d.rule(
         "EM.14.4_Vn",
@@ -1323,11 +1709,13 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             &[l["via1"], l["via2"], l["via3"], l["via4"], l["via5_nomim"]],
             2090.0,
             580.0,
+            None,
+            None,
         ),
     );
     d.rule(
         "EM.14.4_CO",
-        em_current_density(&[l["contact"]], 2090.0, 430.0),
+        em_current_density(&[l["contact"]], 2090.0, 430.0, None, None),
     );
     d.rule("LU.9_10", supply_short(l["ntap"], l["ptap"], None));
     d.rule("floating_nwell", floating_well(l["nwell"], l["ntap"]));

@@ -1756,8 +1756,8 @@ impl<'a> Parser<'a> {
                     }
                     previous = Some(area);
                     let number = self.physical(number, Dim::Scalar, label)?;
-                    out.push((engine, ParamSrc::Value(ParamValue::Area(area))));
-                    out.push((second, ParamSrc::Value(ParamValue::Ratio(number))));
+                    out.push((engine, ParamSource::Value(ParamValue::Area(area))));
+                    out.push((second, ParamSource::Value(ParamValue::Ratio(number))));
                 }
                 return Ok(());
             }

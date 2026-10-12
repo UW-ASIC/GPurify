@@ -8,11 +8,12 @@
 #![allow(clippy::unreadable_literal, reason = "values as the deck writes them")]
 
 use gpurify_check::deck::rules::{
-    angle, antenna, asymmetric_enclosure, cut_size, density, drain_source, edge_width,
-    em_current_density, esd_topological, floating_gate, floating_well, forbidden, gate_oxide,
-    global_density, ir_drop, max_width, min_area, min_enclosed_area, min_enclosure, min_extension,
-    min_spacing, min_spacing_diff, min_width, missing_tie, multiple_drivers, must_be_inside, notch,
-    off_grid, spacing_table, supply_short, tie_high_low, unconnected_pin, via_array_spacing,
+    angle, antenna, antenna_electrical, asymmetric_enclosure, cut_size, density, drain_source,
+    edge_width, em_current_density, esd_topological, floating_gate, floating_well, forbidden,
+    gate_oxide, global_density, ir_drop, max_width, min_area, min_enclosed_area, min_enclosure,
+    min_extension, min_spacing, min_spacing_diff, min_width, missing_tie, multiple_drivers,
+    must_be_inside, notch, off_grid, spacing_table, supply_short, tie_high_low, unconnected_pin,
+    via_array_spacing,
 };
 use gpurify_check::deck::{Bound, BuildError, CompiledDeck, DeckBuilder, LayerRef};
 use gpurify_geom::{Dbu, DbuArea, Grid, StrTable};
@@ -1709,6 +1710,25 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     d.rule("Angle.Via4", angle(Some(l["via4"].into()), &[0, 90]));
     d.rule("Angle.TopVia1", angle(Some(l["topvia1"].into()), &[0, 90]));
     d.rule("Angle.TopVia2", angle(Some(l["topvia2"].into()), &[0, 90]));
+    l.insert(
+        "ant_activ",
+        d.derived(
+            "ant_activ",
+            l["nact"].or(l["pact"]).group().not(l["gatpoly"]),
+        ),
+    );
+    l.insert(
+        "ant_diode",
+        d.derived(
+            "ant_diode",
+            l["ant_activ"].with_area(&[Bound::AtLeast(nm2(160_000))]),
+        ),
+    );
+    l.insert(
+        "ant_marked",
+        d.derived("ant_marked", l["ant_activ"].and(l["recog_diode"])),
+    );
+    d.rule("Ant.g", min_area(l["ant_marked"], nm2(160_000)));
     d.rule(
         "Ant.a",
         antenna(l["gate"], &[l["gatpoly_c"]], 201.0, None, None),
@@ -1716,11 +1736,17 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     d.rule("Ant.c", antenna(l["gate"], &[l["cont"]], 20.0, None, None));
     d.rule(
         "Ant.b_Metal1",
-        antenna(l["gate"], &[l["metal1"]], 200.0, None, None),
+        antenna(l["gate"], &[l["metal1"]], 200.0, None, Some(l["ant_diode"])),
     );
     d.rule(
         "Ant.b_Metal2",
-        antenna(l["gate"], &[l["metal1"], l["metal2"]], 200.0, None, None),
+        antenna(
+            l["gate"],
+            &[l["metal1"], l["metal2"]],
+            200.0,
+            None,
+            Some(l["ant_diode"]),
+        ),
     );
     d.rule(
         "Ant.b_Metal3",
@@ -1729,7 +1755,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             &[l["metal1"], l["metal2"], l["metal3"]],
             200.0,
             None,
-            None,
+            Some(l["ant_diode"]),
         ),
     );
     d.rule(
@@ -1739,7 +1765,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             &[l["metal1"], l["metal2"], l["metal3"], l["metal4"]],
             200.0,
             None,
-            None,
+            Some(l["ant_diode"]),
         ),
     );
     d.rule(
@@ -1755,7 +1781,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             ],
             200.0,
             None,
-            None,
+            Some(l["ant_diode"]),
         ),
     );
     d.rule(
@@ -1772,7 +1798,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             ],
             200.0,
             None,
-            None,
+            Some(l["ant_diode"]),
         ),
     );
     d.rule(
@@ -1790,16 +1816,22 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             ],
             200.0,
             None,
-            None,
+            Some(l["ant_diode"]),
         ),
     );
     d.rule(
         "Ant.d_Via1",
-        antenna(l["gate"], &[l["via1"]], 20.0, None, None),
+        antenna(l["gate"], &[l["via1"]], 20.0, None, Some(l["ant_diode"])),
     );
     d.rule(
         "Ant.d_Via2",
-        antenna(l["gate"], &[l["via1"], l["via2"]], 20.0, None, None),
+        antenna(
+            l["gate"],
+            &[l["via1"], l["via2"]],
+            20.0,
+            None,
+            Some(l["ant_diode"]),
+        ),
     );
     d.rule(
         "Ant.d_Via3",
@@ -1808,7 +1840,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             &[l["via1"], l["via2"], l["via3"]],
             20.0,
             None,
-            None,
+            Some(l["ant_diode"]),
         ),
     );
     d.rule(
@@ -1818,7 +1850,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             &[l["via1"], l["via2"], l["via3"], l["via4"]],
             20.0,
             None,
-            None,
+            Some(l["ant_diode"]),
         ),
     );
     d.rule(
@@ -1828,7 +1860,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             &[l["via1"], l["via2"], l["via3"], l["via4"], l["topvia1_m5"]],
             20.0,
             None,
-            None,
+            Some(l["ant_diode"]),
         ),
     );
     d.rule(
@@ -1845,6 +1877,268 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             ],
             20.0,
             None,
+            Some(l["ant_diode"]),
+        ),
+    );
+    d.rule(
+        "Ant.e_Metal1",
+        antenna_electrical(
+            l["gate"],
+            &[l["metal1"]],
+            20000.0,
+            None,
+            1.0,
+            Some(l["ant_diode"]),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "Ant.e_Metal2",
+        antenna_electrical(
+            l["gate"],
+            &[l["metal1"], l["metal2"]],
+            20000.0,
+            None,
+            1.0,
+            Some(l["ant_diode"]),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "Ant.e_Metal3",
+        antenna_electrical(
+            l["gate"],
+            &[l["metal1"], l["metal2"], l["metal3"]],
+            20000.0,
+            None,
+            1.0,
+            Some(l["ant_diode"]),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "Ant.e_Metal4",
+        antenna_electrical(
+            l["gate"],
+            &[l["metal1"], l["metal2"], l["metal3"], l["metal4"]],
+            20000.0,
+            None,
+            1.0,
+            Some(l["ant_diode"]),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "Ant.e_Metal5",
+        antenna_electrical(
+            l["gate"],
+            &[
+                l["metal1"],
+                l["metal2"],
+                l["metal3"],
+                l["metal4"],
+                l["metal5"],
+            ],
+            20000.0,
+            None,
+            1.0,
+            Some(l["ant_diode"]),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "Ant.e_TopMetal1",
+        antenna_electrical(
+            l["gate"],
+            &[
+                l["metal1"],
+                l["metal2"],
+                l["metal3"],
+                l["metal4"],
+                l["metal5"],
+                l["topmetal1"],
+            ],
+            20000.0,
+            None,
+            1.0,
+            Some(l["ant_diode"]),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "Ant.e_TopMetal2",
+        antenna_electrical(
+            l["gate"],
+            &[
+                l["metal1"],
+                l["metal2"],
+                l["metal3"],
+                l["metal4"],
+                l["metal5"],
+                l["topmetal1"],
+                l["topmetal2"],
+            ],
+            20000.0,
+            None,
+            1.0,
+            Some(l["ant_diode"]),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "Ant.f_Via1",
+        antenna_electrical(
+            l["gate"],
+            &[l["via1"]],
+            500.0,
+            None,
+            1.0,
+            Some(l["ant_diode"]),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "Ant.f_Via2",
+        antenna_electrical(
+            l["gate"],
+            &[l["via1"], l["via2"]],
+            500.0,
+            None,
+            1.0,
+            Some(l["ant_diode"]),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "Ant.f_Via3",
+        antenna_electrical(
+            l["gate"],
+            &[l["via1"], l["via2"], l["via3"]],
+            500.0,
+            None,
+            1.0,
+            Some(l["ant_diode"]),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "Ant.f_Via4",
+        antenna_electrical(
+            l["gate"],
+            &[l["via1"], l["via2"], l["via3"], l["via4"]],
+            500.0,
+            None,
+            1.0,
+            Some(l["ant_diode"]),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "Ant.f_TopVia1",
+        antenna_electrical(
+            l["gate"],
+            &[l["via1"], l["via2"], l["via3"], l["via4"], l["topvia1_m5"]],
+            500.0,
+            None,
+            1.0,
+            Some(l["ant_diode"]),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            None,
+        ),
+    );
+    d.rule(
+        "Ant.f_TopVia2",
+        antenna_electrical(
+            l["gate"],
+            &[
+                l["via1"],
+                l["via2"],
+                l["via3"],
+                l["via4"],
+                l["topvia1_m5"],
+                l["topvia2"],
+            ],
+            500.0,
+            None,
+            1.0,
+            Some(l["ant_diode"]),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
             None,
         ),
     );
@@ -1854,31 +2148,73 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     d.rule("supply_short", supply_short(l["ntap"], l["ptap"], None));
     d.rule(
         "EM.Metal1",
-        em_current_density(&[l["metal1"], l["cont"]], 1000.0, 300.0),
+        em_current_density(
+            &[l["metal1"], l["cont"]],
+            1000.0,
+            300.0,
+            Some(nm(360)),
+            Some(360.0),
+        ),
     );
     d.rule(
         "EM.Metal2",
-        em_current_density(&[l["metal2"], l["via1"]], 2000.0, 400.0),
+        em_current_density(
+            &[l["metal2"], l["via1"]],
+            2000.0,
+            400.0,
+            Some(nm(300)),
+            Some(600.0),
+        ),
     );
     d.rule(
         "EM.Metal3",
-        em_current_density(&[l["metal3"], l["via2"]], 2000.0, 400.0),
+        em_current_density(
+            &[l["metal3"], l["via2"]],
+            2000.0,
+            400.0,
+            Some(nm(300)),
+            Some(600.0),
+        ),
     );
     d.rule(
         "EM.Metal4",
-        em_current_density(&[l["metal4"], l["via3"]], 2000.0, 400.0),
+        em_current_density(
+            &[l["metal4"], l["via3"]],
+            2000.0,
+            400.0,
+            Some(nm(300)),
+            Some(600.0),
+        ),
     );
     d.rule(
         "EM.Metal5",
-        em_current_density(&[l["metal5"], l["via4"]], 2000.0, 400.0),
+        em_current_density(
+            &[l["metal5"], l["via4"]],
+            2000.0,
+            400.0,
+            Some(nm(300)),
+            Some(600.0),
+        ),
     );
     d.rule(
         "EM.TopMetal1",
-        em_current_density(&[l["topmetal1"], l["topvia1_m5"]], 15000.0, 1400.0),
+        em_current_density(
+            &[l["topmetal1"], l["topvia1_m5"]],
+            15000.0,
+            1400.0,
+            None,
+            None,
+        ),
     );
     d.rule(
         "EM.TopMetal2",
-        em_current_density(&[l["topmetal2"], l["topvia2"]], 16000.0, 10000.0),
+        em_current_density(
+            &[l["topmetal2"], l["topvia2"]],
+            16000.0,
+            10000.0,
+            None,
+            None,
+        ),
     );
     d.rule(
         "GOX.lv",

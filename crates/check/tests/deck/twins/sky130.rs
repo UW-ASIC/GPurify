@@ -8,12 +8,13 @@
 #![allow(clippy::unreadable_literal, reason = "values as the deck writes them")]
 
 use gpurify_check::deck::rules::{
-    angle, antenna, asymmetric_enclosure, attached_wide_spacing, cut_size, density_cmp,
-    drain_source, edge_enclosure, edge_min_length, edge_spacing, edge_width, em_current_density,
-    esd_topological, floating_gate, floating_well, forbidden, gate_oxide, ir_drop, min_area,
-    min_enclosed_area, min_enclosure, min_extension, min_spacing, min_spacing_diff, min_width,
-    multiple_drivers, must_be_inside, must_contain, notch, off_grid, soft_connection, supply_short,
-    tie_high_low, unconnected_pin, well_bias, wide_dependent_spacing,
+    angle, antenna, antenna_electrical, asymmetric_enclosure, attached_wide_spacing, cut_size,
+    density_cmp, drain_source, edge_enclosure, edge_min_length, edge_spacing, edge_width,
+    em_current_density, esd_topological, floating_gate, floating_well, forbidden, gate_oxide,
+    ir_drop, min_area, min_enclosed_area, min_enclosure, min_extension, min_spacing,
+    min_spacing_diff, min_width, multiple_drivers, must_be_inside, must_contain, notch, off_grid,
+    soft_connection, supply_short, tie_high_low, unconnected_pin, well_bias,
+    wide_dependent_spacing,
 };
 use gpurify_check::deck::{BuildError, CompiledDeck, DeckBuilder, LayerRef};
 use gpurify_geom::{Dbu, DbuArea, Grid, StrTable};
@@ -985,9 +986,32 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     );
     d.rule("x.1b", off_grid(nm(5)));
     d.rule("x.3a", angle(None, &[0, 45, 90, 135]));
+    l.insert(
+        "pantenna_short",
+        d.derived(
+            "pantenna_short",
+            l["tap"].not(l["poly"]).group().not(l["nwell"]),
+        ),
+    );
+    l.insert(
+        "antenna_diode",
+        d.derived(
+            "antenna_diode",
+            l["diff"]
+                .or(l["tap"])
+                .group()
+                .not(l["poly"].or(l["pantenna_short"])),
+        ),
+    );
     d.rule(
         "ar.poly.1",
-        antenna(l["gate"], &[l["poly_c"]], 50.0, Some(nm(180)), None),
+        antenna(
+            l["gate"],
+            &[l["poly_c"]],
+            50.0,
+            Some(nm(180)),
+            Some(l["pantenna_short"]),
+        ),
     );
     d.rule(
         "ar.licon.1",
@@ -1002,49 +1026,206 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             ],
             3.0,
             None,
-            None,
+            Some(l["pantenna_short"]),
         ),
     );
     d.rule(
         "ar.li.1",
-        antenna(l["gate"], &[l["li_c"]], 75.0, Some(nm(100)), None),
+        antenna_electrical(
+            l["gate"],
+            &[l["li_c"]],
+            75.0,
+            Some(nm(100)),
+            1.0,
+            Some(l["antenna_diode"]),
+            450.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            Some(l["pantenna_short"]),
+        ),
     );
     d.rule(
         "ar.mcon.1",
-        antenna(l["gate"], &[l["mcon"]], 3.0, None, None),
+        antenna_electrical(
+            l["gate"],
+            &[l["mcon"]],
+            3.0,
+            None,
+            1.0,
+            Some(l["antenna_diode"]),
+            18.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            Some(l["pantenna_short"]),
+        ),
     );
     d.rule(
         "ar.met1.1",
-        antenna(l["gate"], &[l["met1"]], 400.0, Some(nm(350)), None),
+        antenna_electrical(
+            l["gate"],
+            &[l["met1"]],
+            400.0,
+            Some(nm(350)),
+            1.0,
+            Some(l["antenna_diode"]),
+            400.0,
+            2200.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            Some(l["pantenna_short"]),
+        ),
     );
-    d.rule("ar.via.1", antenna(l["gate"], &[l["via"]], 6.0, None, None));
+    d.rule(
+        "ar.via.1",
+        antenna_electrical(
+            l["gate"],
+            &[l["via"]],
+            6.0,
+            None,
+            1.0,
+            Some(l["antenna_diode"]),
+            36.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            Some(l["pantenna_short"]),
+        ),
+    );
     d.rule(
         "ar.met2.1",
-        antenna(l["gate"], &[l["met2"]], 400.0, Some(nm(350)), None),
+        antenna_electrical(
+            l["gate"],
+            &[l["met2"]],
+            400.0,
+            Some(nm(350)),
+            1.0,
+            Some(l["antenna_diode"]),
+            400.0,
+            2200.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            Some(l["pantenna_short"]),
+        ),
     );
     d.rule(
         "ar.via2.1",
-        antenna(l["gate"], &[l["via2"]], 6.0, None, None),
+        antenna_electrical(
+            l["gate"],
+            &[l["via2"]],
+            6.0,
+            None,
+            1.0,
+            Some(l["antenna_diode"]),
+            36.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            Some(l["pantenna_short"]),
+        ),
     );
     d.rule(
         "ar.met3.1",
-        antenna(l["gate"], &[l["met3"]], 400.0, Some(nm(800)), None),
+        antenna_electrical(
+            l["gate"],
+            &[l["met3"]],
+            400.0,
+            Some(nm(800)),
+            1.0,
+            Some(l["antenna_diode"]),
+            400.0,
+            2200.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            Some(l["pantenna_short"]),
+        ),
     );
     d.rule(
         "ar.via3.1",
-        antenna(l["gate"], &[l["via3_m3"]], 6.0, None, None),
+        antenna_electrical(
+            l["gate"],
+            &[l["via3_m3"]],
+            6.0,
+            None,
+            1.0,
+            Some(l["antenna_diode"]),
+            36.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            Some(l["pantenna_short"]),
+        ),
     );
     d.rule(
         "ar.met4.1",
-        antenna(l["gate"], &[l["met4"]], 400.0, Some(nm(800)), None),
+        antenna_electrical(
+            l["gate"],
+            &[l["met4"]],
+            400.0,
+            Some(nm(800)),
+            1.0,
+            Some(l["antenna_diode"]),
+            400.0,
+            2200.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            Some(l["pantenna_short"]),
+        ),
     );
     d.rule(
         "ar.via4.1",
-        antenna(l["gate"], &[l["via4_m4"]], 6.0, None, None),
+        antenna_electrical(
+            l["gate"],
+            &[l["via4_m4"]],
+            6.0,
+            None,
+            1.0,
+            Some(l["antenna_diode"]),
+            36.0,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            Some(l["pantenna_short"]),
+        ),
     );
     d.rule(
         "ar.met5.1",
-        antenna(l["gate"], &[l["met5"]], 400.0, Some(nm(1200)), None),
+        antenna_electrical(
+            l["gate"],
+            &[l["met5"]],
+            400.0,
+            Some(nm(1200)),
+            1.0,
+            Some(l["antenna_diode"]),
+            400.0,
+            2200.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            Some(l["pantenna_short"]),
+        ),
     );
     d.rule(
         "x.22",
@@ -1154,23 +1335,23 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     );
     d.rule(
         "EM.met1_mcon",
-        em_current_density(&[l["met1"], l["mcon"]], 2800.0, 360.0),
+        em_current_density(&[l["met1"], l["mcon"]], 2800.0, 360.0, None, None),
     );
     d.rule(
         "EM.met2_via1",
-        em_current_density(&[l["met2"], l["via"]], 2800.0, 290.0),
+        em_current_density(&[l["met2"], l["via"]], 2800.0, 290.0, None, None),
     );
     d.rule(
         "EM.met3_via2",
-        em_current_density(&[l["met3"], l["via2"]], 6800.0, 480.0),
+        em_current_density(&[l["met3"], l["via2"]], 6800.0, 480.0, None, None),
     );
     d.rule(
         "EM.met4_via3",
-        em_current_density(&[l["met4"], l["via3_m3"]], 6800.0, 480.0),
+        em_current_density(&[l["met4"], l["via3_m3"]], 6800.0, 480.0, None, None),
     );
     d.rule(
         "EM.met5_via4",
-        em_current_density(&[l["met5"], l["via4_m4"]], 10170.0, 2490.0),
+        em_current_density(&[l["met5"], l["via4_m4"]], 10170.0, 2490.0, None, None),
     );
     d.rule(
         "m1.density",

@@ -845,6 +845,11 @@ impl RuleSet {
                 c.not_negative("area_minus_diode", t.area_minus_diode[r])?;
                 c.not_negative("gate_plus_diode", t.gate_plus_diode[r])?;
                 c.positive("cut_factor", t.cut_factor[r])?;
+                for &measure in &t.collector_measure[span(&t.collector_start)] {
+                    if let antenna::AntennaMeasure::Sidewall { thickness } = measure {
+                        c.length("sidewall_thickness", thickness)?;
+                    }
+                }
                 for &(_, factor) in &t.diode_reduce[r] {
                     c.not_negative("diode_reduce", factor)?;
                 }

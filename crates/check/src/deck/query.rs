@@ -41,7 +41,7 @@ pub struct DensityLimit {
     pub sense: LimitSense,
 }
 
-/// One antenna row whose collectors include a layer.
+/// One antenna or electrical-antenna row whose collectors include a layer.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AntennaLimit {
     /// The rule's id.
@@ -52,7 +52,8 @@ pub struct AntennaLimit {
     pub max_ratio: f64,
     /// Whether the collector counts its area or its sidewall.
     pub measure: AntennaMeasure,
-    /// The diode layer whose gates the row skips, if any.
+    /// The diode layer: whose gates an `antenna` row skips, whose area an
+    /// `antenna_electrical` row credits; `None` without one.
     pub diode: Option<LayerId>,
 }
 
@@ -298,23 +299,50 @@ impl CompiledDeck {
             })
     }
 
-    /// The `antenna` rows that count `collector` among their collectors, in
-    /// deck order.
+    /// The `antenna` rows, then the `antenna_electrical` rows, that count
+    /// `collector` among their collectors, each in deck order.
     pub fn antenna(&self, collector: LayerId) -> impl Iterator<Item = AntennaLimit> + '_ {
-        let table = &self.erc.antenna;
-        (0..table.head.len()).filter_map(move |row| {
-            let span = table.collector_start[row] as usize..table.collector_start[row + 1] as usize;
-            let at = table.collector[span.clone()]
-                .iter()
-                .position(|&layer| layer == collector)?;
-            Some(AntennaLimit {
-                rule: table.head.rule[row],
-                gate: table.gate[row],
-                max_ratio: table.max_ratio[row],
-                measure: table.collector_measure[span.start + at],
-                diode: table.diode[row],
-            })
-        })
+        let plain = &self.erc.antenna;
+        let electrical = &self.erc.antenna_electrical;
+        let plain = (0..plain.head.len()).map(move |row| {
+            (
+                &plain.head,
+                row,
+                &plain.collector_start,
+                &plain.collector,
+                &plain.collector_measure,
+                plain.gate[row],
+                plain.max_ratio[row],
+                plain.diode[row],
+            )
+        });
+        let electrical = (0..electrical.head.len()).map(move |row| {
+            (
+                &electrical.head,
+                row,
+                &electrical.collector_start,
+                &electrical.collector,
+                &electrical.collector_measure,
+                electrical.gate[row],
+                electrical.max_ratio[row],
+                electrical.diode[row],
+            )
+        });
+        plain.chain(electrical).filter_map(
+            move |(head, row, start, collectors, measures, gate, max_ratio, diode)| {
+                let span = start[row] as usize..start[row + 1] as usize;
+                let at = collectors[span.clone()]
+                    .iter()
+                    .position(|&layer| layer == collector)?;
+                Some(AntennaLimit {
+                    rule: head.rule[row],
+                    gate,
+                    max_ratio,
+                    measure: measures[span.start + at],
+                    diode,
+                })
+            },
+        )
     }
 
     /// The `em_current_density` rows naming `layer`, in deck order.
