@@ -328,7 +328,7 @@ explains (kind 30).
 | 79 | stack_spacing | `stack_space(A, B[; same_net]) >= l` | — | NONE | reported as not mirrored | — |
 | 80 | metal_width_via | `via_map(C, B, A; ..)` | ROW | EXACT (scripted) | exact | — |
 
-51 kinds are EXACT (thirteen scripted over KLayout's polygons), 16 APPROX and nine NONE; `convex_corner_spacing` is NONE on a deck with
+53 kinds are EXACT (fifteen scripted over KLayout's polygons), 16 APPROX and eleven NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`, and between two layers (`space(A, B; nets: ..)`), which is not mirrored. `examined` is GPurify-only; KLayout has no equivalent.
 

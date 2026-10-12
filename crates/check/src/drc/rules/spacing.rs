@@ -747,16 +747,9 @@ pub(crate) fn net_spacing(
             of_b[(row.0 - first_b) as usize]
         }
     };
-    pair_spacing_by_net(
-        store,
-        net_of,
-        rule,
-        layers,
-        limit,
-        s,
-        out,
-        |a, b| ((a == b) == same_net).then_some(Some(limit)),
-    )
+    pair_spacing_by_net(store, net_of, rule, layers, limit, s, out, |a, b| {
+        ((a == b) == same_net).then_some(Some(limit))
+    })
 }
 
 /// Per store row of `layer`, its net: its own, or, for a row on no net, the

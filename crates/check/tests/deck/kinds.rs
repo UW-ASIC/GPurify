@@ -6,7 +6,14 @@ use super::builder::assert_same;
 use super::grid;
 use super::printer::assert_round_trip;
 use gpurify_check::deck::rules::{
-    allowed_width, aspect_ratio, asymmetric_enclosure, convex_corner_spacing, count, cover_density, cut_area_change, cut_class, cut_class_spacing, cut_spacing, dfm_score, edge_facing_space, edge_width, eol_keep_out, eol_within_spacing, exact_pitch, forbidden, forbidden_spacing, full_width, gate_corner, keep_out_zone, max_cut_spacing, max_enclosure, mean_critical_area, metal_width_via, min_enclosure, min_interior_angle, min_step, min_step_adjacent, minimum_cut, must_contain, noncoincident_enclosure, origin, pattern_match, polygon_validity, projection_spacing, protrusion_width, region_density, span_length, stack_spacing, tip_spacing_table, total_area, two_width_spacing_table, via_redundancy, via_stack,
+    allowed_width, aspect_ratio, asymmetric_enclosure, convex_corner_spacing, count, cover_density,
+    cut_area_change, cut_class, cut_class_spacing, cut_spacing, dfm_score, edge_facing_space,
+    edge_width, eol_keep_out, eol_within_spacing, exact_pitch, forbidden, forbidden_spacing,
+    full_width, gate_corner, keep_out_zone, max_cut_spacing, max_enclosure, mean_critical_area,
+    metal_width_via, min_enclosure, min_interior_angle, min_step, min_step_adjacent, minimum_cut,
+    must_contain, noncoincident_enclosure, origin, pattern_match, polygon_validity,
+    projection_spacing, protrusion_width, region_density, span_length, stack_spacing,
+    tip_spacing_table, total_area, two_width_spacing_table, via_redundancy, via_stack,
 };
 use gpurify_check::deck::{compile, Bound, CompiledDeck, DeckBuilder};
 use gpurify_check::drc::ruleset::{DfmCheck, EolParallel};
