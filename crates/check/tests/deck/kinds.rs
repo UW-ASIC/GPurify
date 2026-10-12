@@ -20,6 +20,7 @@ layer r = gds(2, 0)
 layer v = gds(3, 0)
 layer v2 = gds(4, 0)
 layer m2 = gds(5, 0)
+layer t = gds(6, 0)
 layer rects = m.rectangles()
 layer squares = m.squares()
 layer odd = m.non_rectangles()
@@ -27,6 +28,7 @@ layer long = m.with_bbox_max(> 1000nm)
 layer thin = v.non_squares().with_bbox_min(>= 100nm, < 200nm)
 layer roomy = m.with_rect(300nm x 100nm)
 layer cramped = m.without_rect(200nm x 200nm)
+layer stray = t.texts_outside(m)
 rule c.min count(m) >= 1
 rule c.max count(m) <= 4
 rule ar aspect_ratio(m) <= 3
@@ -52,6 +54,7 @@ rule msa.between min_step(m; between_eol: 120nm) >= 50nm
 rule mcs max_space(v) <= 2000nm
 rule mcs.cls max_space(thin, v) <= 2000nm
 rule odd.none forbidden(odd)
+rule stray.none forbidden(stray)
 rule tip tip_space_table(m; length: [0nm, 100nm], space: [[60nm, 70nm], [70nm, 80nm]])
 rule tw two_width_table(m; width: [0nm, 200nm], prl: [none, 300nm], space: [[50nm, 60nm], [60nm, 90nm]])
 rule sl span_length(m; x: [100nm, 200nm], y: [150nm])
@@ -115,6 +118,7 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     let v = d.layer("v", (3, 0));
     let v2 = d.layer("v2", (4, 0));
     let m2 = d.layer("m2", (5, 0));
+    let t = d.layer("t", (6, 0));
     d.derived("rects", m.rectangles());
     d.derived("squares", m.squares());
     let odd = d.derived("odd", m.non_rectangles());
@@ -126,6 +130,7 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     );
     d.derived("roomy", m.with_rect(nm(300), nm(100)));
     d.derived("cramped", m.without_rect(nm(200), nm(200)));
+    let stray = d.derived("stray", t.texts_outside(m));
     d.rule("c.min", count(m, 1, false));
     d.rule("c.max", count(m, 4, true));
     d.rule("ar", aspect_ratio(m, 3.0));
@@ -177,6 +182,7 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     d.rule("mcs", max_cut_spacing(v, None, nm(2000)));
     d.rule("mcs.cls", max_cut_spacing(thin, Some(v.into()), nm(2000)));
     d.rule("odd.none", forbidden(odd));
+    d.rule("stray.none", forbidden(stray));
     d.rule(
         "tip",
         tip_spacing_table(m, &[nm(0), nm(100)], &[nm(60), nm(70), nm(70), nm(80)]),

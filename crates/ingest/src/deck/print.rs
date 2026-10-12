@@ -688,6 +688,7 @@ impl Printer<'_> {
                 }
                 call("with_width", Some(bounds.join(", ")))
             }
+            DerivedOp::TextsOutside => call("texts_outside", Some(name(1)?.to_owned())),
             DerivedOp::WithText { keep, text } => {
                 let pattern = self.source.texts.get(text as usize).ok_or_else(|| {
                     PrintError::Unprintable(format!("layer {}: no text pattern", row.name))

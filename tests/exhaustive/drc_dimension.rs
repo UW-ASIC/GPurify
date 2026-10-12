@@ -96,6 +96,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         wrong_direction_spacing(depth),
         validity(depth),
         pins(depth),
+        floating_labels(depth),
     ]
     .concat()
 }
@@ -5093,6 +5094,100 @@ fn validity(_depth: Depth) -> Vec<Fixture> {
             .expect(Expect::rule("an", vec![count(0)]))
             .expect(Expect::Passes(false)),
     ])
+}
+
+/// Floating labels and pin centres (DRC-007):
+/// - sky130 x.17, "All labels must be within the drawing polygons of the
+///   layer": `forbidden(met1_label.texts_outside(met1))`, each text drawn on
+///   the label layer on no metal, neither on its material nor on its
+///   boundary, as a one-unit box at its anchor (area 1, marked at the
+///   anchor);
+/// - sky130 x.20, "Min spacing between pins on the same layer (center to
+///   center)": `space(met1_pin, center) >= 500nm`, the value deck-supplied
+///   (the public manual states none; no public deck codes it).
+///
+/// Oracle: the rule text, points by construction: a label inside the metal,
+/// on its edge and on its corner (clean), one unit past the edge (floating),
+/// inside a hole of a ringed metal (floating) and on the hole's edge (on
+/// metal), two labels at one floating point (two boxes); two 100 pins with
+/// centres 499, 500 and 501 apart (the closer than 500 one flagged).
+fn floating_labels(depth: Depth) -> Vec<Fixture> {
+    let deck = "grid 1nm
+layer met1 = gds(68, 20)
+layer met1_pin = gds(68, 16)
+layer met1_label = gds(68, 5)
+layer floating = met1_label.texts_outside(met1)
+rule x.17 forbidden(floating)
+rule x.20 space(met1_pin, center) >= 500nm
+";
+    let plate = met1(&[[0, 0, 1000, 1000]]);
+    let floating = |points: &[(i64, i64)]| -> Vec<Finding> {
+        points
+            .iter()
+            .map(|&(x, y)| Finding::area(1).at(x, y))
+            .collect()
+    };
+    let mut cases = Vec::new();
+    for (name, (x, y), found) in [
+        ("inside", (500, 500), false),
+        ("on_edge", (1000, 500), false),
+        ("on_corner", (1000, 1000), false),
+        ("past_edge", (1001, 500), true),
+    ] {
+        cases.push(fixture(
+            &format!("floating_labels/{name}"),
+            &["DRC-007"],
+            deck,
+            plate.clone().label("met1_label", x, y, "A"),
+            vec![
+                ("x.17", if found { floating(&[(x, y)]) } else { vec![] }),
+                ("x.20", vec![]),
+            ],
+        ));
+    }
+    let ring = Layout::default().polygon("met1", &holed([0, 0, 1000, 1000], [400, 400, 600, 600]));
+    cases.push(fixture(
+        "floating_labels/in_hole",
+        &["DRC-007"],
+        deck,
+        ring.clone()
+            .label("met1_label", 500, 500, "A")
+            .label("met1_label", 400, 500, "B"),
+        vec![("x.17", floating(&[(500, 500)])), ("x.20", vec![])],
+    ));
+    cases.push(fixture(
+        "floating_labels/two_at_one_point",
+        &["DRC-007"],
+        deck,
+        plate
+            .clone()
+            .label("met1_label", 2000, 2000, "A")
+            .label("met1_label", 2000, 2000, "B"),
+        vec![
+            ("x.17", floating(&[(2000, 2000), (2000, 2000)])),
+            ("x.20", vec![]),
+        ],
+    ));
+    for d in sweep(depth, 500) {
+        let pins = rects(
+            plate.clone(),
+            "met1_pin",
+            &[[100, 100, 200, 200], [100 + d, 100, 200 + d, 200]],
+        );
+        let findings = if d < 500 {
+            vec![Finding::length(d)]
+        } else {
+            vec![]
+        };
+        cases.push(fixture(
+            &format!("pin_centres/{}", side(d, 500)),
+            &["DRC-007"],
+            deck,
+            pins,
+            vec![("x.17", vec![]), ("x.20", findings)],
+        ));
+    }
+    every_placement(cases)
 }
 
 /// Pins and labels (DRC-007): `inside(met1_pin, met1)` reports the area of a

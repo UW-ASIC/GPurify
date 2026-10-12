@@ -225,6 +225,22 @@ pub fn extents_into(a: &ValidatedLayer, out: &mut ValidatedLayer) -> Result<(), 
     Ok(())
 }
 
+/// One rectangle per box of `boxes`, unmerged (overlapping boxes stay
+/// separate polygons, as [`extents_into`]'s do).
+///
+/// # Errors
+///
+/// A box with no area fails validation.
+pub fn boxes_into(boxes: &[Bbox], out: &mut ValidatedLayer) -> Result<(), BooleanError> {
+    let mut builder = GeometryStoreBuilder::with_capacity(boxes.len(), 4 * boxes.len());
+    for &b in boxes {
+        push_rect(&mut builder, b);
+    }
+    let (store, _) = builder.finish(1);
+    validate_layer_into(&store, ONLY, out)?;
+    Ok(())
+}
+
 /// `KLayout` `with_area`: polygons whose area in square grid units, holes
 /// excluded, is in `range`. Exact for an octilinear polygon too, whose area
 /// can be a half unit: it is compared doubled.

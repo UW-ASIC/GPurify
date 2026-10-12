@@ -773,6 +773,16 @@ impl Layers<'_> {
                     rb(pattern)
                 )
             }
+            // A text as a 2 x 2 box centred on it (`extents`), moved up
+            // and right by 1: GPurify's one-unit box from the anchor, doubled.
+            DerivedOp::TextsOutside => {
+                let operand = self.deck.layers.operands(layer)[0];
+                let (l, d) = self.deck.layers.stream_of(operand);
+                format!(
+                    "src.labels({l}, {d}).texts(pattern(\"*\")).not_interacting({}).extents.moved(1, 1)",
+                    b()
+                )
+            }
             // `Source#select`: "-" disables the top cell, "+p" enables a
             // matching cell with its subtree, "-p" disables one; a cell no
             // filter names inherits its parent's state.
