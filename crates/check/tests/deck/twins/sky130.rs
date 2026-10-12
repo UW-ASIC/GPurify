@@ -8,15 +8,15 @@
 #![allow(clippy::unreadable_literal, reason = "values as the deck writes them")]
 
 use gpurify_check::deck::rules::{
-    adjacent_enclosure, angle, antenna, antenna_electrical, attached_wide_spacing, cut_size,
-    density_cmp, drain_source, edge_enclosure, edge_min_length, edge_spacing, edge_width,
-    em_current_density, esd_topological, floating_gate, floating_well, forbidden, gate_oxide,
-    ir_drop, min_area, min_enclosed_area, min_enclosure, min_extension, min_spacing,
-    min_spacing_diff, min_width, multiple_drivers, must_be_inside, must_contain, notch, off_grid,
-    soft_connection, supply_short, tie_high_low, unconnected_pin, well_bias,
-    wide_dependent_spacing,
+    adjacent_enclosure, allowed_width, angle, antenna, antenna_electrical, attached_wide_spacing,
+    cut_class_spacing, cut_size, density_cmp, drain_source, edge_enclosure, edge_min_length,
+    edge_spacing, edge_width, em_current_density, esd_topological, floating_gate, floating_well,
+    forbidden, gate_corner, gate_oxide, ir_drop, max_enclosure, min_area, min_enclosed_area,
+    min_enclosure, min_extension, min_spacing, min_spacing_diff, min_width, multiple_drivers,
+    must_be_inside, must_contain, noncoincident_enclosure, notch, off_grid, soft_connection,
+    supply_short, tie_high_low, unconnected_pin, well_bias, wide_dependent_spacing,
 };
-use gpurify_check::deck::{BuildError, CompiledDeck, DeckBuilder, LayerRef};
+use gpurify_check::deck::{Bound, BuildError, CompiledDeck, DeckBuilder, LayerRef};
 use gpurify_geom::{Dbu, DbuArea, Grid, StrTable};
 use gpurify_ingest::deck::{DeviceKind, DeviceValue, StackSource};
 use std::collections::HashMap;
@@ -78,6 +78,21 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     l.insert("areaid_diode", d.layer("areaid_diode", (81, 23)));
     l.insert("pnp", d.layer("pnp", (82, 44)));
     l.insert("tunm", d.layer("tunm", (80, 20)));
+    l.insert("cfom_fill", d.layer("cfom_fill", (22, 99)));
+    l.insert("cfom_waffle", d.layer("cfom_waffle", (22, 24)));
+    l.insert("cp1m_fill", d.layer("cp1m_fill", (28, 28)));
+    l.insert("cp1m_waffle", d.layer("cp1m_waffle", (33, 24)));
+    l.insert("cli1m_fill", d.layer("cli1m_fill", (56, 28)));
+    l.insert("cmm1_fill", d.layer("cmm1_fill", (36, 28)));
+    l.insert("cmm1_waffle", d.layer("cmm1_waffle", (62, 24)));
+    l.insert("cmm2_fill", d.layer("cmm2_fill", (41, 28)));
+    l.insert("cmm2_waffle", d.layer("cmm2_waffle", (105, 52)));
+    l.insert("cmm3_fill", d.layer("cmm3_fill", (34, 28)));
+    l.insert("cmm3_waffle", d.layer("cmm3_waffle", (107, 24)));
+    l.insert("cmm4_fill", d.layer("cmm4_fill", (51, 28)));
+    l.insert("cmm4_waffle", d.layer("cmm4_waffle", (112, 4)));
+    l.insert("cmm5_fill", d.layer("cmm5_fill", (59, 28)));
+    l.insert("cmm5_waffle", d.layer("cmm5_waffle", (117, 4)));
     l.insert("poly_label", d.layer("poly_label", (66, 5)));
     l.insert("li_label", d.layer("li_label", (67, 5)));
     l.insert("met1_label", d.layer("met1_label", (68, 5)));
@@ -661,6 +676,14 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     );
     d.rule("lvtn.4b", min_enclosure(l["lvtn_gate"], l["lvtn"], nm(180)));
     d.rule("lvtn.9", min_spacing_diff(l["lvtn"], l["hvtp"], nm(380)));
+    l.insert(
+        "nwell_novar",
+        d.derived("nwell_novar", l["nwell"].outside(l["var_channel"])),
+    );
+    d.rule(
+        "lvtn.10",
+        noncoincident_enclosure(l["lvtn"], l["nwell_novar"], nm(380)),
+    );
     d.rule(
         "lvtn.12",
         min_spacing_diff(l["lvtn"], l["nwell_ce"], nm(380)),
@@ -726,6 +749,8 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
         "poly.9.difftap",
         min_spacing_diff(l["poly_res"], l["difftap"], nm(480)),
     );
+    d.rule("poly.10", gate_corner(l["poly"], l["diff"], true));
+    d.rule("poly.11", gate_corner(l["poly"], l["diff"], false));
     d.rule("rpm.1a", min_width(l["rpm"], nm(1270)));
     d.rule("rpm.2", min_spacing(l["rpm"], nm(840)));
     d.rule("rpm.2.notch", notch(l["rpm"], nm(840)));
@@ -741,7 +766,39 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
         "rpm.9",
         min_spacing_diff(l["prec_rpm"], l["hvntm"], nm(185)),
     );
+    d.rule(
+        "rpm.1b",
+        allowed_width(
+            l["prec_rpm"],
+            &[nm(350), nm(690), nm(1410), nm(2850), nm(5730)],
+        ),
+    );
+    for (name, width) in [
+        ("prec_term_0p35", 350),
+        ("prec_term_0p69", 690),
+        ("prec_term_1p41", 1410),
+        ("prec_term_2p85", 2850),
+        ("prec_term_5p73", 5730),
+    ] {
+        let term = l["prec_rpm"]
+            .with_width(&[Bound::Exactly(nm(width))])
+            .and(l["li"]);
+        l.insert(name, d.derived(name, term));
+    }
+    for (id, name, most) in [
+        ("rpm.1g", "prec_term_0p35", 1),
+        ("rpm.1h", "prec_term_0p69", 1),
+        ("rpm.1i", "prec_term_1p41", 2),
+        ("rpm.1j", "prec_term_2p85", 4),
+        ("rpm.1k", "prec_term_5p73", 8),
+    ] {
+        d.rule(id, must_contain(l[name], l["licon"], 0, Some(most)));
+    }
     d.rule("varac.1", min_width(l["var_channel"], nm(180)));
+    d.rule(
+        "varac.2",
+        edge_width(l["var_channel"].edges().and(l["tap"].edges()), nm(1000)),
+    );
     d.rule(
         "varac.3",
         min_spacing_diff(l["var_lvt"], l["hvtp"], nm(180)),
@@ -756,6 +813,20 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     d.rule("npc.2", min_spacing(l["npc"], nm(270)));
     d.rule("npc.2.notch", notch(l["npc"], nm(270)));
     d.rule("npc.4", min_spacing_diff(l["npc"], l["gate"], nm(90)));
+    l.insert(
+        "licon_slot",
+        d.derived(
+            "licon_slot",
+            l["licon"]
+                .rectangles()
+                .with_bbox_min(&[Bound::Exactly(nm(190))])
+                .with_bbox_max(&[Bound::Exactly(nm(2000))]),
+        ),
+    );
+    d.rule(
+        "npc.5",
+        max_enclosure(l["poly"].interacting(l["licon_slot"]), l["npc"], nm(95)),
+    );
     d.rule("nsd.1", min_width(l["nsdm"], nm(380)));
     d.rule("psd.1", min_width(l["psdm"], nm(380)));
     d.rule("nsd.2", min_spacing(l["nsdm"], nm(380)));
@@ -775,6 +846,32 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     d.rule("licon.1", cut_size(l["licon_std"], nm(170), nm(170)));
     d.rule("licon.1b", cut_size(l["licon_prec"], nm(190), nm(2000)));
     d.rule("licon.2", min_spacing(l["licon"], nm(170)));
+    d.rule(
+        "licon.2b",
+        cut_class_spacing(
+            l["licon"],
+            &[nm(170), nm(190)],
+            &[nm(170), nm(2000)],
+            &[
+                nm(170),
+                nm(170),
+                nm(510),
+                nm(510),
+                nm(170),
+                nm(170),
+                nm(510),
+                nm(510),
+                nm(510),
+                nm(510),
+                nm(350),
+                nm(510),
+                nm(510),
+                nm(510),
+                nm(510),
+                nm(510),
+            ],
+        ),
+    );
     d.rule(
         "licon.5a",
         min_enclosure(l["licon_diff"], l["diff"], nm(40)),
@@ -993,6 +1090,13 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     d.rule(
         "difftap.24",
         min_spacing_diff(l["nwell"], l["hndiff"], nm(430)),
+    );
+    d.rule(
+        "poly.13",
+        edge_width(
+            l["gate"].inside(l["hvi"]).edges().not(l["diff"].edges()),
+            nm(500),
+        ),
     );
     d.rule("hvntm.1", min_width(l["hvntm"], nm(700)));
     d.rule("hvntm.2", min_spacing(l["hvntm"], nm(700)));
@@ -2109,6 +2213,25 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     d.rule("hvi.4", forbidden(l["hvi"].and(l["tunm"])));
     d.rule("hvntm.9", forbidden(l["hvntm"].and(l["areaid_ce"])));
     d.rule("hvntm.10", forbidden(l["hvntm"].outside(l["hvi"])));
+    for (id, layer) in [
+        ("diff.oldfill.1", "cfom_fill"),
+        ("diff.oldfill.2", "cfom_waffle"),
+        ("poly.oldfill.1", "cp1m_fill"),
+        ("poly.oldfill.2", "cp1m_waffle"),
+        ("li.oldfill.1", "cli1m_fill"),
+        ("m1.oldfill.1", "cmm1_fill"),
+        ("m1.oldfill.2", "cmm1_waffle"),
+        ("m2.oldfill.1", "cmm2_fill"),
+        ("m2.oldfill.2", "cmm2_waffle"),
+        ("m3.oldfill.1", "cmm3_fill"),
+        ("m3.oldfill.2", "cmm3_waffle"),
+        ("m4.oldfill.1", "cmm4_fill"),
+        ("m4.oldfill.2", "cmm4_waffle"),
+        ("m5.oldfill.1", "cmm5_fill"),
+        ("m5.oldfill.2", "cmm5_waffle"),
+    ] {
+        d.rule(id, forbidden(l[layer]).warning());
+    }
     l.insert(
         "butt",
         d.derived("butt", l["tap"].edges().and(l["diff"].edges())),

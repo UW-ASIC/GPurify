@@ -33,6 +33,11 @@
 #        (ndiode, ndiodelvt: the diode layers and their substrate terminal) and KLayout
 #        sky130A/libs.tech/klayout/lvs/sky130.lvs (ndiode_terminal_n and the four
 #        pw2nd variants by hvi and lvtn)
+#   [S10] SKY130 derived-layer definitions, docs/rules/layers/table-c3-device-lvs-other.csv
+#        in [S1]'s repository (prec_resistor, prec_resistor_terminal, slotted_licon)
+#   [S11] Cadence's SKY130 Pegasus DRC deck v0.0_2.12 and its rule manual dated 2025-07-22
+#        (Sky130_DRM_July_22_2025.pdf; Cadence Public License 1.0, released without NDA),
+#        read from neu-ucb-tvip/tvip-analog-workspace at commit 956db25, Sky130_DRC/
 #
 # Rule ids are the manual's: nwell.1, licon.5a, m1.4. The n+/p+ implant rules,
 # which the manual groups as "n/psd.x", are nsd.x and psd.x here, as [S3] names them.
@@ -87,6 +92,24 @@ layer areaid_ed = gds(81, 19)
 layer areaid_diode = gds(81, 23)
 layer pnp = gds(82, 44)
 layer tunm = gds(80, 20)
+# Retired fill and waffle-drop layers [S11]: the pairs its layer map reads
+# (Include/layer_def.drc.pvl lines 528-542, Include/other.drc.pvl lines
+# 246-345), which for the waffle drops are [S2]'s.
+layer cfom_fill = gds(22, 99)
+layer cfom_waffle = gds(22, 24)
+layer cp1m_fill = gds(28, 28)
+layer cp1m_waffle = gds(33, 24)
+layer cli1m_fill = gds(56, 28)
+layer cmm1_fill = gds(36, 28)
+layer cmm1_waffle = gds(62, 24)
+layer cmm2_fill = gds(41, 28)
+layer cmm2_waffle = gds(105, 52)
+layer cmm3_fill = gds(34, 28)
+layer cmm3_waffle = gds(107, 24)
+layer cmm4_fill = gds(51, 28)
+layer cmm4_waffle = gds(112, 4)
+layer cmm5_fill = gds(59, 28)
+layer cmm5_waffle = gds(117, 4)
 
 # Text layers [S2]: the label purpose, the pin purpose, and text on drawing
 layer poly_label = gds(66, 5)
@@ -271,6 +294,11 @@ rule lvtn.2.notch notch(lvtn) >= 380nm
 rule lvtn.3a space(std_gate, lvtn) >= 180nm
 rule lvtn.4b enclosure(lvtn_gate, lvtn) >= 180nm
 rule lvtn.9 space(lvtn, hvtp) >= 380nm
+# lvtn.10, "Min enclosure of lvtn by (nwell not overlapping Var_channel)
+# (exclude coincident edges)", as [S11] Include/lvtn.drc.pvl lines 40-44
+# selects the wells; an lvtn off every such well is not measured.
+layer nwell_novar = nwell.outside(var_channel)
+rule lvtn.10 enclosure(lvtn, nwell_novar, noncoincident) >= 380nm
 rule lvtn.12 space(lvtn, nwell_ce) >= 380nm
 rule lvtn.13 area(lvtn) >= 0.265um2
 rule lvtn.14 hole_area(lvtn) >= 0.265um2
@@ -311,6 +339,8 @@ rule poly.7 extension(diff, poly) >= 250nm
 rule poly.8 extension(poly, diff) >= 130nm
 rule poly.9 space(poly_res, poly_plain) >= 480nm
 rule poly.9.difftap space(poly_res, difftap) >= 480nm
+rule poly.10 covers_corner(poly, diff)
+rule poly.11 bend(poly, diff)
 
 # --- P+ poly precision resistor [S1]; prec_resistor as [S3] defines it ---
 rule rpm.1a width(rpm) >= 1270nm
@@ -322,9 +352,26 @@ rule rpm.5 enclosure(prec_rpm, npc) >= 95nm
 rule rpm.6 space(rpm, nsdm) >= 200nm
 rule rpm.7 space(rpm, poly_out_rpm) >= 200nm
 rule rpm.9 space(prec_rpm, hvntm) >= 185nm
+# rpm.1b-1f: a prec_resistor ([S10]: rpm AND (poly overlapping poly.rs) AND
+# psdm, the layer prec_rpm) is one of the five xhrpoly widths, each exact.
+rule rpm.1b width(prec_rpm; allowed: [350nm, 690nm, 1410nm, 2850nm, 5730nm])
+# rpm.1g-1k: a prec_resistor_terminal ([S10]: prec_resistor AND li) holds at
+# most 1, 1, 2, 4 or 8 licons by its resistor's width.
+layer prec_term_0p35 = prec_rpm.with_width(== 350nm) and li
+layer prec_term_0p69 = prec_rpm.with_width(== 690nm) and li
+layer prec_term_1p41 = prec_rpm.with_width(== 1410nm) and li
+layer prec_term_2p85 = prec_rpm.with_width(== 2850nm) and li
+layer prec_term_5p73 = prec_rpm.with_width(== 5730nm) and li
+rule rpm.1g contains(prec_term_0p35, licon) <= 1
+rule rpm.1h contains(prec_term_0p69, licon) <= 1
+rule rpm.1i contains(prec_term_1p41, licon) <= 2
+rule rpm.1j contains(prec_term_2p85, licon) <= 4
+rule rpm.1k contains(prec_term_5p73, licon) <= 8
 
 # --- Varactor [S1] ---
 rule varac.1 width(var_channel) >= 180nm
+# varac.2, the channel width: the Var_channel's sides on the tap's edge.
+rule varac.2 width(var_channel.edges() and tap.edges()) >= 1um
 rule varac.3 space(var_lvt, hvtp) >= 180nm
 rule varac.4 space(licon_var_tap, var_channel) >= 250nm
 rule varac.5 enclosure(var_poly, nwell) >= 150nm
@@ -335,6 +382,10 @@ rule npc.1 width(npc) >= 270nm
 rule npc.2 space(npc) >= 270nm
 rule npc.2.notch notch(npc) >= 270nm
 rule npc.4 space(npc, gate) >= 90nm
+# npc.5, "Max enclosure of poly overlapping slotted_licon by npcm"; a
+# slotted_licon is a 0.19 x 2.0 um licon [S10].
+layer licon_slot = licon.rectangles().with_bbox_min(== 190nm).with_bbox_max(== 2um)
+rule npc.5 enclosure(poly.interacting(licon_slot), npc) <= 95nm
 
 # --- N+/P+ implants [S1] ---
 rule nsd.1 width(nsdm) >= 380nm
@@ -363,6 +414,16 @@ rule psd.11 hole_area(psdm) >= 0.265um2
 rule licon.1 size(licon_std) == 170nm x 170nm
 rule licon.1b size(licon_prec) == 190nm x 2000nm
 rule licon.2 space(licon) >= 170nm
+# licon.2b-2d as one cut-class table: two slotted licons 0.35um end to end
+# (2b), 0.51um otherwise (2c), and 0.51um from a 0.17um square licon (2d);
+# squares stay at licon.2's 0.17um.
+rule licon.2b cut_class_space(licon;
+    short: [170nm, 190nm],
+    long:  [170nm, 2000nm],
+    space: [[170nm, 170nm, 510nm, 510nm],
+            [170nm, 170nm, 510nm, 510nm],
+            [510nm, 510nm, 350nm, 510nm],
+            [510nm, 510nm, 510nm, 510nm]])
 rule licon.5a enclosure(licon_diff, diff) >= 40nm
 rule licon.5c enclosure(licon_diff, diff, adjacent) >= 60nm
 rule licon.7 enclosure(licon_iso_tap, tap, adjacent) >= 120nm
@@ -481,6 +542,9 @@ rule difftap.20 space(ptap, hv_nwell) >= 430nm
 rule difftap.22 enclosure(difftap_hv, hvi) >= 180nm
 rule difftap.23 space(difftap_lv, hvi) >= 180nm
 rule difftap.24 space(nwell, hndiff) >= 430nm
+# poly.13, the channel length inside hvi: the gate's sides inside the
+# diffusion, as [S11] Include/hvpoly.drc.pvl lines 15-27 measures it.
+rule poly.13 width(gate.inside(hvi).edges() not diff.edges()) >= 500nm
 rule hvntm.1 width(hvntm) >= 700nm
 rule hvntm.2 space(hvntm) >= 700nm
 rule hvntm.2.notch notch(hvntm) >= 700nm
@@ -722,6 +786,29 @@ rule hvi.4 forbidden(hvi and tunm)
 rule hvntm.9 forbidden(hvntm and areaid_ce)
 rule hvntm.10 forbidden(hvntm.outside(hvi))
 
+# --- Retired fill layers [S11] ---
+# Warnings, as the rule manual's "Rules for Obsolete Fill Layers" (page 21)
+# and Include/other.drc.pvl lines 245-349 give them: each layer "is not
+# supported", and its shapes belong on the layer's fill or fill_block purpose.
+# The manual and the m3.oldfill.2 caption name cmm3's waffle drop 107:52; the
+# layer map the rule reads (layer_def.drc.pvl line 538) and [S2] say 107:24,
+# which this deck reads.
+rule diff.oldfill.1 warning forbidden(cfom_fill)
+rule diff.oldfill.2 warning forbidden(cfom_waffle)
+rule poly.oldfill.1 warning forbidden(cp1m_fill)
+rule poly.oldfill.2 warning forbidden(cp1m_waffle)
+rule li.oldfill.1 warning forbidden(cli1m_fill)
+rule m1.oldfill.1 warning forbidden(cmm1_fill)
+rule m1.oldfill.2 warning forbidden(cmm1_waffle)
+rule m2.oldfill.1 warning forbidden(cmm2_fill)
+rule m2.oldfill.2 warning forbidden(cmm2_waffle)
+rule m3.oldfill.1 warning forbidden(cmm3_fill)
+rule m3.oldfill.2 warning forbidden(cmm3_waffle)
+rule m4.oldfill.1 warning forbidden(cmm4_fill)
+rule m4.oldfill.2 warning forbidden(cmm4_waffle)
+rule m5.oldfill.1 warning forbidden(cmm5_fill)
+rule m5.oldfill.2 warning forbidden(cmm5_waffle)
+
 # --- Butting edges [S1], as [S3] writes them ---
 layer butt = tap.edges() and diff.edges()
 rule difftap.4 length(butt) >= 290nm
@@ -739,22 +826,27 @@ rule hvntm.6b forbidden((ptap.edges() and diff.edges()).inside_part(hvntm))
 
 # --- Rules waiting on a check kind ---
 # licon.16 on source diff: needs the source terminal as a layer.
-# rpm.1g-1k "only N licons in the prec_resistor_terminal": an exact count and
-#   the terminal layers.
 # nwell.7 (nwell to dnwell on separate nets, 4.5um), nwell.8 (hv_nwell to
 #   nwell, 2um), hv.nwell.1 (2.5um), vhvi.8 (11.24um): net spacing needs
 #   conductors, and dnwell and the HV n-well (nwell under hvi, or tagged
 #   shv_nwell / vhvi) are not.
 
 # --- Left out ---
-# Not expressible yet: difftap.16 (tap bound by diffusion), poly.10/11 (corner and turn
-# rules), poly.13 (gate length inside hvi, 0.5um: needs L, not width),
-# lvtn.3b (S/D direction spacing), lvtn.10 (enclosure excluding coincident
-# edges), difftap.6 (edges cannot be extended), npc.5 (maximum enclosure), licon.2b/2c/2d (slotted-licon spacing by
-# edge length), rpm.1b-1f (exact resistor widths), varac.2/6 (tap-width and
-# varactor-tap spacing), hv.* and vhvi.* (net propagation of high voltage),
-# m1.pd.1-m4.pd.1 and x.18 (recommended only; pd.1's "oxide pattern density"
-# is not a metal density this deck can state with certainty), m1.X.1-m4.X.1
+# Not expressible yet: difftap.16 (tap bound by diffusion), difftap.6 ("diff
+# and tap are not allowed to extend beyond their abutting edge": [S11]
+# Include/difftap.drc.pvl lines 176-181 selects every whole edge that has a
+# butting part, which no edge operation here does), hv.* and vhvi.* (hv.X.1
+# would be `hv_tag(diff, diff:hv 65:8; voltage: ..)`, but [S1] puts the high
+# voltage range at "5.5 - 12V" and exempts "0 to 5.5V", so 5.5V itself is
+# both, and the rest needs net propagation of high voltage).
+# Not settled by the sources: lvtn.3b "spacing of lvtn to pfet along the S/D
+# direction": [S1] gives 0.235um, [S11] (manual and Include/lvtn.drc.pvl
+# lines 23-27) 0.19um measured from the gate's edges on the diffusion's
+# edge, and which edges "along the S/D direction" names is not said.
+# Held by another rule: varac.6 (VaracTap to difftap, 0.27um) is difftap.3,
+# which spaces every diff and tap shape 0.27um from every other.
+# Also left out: m1.pd.1-m4.pd.1 and x.18 (recommended only; pd.1's "oxide
+# pattern density" is not a metal density this deck can state with certainty), m1.X.1-m4.X.1
 # (waffle-drop window density: [S1] states no window step, and Cadence's
 # SKY130 DRM of 2025-07-22 lists m1-m4.RC.pd1-6 as obsolete and removed and
 # cmm*/waffleDrop as unsupported), the CU-flagged rules, ct/via*.irdrop among

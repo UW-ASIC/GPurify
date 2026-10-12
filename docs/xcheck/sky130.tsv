@@ -148,9 +148,7 @@ x.3a	x.3a	dnwell_angle nwell_angle pwbm_angle pwde_angle hvtp_angle hvtr_angle l
 -	licon	MR_licon.ANG.1	ours_missing	angle: x.3a allows 45 degrees on every layer
 -	licon.1b-c	MR_licon.CON.13	ours_missing	licon bars: needs a shape class (H item)
 -	licon.1b-c	MR_licon.CON.xx	ours_missing	licon squares on rpm/urpm: needs a shape class (H item)
--	licon.2b	MR_licon.SP.2	ours_missing	licon bar end-to-end spacing: needs a shape class (H item)
--	licon.2c	MR_licon.SP.3	ours_missing	licon bar side-to-side spacing: needs a shape class (H item)
--	licon.2d	MR_licon.SP.4	ours_missing	licon bar to square spacing: needs a shape class (H item)
+licon.2b	licon.2b licon.2c licon.2d	MR_licon.SP.2 MR_licon.SP.3 MR_licon.SP.4	agrees	One cut-class table in the deck (slotted licons 0.35 end to end, 0.51 otherwise and from a square licon); the foundry writes three checks. Neither test_violators nor sky130_fd_sc_hd draws a slotted licon.
 -	licon.SP.15	MRW_licon.SP.15	ours_missing	post-maskgen bar spacing: needs a shape class (H item)
 -	licon.SP.16	MRW_licon.SP.16	ours_missing	post-maskgen bar spacing: needs a shape class (H item)
 -	capm.5	MR_capm.SP.3	ours_missing	capm to via3 spacing conflicts with capm.4 over the plate (deck note)
@@ -185,6 +183,7 @@ hvtr.3	hvtr.3	-	theirs_missing	sky130A_mr.drc has no check for it
 lvtn.3a	lvtn.3a	-	theirs_missing	sky130A_mr.drc has no check for it
 lvtn.4b	lvtn.4b	-	theirs_missing	sky130A_mr.drc has no check for it
 lvtn.9	lvtn.9	-	theirs_missing	sky130A_mr.drc has no check for it
+lvtn.10	lvtn.10	-	theirs_missing	sky130A_mr.drc has no enclosure check for it; its MR_lvtn.OVL.2 (lvtn straddling nwell) is another check and stays ours_missing
 lvtn.12	lvtn.12	-	theirs_missing	sky130A_mr.drc has no check for it
 lvtn.13	lvtn.13	-	theirs_missing	sky130A_mr.drc has no check for it
 lvtn.14	lvtn.14	-	theirs_missing	sky130A_mr.drc has no check for it
@@ -204,18 +203,28 @@ poly.7	poly.7	-	theirs_missing	sky130A_mr.drc has no check for it
 poly.8	poly.8	-	theirs_missing	sky130A_mr.drc has no check for it
 poly.9	poly.9	-	theirs_missing	sky130A_mr.drc has no check for it
 poly.9.difftap	poly.9.difftap	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.10	poly.10	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.11	poly.11	-	theirs_missing	sky130A_mr.drc has no check for it
 rpm.3	rpm.3	-	theirs_missing	sky130A_mr.drc has no check for it
 rpm.4	rpm.4	-	theirs_missing	sky130A_mr.drc has no check for it
 rpm.5	rpm.5	-	theirs_missing	sky130A_mr.drc has no check for it
 rpm.6	rpm.6	-	theirs_missing	sky130A_mr.drc has no check for it
 rpm.7	rpm.7	-	theirs_missing	sky130A_mr.drc has no check for it
 rpm.9	rpm.9	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.1b	rpm.1b rpm.1c rpm.1d rpm.1e rpm.1f	-	theirs_missing	sky130A_mr.drc has no check for it; one allowed-width row stands for rpm.1b-1f
+rpm.1g	rpm.1g	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.1h	rpm.1h	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.1i	rpm.1i	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.1j	rpm.1j	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.1k	rpm.1k	-	theirs_missing	sky130A_mr.drc has no check for it
 varac.1	varac.1	-	theirs_missing	sky130A_mr.drc has no check for it
+varac.2	varac.2	-	theirs_missing	sky130A_mr.drc has no check for it
 varac.3	varac.3	-	theirs_missing	sky130A_mr.drc has no check for it
 varac.4	varac.4	-	theirs_missing	sky130A_mr.drc has no check for it
 varac.5	varac.5	-	theirs_missing	sky130A_mr.drc has no check for it
 varac.8	varac.8	-	theirs_missing	sky130A_mr.drc has no check for it
 npc.4	npc.4	-	theirs_missing	sky130A_mr.drc has no check for it
+npc.5	npc.5	-	theirs_missing	sky130A_mr.drc has no check for it
 nsd.5a	nsd.5a	-	theirs_missing	sky130A_mr.drc has no check for it
 psd.5a	psd.5a	-	theirs_missing	sky130A_mr.drc has no check for it
 nsd.5b	nsd.5b	-	theirs_missing	sky130A_mr.drc has no check for it
@@ -246,6 +255,7 @@ difftap.20	difftap.20	-	theirs_missing	sky130A_mr.drc has no check for it
 difftap.22	difftap.22	-	theirs_missing	sky130A_mr.drc has no check for it
 difftap.23	difftap.23	-	theirs_missing	sky130A_mr.drc has no check for it
 difftap.24	difftap.24	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.13	poly.13	-	theirs_missing	sky130A_mr.drc has no check for it
 hvntm.3	hvntm.3	-	theirs_missing	sky130A_mr.drc has no check for it
 hvntm.4	hvntm.4	-	theirs_missing	sky130A_mr.drc has no check for it
 hvntm.5	hvntm.5	-	theirs_missing	sky130A_mr.drc has no check for it
@@ -304,6 +314,21 @@ difftap.21	difftap.21	-	theirs_missing	sky130A_mr.drc has no check for it
 hvi.4	hvi.4	-	theirs_missing	sky130A_mr.drc has no check for it
 hvntm.9	hvntm.9	-	theirs_missing	sky130A_mr.drc has no check for it
 hvntm.10	hvntm.10	-	theirs_missing	sky130A_mr.drc has no check for it
+diff.oldfill.1	diff.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+diff.oldfill.2	diff.oldfill.2	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+poly.oldfill.1	poly.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+poly.oldfill.2	poly.oldfill.2	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+li.oldfill.1	li.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m1.oldfill.1	m1.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m1.oldfill.2	m1.oldfill.2	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m2.oldfill.1	m2.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m2.oldfill.2	m2.oldfill.2	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m3.oldfill.1	m3.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m3.oldfill.2	m3.oldfill.2	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m4.oldfill.1	m4.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m4.oldfill.2	m4.oldfill.2	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m5.oldfill.1	m5.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m5.oldfill.2	m5.oldfill.2	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
 difftap.4	difftap.4	-	theirs_missing	sky130A_mr.drc has no check for it
 difftap.5	difftap.5	-	theirs_missing	sky130A_mr.drc has no check for it
 difftap.7	difftap.7	-	theirs_missing	sky130A_mr.drc has no check for it

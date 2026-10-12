@@ -125,7 +125,12 @@ None has been compared against foundry signoff results.
   m1-m4.RC.pd1-6 "are obsolete and removed". It also says cmm*/waffleDrop is
   not supported and should be replaced by metX/fill_block (warning
   mX.oldfill.2). Writing the rule would mean guessing a step, so GPurify
-  leaves it out.
+  leaves it out. The sky130 deck does carry that DRM's "Rules for Obsolete
+  Fill Layers" (diff/poly/li/m1-m5 .oldfill.1 and .2) as warnings on the
+  retired fill and waffle-drop layers. The manual and the rule's caption
+  give cmm3's waffle drop as 107:52; the layer map the Pegasus rule reads
+  (Include/layer_def.drc.pvl line 538) and google/skywater-pdk
+  gds_layers.csv give 107:24, which the deck reads.
 - sky130: the IR-drop rules (ct.irdrop.1-3 and via.irdrop to
   via4.irdrop.1-4: "for n contacts on the same connector, mcon area pre-
   and post- Cu conversion must differ by no more than" 0.0-0.9) are not

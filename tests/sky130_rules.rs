@@ -767,3 +767,137 @@ fn the_gf180_antenna_rows_credit_comp_by_oxide() {
         }
     }
 }
+
+/// npc.5: maximum enclosure of poly overlapping a slotted licon by npc,
+/// 0.095 um.
+///
+/// Oracle: foundry example, sky130 npc.5 0.095 um (`SkyWater` SKY130
+/// periphery rules; a slotted licon is 0.19 x 2.0 um, table C3): npc drawn
+/// 95 then 100 nm past the resistor poly, so the pass layout sits on the
+/// limit and the fail layout 5 nm past it.
+#[test]
+fn npc_5_npc_reaches_at_most_95nm_past_slotted_poly() {
+    let base = [("poly", 0, 0, 350, 3000), ("licon", 80, 500, 270, 2500)];
+    let pass = [base[0], base[1], ("npc", -95, -95, 445, 3095)];
+    let fail = [base[0], base[1], ("npc", -100, -95, 445, 3095)];
+    at_limit("npc.5", &pass, &fail);
+}
+
+/// licon.2b: two slotted licons end to end, 0.35 um.
+///
+/// Oracle: foundry example, sky130 licon.2b 0.350 um "when both the edges
+/// are 0.19um in length" (`SkyWater` SKY130 periphery rules): two 0.19 x 2.0
+/// um bars drawn 350 then 345 nm apart along their length.
+#[test]
+fn licon_2b_slotted_licons_end_to_end_350nm() {
+    let pass = [("licon", 0, 0, 190, 2000), ("licon", 0, 2350, 190, 4350)];
+    let fail = [("licon", 0, 0, 190, 2000), ("licon", 0, 2345, 190, 4345)];
+    at_limit("licon.2b", &pass, &fail);
+}
+
+/// rpm.1g: one licon in an `xhrpoly_0p35` `prec_resistor_terminal`.
+///
+/// Oracle: foundry example, sky130 rpm.1g "Only 1 licon is allowed in
+/// `xhrpoly_0p35` `prec_resistor_terminal`" (`SkyWater` SKY130 periphery
+/// rules; the terminal is `prec_resistor` AND li, table C3): a 0.35 um
+/// resistor's head holds its slotted licon, then that and a square licon.
+#[test]
+fn rpm_1g_one_licon_in_a_0p35_terminal() {
+    let base = [
+        ("poly", 0, 0, 350, 10_000),
+        ("poly_rs", -100, 3000, 450, 7000),
+        ("rpm", -300, -300, 650, 10_300),
+        ("psdm", -300, -300, 650, 10_300),
+        ("li", 0, 0, 350, 2900),
+        ("licon", 80, 300, 270, 2300),
+    ];
+    let mut fail = base.to_vec();
+    fail.push(("licon", 90, 2500, 260, 2670));
+    at_limit("rpm.1g", &base, &fail);
+}
+
+/// [`at_limit`] for a width between chosen edges, which examines only the
+/// pairs closer than its limit, so a layout on the limit examines none: the
+/// rule ran and found nothing there, and finds the layout 5 nm inside.
+fn at_edge_limit(
+    id: &str,
+    passing: &[(&str, i64, i64, i64, i64)],
+    failing: &[(&str, i64, i64, i64, i64)],
+) {
+    let (count, runs) = run(SKY130, id, passing);
+    assert!(
+        runs.iter().all(|r| r.outcome == Outcome::Ran),
+        "{id} did not run: {runs:?}"
+    );
+    assert_eq!(
+        count, 0,
+        "{id} flags a layout exactly at the manual's limit"
+    );
+    let (count, _) = run(SKY130, id, failing);
+    assert!(
+        count > 0,
+        "{id} passes a layout 5 nm inside the manual's limit"
+    );
+}
+
+/// varac.2: varactor channel width (its tap width), 1.0 um.
+///
+/// Oracle: foundry example, sky130 varac.2 1.000 um (`SkyWater` SKY130
+/// periphery rules): the tap under the varactor poly drawn 1000 then 995 nm
+/// across the channel.
+#[test]
+fn varac_2_varactor_channel_width_1um() {
+    let base = [
+        ("nwell", -1000, -1000, 2000, 2000),
+        ("poly", 400, -300, 580, 1300),
+    ];
+    let pass = [base[0], base[1], ("tap", 0, 0, 1000, 1000)];
+    let fail = [base[0], base[1], ("tap", 0, 0, 1000, 995)];
+    at_edge_limit("varac.2", &pass, &fail);
+}
+
+/// poly.13: channel length of a gate inside hvi, 0.5 um.
+///
+/// Oracle: foundry example, sky130 poly.13 0.500 um "Min width of poly over
+/// diff inside Hvi" (`SkyWater` SKY130 periphery rules): the gate drawn 500
+/// then 495 nm long.
+#[test]
+fn poly_13_hv_channel_length_500nm() {
+    let base = [
+        ("diff", 0, 0, 2000, 1000),
+        ("hvi", -1000, -1000, 3000, 2000),
+    ];
+    let pass = [base[0], base[1], ("poly", 500, -300, 1000, 1300)];
+    let fail = [base[0], base[1], ("poly", 500, -300, 995, 1300)];
+    at_edge_limit("poly.13", &pass, &fail);
+}
+
+/// poly.11 and poly.10: a straight gate passes both; poly turning on diff
+/// fails poly.11, and poly over an inner corner of diff fails poly.10.
+///
+/// Oracle: foundry example, sky130 poly.11 "No 90 deg turns of poly on diff"
+/// and poly.10 "Poly can't overlap inner corners of diff" (`SkyWater` SKY130
+/// periphery rules), each drawn as the rule's text describes.
+#[test]
+fn poly_10_and_11_gate_shapes() {
+    let diff = ("diff", 0, 0, 2000, 1000);
+    let straight = [diff, ("poly", 500, -300, 650, 1300)];
+    let turning = [straight[0], straight[1], ("poly", 500, 400, 1500, 550)];
+    at_limit("poly.11", &straight, &turning);
+    let l_diff = [diff, ("diff", 0, 1000, 1000, 2000)];
+    let clear = [l_diff[0], l_diff[1], ("poly", 300, -300, 450, 2300)];
+    let corner = [l_diff[0], l_diff[1], ("poly", 900, -300, 1050, 2300)];
+    at_limit("poly.10", &clear, &corner);
+}
+
+/// lvtn.10: enclosure of lvtn by an n-well with no varactor, 0.38 um.
+///
+/// Oracle: foundry example, sky130 lvtn.10 0.380 um (`SkyWater` SKY130
+/// periphery rules): lvtn drawn 380 then 375 nm inside the n-well.
+#[test]
+fn lvtn_10_nwell_encloses_lvtn_by_380nm() {
+    let well = ("nwell", 0, 0, 2000, 2000);
+    let pass = [well, ("lvtn", 380, 380, 1620, 1620)];
+    let fail = [well, ("lvtn", 375, 380, 1620, 1620)];
+    at_limit("lvtn.10", &pass, &fail);
+}
