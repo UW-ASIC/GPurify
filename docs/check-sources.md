@@ -65,8 +65,8 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 | DRC | 43 | 6 | 42 | 15 | 0 | 0 |
 | LVS | 24 | 1 | 14 | 9 | 0 | 0 |
 | ERC | 53 | 4 | 11 | 13 | 0 | 0 |
-| PEX | 4 | 0 | 3 | 9 | 0 | 0 |
-| Flow | 0 | 0 | 2 | 8 | 0 | 0 |
+| PEX | 7 | 0 | 3 | 6 | 0 | 0 |
+| Flow | 2 | 0 | 2 | 6 | 0 | 0 |
 
 These numbers come from the TSV. Once `tests/catalog.rs` exists, it computes
 them, so this table cannot go stale unnoticed (the plan's F5 problem).
@@ -361,7 +361,10 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-G7 | Gate tied directly to a rail | implemented | CAL (weak sourcing) | SY; NV; MR |
 | ERC-H1 | Static leakage / HiZ / floating in power-down | implemented | IA | SY; NV |
 | ERC-H4 | Fanout limits | implemented | ICV; GF:14.1.4.1 | SY; NV |
+| PEX-009 | PEX netlist diff / qualification | partial | SIL:PEX Certify | CF; MR; SY |
 | PEX-010 | SPEF output | implemented | IEEE1481 | CF; SE; MR; golden |
+| FLOW-001 | Geometric / hierarchy-invariant waivers | implemented | CAL:Auto-Waivers; PEG | SY; MR |
+| FLOW-002 | Early / dirty-design staged runs | implemented | CAL:Recon; ICV:Explorer | SY; MR |
 | FLOW-005 | In-design / live DRC | partial | CAL:RealTime; ICV:Live; PEG | FR; MR |
 
 <!-- end of generated block -->
