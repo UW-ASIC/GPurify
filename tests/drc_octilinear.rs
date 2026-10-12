@@ -82,6 +82,7 @@ fn run_on(rules: &str, rings: &[(&str, Vec<(i64, i64)>)]) -> Found {
         provenance,
         reference: None,
         intent: None,
+        design: None,
     };
     let extracted = extract(&loaded).expect("extracts");
     let options = RunOptions {
