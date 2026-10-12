@@ -80,6 +80,8 @@ pub struct CompiledDeck {
     pub lvs: LvsControls,
     /// The `extraction` statement: which parasitics PEX writes out.
     pub extraction: Extraction,
+    /// The parasitic models beyond the stack (`pex_fill`, …).
+    pub pex_models: gpurify_ingest::deck::PexModels,
     /// The `corner` statements: each process corner's stack.
     pub corners: Vec<ProcessCorner>,
     /// The `stage` statements: the order a staged run checks the rules in.
@@ -243,6 +245,7 @@ impl CompiledDeck {
             corners,
             stages,
             waivers,
+            pex_models,
         } = deck;
         Ok(Self {
             grid,
@@ -254,6 +257,7 @@ impl CompiledDeck {
             temperature_law,
             lvs,
             extraction,
+            pex_models,
             corners,
             stages,
             waivers,

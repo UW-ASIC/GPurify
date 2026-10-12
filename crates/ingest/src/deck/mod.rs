@@ -129,6 +129,42 @@ pub struct Deck {
     pub temperature_law: Option<TemperatureLaw>,
     /// The `lvs` statements: how the comparison treats each device model.
     pub lvs: LvsControls,
+    /// The parasitic models beyond the stack (`pex_fill`, …), as written.
+    pub pex_models: PexModels,
+}
+
+/// The parasitic models a deck states beyond the `pex` stack, by layer
+/// name as written, each checked against the deck's layers when it is
+/// lowered. Every value is the foundry's, supplied by the deck: no public
+/// deck states them, so none has a default.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PexModels {
+    /// `pex_fill <layer> floating|grounded|ignored`, in deck order: how a
+    /// net drawn only on that conductor (a metal fill piece) is extracted
+    /// (catalog PEX-012).
+    pub fill: Vec<(String, FillTreatment)>,
+}
+
+/// How PEX treats metal fill (`pex_fill`), as `StarRC` and Quantus offer it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FillTreatment {
+    /// Each piece floats: a net's couplings through it are in series.
+    Floating,
+    /// Each piece is tied to ground.
+    Grounded,
+    /// The fill is left out of the extraction.
+    Ignored,
+}
+
+impl FillTreatment {
+    /// The word the deck writes.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Floating => "floating",
+            Self::Grounded => "grounded",
+            Self::Ignored => "ignored",
+        }
+    }
 }
 
 /// A deck's `temperature T nominal T0` and, per `pex` row, its sheet

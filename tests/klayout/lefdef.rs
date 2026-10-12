@@ -49,11 +49,14 @@ fn ours(lef_text: &str, def_text: &str) -> Vec<u8> {
     .expect("the design writes")
 }
 
-/// Reads each pair and prints `seed layer xor ours theirs` areas; the
-/// first design also lists the layers `KLayout` made.
+/// Reads each pair and writes `seed layer xor ours theirs` areas to
+/// `rows.txt` (stdout carries the reader's warnings); the first design also
+/// lists the layers `KLayout` made.
 const RUBY: &str = r##"
 LAYERS = [["M1", 1], ["V1", 2], ["M2", 3], ["V2", 4], ["M3", 5]]
-DESIGNS.each_with_index do |(seed, gds, def), k|
+OUT = File.open("rows.txt", "w")
+at_exit { OUT.close }
+DESIGNS.each_with_index do |(seed, gds, design), k|
   a = RBA::Layout::new
   a.read(gds)
   opt = RBA::LoadLayoutOptions::new
@@ -62,9 +65,9 @@ DESIGNS.each_with_index do |(seed, gds, def), k|
   c.read_lef_with_def = false
   c.lef_files = [File.expand_path("tech.lef")]
   b = RBA::Layout::new
-  b.read(def, opt)
+  b.read(design, opt)
   if k == 0
-    b.layer_indexes.each { |li| puts "layer #{b.get_info(li).to_s}" }
+    b.layer_indexes.each { |li| OUT.puts "LAYER #{b.get_info(li).to_s}" }
   end
   LAYERS.each do |name, number|
     index = a.find_layer(number, 0)
@@ -75,7 +78,7 @@ DESIGNS.each_with_index do |(seed, gds, def), k|
       label = info.name.to_s.empty? ? info.to_s : info.name.to_s
       rb.insert(b.top_cell.begin_shapes_rec(li)) if label.split(".")[0] == name
     end
-    puts "#{seed} #{name} #{(ra ^ rb).area} #{ra.area} #{rb.area}"
+    OUT.puts "ROW #{seed} #{name} #{(ra ^ rb).area} #{ra.area} #{rb.area}"
   end
 end
 "##;
@@ -131,20 +134,24 @@ fn klayout_lefdef_differential_on_seeded_designs() {
     ruby.push_str("]\n");
     ruby.push_str(RUBY);
     std::fs::write(dir.join("lefdef.rb"), ruby).expect("writable");
-    let stdout = oracle::run(
+    oracle::run(
         &klayout,
         &["-b", "-r", "lefdef.rb"],
         &dir,
         Duration::from_mins(30),
     );
+    let written = std::fs::read_to_string(dir.join("rows.txt")).expect("the script wrote rows");
 
     let mut rows: BTreeMap<(u64, String), [i128; 3]> = BTreeMap::new();
     let mut layers = Vec::new();
-    for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
-        if let Some(layer) = line.strip_prefix("layer ") {
+    for line in written.lines() {
+        if let Some(layer) = line.strip_prefix("LAYER ") {
             layers.push(layer.to_owned());
             continue;
         }
+        let Some(line) = line.strip_prefix("ROW ") else {
+            continue;
+        };
         let fields: Vec<&str> = line.split_whitespace().collect();
         let [seed, layer, xor, ours, theirs] = fields[..] else {
             panic!("unexpected KLayout output: {line}");

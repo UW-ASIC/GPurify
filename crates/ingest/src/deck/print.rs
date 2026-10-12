@@ -289,6 +289,9 @@ impl Printer<'_> {
         for (rule, layer) in &source.waivers {
             let _ = writeln!(out, "waive {rule} {layer}");
         }
+        for (layer, treatment) in &source.pex_models.fill {
+            let _ = writeln!(out, "pex_fill {layer} {}", treatment.word());
+        }
         if let Some(extraction) = source.extraction {
             let kind = match extraction.kind {
                 ExtractionKind::R => "r",

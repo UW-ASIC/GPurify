@@ -249,16 +249,107 @@ fn a_top_level_wire_is_checked_against_a_block_abstract() {
             .map(|k| outputs.violations.measured[k])
             .collect()
     };
-    use gpurify_check::report::Measurement::Length;
-    use gpurify_geom::Dbu;
-    assert_eq!(found("m2.s"), [Length(Dbu::new_unchecked(100))]);
-    assert_eq!(
-        found("m1.w"),
-        [
-            Length(Dbu::new_unchecked(150)),
-            Length(Dbu::new_unchecked(150))
-        ]
+    let length =
+        |nm| gpurify_check::report::Measurement::Length(gpurify_geom::Dbu::new_unchecked(nm));
+    assert_eq!(found("m2.s"), [length(100)]);
+    assert_eq!(found("m1.w"), [length(150), length(150)]);
+}
+
+/// Metal fill between two plates, each treatment of `pex_fill` (PEX-012).
+///
+/// Oracle: closed form. Net `a` on met1 (top at 1.1 µm), a fill piece on
+/// `fillm` (1.2 to 1.3 µm) and net `b` on met2 (from 1.4 µm), all 10 × 10
+/// µm and stacked, in k = 3.9: each 0.1 µm gap is a parallel plate
+/// `C₁ = ε₀k·100 µm²/0.1 µm`, and a–b directly `C₁/3` over 0.3 µm (the
+/// closed forms do not shield). Floating fill with no capacitance of its
+/// own to ground puts a–fill and fill–b in series: a–b is `C₁/3 + C₁/2`;
+/// grounded, a–b is `C₁/3` and each plate gains `C₁` to ground; ignored,
+/// a–b is `C₁/3`. Every treatment leaves only nets a and b.
+#[test]
+fn fill_between_two_plates_is_in_series_grounded_or_gone() {
+    let lef = format!(
+        "{}LAYER fillm TYPE ROUTING ; DIRECTION HORIZONTAL ; WIDTH 0.2 ; END fillm\nEND LIBRARY\n",
+        LEF.trim_end().trim_end_matches("END LIBRARY")
     );
+    let deck = |treatment: &str| {
+        format!(
+            "grid 1nm\nlayer met1 = gds(1, 0)\nlayer via1 = gds(2, 0)\nlayer met2 = gds(3, 0)\n\
+             layer fillm = gds(4, 0)\n\
+             connect conductors [met1, fillm, met2]\nconnect touch_within_layer\n\
+             connect via via1 [met1, met2]\n\
+             connect label met1 names met1\nconnect label met2 names met2\n\
+             pex met1 thickness 100nm height 1000nm sheet 0.1ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um\n\
+             pex fillm thickness 100nm height 1200nm sheet 0.1ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um\n\
+             pex met2 thickness 100nm height 1400nm sheet 0.1ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um\n\
+             pex via1 thickness 100nm height 1100nm sheet 2ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um\n\
+             pex_fill fillm {treatment}\n"
+        )
+    };
+    let c1 = 8.854_187_812_8 * 3.9 * 100.0 / 0.1 / 1000.0;
+    let options = RunOptions {
+        checks: Checks {
+            drc: false,
+            erc: false,
+            lvs: false,
+            pex: true,
+        },
+        lvs: gpurify_check::lvs::CompareOptions::default(),
+        quasistatic_nets: Vec::new(),
+    };
+    for (treatment, coupling, ground) in [
+        ("floating", c1 / 3.0 + c1 / 2.0, 0.0),
+        ("grounded", c1 / 3.0, c1),
+        ("ignored", c1 / 3.0, 0.0),
+    ] {
+        let mut inputs = inputs(
+            &format!("fill-{treatment}"),
+            &design(
+                "SPECIALNETS 2 ;\n- a + RECT met1 ( 0 0 ) ( 10000 10000 ) ;\n\
+                 - b + RECT met2 ( 0 0 ) ( 10000 10000 ) ;\nEND SPECIALNETS\n\
+                 FILLS 1 ;\n- LAYER fillm RECT ( 0 0 ) ( 10000 10000 ) ;\nEND FILLS",
+            ),
+        );
+        inputs.lef = vec![{
+            let path = inputs.lef[0].with_file_name("fill.lef");
+            std::fs::write(&path, &lef).expect("writable");
+            path
+        }];
+        std::fs::write(&inputs.deck, deck(treatment)).expect("writable");
+        let (loaded, extracted, outputs, _) = run(&inputs, &options).expect("the DEF runs");
+        let network = outputs.parasitics.expect("PEX ran");
+        let net = |name: &str| {
+            extracted
+                .ports
+                .net_of(loaded.strings.get(name).expect("named"))
+                .expect("one net")
+        };
+        let (a, b) = (net("a"), net("b"));
+        let mut nets: Vec<_> = network.node_net.clone();
+        nets.dedup();
+        assert_eq!(
+            nets,
+            [a.min(b), a.max(b)],
+            "{treatment}: only a and b remain"
+        );
+        let (mut cc, mut ga) = (0.0, 0.0);
+        for row in 0..network.element_count() {
+            match network.value[row] {
+                Parasitic::CouplingCap(q) => cc += q.raw(),
+                Parasitic::GroundCap(q) if network.node_net[network.from[row].0 as usize] == a => {
+                    ga += q.raw();
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            (cc - coupling).abs() < 1e-9 * coupling,
+            "{treatment}: {cc} against {coupling}"
+        );
+        assert!(
+            (ga - ground).abs() < 1e-9 * c1,
+            "{treatment}: {ga} against {ground}"
+        );
+    }
 }
 
 /// A DEF whose layer the deck does not have is refused naming it, and an

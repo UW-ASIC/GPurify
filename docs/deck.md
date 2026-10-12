@@ -958,6 +958,27 @@ OpenROAD's extractor does (`extract_parasitics -coupling_threshold`); it is
 legal only with a type that keeps coupling (`cc`, `rcc`), and zero or more.
 Without an `extraction` line the output is `rcc` with nothing grounded.
 
+### Metal fill
+
+```
+layer met1_fill = gds(68, 28)
+connect conductors [met1, met1_fill, ...]
+pex met1_fill thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9 area_cap 25.8aF/um2 fringe_cap 40.5aF/um
+pex_fill met1_fill floating
+```
+
+`pex_fill <layer> floating|grounded|ignored` says how PEX treats metal
+fill: a net drawn only on that conductor layer is a fill piece, not a
+signal. `floating` leaves each piece floating, so a net's coupling through
+it is in series with the piece's other capacitances (two nets each coupled
+to a piece by `c₁` and `c₂`, the piece to ground by `c_g`, couple by
+`c₁c₂ / (c₁ + c₂ + c_g)`); pieces coupled to each other are eliminated
+together. `grounded` ties each piece to ground, so a net's coupling to it
+is capacitance to ground. `ignored` leaves the fill out. Either way the
+fill's own nets are gone from the output. The layer must be a conductor
+with a `pex` line, and each layer is stated once. Which treatment a
+foundry signs off with is its own; no open deck states one.
+
 ## Errors
 
 Every problem is reported with its line, column and a marker under the

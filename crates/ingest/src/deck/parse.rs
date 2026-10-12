@@ -468,6 +468,7 @@ impl<'a> Parser<'a> {
             "connect" => self.connect(),
             "device" => self.device(),
             "pex" => self.pex(),
+            "pex_fill" => self.pex_fill(),
             "temperature" => self.temperature(span),
             "extraction" => self.extraction(span),
             "corner" => self.corner(),
@@ -477,7 +478,7 @@ impl<'a> Parser<'a> {
             "lvs" => self.lvs(),
             _ => Err(self.err(
                 span,
-                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, temperature, lvs, extraction, corner, stage or waive"),
+                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, pex_fill, temperature, lvs, extraction, corner, stage or waive"),
             )),
         }
     }
@@ -1639,6 +1640,28 @@ impl<'a> Parser<'a> {
         if self.out.temperature.replace((operating, nominal)).is_some() {
             return Err(self.err(span, "the temperature is already stated"));
         }
+        Ok(())
+    }
+
+    /// `pex_fill <layer> floating|grounded|ignored`: how PEX treats the
+    /// nets drawn only on that layer, metal fill ([`super::FillTreatment`]).
+    fn pex_fill(&mut self) -> R<()> {
+        let layer = self.layer_word()?;
+        let (word, at) = self.ident("floating, grounded or ignored")?;
+        let treatment = match word.as_str() {
+            "floating" => super::FillTreatment::Floating,
+            "grounded" => super::FillTreatment::Grounded,
+            "ignored" => super::FillTreatment::Ignored,
+            _ => {
+                return Err(self.err(
+                    at,
+                    &format!(
+                        "unknown fill treatment `{word}`; expected floating, grounded or ignored"
+                    ),
+                ))
+            }
+        };
+        self.out.pex_models.fill.push((layer, treatment));
         Ok(())
     }
 
