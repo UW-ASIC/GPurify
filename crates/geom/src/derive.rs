@@ -298,7 +298,9 @@ pub fn with_bbox_into(
 ///
 /// # Errors
 ///
-/// A boolean refuses its input, or growing past the coordinate domain.
+/// [`BooleanError::NotRectilinear`] for a layer with a 45-degree edge, which
+/// the erosion by rectangles does not read; a boolean refusing its input, or
+/// growing past the coordinate domain.
 ///
 /// # Panics
 ///
@@ -312,6 +314,9 @@ pub fn with_rect_into(
 ) -> Result<(), BooleanError> {
     let (w, h) = (w.raw(), h.raw());
     assert!(w > 0 && h > 0, "a box has positive sides");
+    if !a.is_rectilinear() {
+        return Err(BooleanError::NotRectilinear);
+    }
     let mut room = ValidatedLayer::default();
     let mut flags = room_into(a, w, h, &mut room).and_then(|()| overlapping_flags(a, &room))?;
     if w != h {
