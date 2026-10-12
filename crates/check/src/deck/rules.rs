@@ -750,6 +750,15 @@ kinds! {
         max_voltage: Option<f64> = "max_voltage",
         min_width: Option<Dbu> = "min_width",
     }
+    /// [`EsdPinPairTable`](crate::erc::rules::esd::EsdPinPairTable):
+    /// `esd_pin_pair(pad; clamps, current, clamp_resistance,
+    /// max_resistance)`, the current in µA, resistances in ohms.
+    esd_pin_pair(pad: one) [] {
+        clamps: &[&str] = "clamp",
+        current: f64 = "current",
+        clamp_resistance: f64 = "clamp_resistance",
+        max_resistance: f64 = "max_resistance",
+    }
     /// [`EsdClampResistanceTable`](crate::erc::rules::esd::EsdClampResistanceTable):
     /// `esd_clamp_resistance(pad; clamps, max_resistance)`, in ohms.
     esd_clamp_resistance(pad: one) [] {

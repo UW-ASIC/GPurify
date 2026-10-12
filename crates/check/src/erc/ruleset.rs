@@ -1,4 +1,4 @@
-//! The fifty-three tables, the deck parser that fills them, and the dispatcher.
+//! The fifty-four tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
@@ -114,6 +114,8 @@ pub struct RuleSet {
 
     /// `esd_path` rows: [`esd::EsdPathTable`].
     pub esd_path: esd::EsdPathTable,
+    /// `esd_pin_pair` rows: [`esd::EsdPinPairTable`].
+    pub esd_pin_pair: esd::EsdPinPairTable,
     /// `esd_clamp_resistance` rows: [`esd::EsdClampResistanceTable`].
     pub esd_clamp_resistance: esd::EsdClampResistanceTable,
     /// `esd_ground_coupling` rows: [`esd::EsdGroundCouplingTable`].
@@ -882,6 +884,21 @@ impl RuleSet {
                     table.max_voltage.push(max_voltage);
                     table.min_width.push(min_width);
                 }
+                "esd_pin_pair" => {
+                    let layers = row.layers(1)?;
+                    let clamps = row.models("clamp")?;
+                    let current = Qty::new(row.number("current")?);
+                    let clamp_resistance = Qty::new(row.number("clamp_resistance")?);
+                    let max_resistance = Qty::new(row.number("max_resistance")?);
+                    let table = &mut set.esd_pin_pair;
+                    row.head(&mut table.head)?;
+                    table.pad.push(layers[0]);
+                    table.clamp.extend(clamps);
+                    close_csr(&mut table.clamp_start, table.clamp.len());
+                    table.current.push(current);
+                    table.clamp_resistance.push(clamp_resistance);
+                    table.max_resistance.push(max_resistance);
+                }
                 "esd_clamp_resistance" => {
                     let layers = row.layers(1)?;
                     let clamps = row.models("clamp")?;
@@ -1335,6 +1352,7 @@ impl RuleSet {
             "esd_topological" => &self.esd_topological.head,
             "esd_path" => &self.esd_path.head,
             "esd_clamp_resistance" => &self.esd_clamp_resistance.head,
+            "esd_pin_pair" => &self.esd_pin_pair.head,
             "esd_ground_coupling" => &self.esd_ground_coupling.head,
             "esd_cross_domain" => &self.esd_cross_domain.head,
             "esd_parasitic" => &self.esd_parasitic.head,
@@ -1577,6 +1595,15 @@ impl RuleSet {
             "power_switch" if span(&self.power_switch.model_start).is_empty() => {
                 return Err(c.missing("model"));
             }
+            "esd_pin_pair" => {
+                let t = &self.esd_pin_pair;
+                if span(&t.clamp_start).is_empty() {
+                    return Err(c.missing("clamp"));
+                }
+                c.positive("current", t.current[r].raw())?;
+                c.positive("clamp_resistance", t.clamp_resistance[r].raw())?;
+                c.positive("max_resistance", t.max_resistance[r].raw())?;
+            }
             "esd_clamp_resistance" => {
                 let t = &self.esd_clamp_resistance;
                 if span(&t.clamp_start).is_empty() {
@@ -1801,6 +1828,7 @@ impl RuleSet {
             &self.dielectric_field.head,
             &self.esd_path.head,
             &self.esd_clamp_resistance.head,
+            &self.esd_pin_pair.head,
             &self.esd_ground_coupling.head,
             &self.esd_cross_domain.head,
             &self.esd_parasitic.head,
@@ -1959,6 +1987,15 @@ impl RuleSet {
         reliability::check_esd_latchup(design, intent, &self.esd_latchup, scratch, out, runs);
 
         esd::check_esd_path(design, intent, process, &self.esd_path, scratch, out, runs);
+        esd::check_esd_pin_pair(
+            design,
+            intent,
+            process,
+            &self.esd_pin_pair,
+            scratch,
+            out,
+            runs,
+        );
         esd::check_esd_clamp_resistance(
             design,
             process,

@@ -6,8 +6,8 @@ use super::builder::assert_same;
 use super::grid;
 use super::printer::assert_round_trip;
 use gpurify_check::deck::rules::{
-    combinational_loop, em_peak, em_rms, esd_clamp_resistance, floating_supply, gate_path,
-    matching, power_switch, supply_path,
+    combinational_loop, em_peak, em_rms, esd_clamp_resistance, esd_pin_pair, floating_supply,
+    gate_path, matching, power_switch, supply_path,
 };
 use gpurify_check::deck::{compile, CompiledDeck, DeckBuilder};
 use gpurify_geom::{Dbu, StrTable};
@@ -27,6 +27,8 @@ rule fs floating_supply()
 rule mt matching(mk; tolerance: 50nm)
 rule ps power_switch(; models: [\"dio\"])
 rule cr esd_clamp_resistance(pad; clamps: [\"dio\"], max_resistance: 1ohm)
+rule pp esd_pin_pair(pad; clamps: [\"dio\"], current: 1330mA, clamp_resistance: 1ohm, \
+max_resistance: 5ohm)
 rule rms em_rms(met1, via1; frequency: [100MHz, 300MHz], width: [500nm, 1500nm], \
 density: [[1mA/um, 2mA/um], [3mA/um, 4mA/um]], max_current_per_cut: 1mA)
 rule pk em_peak(met1; frequency: [1GHz], width: [0nm], density: [[6.1mA/um]], \
@@ -55,6 +57,7 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     d.rule("mt", matching(mk, Dbu::new_unchecked(50)));
     d.rule("ps", power_switch(&["dio"]));
     d.rule("cr", esd_clamp_resistance(pad, &["dio"], 1.0));
+    d.rule("pp", esd_pin_pair(pad, &["dio"], 1_330_000.0, 1.0, 5.0));
     d.rule(
         "rms",
         em_rms(

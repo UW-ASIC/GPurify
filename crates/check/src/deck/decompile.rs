@@ -918,6 +918,17 @@ impl CompiledDeck {
             }
             file(&t.head, r, row);
         }
+        let t = &erc.esd_pin_pair;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("esd_pin_pair", &[t.pad[r]])
+                .number("current", t.current[r].raw())
+                .number("clamp_resistance", t.clamp_resistance[r].raw())
+                .number("max_resistance", t.max_resistance[r].raw());
+            for &id in &t.clamp[span(&t.clamp_start, r)] {
+                row.params.push(("clamp", model(id)));
+            }
+            file(&t.head, r, row);
+        }
         let t = &erc.esd_clamp_resistance;
         for r in 0..t.head.len() {
             let mut row = Row::new("esd_clamp_resistance", &[t.pad[r]])

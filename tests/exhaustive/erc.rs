@@ -99,6 +99,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(esd_clamp_size());
     out.extend(esd_interconnect());
     out.extend(esd_layout_rules());
+    out.extend(esd_pin_pair());
     out.extend(esd_window());
     out.extend(ring_injection());
     out.extend(ground_coupling());
@@ -5523,6 +5524,75 @@ fn esd_layout_rules() -> Vec<Fixture> {
         f.intent = Some(esd_intent());
         out.extend(every_placement(&[f]));
     }
+    out
+}
+
+/// `esd_pin_pair` (ERC-C6), hand-derived on [`ESD_PROCESS`]: pad strips
+/// PADA at y 0 and PADB at 6 µm, VSS (met1) at -3 µm and VDD (met2) at
+/// 3 µm, every strip 20 µm long and 1 µm wide. A `down` diode joins PADA
+/// to VSS at x 2 µm, a `rail` VSS to VDD at 10 µm and an `up` PADB to VDD
+/// at 18 µm, each 1 Ω. 1.33 A from PADA (tapped at its centre, 10 µm) to
+/// PADB (held at its centre) crosses 8 µm of PADA (0.0625 Ω/sq: 0.5 Ω),
+/// the down diode, 8 µm of VSS (0.125 Ω/sq: 1 Ω), the rail clamp, 8 µm of
+/// VDD (0.5 Ω), the up diode and 8 µm of PADB (0.5 Ω): 5.5 Ω, swept a part
+/// in a thousand either side. Without the rail clamp the two pins share no
+/// supply and the pair is not examined.
+fn esd_pin_pair() -> Vec<Fixture> {
+    let board = |rail: bool| {
+        let mut l = Layout::default();
+        for (layer, text, name, y) in [
+            ("pad", "padtxt", "PADA", 0),
+            ("met1", "m1txt", "VSS", -3000),
+            ("met2", "m2txt", "VDD", 3000),
+            ("pad", "padtxt", "PADB", 6000),
+        ] {
+            rect(&mut l, layer, (0, y, STRIP, y + 1000));
+            l = l.label(text, 100, y + 500, name);
+        }
+        rect(&mut l, "mkd", (1900, -2100, 2100, 100));
+        if rail {
+            rect(&mut l, "mkr", (9900, -2100, 10_100, 3100));
+        }
+        rect(&mut l, "mku", (17_900, 3900, 18_100, 6100));
+        l
+    };
+    let deck = |limit: f64| {
+        format!(
+            "{ESD_PROCESS}rule pp esd_pin_pair(pad; clamps: {ESD_CLAMPS}, current: 1330mA, \
+             clamp_resistance: 1ohm, max_resistance: {limit}ohm)\n"
+        )
+    };
+    let value = 5.5;
+    let mut out = Vec::new();
+    for limit in [value * 0.999, value * 1.001] {
+        let mut f = Fixture::new(
+            &format!("erc/esd_pin_pair/{}", side(limit, value)),
+            &["ERC-C6"],
+            &deck(limit),
+            ERC,
+        )
+        .layout(board(true))
+        .expect(Expect::rule(
+            "pp",
+            if value > limit {
+                vec![ohms(value)]
+            } else {
+                Vec::new()
+            },
+        ));
+        f.intent = Some(esd_intent());
+        out.extend(every_placement(&[f]));
+    }
+    let mut f = Fixture::new("erc/esd_pin_pair/no_rail", &["ERC-C6"], &deck(1.0), ERC)
+        .layout(board(false))
+        .expect(Expect::Rule {
+            id: "pp".to_owned(),
+            outcome: Want::Ran,
+            findings: Vec::new(),
+            examined: Some(0),
+        });
+    f.intent = Some(esd_intent());
+    out.push(f);
     out
 }
 

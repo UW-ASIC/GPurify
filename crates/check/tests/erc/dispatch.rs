@@ -44,7 +44,7 @@ fn id_of(kind: &str) -> StrId {
 }
 
 /// The kinds that cannot answer their question without design intent.
-const INTENT_GATED: [&str; 34] = [
+const INTENT_GATED: [&str; 35] = [
     "combinational_loop",
     "dielectric_field",
     "domain_crossing",
@@ -60,6 +60,7 @@ const INTENT_GATED: [&str; 34] = [
     "em_thermal",
     "esd_latchup",
     "esd_path",
+    "esd_pin_pair",
     "esd_topological",
     "floating_supply",
     "forward_diode",
@@ -336,6 +337,15 @@ fn every_kind() -> RuleSet {
             max_current_per_cut: vec![None],
             max_voltage: vec![None],
             min_width: vec![None],
+        },
+        esd_pin_pair: esd::EsdPinPairTable {
+            head: head(id_of("esd_pin_pair")),
+            pad: vec![LayerId(0)],
+            clamp_start: vec![0, 1],
+            clamp: vec![rule(900)],
+            current: vec![microamps(1_330_000.0)],
+            clamp_resistance: vec![ohms(1.0)],
+            max_resistance: vec![ohms(2.0)],
         },
         esd_clamp_resistance: esd::EsdClampResistanceTable {
             head: head(id_of("esd_clamp_resistance")),
