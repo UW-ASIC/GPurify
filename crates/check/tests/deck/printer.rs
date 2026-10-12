@@ -141,6 +141,7 @@ lvs max_res 1Mohm
 lvs min_caps 10fF
 lvs same_nets \"OUT_PAD\" \"OUT\"
 lvs count \"nfet\" >= 1 <= 4000
+lvs recognize_gates
 ";
     let mut strings = StrTable::default();
     let deck = compile(text, grid(), &mut strings).expect("the deck compiles");
@@ -157,6 +158,7 @@ lvs count \"nfet\" >= 1 <= 4000
         "lvs min_caps 1e4aF",
         "lvs same_nets \"OUT_PAD\" \"OUT\"",
         "lvs count \"nfet\" >= 1 <= 4000",
+        "lvs recognize_gates",
         "device inductor res model \"spiral\" terminals [poly, poly] inductance 2e0nH",
     ] {
         assert!(printed.contains(line), "{line} not in\n{printed}");

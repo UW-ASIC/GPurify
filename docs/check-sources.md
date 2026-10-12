@@ -63,7 +63,7 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 | Domain | implemented | expressible | partial | missing | verify | out of scope |
 |---|---:|---:|---:|---:|---:|---:|
 | DRC | 43 | 6 | 43 | 14 | 0 | 0 |
-| LVS | 31 | 1 | 10 | 6 | 0 | 0 |
+| LVS | 31 | 1 | 11 | 5 | 0 | 0 |
 | ERC | 53 | 4 | 13 | 11 | 0 | 0 |
 | PEX | 7 | 0 | 3 | 6 | 0 | 0 |
 | Flow | 2 | 0 | 2 | 6 | 0 | 0 |
@@ -313,6 +313,7 @@ single oracle is a named gap that ledger P1 closes.
 | DRC-113 | Litho / CMP simulation hotspots | partial | CAL:LFD,CMPAnalyzer; PEG; Ouma2002 | CF; MR; SY |
 | LVS-005 | Short isolation / localisation | partial | CAL:LVS ISOLATE SHORT,LVS ISOLATE OPENS; ICV:ShortFinder; PEG | SY; MR |
 | LVS-020 | Undeclared parameter | implemented | - | SY; MR |
+| LVS-047 | Logic-gate recognition | partial | CAL:LVS RECOGNIZE GATES; SubGemini; Silvaco Guardian LVS app note Logic Gate Recognition (2020) and example 4 | SY; MR |
 | LVS-066 | Device flavour (HVT/LVT) by implant marker | expressible | GF:App.A; IHP LVS decks | SY; MR |
 | LVS-071 | Spectre reader | implemented | - | SY; MR; fuzz |
 | ERC-A9 | Minimum protection-diode size | expressible | IHP:Ant.g | SE:IHP Ant.g; MR; SY |

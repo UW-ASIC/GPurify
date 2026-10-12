@@ -1292,6 +1292,12 @@ impl<'a> Parser<'a> {
                 }
                 Ok(())
             }
+            "recognize_gates" => {
+                if std::mem::replace(&mut self.out.lvs.recognize_gates, true) {
+                    return Err(self.err(span, "gates are already recognised"));
+                }
+                Ok(())
+            }
             "ports_by_name" => {
                 if std::mem::replace(&mut self.out.lvs.ports_by_name, true) {
                     return Err(self.err(span, "ports are already compared by name"));
@@ -1363,7 +1369,7 @@ impl<'a> Parser<'a> {
                 &format!(
                     "unknown lvs control `{control}`; expected tolerance, ignore_parameter, \
                      asymmetric, permute, ignore, ignore_shorted, ports_by_name, range, topology, connect_implicit, \
-                     connect_explicit, max_res, min_caps, same_nets or count"
+                     connect_explicit, max_res, min_caps, same_nets, count or recognize_gates"
                 ),
             )),
         }

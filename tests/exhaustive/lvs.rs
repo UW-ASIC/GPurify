@@ -1075,6 +1075,9 @@ struct Controls {
     min_caps: Option<(&'static str, f64)>,
     /// `lvs same_nets`: a layout label and a reference net name.
     same_nets: Vec<(&'static str, &'static str)>,
+    /// `lvs recognize_gates`: a stack or a parallel group of plain,
+    /// identical transistors takes its inputs in any order.
+    gates: bool,
 }
 
 impl Controls {
@@ -1255,6 +1258,9 @@ impl Controls {
         if let Some((text, _)) = self.min_caps {
             let _ = writeln!(out, "lvs min_caps {text}");
         }
+        if self.gates {
+            out.push_str("lvs recognize_gates\n");
+        }
         for &(layout, reference) in &self.same_nets {
             let _ = writeln!(out, "lvs same_nets \"{layout}\" \"{reference}\"");
         }
@@ -1433,6 +1439,19 @@ fn equivalent(layout: &Circuit, reference: &Circuit) -> bool {
 
 /// [`equivalent`] under the deck's `lvs` statements.
 fn equivalent_under(layout: &Circuit, reference: &Circuit, controls: &Controls) -> bool {
+    if controls.gates {
+        // deck.md's `lvs recognize_gates`: the inputs of a stack or a
+        // parallel group swap freely, so the circuits match when some
+        // reassignment of each group's gates among its members matches
+        // without the control. A brute force over every reassignment.
+        let plain = Controls {
+            gates: false,
+            ..controls.clone()
+        };
+        return gate_reassignments(layout)
+            .iter()
+            .any(|variant| equivalent_under(variant, reference, &plain));
+    }
     let reference = controls.strip(reference);
     let declared = Declared::of(&reference);
     let (layout, reference) = (
@@ -1444,6 +1463,83 @@ fn equivalent_under(layout: &Circuit, reference: &Circuit, controls: &Controls) 
         &reduce(&reference, &declared, false, controls),
         controls,
     )
+}
+
+/// `c` with the gates of each group deck.md's `lvs recognize_gates`
+/// names reassigned among its members, every way: groups of MOS of one
+/// model and one size and count, each on a gate of its own, either on one
+/// source and drain pair (parallel) or chained through nets that are no
+/// port and that only the two neighbours' channel ends touch (series).
+/// The first is `c` itself. Small circuits only: every reassignment of
+/// every group.
+fn gate_reassignments(c: &Circuit) -> Vec<Circuit> {
+    let same = |a: &Dev, b: &Dev| {
+        a.model.is_mos()
+            && a.model == b.model
+            && a.w == b.w
+            && a.l == b.l
+            && a.writes == b.writes
+            && a.m == b.m
+            && a.params.is_empty()
+            && b.params.is_empty()
+            && a.pins.get(3) == b.pins.get(3)
+    };
+    let touches = |net: usize| {
+        c.devs
+            .iter()
+            .flat_map(|d| &d.pins)
+            .filter(|&&p| p == net)
+            .count()
+    };
+    let n = c.devs.len();
+    // Union of devices joined in parallel or in series.
+    let mut group: Vec<usize> = (0..n).collect();
+    let root = |group: &Vec<usize>, mut at: usize| {
+        while group[at] != at {
+            at = group[at];
+        }
+        at
+    };
+    for i in 0..n {
+        for j in i + 1..n {
+            let (a, b) = (&c.devs[i], &c.devs[j]);
+            if !same(a, b) || a.pins[0] == b.pins[0] {
+                continue;
+            }
+            let pair = |d: &Dev| (d.pins[1].min(d.pins[2]), d.pins[1].max(d.pins[2]));
+            let parallel = pair(a) == pair(b);
+            let series = [1, 2].iter().any(|&ea| {
+                [1, 2].iter().any(|&eb| {
+                    let x = a.pins[ea];
+                    x == b.pins[eb] && !c.ports[x] && touches(x) == 2
+                })
+            });
+            if parallel || series {
+                let (ra, rb) = (root(&group, i), root(&group, j));
+                group[ra.max(rb)] = ra.min(rb);
+            }
+        }
+    }
+    let mut out = vec![c.clone()];
+    for head in 0..n {
+        let members: Vec<usize> = (0..n).filter(|&d| root(&group, d) == head).collect();
+        if members.len() < 2 {
+            continue;
+        }
+        let gates: Vec<usize> = members.iter().map(|&d| c.devs[d].pins[0]).collect();
+        let mut next = Vec::new();
+        for variant in &out {
+            for perm in permutations(members.len()) {
+                let mut v = variant.clone();
+                for (k, &d) in members.iter().enumerate() {
+                    v.devs[d].pins[0] = gates[perm[k]];
+                }
+                next.push(v);
+            }
+        }
+        out = next;
+    }
+    out
 }
 
 /// Whether some bijection of `a`'s surviving nets onto `b`'s pairs every
@@ -3301,6 +3397,79 @@ fn controlled() -> Vec<Fixture> {
             ));
         }
     }
+    // LVS-047: logic-gate recognition. A NAND2 (nets a, b, out, gnd, vdd,
+    // and x between its stack's transistors; a narrow transistor on `a`
+    // alone tells `a` from `b`) drawn with `a` on top matches
+    // a schematic with `b` on top once gates are recognised, and not
+    // otherwise; so does a NOR2's p-channel stack. Stacked transistors of
+    // different widths do not merge, so the swap still mismatches; nor does
+    // a stack through a labelled node; nor an analog cascode the control
+    // does not name, which is the same structure and stays a mismatch by
+    // default.
+    let nand = |top: usize, bottom: usize, wide: i64| {
+        Circuit::new(
+            6,
+            vec![
+                Dev::mos(N, top, 4, 2),
+                Dev::mos(N, bottom, 3, 4).sized(wide, 150),
+                Dev::mos(P, 0, 5, 2),
+                Dev::mos(P, 1, 5, 2),
+                Dev::mos(N, 0, 3, 5).sized(500, 150),
+            ],
+        )
+        .internal(4)
+    };
+    let nor = |top: usize, bottom: usize| {
+        Circuit::new(
+            6,
+            vec![
+                Dev::mos(P, top, 4, 2),
+                Dev::mos(P, bottom, 5, 4),
+                Dev::mos(N, 0, 3, 2),
+                Dev::mos(N, 1, 3, 2),
+                Dev::mos(N, 0, 3, 5).sized(500, 150),
+            ],
+        )
+        .internal(4)
+    };
+    let labelled_x = Circuit::new(
+        6,
+        vec![
+            Dev::mos(N, 0, 4, 2),
+            Dev::mos(N, 1, 3, 4),
+            Dev::mos(P, 0, 5, 2),
+            Dev::mos(P, 1, 5, 2),
+            Dev::mos(N, 0, 3, 5).sized(500, 150),
+        ],
+    );
+    let mut labelled_swapped = labelled_x.clone();
+    labelled_swapped.devs[0].pins[0] = 1;
+    labelled_swapped.devs[1].pins[0] = 0;
+    let gated = Controls {
+        gates: true,
+        ..Controls::default()
+    };
+    let recognised: [(&str, Circuit, Circuit); 5] = [
+        ("nand2_same", nand(0, 1, 1000), nand(0, 1, 1000)),
+        ("nand2_inputs_swapped", nand(0, 1, 1000), nand(1, 0, 1000)),
+        (
+            "nand2_sizes_differ_swapped",
+            nand(0, 1, 2000),
+            nand(1, 0, 2000),
+        ),
+        ("nor2_inputs_swapped", nor(0, 1), nor(1, 0)),
+        ("labelled_node_swapped", labelled_x, labelled_swapped),
+    ];
+    for (name, layout, reference) in recognised {
+        for (label, controls) in [("gates", &gated), ("default", &Controls::default())] {
+            out.push(compared_under(
+                &format!("gates/{name}/{label}"),
+                &["LVS-047"],
+                (&layout, &reference),
+                controls,
+            ));
+        }
+    }
     // A diode's value is its area: two drawn in parallel, 0.32 um² each,
     // are one of 0.64 um² relaxed, and two strict (derived by hand from
     // [`draw_pins`]).
@@ -3741,6 +3910,102 @@ mod system;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// LVS-047: reassigning a group's inputs never changes a match under
+    /// `lvs recognize_gates`.
+    ///
+    /// Oracle: metamorphic relation. Each circuit of [`sample`] (whose
+    /// parallel transistors on different gates are groups) drawn and
+    /// compared with every reassignment of its groups' gates
+    /// ([`gate_reassignments`]) matches with gates recognised, as it
+    /// matches itself; a reassignment the tool reads as another circuit
+    /// breaks it. The NAND2 of the fixtures, whose stack is a series group,
+    /// is held to the same.
+    #[test]
+    fn reassigning_a_gate_group_s_inputs_keeps_a_match() {
+        use Model::{N, P};
+        let nand = Circuit::new(
+            6,
+            vec![
+                Dev::mos(N, 0, 4, 2),
+                Dev::mos(N, 1, 3, 4),
+                Dev::mos(P, 0, 5, 2),
+                Dev::mos(P, 1, 5, 2),
+                Dev::mos(N, 0, 3, 5).sized(500, 150),
+            ],
+        )
+        .internal(4);
+        let gated = Controls {
+            gates: true,
+            ..Controls::default()
+        };
+        let mut checked = 0;
+        for c in sample().into_iter().chain([nand]) {
+            let variants = gate_reassignments(&c);
+            if variants.len() < 2 {
+                continue;
+            }
+            for variant in &variants[1..] {
+                let fixture =
+                    compared_under("lvs/gates/relation", &["LVS-047"], (&c, variant), &gated);
+                let ran = crate::harness::run(&fixture).unwrap_or_else(|why| panic!("{why}"));
+                assert!(
+                    matches!(ran.lvs, Some(gpurify::check::lvs::Verdict::Match)),
+                    "{} against {}",
+                    c.code(),
+                    variant.code()
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 3, "only {checked} reassignments were compared");
+    }
+
+    /// LVS-047: the gate fixtures' verdicts, derived by hand, so the
+    /// fixtures cannot pass by both sides agreeing on nothing.
+    ///
+    /// Oracle: hand-derived from Guardian's definition ("all N input
+    /// terminals are swappable"): a NAND2 whose stack order is swapped is
+    /// the same gate once gates are recognised and another circuit without;
+    /// one whose stacked transistors differ in width is not reduced, so
+    /// the swap stays a mismatch.
+    #[test]
+    fn gate_recognition_swaps_inputs_only_where_defined() {
+        use Model::{N, P};
+        let nand = |top: usize, bottom: usize, wide: i64| {
+            Circuit::new(
+                6,
+                vec![
+                    Dev::mos(N, top, 4, 2),
+                    Dev::mos(N, bottom, 3, 4).sized(wide, 150),
+                    Dev::mos(P, 0, 5, 2),
+                    Dev::mos(P, 1, 5, 2),
+                    Dev::mos(N, 0, 3, 5).sized(500, 150),
+                ],
+            )
+            .internal(4)
+        };
+        let gated = Controls {
+            gates: true,
+            ..Controls::default()
+        };
+        assert!(equivalent_under(
+            &nand(0, 1, 1000),
+            &nand(1, 0, 1000),
+            &gated
+        ));
+        assert!(!equivalent(&nand(0, 1, 1000), &nand(1, 0, 1000)));
+        assert!(!equivalent_under(
+            &nand(0, 1, 2000),
+            &nand(1, 0, 2000),
+            &gated
+        ));
+        let fixture = controlled()
+            .into_iter()
+            .find(|f| f.name == "lvs/gates/nand2_inputs_swapped/gates")
+            .expect("the fixture exists");
+        assert!(fixture.expect.contains(&Expect::Lvs(true)));
+    }
 
     /// LVS-017: the reference instances a mismatch leaves whole and
     /// unpaired are named, outermost first, and only those.

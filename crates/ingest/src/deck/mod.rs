@@ -868,6 +868,11 @@ pub struct LvsControls {
     /// per model: bounds on how many devices of the model the layout holds
     /// (catalog LVS-068).
     pub count: Vec<LvsCount>,
+    /// `lvs recognize_gates`: plain transistors in series or in parallel on
+    /// different gates of their own become one device with interchangeable
+    /// gates, so a NAND's or NOR's inputs may be wired in either order
+    /// (Silvaco Guardian's gate reduction; catalog LVS-047).
+    pub recognize_gates: bool,
 }
 
 /// One `lvs count` statement: the bounds, either or both, on the number of
@@ -1058,6 +1063,7 @@ fn build_lvs(
         lvs.ignore_shorted.push(strings.intern(model));
     }
     lvs.ports_by_name = declared.ports_by_name;
+    lvs.recognize_gates = declared.recognize_gates;
     lvs.relaxed = declared.topology == Some(true);
     lvs.connect_implicit.clone_from(&declared.connect_implicit);
     for group in &declared.connect_explicit {
@@ -1162,6 +1168,8 @@ pub struct LvsSrc {
     pub(crate) same_nets: Vec<(String, String)>,
     /// `lvs count`: `(model, min, max)`.
     pub(crate) count: Vec<(String, Option<u32>, Option<u32>)>,
+    /// `lvs recognize_gates`.
+    pub(crate) recognize_gates: bool,
 }
 
 /// `lvs tolerance "model" param relative r absolute a`, the absolute part
@@ -1217,6 +1225,7 @@ impl LvsSrc {
             ignore: controls.ignore.iter().map(|&id| name(id)).collect(),
             ignore_shorted: controls.ignore_shorted.iter().map(|&id| name(id)).collect(),
             ports_by_name: controls.ports_by_name,
+            recognize_gates: controls.recognize_gates,
             range: controls
                 .range
                 .iter()

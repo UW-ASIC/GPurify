@@ -669,6 +669,7 @@ pub(crate) fn param_names(strings: &gpurify_ingest::StrTable) -> gpurify_check::
             name("pe"),
         ],
         inductance: name("ind"),
+        gates: false,
         relaxed: false,
     }
 }

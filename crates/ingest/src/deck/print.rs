@@ -435,6 +435,9 @@ impl Printer<'_> {
         if lvs.ports_by_name {
             out.push_str("lvs ports_by_name\n");
         }
+        if lvs.recognize_gates {
+            out.push_str("lvs recognize_gates\n");
+        }
         for (model, param, min, max) in &lvs.range {
             let _ = write!(out, "lvs range {} {param}", quoted(model)?);
             for (cmp, limit) in [(">=", min), ("<=", max)] {

@@ -543,6 +543,7 @@ const NAMES: gpurify_check::lvs::ParamNames = gpurify_check::lvs::ParamNames {
     diffusion: [Some(AS), Some(AD), Some(PS), Some(PD)],
     values: [None; 6],
     inductance: None,
+    gates: false,
     relaxed: false,
 };
 
