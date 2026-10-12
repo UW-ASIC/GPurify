@@ -972,7 +972,7 @@ pub fn extract_into(
 /// The index in `shapes` of a supply's feed point: supply enters from the top,
 /// so its highest-layer, then widest, then lowest-index shape. A missing
 /// `height_nm` reads as the substrate. `shapes` is not empty.
-fn feed_shape(store: &GeometryStore, process: Process<'_>, shapes: &[PolyId]) -> usize {
+pub(crate) fn feed_shape(store: &GeometryStore, process: Process<'_>, shapes: &[PolyId]) -> usize {
     let mut anchor = 0;
     let mut best = (f64::NEG_INFINITY, i128::MIN);
     for (offset, &poly) in shapes.iter().enumerate() {
