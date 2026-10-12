@@ -95,10 +95,10 @@ come from and using the foundry's rule ids:
 
 | File | Drawn layers | Rules | Devices |
 |---|---:|---:|---:|
-| `ihp_sg13g2` | 75 | 460 | 12 |
-| `gf180mcu` | 56 | 286 | 27 |
-| `sky130` | 59 | 274 | 30 |
-| `generic_finfet` (ASAP7) | 45 | 178 | 0 |
+| `ihp_sg13g2` | 75 | 465 | 12 |
+| `gf180mcu` | 56 | 328 | 27 |
+| `sky130` | 74 | 302 | 30 |
+| `generic_finfet` (ASAP7) | 45 | 239 | 0 |
 
 From Rust, each is also compiled into the library as a constant
 (`gpurify::pdks::SKY130` and so on), so a tool built on GPurify reads the
