@@ -6,9 +6,16 @@ use super::builder::assert_same;
 use super::grid;
 use super::printer::assert_round_trip;
 use gpurify_check::deck::rules::{
-    allowed_width, aspect_ratio, asymmetric_enclosure, convex_corner_spacing, count, cover_density, cut_area_change, cut_class, cut_class_spacing, cut_spacing, dfm_score, edge_facing_space, edge_width, eol_keep_out, eol_within_spacing, exact_pitch, forbidden, forbidden_spacing, full_width, gate_corner, keep_out_zone, max_cut_spacing, max_enclosure, mean_critical_area, min_enclosure, min_interior_angle, min_step, min_step_adjacent, minimum_cut, must_contain, noncoincident_enclosure, origin, pattern_match, polygon_validity, projection_spacing, protrusion_width, region_density, span_length, tip_spacing_table, total_area, two_width_spacing_table, via_redundancy, via_stack,
+    allowed_width, aspect_ratio, asymmetric_enclosure, convex_corner_spacing, count, cover_density,
+    cut_area_change, cut_class, cut_class_spacing, cut_spacing, dfm_score, edge_facing_space,
+    edge_width, eol_keep_out, eol_within_spacing, exact_pitch, forbidden, forbidden_spacing,
+    full_width, gate_corner, keep_out_zone, max_cut_spacing, max_enclosure, mean_critical_area,
+    min_enclosure, min_interior_angle, min_step, min_step_adjacent, minimum_cut, must_contain,
+    noncoincident_enclosure, origin, pattern_match, polygon_validity, projection_spacing,
+    protrusion_width, region_density, span_length, stack_spacing, tip_spacing_table, total_area,
+    two_width_spacing_table, via_redundancy, via_stack,
 };
-use gpurify_check::deck::{Bound, CompiledDeck, DeckBuilder, compile};
+use gpurify_check::deck::{compile, Bound, CompiledDeck, DeckBuilder};
 use gpurify_check::drc::ruleset::{DfmCheck, EolParallel};
 use gpurify_check::drc::{StepKind, StepNeighbour, WireBand};
 use gpurify_geom::{Dbu, DbuArea, StrTable};
@@ -51,6 +58,9 @@ rule ms.step min_step(m; corner: step, length_sum: none) >= 60nm
 rule msa min_step(m; adjacent: 60nm, except_rectangle: true) >= 50nm
 rule msa.eol min_step(m; adjacent: 30nm, adjacent_eol: 120nm, except_rectangle: false) >= 50nm
 rule msa.between min_step(m; between_eol: 120nm) >= 50nm
+rule vs.single via_stack(m, v, m2, v2, r, single) <= 2
+rule ss stack_space(v2, v; same_net: true) >= 200nm
+rule ss.all stack_space(v2, v) >= 200nm
 rule mcs max_space(v) <= 2000nm
 rule mcs.cls max_space(thin, v) <= 2000nm
 rule odd.none forbidden(odd)
@@ -180,6 +190,9 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
         "msa.between",
         min_step_adjacent(m, nm(50), StepNeighbour::BetweenEol(nm(120))),
     );
+    d.rule("vs.single", via_stack(&[m, v, m2, v2, r], 2).single_cut());
+    d.rule("ss", stack_spacing(v2, v, true, nm(200)));
+    d.rule("ss.all", stack_spacing(v2, v, false, nm(200)));
     d.rule("mcs", max_cut_spacing(v, None, nm(2000)));
     d.rule("mcs.cls", max_cut_spacing(thin, Some(v.into()), nm(2000)));
     d.rule("odd.none", forbidden(odd));

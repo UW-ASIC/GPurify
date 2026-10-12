@@ -455,6 +455,7 @@ fn a_stack_of_overlapping_cuts_taller_than_the_limit_is_reported_once() {
             RULE,
             Rule::ViaStack {
                 stack: 0,
+                single: false,
                 max_height: 2,
             },
         )],

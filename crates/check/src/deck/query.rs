@@ -382,12 +382,15 @@ impl CompiledDeck {
             .rules
             .iter()
             .filter_map(|(_, rule)| match *rule {
-                Rule::ViaStack { stack, max_height }
-                    if self
-                        .drc
-                        .stacks
-                        .get(stack as usize)
-                        .is_some_and(|layers| layers.contains(&cut)) =>
+                Rule::ViaStack {
+                    stack,
+                    single,
+                    max_height,
+                } if self.drc.stacks.get(stack as usize).is_some_and(|layers| {
+                    // A single-cut stack names its metals too, at even places.
+                    let cuts = layers.iter().skip(usize::from(single));
+                    cuts.step_by(if single { 2 } else { 1 }).any(|&c| c == cut)
+                }) =>
                 {
                     Some(max_height)
                 }

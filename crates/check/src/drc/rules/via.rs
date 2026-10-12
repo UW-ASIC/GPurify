@@ -13,7 +13,7 @@ use super::{
 use crate::drc::ruleset::CutAreaBands;
 use crate::drc::{CutClassTable, Scratch};
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
-use gpurify_geom::boolean::{BooleanError, intersection_into, union_into};
+use gpurify_geom::boolean::{intersection_into, union_into, BooleanError};
 use gpurify_geom::connectivity::components_into;
 use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, Point};
@@ -532,6 +532,12 @@ pub(crate) fn minimum_cut(
     (Outcome::Ran, examined)
 }
 
+/// A drawn cut: its box and its row.
+type Cut = (Bbox, PolyId);
+
+/// The metal figures below and above a cut, `None` where it lands on none.
+type Joins = (Option<u32>, Option<u32>);
+
 /// LEF `MAXVIASTACK`: the tallest chain of overlapping cuts, one per layer of
 /// `stack` (bottom to top), through each cut; each cut at height
 /// `max_height + 1` of a taller chain is reported once. `examined` counts
@@ -539,19 +545,54 @@ pub(crate) fn minimum_cut(
 pub(crate) fn via_stack(
     store: &GeometryStore,
     rule: StrId,
-    stack: &[LayerId],
+    (layers, single): (&[LayerId], bool),
     max_height: u16,
+    s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let cuts: Vec<Vec<(Bbox, PolyId)>> = stack
-        .iter()
-        .map(|&layer| {
-            store
-                .polys_on_layer(layer)
-                .map(|row| (store.poly_bbox(PolyId(row)), PolyId(row)))
-                .collect()
-        })
-        .collect();
+    let all = |layer: LayerId| -> Vec<(Bbox, PolyId)> {
+        store
+            .polys_on_layer(layer)
+            .map(|row| (store.poly_bbox(PolyId(row)), PolyId(row)))
+            .collect()
+    };
+    // With `single`, the cut layers sit between metals; a cut of a via of
+    // two or more cuts (cuts joining the same two metal figures) stacks with
+    // nothing.
+    let (stack, cuts, examined): (Vec<LayerId>, Vec<Vec<Cut>>, u64) = if single {
+        let mut metals = Vec::new();
+        for &metal in layers.iter().step_by(2) {
+            let Some(figures) = merged(store, metal, s) else {
+                return REFUSED;
+            };
+            metals.push(figure_rects(&figures));
+        }
+        let stack: Vec<LayerId> = layers.iter().skip(1).step_by(2).copied().collect();
+        let mut examined = 0u64;
+        let cuts = stack
+            .iter()
+            .enumerate()
+            .map(|(i, &layer)| {
+                let on = |b: Bbox, k: usize| metals[k].overlapping(b).map(|(_, f)| f).min();
+                let mut keyed: Vec<(Joins, Cut)> = all(layer)
+                    .into_iter()
+                    .map(|(b, row)| ((on(b, i), on(b, i + 1)), (b, row)))
+                    .collect();
+                examined += keyed.len() as u64;
+                keyed.sort_unstable_by_key(|&(key, (_, row))| (key, row));
+                keyed
+                    .chunk_by(|p, q| p.0 == q.0)
+                    .filter(|via| via.len() == 1)
+                    .map(|via| via[0].1)
+                    .collect()
+            })
+            .collect();
+        (stack, cuts, examined)
+    } else {
+        let cuts: Vec<Vec<(Bbox, PolyId)>> = layers.iter().map(|&layer| all(layer)).collect();
+        let examined = cuts.iter().map(|c| c.len() as u64).sum();
+        (layers.to_vec(), cuts, examined)
+    };
     // Per layer and cut: the tallest chain ending at it from below (`down`)
     // and starting at it upward (`up`).
     let chain = |order: &mut dyn Iterator<Item = usize>, step: isize| {
@@ -597,7 +638,7 @@ pub(crate) fn via_stack(
             }
         }
     }
-    (Outcome::Ran, cuts.iter().map(|c| c.len() as u64).sum())
+    (Outcome::Ran, examined)
 }
 
 /// Whether `b` is a cut of the class `(short, long)`: that size either way
