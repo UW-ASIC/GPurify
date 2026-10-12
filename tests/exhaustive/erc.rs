@@ -4844,7 +4844,7 @@ fn esd_path() -> Vec<Fixture> {
                 };
                 let mut f = Fixture::new(
                     &format!("erc/esd_path/{name}/{k}/{}", side(limit, value)),
-                    &["ERC-C6"],
+                    &["ERC-C6", "ERC-C14"],
                     &esd_path_deck(&[("max_resistance", format!("{limit}ohm"))]),
                     ERC,
                 )
@@ -4957,7 +4957,7 @@ fn esd_interconnect() -> Vec<Fixture> {
             };
             let mut f = Fixture::new(
                 &format!("erc/esd_path/max_density/{k}/{}", side(density, per_um)),
-                &["ERC-C7"],
+                &["ERC-C7", "ERC-C14"],
                 &esd_path_deck(&[("max_density", format!("{density}A/m"))]),
                 ERC,
             )
@@ -5643,11 +5643,18 @@ fn native_clear() -> Vec<Fixture> {
         ("ncomp_in_nat", &[("ncomp", (500, 500, 1500, 1500))], 0),
         ("ncomp_on_ring", &[("ncomp", (-450, 0, -250, 200))], 0),
         ("ncomp_in_gap", &[("ncomp", (2050, 0, 2150, 100))], 1),
-        ("ncomp_straddles_nat", &[("ncomp", (1900, 500, 2100, 600))], 1),
+        (
+            "ncomp_straddles_nat",
+            &[("ncomp", (1900, 500, 2100, 600))],
+            1,
+        ),
         ("well_in_gap", &[("well", (0, 2050, 100, 2150))], 1),
         (
             "two_in_gap",
-            &[("ncomp", (2050, 0, 2150, 100)), ("ncomp", (-150, 0, -50, 100))],
+            &[
+                ("ncomp", (2050, 0, 2150, 100)),
+                ("ncomp", (-150, 0, -50, 100)),
+            ],
             2,
         ),
     ];
