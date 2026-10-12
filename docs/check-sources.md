@@ -64,7 +64,7 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 |---|---:|---:|---:|---:|---:|---:|
 | DRC | 31 | 4 | 36 | 35 | 0 | 0 |
 | LVS | 17 | 1 | 16 | 14 | 0 | 0 |
-| ERC | 27 | 2 | 14 | 38 | 0 | 0 |
+| ERC | 34 | 3 | 10 | 34 | 0 | 0 |
 | PEX | 4 | 0 | 3 | 9 | 0 | 0 |
 | Flow | 0 | 0 | 2 | 8 | 0 | 0 |
 
@@ -306,12 +306,15 @@ single oracle is a named gap that ledger P1 closes.
 | LVS-071 | Spectre reader | implemented | - | SY; MR; fuzz |
 | ERC-A2 | Side-area (sidewall) ratio | implemented | LEF:App.C; GF:ANT.1-7; SKY:antenna vertical | CF; FR; MR; SY |
 | ERC-A3 | Cumulative ratio (CAR) | implemented | LEF:App.C; IHP:Ant.b,Ant.d | SE:IHP AreaRatio; CF; MR; SY |
-| ERC-A4 | Cut/via ratio, routing-plus-cut accumulation | partial | LEF:ANTENNACUMROUTINGPLUSCUT; GF:ANT.8-13; SKY:licon.1,via.1; IHP:Ant.c | FR; CF; MR; SY |
-| ERC-A5 | Subtractive diode credit (K x area + bonus) | partial | SKY:EGAR; LEF:ANTENNAAREAMINUSDIFF | SE:SKY formula; FR; MR; SY |
+| ERC-A4 | Cut/via ratio, routing-plus-cut accumulation | implemented | LEF:ANTENNACUMROUTINGPLUSCUT; GF:ANT.8-13; SKY:licon.1,via.1; IHP:Ant.c | SE:LEF Example 1; SE:LEF Example 2; FR; CF; MR; SY |
+| ERC-A6 | Additive diode credit (gate += MF x diode) | implemented | GF:ANT.16; LEF:ANTENNAGATEPLUSDIFF | SE:GF ANT.16; SE:LEF Example 3; MR; SY |
+| ERC-A7 | PWL diffusion-dependent limit | implemented | LEF:ANTENNADIFFAREARATIO PWL,ANTENNAAREADIFFREDUCEPWL; SKY:tech LEF | SE:LEF Example 4; SE:LEF keyword example; SE:SKY tech LEF; MR; SY |
 | ERC-A8 | Separate limits with/without diode | implemented | IHP:Ant.b/e,Ant.d/f; SKY | FR; MR; SY |
+| ERC-A9 | Minimum protection-diode size | expressible | IHP:Ant.g | SE:IHP Ant.g; MR; SY |
 | ERC-A10 | Diode well legality | expressible | IHP:Ant.h,Ant.i | FR; SY |
 | ERC-A11 | MIM capacitor as victim | partial | GF:ANT.14,ANT.15 | FR; MR; SY |
-| ERC-A12 | Oxide-class-specific limits | partial | LEF:ANTENNAMODEL OXIDE1-4; GF | FR; MR; SY |
+| ERC-A12 | Oxide-class-specific limits | implemented | LEF:ANTENNAMODEL OXIDE1-4; GF | SE:GF ANT.16; FR; MR; SY |
+| ERC-A13 | Exemption for substrate-shorted nets | implemented | SKY:.ar.1 | SE:SKY .ar.1; MR; SY |
 | ERC-B1 | Windowed density + CMP thickness | implemented | GF:13 | CF; MR; SY |
 | ERC-C1 | Pad ESD path to power and ground | implemented | TR18-01:4.5.2-4.5.4; Khazhinsky2012 | SY; NV; MR |
 | ERC-C7 | ESD-pulse current density | partial | TR18-01:Fig58; TR22:4.4; CAL; ICV; PF | CF; MR; SY |
@@ -321,11 +324,11 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-D4 | Guard-ring resistance / current under injection | partial | TR18-02:2.3; JESD78:Table 1; CAL | CF; MR; SY |
 | ERC-E1 | DC current per width | implemented | GF:Table 14.3; IHP:2.15 | FR; CF; MR; SY |
 | ERC-E2 | Current per cut | implemented | GF:Table 14.4; IHP:2.15 | FR; MR; SY |
-| ERC-E3 | Width-banded absolute current for narrow lines | partial | IHP:2.15 | FR; MR; SY |
+| ERC-E3 | Width-banded absolute current for narrow lines | implemented | IHP:2.15 | SE:IHP 2.15; FR; MR; SY |
 | ERC-E4 | Temperature derating (Black / Arrhenius) | implemented | GF:14.2.2; Black1969; JEP122; JESD63 | SE:GF formula vs table (1.6% rounding); MR; SY |
 | ERC-E5 | Lifetime target and percentile | implemented | GF:14.2; IHP:2.15; JESD202 | SE; MR; SY |
 | ERC-E6 | Blech short-length immortality | implemented | Blech1976 | CF; MR; SY |
-| ERC-E12 | Stress voiding / slotting | partial | JEP139; JESD214; GF:14.6 | FR; MR; SY |
+| ERC-E12 | Stress voiding / slotting | partial | JEP139; JESD214; GF:14.6,MSLOT.1-10; IHP:Slt.a-i | FR; MR; SY |
 | ERC-F1 | Static voltage propagation, conditional on gate voltage | partial | CAL:WP 81822; SKY:hv.X.1; patents P5,P9 | SE:Siemens WP; SY |
 | ERC-F2 | Gate-oxide overstress | implemented | GF:14.1.4.2; SKY:hv; TR22:4.1; CAL | FR; CF; SY |
 | ERC-F3 | Junction / drain-source overstress | implemented | SKY:hv; IHP:process spec | FR; SY |

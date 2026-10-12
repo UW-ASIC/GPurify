@@ -287,14 +287,7 @@ says which foundry manual, standard or tool defines each one.
 
 | Id | Check | Status | What is missing |
 |---|---|---|---|
-| ERC-A4 | Cut/via ratio, routing-plus-cut accumulation | partial | ROUTINGPLUSCUT is missing |
-| ERC-A5 | Subtractive diode credit (K x area + bonus) | partial | A row with a diode and non-zero diode_credit is refused (limitations.md, "Rules that can pass a layout signoff would flag"); diode_bonus applies only to gates with diode area on their net |
-| ERC-A6 | Additive diode credit (gate += MF x diode) | missing | — |
-| ERC-A7 | PWL diffusion-dependent limit | missing | — |
-| ERC-A9 | Minimum protection-diode size | missing | — |
 | ERC-A11 | MIM capacitor as victim | partial | The gate argument takes any layer; a non-conductor gate joins the layer a device mos row names as its gate terminal, else the conductor it lies on, never metal routed over it (F72, F81 fixed). gf180 leaves ANT.14/15 out, and the FuseTop/Via5 connectivity needs care |
-| ERC-A12 | Oxide-class-specific limits | partial | One row per gate layer |
-| ERC-A13 | Exemption for substrate-shorted nets | missing | No exemption: every net with gate area > 0 is checked; reaching diffusion or a tap protects nothing (erc::rules::antenna::check_antenna) |
 | ERC-A14 | Hierarchical / macro-pin antenna | missing | — |
 | ERC-A15 | Fix hint: required diode area | missing | Report feature |
 | ERC-C2 | ESD device sizing (perimeter, clamp width) | missing | — |
@@ -319,11 +312,10 @@ says which foundry manual, standard or tool defines each one.
 | ERC-D7 | Native-device guard ring | missing | — |
 | ERC-D8 | Forward-biased diode marked and ringed | missing | — |
 | ERC-D9 | PMOS/NMOS devices sharing one well | missing | Named as a Calibre PERC layout check without a public definition of which sharing is illegal |
-| ERC-E3 | Width-banded absolute current for narrow lines | partial | Limit is max_density x width only, with no width band or absolute cap (erc::rules::electrical::check_em_current_density). The IHP deck states JMAX only: it may over-report, but it cannot under-report |
-| ERC-E7 | RMS / Joule heating / peak limits | missing | LEF 5.8 publishes the grammar (limits tabled by frequency and width); no open PDK publishes values |
+| ERC-E7 | RMS / Joule heating / peak limits | missing | Public limits exist: LEF 5.8's ACCURRENTDENSITY tables by frequency and width, and the sky130 tech LEF's RMS limits (6.1 mA/um met1-met2, 14.9 met3-met4, 22.34 met5, Tj 90 C). The intent states only a DC current budget per net, so no RMS or peak current reaches a check |
 | ERC-E9 | PDN integrity (floating stripes, unconnected instances) | partial | Flags unconnected conductors; PDN-specific checks (floating stripes, instance supply terminals) are missing |
 | ERC-E11 | Dynamic / vectorless IR | missing | In scope since 2026-10-11 (was: Static analysis only: dynamic IR needs switching activity) |
-| ERC-E12 | Stress voiding / slotting | partial | cheesing requires a slot in wide shapes; stress-voiding rules beyond slotting are missing |
+| ERC-E12 | Stress voiding / slotting | partial | cheesing requires a slot in wide shapes, and the slot geometry (IHP Slt.*, gf180 MSLOT.*) is DRC width, enclosure and spacing; JEP139 and JESD214 are stress-migration test methods that state no layout rule, so the stress-voiding rules beyond slotting (vias landing on wide metal) have no public limit |
 | ERC-E13 | Thermal-aware / statistical EM, self-heating | missing | In scope since 2026-10-11 (was: One temperature, 85 C (limitations.md, "Power grid")) |
 | ERC-F1 | Static voltage propagation, conditional on gate voltage | partial | Channels pass unconditionally |
 | ERC-F4 | HCI susceptibility flag | missing | — |
