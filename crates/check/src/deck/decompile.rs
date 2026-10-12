@@ -398,6 +398,30 @@ impl CompiledDeck {
             } => one(layer)
                 .length("radius", radius)
                 .value("limit", ParamValue::Area(limit)),
+            Rule::CoverDensity {
+                layer,
+                cover,
+                boundary,
+                window,
+                step,
+                bands,
+            } => {
+                let mut layers = vec![layer, cover];
+                layers.extend(boundary);
+                let mut row = Row::new(rule.kind(), &layers)
+                    .length("window", window)
+                    .length("step", step);
+                if let Some(bands) = self.drc.cover_bands.get(bands as usize) {
+                    for &cover in &bands.cover {
+                        row = row.number("cover", cover);
+                    }
+                    for &density in &bands.density {
+                        row = row.number("density", density);
+                    }
+                    row = row.value("inclusive", ParamValue::Flag(bands.inclusive));
+                }
+                row
+            }
             Rule::DensityBalance {
                 a,
                 b,

@@ -383,6 +383,25 @@ def via_stack(rule, layers, max)
     end
   end
 end
+# Density per window held to the band the cover layer's coverage picks:
+# `cover` and `need` the bands' starts and densities, `incl` whether a start
+# is in its band.
+def cover_density(rule, layer, cover, die, w, s, starts, need, incl)
+  return if die.empty?
+  cl = layer.data.merged & RBA::Region.new(die)
+  cc = cover.data.merged & RBA::Region.new(die)
+  area = w.to_f * w
+  positions(die.width, w, s).times do |i|
+    positions(die.height, w, s).times do |j|
+      win = RBA::Box.new(die.left + i * s, die.bottom + j * s, die.left + i * s + w, die.bottom + j * s + w)
+      c = (cc & RBA::Region.new(win)).area / area
+      band = starts.rindex { |t| incl ? c >= t : c > t }
+      next if band.nil?
+      d = (cl & RBA::Region.new(win)).area / area
+      put({ rule: rule, pt: [win.center.x, win.center.y], v: d }) if d < need[band]
+    end
+  end
+end
 # sky130 x.19: the layer's box starts at the origin, or its corner is reported.
 def origin(rule, layer)
   b = layer.data.bbox
@@ -984,6 +1003,36 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 )
                 .expect("a String");
                 exact("critical_area", Key::Point, Value::Area)
+            }
+            Rule::CoverDensity {
+                layer,
+                cover,
+                boundary,
+                window,
+                step,
+                bands,
+            } => {
+                layers.reads(layer, &mut reads);
+                layers.reads(cover, &mut reads);
+                let bands = &set.cover_bands[bands as usize];
+                let list = |values: &[f64]| {
+                    let shown: Vec<String> = values.iter().map(|v| format!("{v:?}")).collect();
+                    format!("[{}]", shown.join(", "))
+                };
+                writeln!(
+                    body,
+                    "cover_density({q}, {}, {}, {}, {}, {}, {}, {}, {})",
+                    var(layer),
+                    var(cover),
+                    boundary.map_or("die".to_owned(), |l| format!("{}.data.bbox", var(l))),
+                    lim(window),
+                    lim(step),
+                    list(&bands.cover),
+                    list(&bands.density),
+                    bands.inclusive
+                )
+                .expect("a String");
+                exact("cover_density", Key::Point, Value::Ratio)
             }
             Rule::DensityBalance {
                 a,

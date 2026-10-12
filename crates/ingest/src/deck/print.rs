@@ -799,7 +799,7 @@ impl Printer<'_> {
                         Dim::CapPerArea => "aF/um2",
                         Dim::CapPerLength => "aF/um",
                         Dim::Angle => "deg",
-                        Dim::Fraction | Dim::Scalar => "",
+                        Dim::Fraction | Dim::FractionList | Dim::Scalar => "",
                         _ => return Err(wrong()),
                     };
                     Ok(format!("{}{unit}", number(number_value)?))
@@ -837,9 +837,11 @@ impl Printer<'_> {
                 let other = other.first().ok_or_else(missing)?;
                 Ok(format!("{} x {}", one(values[0])?, one(other)?))
             }
-            Dim::AngleList | Dim::LengthList | Dim::VoltageList | Dim::OptLengthList => {
-                Ok(format!("[{}]", list(&values)?.join(", ")))
-            }
+            Dim::AngleList
+            | Dim::LengthList
+            | Dim::VoltageList
+            | Dim::FractionList
+            | Dim::OptLengthList => Ok(format!("[{}]", list(&values)?.join(", "))),
             Dim::LengthPairList(second) => {
                 let others = stated(second);
                 if values.len() != others.len() {

@@ -395,6 +395,17 @@ kinds! {
         step: Dbu = "step",
         limit: f64 = "limit",
     }
+    /// [`Rule::CoverDensity`](crate::drc::Rule::CoverDensity):
+    /// `cover_density(layer, by[, boundary]; window, step, cover: [..],
+    /// density: [..], inclusive)`; `cover` and `density` fractions, one per
+    /// band ([`CoverBands`](crate::drc::ruleset::CoverBands)).
+    cover_density(layer: one, by: one, boundary: opt) [] {
+        window: Dbu = "window",
+        step: Dbu = "step",
+        cover: &[f64] = "cover",
+        density: &[f64] = "density",
+        inclusive: bool = "inclusive",
+    }
     /// [`Rule::MinEnclosure`](crate::drc::Rule::MinEnclosure): `enclosure(inner, outer) >= limit`.
     /// A wire band is [`RuleRow::wire`].
     min_enclosure(inner: one, outer: one) [1, 0] { limit: Dbu = "limit" }
