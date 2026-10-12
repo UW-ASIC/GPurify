@@ -276,7 +276,7 @@ fn mid(a: i64, b: i64) -> i64 {
 
 /// The edge key: floored midpoint and length, in `GPurify`'s units.
 /// An edge (doubled coordinates) by its floored midpoint and its Euclidean
-/// length, halved and floored as GPurify reports a 45-degree edge's.
+/// length, halved and floored as `GPurify` reports a 45-degree edge's.
 fn edge_key(e: [i64; 4]) -> Vec<i64> {
     let (dx, dy) = (e[2] - e[0], e[3] - e[1]);
     vec![

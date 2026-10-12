@@ -212,7 +212,8 @@ pub fn derive_layers<D: AsRef<LayerTable> + ?Sized>(
     strings: &StrTable,
 ) -> Result<(), LayoutError> {
     // A store built in memory has no cells: every shape's tag is empty.
-    derive_layers_into(store, deck.as_ref(), &provenance.placed, strings, &[])
+    derive_layers_into(store, deck.as_ref(), &provenance.placed, strings, &[]);
+    Ok(())
 }
 
 /// Compute every deck-derived layer and append it to the store, in id order.
@@ -227,7 +228,7 @@ fn derive_layers_into(
     labels: &[PlacedLabel],
     strings: &StrTable,
     cells: &[u64],
-) -> Result<(), LayoutError> {
+) {
     let mut folded = ValidatedLayer::default();
     let mut operand = ValidatedLayer::default();
     let mut combined = ValidatedLayer::default();
@@ -433,15 +434,12 @@ fn derive_layers_into(
 
             Ok(false)
         })();
-        let edge_layer = match computed {
-            Ok(edge_layer) => edge_layer,
-            Err(_) => {
-                store.mark_uncomputed(*layer);
-                folded = ValidatedLayer::default();
-                edges.clear();
-                layers.is_edges(*layer)
-            }
-        };
+        let edge_layer = computed.unwrap_or_else(|_| {
+            store.mark_uncomputed(*layer);
+            folded = ValidatedLayer::default();
+            edges.clear();
+            layers.is_edges(*layer)
+        });
         if edge_layer {
             store.append_edges(*layer, &edges);
             continue;
@@ -464,7 +462,6 @@ fn derive_layers_into(
         }
         store.append_layer(*layer, &xs, &ys, &start, &len);
     }
-    Ok(())
 }
 
 /// Whether `p` lies on the polygon's material, its boundary included.
@@ -1731,13 +1728,7 @@ pub mod gds {
             } else {
                 order.iter().map(|&old| walk.tags[old as usize]).collect()
             };
-            super::derive_layers_into(
-                &mut store,
-                layers,
-                &walk.provenance.placed,
-                strings,
-                &cells,
-            )?;
+            super::derive_layers_into(&mut store, layers, &walk.provenance.placed, strings, &cells);
             Ok((store, walk.provenance))
         }
     }

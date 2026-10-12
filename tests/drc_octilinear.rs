@@ -199,8 +199,8 @@ fn a_turned_u_has_its_width_and_notch_times_root_two() {
     assert!(found.of("n141").is_empty());
 }
 
-/// Oracle: hand-derived. The right triangle with legs 9 has area 40.5: `area
-/// >= 41nm2` flags it at 40 (floored), `>= 40nm2` passes. A diamond of radius
+/// Oracle: hand-derived. The right triangle with legs 9 has area 40.5:
+/// `area >= 41nm2` flags it at 40 (floored), `>= 40nm2` passes. A diamond of radius
 /// 10 has four edges `10·√2 ≈ 14.14` long: `edge_length >= 15nm` flags all
 /// four at 14, `>= 14nm` none.
 #[test]

@@ -285,24 +285,25 @@ fn neck2(poly: PolygonRef<'_>, limit: Dbu) -> Option<(i128, Point)> {
 /// than `limit` is looked for; `None` when there is none.
 ///
 /// The width is the rectilinear one ([`narrowest_width`]) read at every
-/// octilinear angle, the least of:
-/// - two antiparallel edges facing each other across material over a stretch
-///   of positive length: their perpendicular distance (IHP SG13G2 M1.g/Mn.g,
-///   "45-degree bent width", which the PDK's `KLayout` deck checks as a
-///   Euclidean `width` between the 45-degree edges);
-/// - a neck: two concave corners each lying in the closed wedge opposite the
-///   other's empty sector (in rectilinear terms, concave corners whose empty
-///   quadrants point away from each other), corner to corner; a corner where
-///   the figure meets itself is a neck of width 0;
+/// octilinear angle, `KLayout`'s Euclidean `width` restricted to
+/// antiparallel edge pairs, the least of:
+/// - two antiparallel edges, each strictly on the other's material side, at
+///   the distance between them: perpendicular where they face each other
+///   (IHP SG13G2 M1.g/Mn.g, "45-degree bent width", which the PDK's
+///   `KLayout` deck checks as a Euclidean `width` between the 45-degree
+///   edges), end to end past each other (a neck, as at the inner corners of
+///   two overlapping rectangles);
+/// - a point where the figure meets itself (two concave corners at one
+///   point, the connected corner model): width 0;
 /// - an acute tip, a corner of less than 90 degrees: width 0.
 ///
-/// A corner of 90 degrees or more and two edges that merely converge (a
-/// chamfer's end and the far side) are not a width. A notch is two
-/// antiparallel edges facing across empty space over a stretch of positive
-/// length, as [`narrowest_facing`] reads one.
+/// Two edges at 45 or 135 degrees to each other (a chamfer's end and the far
+/// side) are not a width pair, as they are not at `KLayout`'s `angle_limit`
+/// of 1 degree. A notch is two antiparallel edges facing across empty space
+/// over a stretch of positive length, as [`narrowest_facing`] reads one.
 ///
-/// Over `n` edges and `k` concave corners, the pairs within `limit` in x:
-/// `O(n²)` only when every edge sits in one `limit`-wide column.
+/// Over `n` edges, the pairs within `limit` in x: `O(n²)` only when every
+/// edge sits in one `limit`-wide column.
 pub fn narrowest_pair2(
     poly: PolygonRef<'_>,
     material_between: bool,
@@ -343,8 +344,9 @@ pub fn narrowest_pair2(
         return best;
     }
 
-    // Each corner: its point, the ways back and on, and whether it is concave.
-    let mut concave: Vec<Corner> = Vec::new();
+    // Concave corners, by point: two at one point are a pinch, where the
+    // figure meets itself (the connected corner model), a neck of width 0.
+    let mut concave: Vec<(i64, i64)> = Vec::new();
     for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
         let (xs, ys) = ring.coords();
         let n = xs.len();
@@ -361,49 +363,27 @@ pub fn narrowest_pair2(
                 // A left turn by more than 90 degrees: an acute tip.
                 keep(0, Point { x: xs[c], y: ys[c] });
             } else if turn < 0 {
-                concave.push((x, y, back, on));
+                concave.push((x, y));
             }
         }
     }
     concave.sort_unstable();
-    for (i, &(x, y, back, on)) in concave.iter().enumerate() {
-        for &(x2, y2, back2, on2) in &concave[i + 1..] {
-            if x2 - x >= limit.raw() {
-                break;
-            }
-            let w = (x2 - x, y2 - y);
-            // The two empty sectors point at each other: one is the other turned
-            // 180 degrees (in rectilinear terms, opposite empty quadrants).
-            let dir = |r: (i64, i64)| (r.0.signum(), r.1.signum());
-            let flipped = |r: (i64, i64)| (-r.0.signum(), -r.1.signum());
-            let facing = dir(back2) == flipped(back) && dir(on2) == flipped(on);
-            if facing && opposite_empty(w, back, on) && opposite_empty((-w.0, -w.1), back2, on2) {
-                let d2 =
-                    2 * (i128::from(w.0) * i128::from(w.0) + i128::from(w.1) * i128::from(w.1));
-                keep(d2, mid4((2 * x, 2 * y), (2 * x2, 2 * y2)));
-            }
-        }
+    if let Some(pair) = concave.windows(2).find(|pair| pair[0] == pair[1]) {
+        let (x, y) = pair[0];
+        keep(
+            0,
+            Point {
+                x: Dbu::new_unchecked(x),
+                y: Dbu::new_unchecked(y),
+            },
+        );
     }
     best
 }
 
-/// A concave corner: its point, its way back and its way on.
-type Corner = (i64, i64, (i64, i64), (i64, i64));
-
-/// Whether `w` lies in the closed wedge opposite a concave corner's empty
-/// sector, which runs counter-clockwise from its way back to its way on and
-/// spans less than 180 degrees. Zero lies in it.
-fn opposite_empty(w: (i64, i64), back: (i64, i64), on: (i64, i64)) -> bool {
-    let cross = |a: (i64, i64), b: (i64, i64)| {
-        i128::from(a.0) * i128::from(b.1) - i128::from(a.1) * i128::from(b.0)
-    };
-    let (from, to) = ((-back.0, -back.1), (-on.0, -on.1));
-    cross(from, w) >= 0 && cross(w, to) >= 0
-}
-
-/// Whether `(e, f)` face each other: antiparallel, each strictly on the
-/// other's material side (`material_between`) or empty side, over a stretch
-/// of positive length.
+/// Whether `(e, f)` face each other: antiparallel and each strictly on the
+/// other's material side (`material_between`), or each on the other's empty
+/// side over a stretch of positive length.
 fn facing(e: Seg, f: Seg, material_between: bool) -> bool {
     let dir = |s: Seg| (s.b.x.raw() - s.a.x.raw(), s.b.y.raw() - s.a.y.raw());
     let ((ux, uy), (vx, vy)) = (dir(e), dir(f));
@@ -425,6 +405,11 @@ fn facing(e: Seg, f: Seg, material_between: bool) -> bool {
     };
     if side(e, f.a) != want || side(f, e.a) != want {
         return false;
+    }
+    if material_between {
+        // A width pair need not overlap: past each other's ends the two
+        // edges are as far apart as their nearest ends (a neck).
+        return true;
     }
     let at = |p: Point| ux * i128::from(p.x.raw()) + uy * i128::from(p.y.raw());
     let (e0, e1) = (at(e.a).min(at(e.b)), at(e.a).max(at(e.b)));

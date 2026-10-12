@@ -16,9 +16,7 @@ use gpurify_geom::ops::Point;
 use gpurify_geom::rects::decompose_into;
 use gpurify_geom::store::GeometryStoreBuilder;
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
-use gpurify_geom::width::{
-    narrowest_facing, narrowest_neck, narrowest_pair2, narrowest_width2, poly_edges,
-};
+use gpurify_geom::width::{narrowest_facing, narrowest_neck, narrowest_pair2, narrowest_width2};
 use gpurify_geom::{Bbox, Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_geom::{GeometryStore, LayerId};
 use gpurify_ingest::StrId;
@@ -324,7 +322,7 @@ pub(crate) fn min_edge_length(
     let limit2 = limit.mul_wide(limit);
     let mut examined = 0u64;
     for (idx, owner) in (0..).zip(owners) {
-        for (a, b) in poly_edges(s.layer_out.get(idx)) {
+        for (a, b) in straight_runs(s.layer_out.get(idx)) {
             examined += 1;
             let (dx, dy) = ((b.x - a.x).abs(), (b.y - a.y).abs());
             let length2 = dx.mul_wide(dx) + dy.mul_wide(dy);
@@ -346,6 +344,37 @@ pub(crate) fn min_edge_length(
         }
     }
     (Outcome::Ran, examined)
+}
+
+/// Every straight run of a polygon's boundary, holes included: consecutive
+/// edges of a ring running one way are one run. A merged ring keeps a vertex
+/// where it passes straight through a point it also turns at (a 45-degree
+/// tip touching an edge, the connected corner model); the edge there is
+/// still one edge, as `KLayout` reads it.
+fn straight_runs(poly: gpurify_geom::view::PolygonRef<'_>) -> Vec<(Point, Point)> {
+    let mut runs = Vec::new();
+    for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+        let (xs, ys) = ring.coords();
+        let n = xs.len();
+        let at = |i: usize| Point {
+            x: xs[i % n],
+            y: ys[i % n],
+        };
+        let way = |i: usize| heading(at(i), at(i + 1));
+        // Start at a vertex where the ring turns; every ring turns somewhere.
+        let Some(first) = (0..n).find(|&i| way(i + n - 1) != way(i)) else {
+            continue;
+        };
+        let mut from = first;
+        for step in 1..=n {
+            let i = first + step;
+            if step == n || way(i - 1) != way(i) {
+                runs.push((at(from), at(i)));
+                from = i;
+            }
+        }
+    }
+    runs
 }
 
 /// The direction an axis-aligned edge runs, as signs along x and y.

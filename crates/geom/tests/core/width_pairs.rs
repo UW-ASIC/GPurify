@@ -2,7 +2,7 @@
 //!
 //! Oracle: on rectilinear polygons, a differential against the rectilinear
 //! measures (`narrowest_width2`, `narrowest_facing`), which the bitmap
-//! reference and the KLayout mirror already hold; on 45-degree polygons,
+//! reference and the `KLayout` mirror already hold; on 45-degree polygons,
 //! hand-derived widths.
 
 use gpurify_geom::boolean::union_into;
