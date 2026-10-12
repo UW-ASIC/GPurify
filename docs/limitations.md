@@ -326,9 +326,8 @@ says which foundry manual, standard or tool defines each one.
 | ERC-D9 | PMOS/NMOS devices sharing one well | missing | Named as a Calibre PERC layout check without a public definition of which sharing is illegal |
 | ERC-E7 | RMS / Joule heating / peak limits | missing | Public limits exist: LEF 5.8's ACCURRENTDENSITY tables by frequency and width, and the sky130 tech LEF's RMS limits (6.1 mA/um met1-met2, 14.9 met3-met4, 22.34 met5, Tj 90 C). The intent states only a DC current budget per net, so no RMS or peak current reaches a check |
 | ERC-E9 | PDN integrity (floating stripes, unconnected instances) | partial | Flags unconnected conductors; PDN-specific checks (floating stripes, instance supply terminals) are missing |
-| ERC-E11 | Dynamic / vectorless IR | missing | In scope since 2026-10-11 (was: Static analysis only: dynamic IR needs switching activity) |
+| ERC-E11 | Dynamic / vectorless IR | partial | Vectorless worst cycle: every load on a net switches in phase once, a triangular pulse from its budget, toggle rate and rise time, against the net's decap; an RC grid with no package, bump or wire inductance (L di/dt), and one feed point per supply (limitations.md, "Power grid") |
 | ERC-E12 | Stress voiding / slotting | partial | cheesing requires a slot in wide shapes, and the slot geometry (IHP Slt.*, gf180 MSLOT.*) is DRC width, enclosure and spacing; JEP139 and JESD214 are stress-migration test methods that state no layout rule, so the stress-voiding rules beyond slotting (vias landing on wide metal) have no public limit |
-| ERC-E13 | Thermal-aware / statistical EM, self-heating | missing | In scope since 2026-10-11 (was: One temperature, 85 C (limitations.md, "Power grid")) |
 | ERC-F1 | Static voltage propagation, conditional on gate voltage | partial | Channels pass unconditionally |
 | ERC-F4 | HCI susceptibility flag | missing | — |
 | ERC-F7 | Missing isolation at switchable-domain outputs | missing | Needs power states |

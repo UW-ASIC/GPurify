@@ -1073,6 +1073,8 @@ fn check_thermal_branches(
             grid,
             row.max_density[at],
             row.max_current_per_cut[at],
+            // An `em_thermal` row states no narrow-line band.
+            None,
         ) * derate;
         let current = solution.branch_current[edge].raw().abs();
         let (measured, limit) = (
