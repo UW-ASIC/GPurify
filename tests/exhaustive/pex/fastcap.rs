@@ -71,11 +71,10 @@ const DEFAULT_MESH: f64 = 2.5e-2;
 /// of these stacks (500 nm) at the centre of a face, finer toward its edges.
 const PANEL_UM: f64 = 0.25;
 
-/// The stratified plate's interior panel edge, µm: an eighth of its side.
-/// At [`PANEL_UM`] the 8 µm plate, mirrored and cut by its interface, was
-/// 15 000 panels and ran `FastCap` past its 20 minutes; its capacitance is
-/// mostly its area's, which panels this size, finer toward the edges, still
-/// resolve well inside [`STRATIFIED`].
+/// The stratified differential's interior panel edge, µm, an eighth of the
+/// plate's side. At [`PANEL_UM`] the 8 µm plate, mirrored and cut by its
+/// interface, was 15 000 panels and ran `FastCap` past its 20 minutes; at
+/// this size, finer toward every edge, it read within 0.5 % of `GPurify`.
 const PLATE_PANEL_UM: f64 = 1.0;
 
 /// One conductor as `FastCap` reads it: a named box, corners in µm.
@@ -729,10 +728,14 @@ fn fastcap_stratified(
 
 /// PEX-003: every entry of three stratified geometries within
 /// [`STRATIFIED`] of `FastCap`'s multi-dielectric solve: an 8 um `m1`
-/// plate (its reference cut at [`PLATE_PANEL_UM`]) and two coupled `m1`
-/// bars, the stack 7 up to `m1`'s top and 3.9 over it, and an `m1` bar
-/// under a crossing `m2` bar, 7 up to `m1`'s top, 3.9 to `m2`'s bottom and
-/// 5 over it (two interfaces).
+/// plate and two coupled 4 x 2 um `m1` plates 1 um apart, the stack 7 up
+/// to `m1`'s top and 3.9 over it, and a 1 um `m1` bar under a crossing
+/// 1 um `m2` bar, 7 up to `m1`'s top, 3.9 to `m2`'s bottom and 5 over it
+/// (two interfaces). Each reference is cut at [`PLATE_PANEL_UM`]: at
+/// [`PANEL_UM`], 0.5 um bars gave `FastCap` 2.0's dielectric solve a
+/// matrix it returned non-physical (a negative self-capacitance) or did
+/// not finish in 20 minutes (Nightly 38233408339), where the coarser,
+/// wider geometries stay inside its reach.
 /// Oracle: differential against `FastCap` 2.0, an independent
 /// multi-dielectric boundary-element solver given the same windows.
 #[test]
@@ -757,20 +760,20 @@ fn fastcap_differential_stratified_dielectrics() {
         (
             "pair",
             with(7.0, 3.9, 3.9),
-            parallel(Metal::M1, 3_000, 500, 500, 0),
+            parallel(Metal::M1, 4_000, 2_000, 1_000, 0),
             vec!["A", "B"],
-            PANEL_UM,
+            PLATE_PANEL_UM,
         ),
         (
             "crossing",
             with(7.0, 3.9, 5.0),
             Layout::default()
-                .rect("m1", 0, 0, 4_000, 500)
-                .rect("m2", 1_750, -1_500, 2_250, 2_000)
-                .label("m1_label", 250, 250, "A")
-                .label("m2_label", 2_000, 1_900, "B"),
+                .rect("m1", 0, 0, 4_000, 1_000)
+                .rect("m2", 1_500, -1_500, 2_500, 2_500)
+                .label("m1_label", 500, 500, "A")
+                .label("m2_label", 2_000, 2_000, "B"),
             vec!["A", "B"],
-            PANEL_UM,
+            PLATE_PANEL_UM,
         ),
     ];
     let mut broken = Vec::new();
