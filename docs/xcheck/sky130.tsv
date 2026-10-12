@@ -314,3 +314,5 @@ psd.5b.butted	psd.5b.butted	-	theirs_missing	sky130A_mr.drc has no check for it
 nsd.6	nsd.6	-	theirs_missing	sky130A_mr.drc has no check for it
 poly.6	poly.6	-	theirs_missing	sky130A_mr.drc has no check for it
 hvntm.6b	hvntm.6b	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.2 difftap.2b	difftap.2	-	theirs_missing	channel width (the gate's sides on the diffusion's edge); sky130A_mr.drc has no such check (its difftap.2 is the areaid.ce diff width, row ours_missing)
+capm.7	capm.7	-	theirs_missing	sky130A_mr.drc has no check for it
