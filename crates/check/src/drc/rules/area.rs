@@ -351,8 +351,9 @@ pub(crate) fn global_density(
 
 /// The number of merged figures on the layer in the whole layout against a
 /// minimum or a maximum (IHP npn13G2.bR, one seal ring per chip), one
-/// violation at the die's centre. `examined` counts figures; nothing drawn is
-/// `Skipped(EmptyLayer)`.
+/// violation at the die's centre. `examined` counts figures, and is one (the
+/// die) when the layer has none, so a missing figure's violation names a rule
+/// that examined something; nothing drawn is `Skipped(EmptyLayer)`.
 pub(crate) fn count(
     store: &GeometryStore,
     rule: StrId,
@@ -382,7 +383,7 @@ pub(crate) fn count(
             shapes: (PolyId(first_row_or_none(store, layer)), None),
         });
     }
-    (Outcome::Ran, u64::from(figures))
+    (Outcome::Ran, u64::from(figures).max(1))
 }
 
 /// The area the merged layer covers in the whole layout, holes excluded,
