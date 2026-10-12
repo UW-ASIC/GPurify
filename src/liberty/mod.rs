@@ -57,7 +57,7 @@
 //! let inputs = Inputs {
 //!     layout: "strongarm.gds".into(),
 //!     deck: "pdks/sky130.deck".into(),
-//!     reference: Some("strongarm.spice".into()),
+//!     reference: vec!["strongarm.spice".into()],
 //!     ..Inputs::default()
 //! };
 //! let loaded = load(&inputs)?;

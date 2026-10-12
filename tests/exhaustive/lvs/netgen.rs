@@ -55,8 +55,8 @@
 //! elements"). They are counted, and `GPurify` must call each a mismatch.
 
 use super::{
-    circuits, compared, compared_under, enumerated, measured, pin_names, polar, spice, Circuit,
-    Controls, Dev, Model, TOLERANCE,
+    circuits, compared, compared_under, enumerated, measured, pin_names, polar, spice,
+    verilog_tops, Circuit, Controls, Dev, Model, TOLERANCE,
 };
 use crate::harness::{self, Expect, Fixture};
 use gpurify::check::lvs::Verdict;
@@ -127,6 +127,10 @@ struct Case {
     /// The fixture's deck controls, which Netgen reads as [`netgen_setup`]
     /// writes them.
     controls: Controls,
+    /// A structural Verilog top Netgen reads over `reference`, its cell
+    /// library (`readnet verilog` into the library's netlist, as
+    /// `OpenLane`'s LVS script does), comparing its top module `TOP`.
+    verilog: Option<String>,
 }
 
 /// `text` as Netgen reads it: the bulk of every [`THREE_TERMINAL`] MOS on one
@@ -209,6 +213,7 @@ fn enumeration(c: &Circuit) -> Vec<Case> {
                 reference,
                 differs: None,
                 controls: Controls::default(),
+                verilog: None,
             }
         })
         .collect()
@@ -228,6 +233,7 @@ fn curated() -> Vec<Case> {
         reference: for_netgen(&spice(reference)),
         differs,
         controls: Controls::default(),
+        verilog: None,
     };
     let stack = Circuit::new(4, vec![Dev::mos(N, 0, 1, 3), Dev::mos(N, 0, 3, 2)]).internal(3);
     let long = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(1000, 300)]);
@@ -393,6 +399,7 @@ fn controlled_case(
         reference: for_netgen(&spice(reference)),
         differs: None,
         controls: controls.clone(),
+        verilog: None,
     }
 }
 
@@ -495,6 +502,7 @@ fn controlled() -> Vec<Case> {
     out.extend(ignored());
     out.extend(dummies());
     out.extend(relaxed());
+    out.extend(verilog());
     let row = |model, param, relative| Controls::default().tolerance(model, param, relative, None);
     // LVS-014: `w` 3000 against 3120 nm, 3.85 % of the larger: within a 5 %
     // row on `nmos` `w`, not a 3 % one, and not a 5 % row on `pmos`.
@@ -715,6 +723,23 @@ fn relaxed() -> Vec<Case> {
     out
 }
 
+/// LVS-075: the X5 Verilog tops ([`verilog_tops`]), each a cell library
+/// and a Verilog top placing it, against Netgen reading the same Verilog
+/// over the same library.
+fn verilog() -> Vec<Case> {
+    verilog_tops()
+        .into_iter()
+        .map(|top| Case {
+            layout: for_netgen(&spice(&as_declared(&top.drawn, &top.flat))),
+            reference: for_netgen(&top.library),
+            differs: None,
+            controls: Controls::default(),
+            verilog: Some(top.verilog_with_sub),
+            fixture: top.fixture,
+        })
+        .collect()
+}
+
 /// LVS-034: a capacitor drawn and not written, written and not drawn, and
 /// written to an internal net nothing else touches, against Netgen's
 /// `ignore class`, each with and without the control.
@@ -876,10 +901,22 @@ fn differential(netgen: &Path, cases: &[Case]) -> Tally {
             write(&format!("l{i}.spice"), &case.layout);
             write(&format!("r{i}.spice"), &case.reference);
             write(&format!("s{i}.tcl"), &netgen_setup(&setup, &case.controls));
-            let _ = writeln!(
-                batch,
-                "lvs {{l{i}.spice TOP}} {{r{i}.spice TOP}} s{i}.tcl o{i}.log"
-            );
+            match &case.verilog {
+                None => {
+                    let _ = writeln!(
+                        batch,
+                        "lvs {{l{i}.spice TOP}} {{r{i}.spice TOP}} s{i}.tcl o{i}.log"
+                    );
+                }
+                Some(verilog) => {
+                    write(&format!("v{i}.v"), verilog);
+                    let _ = writeln!(
+                        batch,
+                        "set c{i} [readnet spice r{i}.spice]\nreadnet verilog v{i}.v $c{i}\n\
+                         lvs {{l{i}.spice TOP}} [list $c{i} TOP] s{i}.tcl o{i}.log"
+                    );
+                }
+            }
         }
     }
     write("batch.tcl", &batch);

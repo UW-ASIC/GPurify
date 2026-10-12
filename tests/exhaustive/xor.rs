@@ -41,7 +41,7 @@ fn xor(tag: &str, a: Layout, b: Layout) -> (Report, bool) {
     let inputs = Inputs {
         layout: write(&dir, "a", a),
         deck,
-        reference: None,
+        reference: Vec::new(),
         intent: None,
         ..Inputs::default()
     };

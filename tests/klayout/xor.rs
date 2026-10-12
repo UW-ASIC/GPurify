@@ -107,7 +107,7 @@ fn random_layout_pairs_agree_with_klayout_xor() {
         let inputs = Inputs {
             layout: dir.join(&name_a),
             deck: deck.clone(),
-            reference: None,
+            reference: Vec::new(),
             intent: None,
             lef: Vec::new(),
         };

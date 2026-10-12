@@ -27,7 +27,7 @@ standard output.
 | Option | Meaning |
 |---|---|
 | `--deck <file>` | The process deck. Required. See [deck.md](deck.md). |
-| `--reference <file>` | The schematic netlist for LVS (SPICE or Spectre). |
+| `--reference <file>` | The schematic netlist for LVS (SPICE or Spectre). Repeat it to give a structural Verilog top level (`.v`) beside the SPICE or Spectre cell library its modules place; see below. |
 | `--intent <file>` | Design intent: supply voltages and per-net limits. See below. |
 | `--format text\|json\|spef\|dspf` | Report format. `spef` and `dspf` need a `pex` run. Default `text`. |
 | `--quasistatic <net>` | Field-solve this net's capacitance and inductance instead of using the closed-form estimate. Repeat for more nets. |
@@ -185,6 +185,27 @@ netgen's):
 - when the deck extracts no bulk, the reference's bulks are dropped here;
   netgen has no such rule, so its setup must tie every bulk to one net on
   both sides.
+
+## A Verilog top level
+
+A digital block's schematic usually arrives as gate-level Verilog placing
+standard cells whose transistors are in a SPICE library. Give both:
+
+    gpurify lvs top.gds --deck sky130.deck --reference cells.spice --reference top.v
+
+as Netgen reads them (`readnet verilog` into the netlist the cells were
+read into). Every `.v` file is Verilog; at most one other file is the
+SPICE or Spectre netlist. The top is the one module no other module
+places, whatever cells of the library go unused. The Verilog read is the
+structural subset a netlister writes: modules, `input`/`output`/`inout`/
+`wire`/`supply0`/`supply1` declarations with constant ranges, `assign`
+between nets, and instances connected by name or in order with nets, bits,
+part selects and concatenations. A bus is its bits, `d[3]` and so on, and
+a cell port `D[0]` takes bit `0` of a bus connected to `.D(...)`. A port an
+instance leaves out is open, a net of its own. Compiler directives
+(`` `ifdef ``) and constants (`1'b0`) are refused, so power connections
+and tie cells must be written as nets and instances; the
+`gpurify_ingest::netlist::verilog` docs list the subset.
 
 ## LVS parameters
 

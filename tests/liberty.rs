@@ -19,7 +19,10 @@ fn inputs(reference: bool) -> Inputs {
     Inputs {
         layout: fixtures().join("lvs/LVS_CLEAN_MATCH.gds"),
         deck: fixtures().join("params.deck"),
-        reference: reference.then(|| fixtures().join("lvs_inv.cdl")),
+        reference: reference
+            .then(|| fixtures().join("lvs_inv.cdl"))
+            .into_iter()
+            .collect(),
         ..Inputs::default()
     }
 }

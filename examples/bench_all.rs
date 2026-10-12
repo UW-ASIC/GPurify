@@ -122,7 +122,7 @@ fn fixture_inputs(deck: &Path) -> Inputs {
     Inputs {
         layout: fixtures().join("_source/conformance.gds"),
         deck: deck.to_path_buf(),
-        reference: None,
+        reference: Vec::new(),
         intent: None,
         lef: Vec::new(),
     }

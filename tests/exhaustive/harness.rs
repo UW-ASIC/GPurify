@@ -386,6 +386,9 @@ pub struct Fixture {
     pub layout: Layout,
     /// SPICE text for LVS.
     pub reference: Option<String>,
+    /// Structural Verilog files read over `reference` as its cell library
+    /// (`engine::pipeline::read_references`); empty for none.
+    pub verilog: Vec<String>,
     /// Design-intent JSON for the intent-gated ERC rules.
     pub intent: Option<String>,
     /// Nets to field-solve.
@@ -419,6 +422,7 @@ impl Fixture {
             deck: deck.to_owned(),
             layout: Layout::default(),
             reference: None,
+            verilog: Vec::new(),
             intent: None,
             quasistatic: Vec::new(),
             checks,
@@ -523,16 +527,18 @@ pub fn run(fixture: &Fixture) -> Result<Ran, String> {
     let reference = match &fixture.reference {
         None => None,
         Some(text) => {
-            // SPICE or Spectre, picked as the pipeline picks it.
-            let netlist = gpurify::engine::pipeline::read_reference_text(
-                text,
-                false,
+            // SPICE or Spectre, picked as the pipeline picks it, and any
+            // Verilog over it.
+            let verilog: Vec<&str> = fixture.verilog.iter().map(String::as_str).collect();
+            let (netlist, top) = gpurify::engine::pipeline::read_references(
+                Some((text, false)),
+                &verilog,
                 &deck.devices,
                 &mut strings,
             )
             .map_err(|why| format!("reference: {why}"))?;
             // As `engine::pipeline::load` does: LVS compares the flattened top.
-            Some(match netlist.top() {
+            Some(match top {
                 Some(top) => netlist
                     .flatten_top(top, &mut strings)
                     .map_err(|why| format!("reference: {why}"))?,
