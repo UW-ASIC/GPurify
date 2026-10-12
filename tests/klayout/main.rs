@@ -452,6 +452,131 @@ fn random_fixtures(count: u64) -> Vec<harness::Fixture> {
         .collect()
 }
 
+/// A deck of the kinds that measure 45-degree shapes (H12), and the derived
+/// layers that feed them. `sized` and `with_width` are left out: on a 45-degree
+/// edge `sized` is the Minkowski sum with the square (`docs/deck.md`), which
+/// `KLayout`'s normal shift is not, a documented difference.
+const OCTILINEAR_DECK: &str = "grid 1nm
+layer met1 = gds(68, 20)
+layer met2 = gds(69, 20)
+layer both = met1 and met2
+layer cut = met1 not met2
+layer all = met1 or met2
+connect conductors [met1, met2]
+connect touch_within_layer
+rule w width(met1) >= 100nm
+rule el edge_length(met1) >= 60nm
+rule n notch(met1) >= 100nm
+rule s space(met1) >= 100nm
+rule sd space(met1, met2) >= 80nm
+rule a area(met1) >= 30000nm2
+rule ha hole_area(met1) >= 30000nm2
+rule f forbidden(met2.with_area(< 20000nm2))
+rule ba area(both) >= 10000nm2
+rule cw width(cut) >= 100nm
+rule as space(all) >= 100nm
+rule ang angle(; allowed: [0deg, 45deg, 90deg, 135deg])
+";
+
+/// One random 45-degree shape on a 10 nm lattice: a rectangle with chamfered
+/// corners (an octagon when all four are cut), or a bar at 45 degrees whose
+/// ends are cut by a step, so no corner is acute.
+fn octilinear_shape(rng: &mut gpurify_testgen::Rng, size: i64) -> Vec<(i64, i64)> {
+    let (x, y) = (rng.range(0, 150) * 10, rng.range(0, 150) * 10);
+    if rng.range(0, 2) == 0 {
+        let (w, h) = (rng.range(2, size) * 10, rng.range(2, size) * 10);
+        let most = w.min(h) / 20;
+        let c: Vec<i64> = (0..4).map(|_| rng.range(0, most + 1) * 10).collect();
+        let mut ring = vec![
+            (x + c[0], y),
+            (x + w - c[1], y),
+            (x + w, y + c[1]),
+            (x + w, y + h - c[2]),
+            (x + w - c[2], y + h),
+            (x + c[3], y + h),
+            (x, y + h - c[3]),
+            (x, y + c[0]),
+        ];
+        ring.dedup();
+        while ring.len() > 1 && ring.first() == ring.last() {
+            ring.pop();
+        }
+        return ring;
+    }
+    // A bar between the lines y = x + c and y = x + c + d, `len` long in x.
+    let (d, len) = (rng.range(1, size / 2) * 20, rng.range(2, size) * 10);
+    let s = d / 2;
+    let bar = [
+        (0, 0),
+        (len, len),
+        (len, len + d - s),
+        (len - s, len + d - s),
+        (-s, d - s),
+        (-s, 0),
+    ];
+    // Rising, or mirrored in x (and re-wound) to fall.
+    if rng.range(0, 2) == 0 {
+        bar.iter().map(|&(bx, by)| (x + bx, y + by)).collect()
+    } else {
+        bar.iter().rev().map(|&(bx, by)| (x - bx, y + by)).collect()
+    }
+}
+
+/// Random 45-degree and rectilinear shapes on [`OCTILINEAR_DECK`]'s layers.
+/// On a 10 nm lattice every crossing of two 45-degree edges falls on a 5 nm
+/// point, on the 1 nm grid, so no vertex is snapped and the comparison is of
+/// the measures alone.
+fn octilinear_fixtures(count: u64) -> Vec<harness::Fixture> {
+    (0..count)
+        .map(|seed| {
+            let mut rng = gpurify_testgen::Rng::new(seed ^ 0x45_45);
+            let mut layout = harness::Layout::default();
+            for (layer, n, size) in [("met1", 7, 40), ("met2", 3, 30)] {
+                for _ in 0..rng.range(1, n) {
+                    layout = layout.polygon(layer, &octilinear_shape(&mut rng, size));
+                }
+            }
+            harness::Fixture::new(&format!("octilinear/{seed}"), &[], OCTILINEAR_DECK, drc())
+                .layout(layout)
+        })
+        .collect()
+}
+
+/// DRC-038, DRC-037, DRC-002: the kinds that measure 45-degree shapes against
+/// `KLayout`'s same checks.
+///
+/// Oracle: differential against `KLayout`, through the mirror deck, on 1500
+/// random layouts of chamfered rectangles, octagons and 45-degree bars, each
+/// rule compared as its verdict states.
+#[test]
+#[ignore = "release tier: needs klayout (nix develop .#oracles)"]
+fn random_octilinear_layouts_agree_with_the_klayout_mirror() {
+    let fixtures = octilinear_fixtures(1500);
+    differential(
+        "octilinear",
+        fixtures
+            .chunks(ROUND)
+            .map(|round| jobs_of(round, "octilinear")),
+    );
+}
+
+/// The octilinear differential's layouts are valid and every rule of its deck
+/// runs on them in `GPurify`, so the release-tier comparison compares rather
+/// than counting refusals.
+///
+/// Oracle: the H12 scope (`docs/deck.md`, "45-degree geometry"): each kind in
+/// [`OCTILINEAR_DECK`] measures 45-degree shapes, so none records `Refused`.
+#[test]
+fn the_octilinear_differential_layouts_run_every_rule() {
+    let jobs = jobs_of(&octilinear_fixtures(40), "octilinear-merge");
+    assert_eq!(jobs.len(), 40, "every layout loads and runs");
+    for job in &jobs {
+        for (id, (outcome, _)) in &job.gpurify {
+            assert_ne!(*outcome, Ran::Refused, "{} {id}", job.name);
+        }
+    }
+}
+
 /// Oracle: differential against `KLayout`, through the mirror deck
 /// `docs/klayout-mirror.md` documents, compared per rule as that rule's verdict
 /// (EXACT or APPROX) states, on 3000 random layouts.

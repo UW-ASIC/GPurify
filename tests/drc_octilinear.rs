@@ -352,3 +352,46 @@ fn a_45_degree_shape_scopes_its_refusal_to_the_rules_that_read_it() {
     assert_eq!(found.outcome("w2"), Outcome::Ran);
     assert_eq!(found.of("w2"), [(len(50), len(100))]);
 }
+
+/// N-H12-1: a derived layer that cannot be computed refuses only the rules
+/// that read it. A triangle with an edge of slope 1/2 (neither axis nor 45
+/// degrees) on met1 makes `met1.sized(10nm)` and everything built on it
+/// uncomputable; the rule on that layer records `Refused`, a rule on met2
+/// reports as usual, and the load does not fail.
+///
+/// Oracle: the scope the H12 brief states (refusal limited to the rules that
+/// read the layer) and a hand-derived width: the met2 bar is 50 wide.
+#[test]
+fn an_uncomputable_derived_layer_refuses_only_its_rules() {
+    let found = run_on(
+        "layer fat = met1.sized(10nm)\nlayer fatter = fat.sized(10nm)\n\
+         rule wf width(fatter) >= 5nm\nrule ef length(fat.edges()) >= 5nm\n\
+         rule w2 width(met2) >= 100nm",
+        &[
+            ("met1", vec![(0, 0), (200, 0), (0, 100)]),
+            ("met2", vec![(500, 0), (550, 0), (550, 1000), (500, 1000)]),
+        ],
+    );
+    assert_eq!(found.outcome("wf"), Outcome::Refused);
+    assert_eq!(found.outcome("ef"), Outcome::Refused);
+    assert_eq!(found.outcome("w2"), Outcome::Ran);
+    assert_eq!(found.of("w2"), [(len(50), len(100))]);
+}
+
+/// N-H12-2: a strict `with_width` bound is exact on a 45-degree width whose
+/// square is a half unit. The bar between `y = x` and `y = x + 99` is
+/// `99/√2 ≈ 70.004` wide (squared 4900.5): `> 70nm` holds it and `<= 70nm`
+/// does not. Stored as `>= 70² + 1` it would be missed.
+///
+/// Oracle: hand-derived, `99² = 9801 = 2·4900 + 1`.
+#[test]
+fn a_strict_width_bound_is_exact_on_a_half_unit_square() {
+    let found = run(
+        "rule over forbidden(met1.with_width(> 70nm))\n\
+         rule under forbidden(met1.with_width(<= 70nm))",
+        &[bar(0, 99)],
+    );
+    assert_eq!(found.of("over").len(), 1);
+    assert!(found.of("under").is_empty());
+    assert_eq!(found.outcome("under"), Outcome::Ran);
+}

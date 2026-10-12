@@ -480,10 +480,11 @@ pub enum DerivedOp {
     /// The shapes whose area, holes excluded, lies in `lo..=hi` square grid units.
     WithArea(i128, i128),
     /// The shapes whose narrowest width, as the `width` rule measures it (a
-    /// diagonal neck counts), has its square in `lo..=hi` square grid units.
-    /// A squared width is a whole number, so the deck's strict bounds are
-    /// kept exactly: `with_width(> 70nm)` is `4901..` and holds a `√5000`
-    /// neck, `with_width(<= 70nm)` is `..=4900` and does not.
+    /// diagonal neck counts), has twice its square in `lo..=hi` square grid
+    /// units. Twice a squared width is a whole number even at 45 degrees, so
+    /// the deck's strict bounds are kept exactly: `with_width(> 70nm)` is
+    /// `9801..` and holds a `√5000` neck and a `99/√2` width,
+    /// `with_width(<= 70nm)` is `..=9800` and holds neither.
     WithWidth(i128, i128),
     /// `with_bbox_max` (`longer`) or `with_bbox_min`: the shapes whose
     /// bounding box's longer, or shorter, side lies in `lo..=hi` grid units,

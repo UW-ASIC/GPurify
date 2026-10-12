@@ -1048,6 +1048,7 @@ fn validity_variant(error: ValidityError) -> &'static str {
         ValidityError::OrphanHole(_) => "OrphanHole",
         ValidityError::NotRectilinear(_) => "NotRectilinear",
         ValidityError::NotOctilinear(_) => "NotOctilinear",
+        ValidityError::Uncomputed(_) => "Uncomputed",
     }
 }
 

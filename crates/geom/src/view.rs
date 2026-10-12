@@ -56,6 +56,10 @@ pub enum ValidityError {
     /// vertical nor at 45 degrees.
     #[error("polygon {0:?} has an edge at an angle other than a multiple of 45 degrees")]
     NotOctilinear(PolyId),
+    /// A derived layer that could not be computed
+    /// ([`GeometryStore::mark_uncomputed`]): nothing on it can be read.
+    #[error("layer {0:?} could not be computed")]
+    Uncomputed(LayerId),
 }
 
 /// One layer's geometry, validated and grouped into outer-plus-holes polygons.
@@ -275,6 +279,9 @@ pub fn validate_layer_with(
 ) -> Result<(), ValidityError> {
     let rows = store.polys_on_layer(layer);
     out.reset();
+    if store.is_uncomputed(layer) {
+        return Err(ValidityError::Uncomputed(layer));
+    }
 
     // Pass one: shape validation, splitting the layer's rows by winding.
     let rows_len = (rows.end - rows.start) as usize;

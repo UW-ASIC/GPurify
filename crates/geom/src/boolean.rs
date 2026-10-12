@@ -25,6 +25,10 @@ mod octilinear;
 /// Why a boolean could not be computed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum BooleanError {
+    /// An operation that builds axis-parallel boxes along edges
+    /// ([`crate::derive::extended_into`]) was given a 45-degree edge.
+    #[error("a 45-degree edge cannot be extended into an axis-parallel box")]
+    NotRectilinear,
     /// A raw ring given to [`canonical_rings_into`] has an edge that is not
     /// horizontal, vertical or at 45 degrees.
     #[error("input is not octilinear; only edges at multiples of 45 degrees are supported")]

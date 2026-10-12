@@ -243,19 +243,11 @@ pub fn with_area_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mut
 }
 
 /// Polygons whose narrowest width, as the `width` rule measures it (diagonal
-/// necks count), has its square in `range`, in square grid units
-/// ([`narrowest_width2`]). Squared, a neck is a whole number, so a strict
-/// bound is exact as an inclusive one: `> 70` is `4901..` here, and a
-/// `√5000` neck (70.7) is in it.
-///
-/// # Errors
-///
-/// On a layer with 45-degree edges the width is
-/// [`crate::width::narrowest_pair2`]'s, whose square can be a half unit: it
-/// is in the range when its floor is at least the lower bound and its
-/// ceiling at most the upper, which is exact for inclusive bounds. A strict
-/// bound the deck turned inclusive (`> n` as `>= n² + 1`) misses a width
-/// whose square is exactly `n² + ½` (`99/√2` against `> 70nm`).
+/// necks count, and on a 45-degree layer [`crate::width::narrowest_pair2`]'s
+/// width), has twice its square in `range`, in square grid units. Twice a
+/// squared width is a whole number even at 45 degrees, so a strict bound is
+/// exact as an inclusive one: `> 70` is `9801..` here, and a `√5000` neck
+/// (70.7) and a `99/√2` width (70.004) are both in it.
 pub fn with_width_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mut ValidatedLayer) {
     let mut scratch = FacingScratch::default();
     let far = Dbu::new_unchecked(crate::MAX_ABS_DBU);
@@ -263,11 +255,9 @@ pub fn with_width_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mu
         .map(|idx| {
             let poly = a.get(idx);
             if a.is_rectilinear() {
-                return range.contains(&narrowest_width2(poly, &mut scratch).raw());
+                return range.contains(&(2 * narrowest_width2(poly, &mut scratch).raw()));
             }
-            narrowest_pair2(poly, true, far).is_some_and(|(twice, _)| {
-                twice / 2 >= *range.start() && (twice + 1) / 2 <= *range.end()
-            })
+            narrowest_pair2(poly, true, far).is_some_and(|(twice, _)| range.contains(&twice))
         })
         .collect();
     a.select_into(&keep, out);

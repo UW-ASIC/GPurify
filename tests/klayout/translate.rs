@@ -531,10 +531,10 @@ impl Layers<'_> {
             DerivedOp::WithArea(lo, hi) => {
                 format!("{a}.with_area({}, {})", lo_bound(lo, 4), hi_bound(hi, 4))
             }
-            // The bounds are on the squared width, so 4x at x2.
+            // The bounds are on twice the squared width, so 2x at x2.
             DerivedOp::WithWidth(i128::MIN, i128::MAX) => a.clone(),
             DerivedOp::WithWidth(lo, hi) => {
-                format!("with_width2({a}, {}, {})", lo_bound(lo, 4), hi_bound(hi, 4))
+                format!("with_width2({a}, {}, {})", lo_bound(lo, 2), hi_bound(hi, 2))
             }
             DerivedOp::WithBbox { longer, lo, hi } => format!(
                 "{a}.with_bbox_{}({}, {})",

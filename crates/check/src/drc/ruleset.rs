@@ -3593,450 +3593,494 @@ impl RuleSet {
         }
         for (at, &(id, rule)) in self.rules.iter().enumerate() {
             let before = out.len();
-            let (outcome, examined) = match rule {
-                Rule::MinWidth { layer, limit } => {
-                    width::facing(store, id, layer, limit, true, s, out)
-                }
-                Rule::MaxWidth { layer, limit } => {
-                    width::max_width(store, id, layer, limit, s, out)
-                }
-                Rule::CutSize {
-                    layer,
-                    width,
-                    height,
-                } => width::cut_size(store, id, layer, width, height, s, out),
-                Rule::Notch { layer, limit } => {
-                    width::facing(store, id, layer, limit, false, s, out)
-                }
-                Rule::MinEdgeLength { layer, limit } => {
-                    width::min_edge_length(store, id, layer, limit, s, out)
-                }
-                Rule::MinSpacing { layer, limit } => {
-                    spacing::min_spacing(store, id, layer, limit, s, out)
-                }
-                Rule::MinSpacingDiff { a, b, limit } => {
-                    spacing::min_spacing_diff(store, id, a, b, limit, s, out)
-                }
-                Rule::ProjectionSpacing { a, b, limit } => {
-                    spacing::projection_spacing(store, id, (a, b), limit, s, out)
-                }
-                Rule::EolSpacing {
-                    layer,
-                    eol_width,
-                    limit,
-                } => spacing::eol_spacing(store, id, layer, eol_width, limit, s, out),
-                Rule::PrlSpacing {
-                    layer,
-                    prl_threshold,
-                    limit,
-                } => spacing::prl_spacing(store, id, layer, prl_threshold, limit, s, out),
-                Rule::CornerToCorner { layer, limit } => {
-                    spacing::corner_to_corner(store, id, layer, limit, s, out)
-                }
-                Rule::WideDependentSpacing {
-                    layer,
-                    width_threshold,
-                    limit,
-                } => spacing::wide_dependent(
-                    store,
-                    id,
-                    layer,
-                    (width_threshold, Dbu::new_unchecked(0)),
-                    limit,
-                    s,
-                    out,
-                ),
-                Rule::MinArea { layer, limit } => area::min_area(store, id, layer, limit, s, out),
-                Rule::MinEnclosedArea { layer, limit } => {
-                    area::min_enclosed_area(store, id, layer, limit, s, out)
-                }
-                Rule::Cheesing {
-                    layer,
-                    max_unslotted,
-                } => area::cheesing(store, id, layer, max_unslotted, s, out),
-                Rule::Density {
-                    layer,
-                    boundary,
-                    window,
-                    step,
-                    limit,
-                    sense,
-                } => area::density(
-                    store,
-                    id,
-                    (layer, boundary, drawn),
-                    (window, step),
-                    limit,
-                    sense,
-                    s,
-                    out,
-                ),
-                Rule::GlobalDensity {
-                    layer,
-                    boundary,
-                    limit,
-                    sense,
-                } => {
-                    area::global_density(store, id, (layer, boundary, drawn), limit, sense, s, out)
-                }
-                Rule::CriticalArea {
-                    layer,
-                    radius,
-                    limit,
-                } => area::critical_area(store, id, layer, radius, limit, s, out),
-                Rule::DensityBalance {
-                    a,
-                    b,
-                    boundary,
-                    window,
-                    step,
-                    limit,
-                } => area::density_balance(
-                    store,
-                    id,
-                    (a, b, boundary, drawn),
-                    (window, step),
-                    limit,
-                    s,
-                    out,
-                ),
-                Rule::MinEnclosure {
-                    outer,
-                    inner,
-                    limit,
-                    wire,
-                } => overlay::enclosure(
-                    store,
-                    id,
-                    (outer, inner),
-                    (limit, wire),
-                    overlay::Mode::EverySide,
-                    s,
-                    out,
-                ),
-                Rule::FullWidth { outer, inner } => overlay::enclosure(
-                    store,
-                    id,
-                    (outer, inner),
-                    (Dbu::new_unchecked(0), WireBand::ANY),
-                    overlay::Mode::FullWidth,
-                    s,
-                    out,
-                ),
-                Rule::NoncoincidentEnclosure {
-                    outer,
-                    inner,
-                    limit,
-                } => overlay::enclosure(
-                    store,
-                    id,
-                    (outer, inner),
-                    (limit, WireBand::ANY),
-                    overlay::Mode::NonCoincident,
-                    s,
-                    out,
-                ),
-                Rule::AsymmetricEnclosure {
-                    outer,
-                    inner,
-                    min_one_side,
-                    wire,
-                } => overlay::enclosure(
-                    store,
-                    id,
-                    (outer, inner),
-                    (min_one_side, wire),
-                    overlay::Mode::Opposite,
-                    s,
-                    out,
-                ),
-                Rule::AdjacentEnclosure {
-                    outer,
-                    inner,
-                    min_one_side,
-                } => overlay::enclosure(
-                    store,
-                    id,
-                    (outer, inner),
-                    (min_one_side, WireBand::ANY),
-                    overlay::Mode::Adjacent,
-                    s,
-                    out,
-                ),
-                Rule::MaxEnclosure {
-                    outer,
-                    inner,
-                    limit,
-                } => overlay::max_enclosure(store, id, (outer, inner), limit, s, out),
-                Rule::MinExtension {
-                    layer,
-                    reference,
-                    limit,
-                } => overlay::min_extension(store, id, layer, reference, limit, s, out),
-                Rule::GateCorner {
-                    layer,
-                    reference,
-                    of_reference,
-                } => overlay::gate_corner(store, id, (layer, reference), of_reference, s, out),
-                Rule::Overlap { a, b, limit } => overlay::overlap(store, id, a, b, limit, s, out),
-                Rule::MaxDistanceToTap { well, tap, limit } => {
-                    overlay::max_distance_to_tap(store, id, well, tap, limit, s, out)
-                }
-                Rule::OffGrid { pitch } => grid::off_grid(store, id, pitch, drawn, out),
-                Rule::Angle { layer, allowed } => {
-                    grid::angle(store, id, (layer, drawn), allowed, out)
-                }
-                Rule::RedundantVia {
-                    layer,
-                    min_count,
-                    within,
-                } => via::redundant_via(store, id, layer, min_count, within, s, out),
-                Rule::ViaArraySpacing {
-                    layer,
-                    array_threshold,
-                    limit,
-                } => via::via_array_spacing(store, id, layer, array_threshold, limit, s, out),
-                Rule::CutSpacing {
-                    layer,
-                    center,
-                    adjacent,
-                    within,
-                    limit,
-                } => via::cut_spacing(
-                    store,
-                    id,
-                    (layer, center),
-                    (adjacent, within),
-                    limit,
-                    s,
-                    out,
-                ),
-                Rule::MinimumCut {
-                    cut,
-                    wide,
-                    other,
-                    width,
-                    within,
-                    min_count,
-                } => via::minimum_cut(
-                    store,
-                    id,
-                    (cut, wide, other),
-                    (width, within),
-                    min_count,
-                    s,
-                    out,
-                ),
-                Rule::ViaStack { stack, max_height } => {
-                    via::via_stack(store, id, &self.stacks[stack as usize], max_height, out)
-                }
-                Rule::CutClassSpacing { layer, table } => via::cut_class_spacing(
-                    store,
-                    id,
-                    layer,
-                    &self.cut_tables[table as usize],
-                    s,
-                    out,
-                ),
-                Rule::MultiPatterning {
-                    layer,
-                    colors,
-                    color_spacing,
-                } => patterning::multi_patterning(store, id, layer, colors, color_spacing, s, out),
-                Rule::AnchoredPatterning {
-                    layer,
-                    anchors,
-                    colors,
-                    color_spacing,
-                } => {
-                    let anchors: Vec<LayerId> = anchors.into_iter().flatten().collect();
-                    patterning::anchored_patterning(
+            // A rule on a derived layer that could not be computed refuses;
+            // the rest run (N-H12-1).
+            let uncomputed = rule
+                .layers()
+                .into_iter()
+                .flatten()
+                .any(|l| store.is_uncomputed(l));
+            let (outcome, examined) = if uncomputed {
+                (Outcome::Refused, 0)
+            } else {
+                match rule {
+                    Rule::MinWidth { layer, limit } => {
+                        width::facing(store, id, layer, limit, true, s, out)
+                    }
+                    Rule::MaxWidth { layer, limit } => {
+                        width::max_width(store, id, layer, limit, s, out)
+                    }
+                    Rule::CutSize {
+                        layer,
+                        width,
+                        height,
+                    } => width::cut_size(store, id, layer, width, height, s, out),
+                    Rule::Notch { layer, limit } => {
+                        width::facing(store, id, layer, limit, false, s, out)
+                    }
+                    Rule::MinEdgeLength { layer, limit } => {
+                        width::min_edge_length(store, id, layer, limit, s, out)
+                    }
+                    Rule::MinSpacing { layer, limit } => {
+                        spacing::min_spacing(store, id, layer, limit, s, out)
+                    }
+                    Rule::MinSpacingDiff { a, b, limit } => {
+                        spacing::min_spacing_diff(store, id, a, b, limit, s, out)
+                    }
+                    Rule::ProjectionSpacing { a, b, limit } => {
+                        spacing::projection_spacing(store, id, (a, b), limit, s, out)
+                    }
+                    Rule::EolSpacing {
+                        layer,
+                        eol_width,
+                        limit,
+                    } => spacing::eol_spacing(store, id, layer, eol_width, limit, s, out),
+                    Rule::PrlSpacing {
+                        layer,
+                        prl_threshold,
+                        limit,
+                    } => spacing::prl_spacing(store, id, layer, prl_threshold, limit, s, out),
+                    Rule::CornerToCorner { layer, limit } => {
+                        spacing::corner_to_corner(store, id, layer, limit, s, out)
+                    }
+                    Rule::WideDependentSpacing {
+                        layer,
+                        width_threshold,
+                        limit,
+                    } => spacing::wide_dependent(
                         store,
                         id,
-                        (layer, &anchors),
-                        colors,
-                        color_spacing,
-                        s,
-                        out,
-                    )
-                }
-                Rule::Forbidden { layer } => presence::forbidden(store, id, layer, s, out),
-                Rule::MustContain {
-                    outer,
-                    inner,
-                    min_count,
-                    max_count,
-                } => presence::must_contain(
-                    store,
-                    id,
-                    (outer, inner),
-                    (min_count, max_count),
-                    s,
-                    out,
-                ),
-                Rule::MustBeInside { inner, outer } => {
-                    presence::must_be_inside(store, id, inner, outer, s, out)
-                }
-                Rule::NetSpacing {
-                    layer,
-                    other,
-                    same_net,
-                    limit,
-                } => match nets {
-                    Some(nets) => spacing::net_spacing(
-                        store,
-                        nets,
-                        id,
-                        (layer, other),
-                        same_net,
+                        layer,
+                        (width_threshold, Dbu::new_unchecked(0)),
                         limit,
                         s,
                         out,
                     ),
-                    None => (Outcome::Refused, 0),
-                },
-                Rule::SpacingTable { layer, table } => {
-                    spacing::spacing_table(store, id, layer, &self.tables[table as usize], s, out)
+                    Rule::MinArea { layer, limit } => {
+                        area::min_area(store, id, layer, limit, s, out)
+                    }
+                    Rule::MinEnclosedArea { layer, limit } => {
+                        area::min_enclosed_area(store, id, layer, limit, s, out)
+                    }
+                    Rule::Cheesing {
+                        layer,
+                        max_unslotted,
+                    } => area::cheesing(store, id, layer, max_unslotted, s, out),
+                    Rule::Density {
+                        layer,
+                        boundary,
+                        window,
+                        step,
+                        limit,
+                        sense,
+                    } => area::density(
+                        store,
+                        id,
+                        (layer, boundary, drawn),
+                        (window, step),
+                        limit,
+                        sense,
+                        s,
+                        out,
+                    ),
+                    Rule::GlobalDensity {
+                        layer,
+                        boundary,
+                        limit,
+                        sense,
+                    } => area::global_density(
+                        store,
+                        id,
+                        (layer, boundary, drawn),
+                        limit,
+                        sense,
+                        s,
+                        out,
+                    ),
+                    Rule::CriticalArea {
+                        layer,
+                        radius,
+                        limit,
+                    } => area::critical_area(store, id, layer, radius, limit, s, out),
+                    Rule::DensityBalance {
+                        a,
+                        b,
+                        boundary,
+                        window,
+                        step,
+                        limit,
+                    } => area::density_balance(
+                        store,
+                        id,
+                        (a, b, boundary, drawn),
+                        (window, step),
+                        limit,
+                        s,
+                        out,
+                    ),
+                    Rule::MinEnclosure {
+                        outer,
+                        inner,
+                        limit,
+                        wire,
+                    } => overlay::enclosure(
+                        store,
+                        id,
+                        (outer, inner),
+                        (limit, wire),
+                        overlay::Mode::EverySide,
+                        s,
+                        out,
+                    ),
+                    Rule::FullWidth { outer, inner } => overlay::enclosure(
+                        store,
+                        id,
+                        (outer, inner),
+                        (Dbu::new_unchecked(0), WireBand::ANY),
+                        overlay::Mode::FullWidth,
+                        s,
+                        out,
+                    ),
+                    Rule::NoncoincidentEnclosure {
+                        outer,
+                        inner,
+                        limit,
+                    } => overlay::enclosure(
+                        store,
+                        id,
+                        (outer, inner),
+                        (limit, WireBand::ANY),
+                        overlay::Mode::NonCoincident,
+                        s,
+                        out,
+                    ),
+                    Rule::AsymmetricEnclosure {
+                        outer,
+                        inner,
+                        min_one_side,
+                        wire,
+                    } => overlay::enclosure(
+                        store,
+                        id,
+                        (outer, inner),
+                        (min_one_side, wire),
+                        overlay::Mode::Opposite,
+                        s,
+                        out,
+                    ),
+                    Rule::AdjacentEnclosure {
+                        outer,
+                        inner,
+                        min_one_side,
+                    } => overlay::enclosure(
+                        store,
+                        id,
+                        (outer, inner),
+                        (min_one_side, WireBand::ANY),
+                        overlay::Mode::Adjacent,
+                        s,
+                        out,
+                    ),
+                    Rule::MaxEnclosure {
+                        outer,
+                        inner,
+                        limit,
+                    } => overlay::max_enclosure(store, id, (outer, inner), limit, s, out),
+                    Rule::MinExtension {
+                        layer,
+                        reference,
+                        limit,
+                    } => overlay::min_extension(store, id, layer, reference, limit, s, out),
+                    Rule::GateCorner {
+                        layer,
+                        reference,
+                        of_reference,
+                    } => overlay::gate_corner(store, id, (layer, reference), of_reference, s, out),
+                    Rule::Overlap { a, b, limit } => {
+                        overlay::overlap(store, id, a, b, limit, s, out)
+                    }
+                    Rule::MaxDistanceToTap { well, tap, limit } => {
+                        overlay::max_distance_to_tap(store, id, well, tap, limit, s, out)
+                    }
+                    Rule::OffGrid { pitch } => grid::off_grid(store, id, pitch, drawn, out),
+                    Rule::Angle { layer, allowed } => {
+                        grid::angle(store, id, (layer, drawn), allowed, out)
+                    }
+                    Rule::RedundantVia {
+                        layer,
+                        min_count,
+                        within,
+                    } => via::redundant_via(store, id, layer, min_count, within, s, out),
+                    Rule::ViaArraySpacing {
+                        layer,
+                        array_threshold,
+                        limit,
+                    } => via::via_array_spacing(store, id, layer, array_threshold, limit, s, out),
+                    Rule::CutSpacing {
+                        layer,
+                        center,
+                        adjacent,
+                        within,
+                        limit,
+                    } => via::cut_spacing(
+                        store,
+                        id,
+                        (layer, center),
+                        (adjacent, within),
+                        limit,
+                        s,
+                        out,
+                    ),
+                    Rule::MinimumCut {
+                        cut,
+                        wide,
+                        other,
+                        width,
+                        within,
+                        min_count,
+                    } => via::minimum_cut(
+                        store,
+                        id,
+                        (cut, wide, other),
+                        (width, within),
+                        min_count,
+                        s,
+                        out,
+                    ),
+                    Rule::ViaStack { stack, max_height } => {
+                        via::via_stack(store, id, &self.stacks[stack as usize], max_height, out)
+                    }
+                    Rule::CutClassSpacing { layer, table } => via::cut_class_spacing(
+                        store,
+                        id,
+                        layer,
+                        &self.cut_tables[table as usize],
+                        s,
+                        out,
+                    ),
+                    Rule::MultiPatterning {
+                        layer,
+                        colors,
+                        color_spacing,
+                    } => patterning::multi_patterning(
+                        store,
+                        id,
+                        layer,
+                        colors,
+                        color_spacing,
+                        s,
+                        out,
+                    ),
+                    Rule::AnchoredPatterning {
+                        layer,
+                        anchors,
+                        colors,
+                        color_spacing,
+                    } => {
+                        let anchors: Vec<LayerId> = anchors.into_iter().flatten().collect();
+                        patterning::anchored_patterning(
+                            store,
+                            id,
+                            (layer, &anchors),
+                            colors,
+                            color_spacing,
+                            s,
+                            out,
+                        )
+                    }
+                    Rule::Forbidden { layer } => presence::forbidden(store, id, layer, s, out),
+                    Rule::MustContain {
+                        outer,
+                        inner,
+                        min_count,
+                        max_count,
+                    } => presence::must_contain(
+                        store,
+                        id,
+                        (outer, inner),
+                        (min_count, max_count),
+                        s,
+                        out,
+                    ),
+                    Rule::MustBeInside { inner, outer } => {
+                        presence::must_be_inside(store, id, inner, outer, s, out)
+                    }
+                    Rule::NetSpacing {
+                        layer,
+                        other,
+                        same_net,
+                        limit,
+                    } => match nets {
+                        Some(nets) => spacing::net_spacing(
+                            store,
+                            nets,
+                            id,
+                            (layer, other),
+                            same_net,
+                            limit,
+                            s,
+                            out,
+                        ),
+                        None => (Outcome::Refused, 0),
+                    },
+                    Rule::SpacingTable { layer, table } => spacing::spacing_table(
+                        store,
+                        id,
+                        layer,
+                        &self.tables[table as usize],
+                        s,
+                        out,
+                    ),
+                    Rule::AttachedWideSpacing {
+                        layer,
+                        width_threshold,
+                        attached,
+                        limit,
+                    } => spacing::wide_dependent(
+                        store,
+                        id,
+                        layer,
+                        (width_threshold, attached),
+                        limit,
+                        s,
+                        out,
+                    ),
+                    Rule::EdgeMinLength { layer, limit } => {
+                        edge::min_length(store, id, layer, limit, out)
+                    }
+                    Rule::EdgeSpacing { a, b, limit } => edge::spacing(store, id, a, b, limit, out),
+                    Rule::EdgeEnclosure {
+                        edges,
+                        outer,
+                        limit,
+                    } => edge::enclosure(store, id, edges, outer, limit, s, out),
+                    Rule::Count {
+                        layer,
+                        limit,
+                        sense,
+                    } => area::count(store, id, (layer, drawn), limit, sense, s, out),
+                    Rule::AspectRatio { layer, limit } => {
+                        area::aspect_ratio(store, id, layer, limit, s, out)
+                    }
+                    Rule::TotalArea { layer, limit } => {
+                        area::total_area(store, id, (layer, drawn), limit, s, out)
+                    }
+                    Rule::CutClass { layer, classes } => {
+                        width::cut_class(store, id, layer, &self.classes[classes as usize], s, out)
+                    }
+                    Rule::EdgeWidth { layer, limit } => {
+                        edge::facing(store, id, layer, limit, true, out)
+                    }
+                    Rule::EdgeFacingSpace { layer, limit } => {
+                        edge::facing(store, id, layer, limit, false, out)
+                    }
+                    Rule::RegionDensity {
+                        layer,
+                        region,
+                        limit,
+                        sense,
+                    } => area::region_density(store, id, (layer, region), limit, sense, s, out),
+                    Rule::AllowedWidth { layer, widths } => width::allowed_width(
+                        store,
+                        id,
+                        layer,
+                        &self.widths[widths as usize],
+                        s,
+                        out,
+                    ),
+                    Rule::MinInteriorAngle { layer, limit } => {
+                        grid::min_interior_angle(store, id, (layer, drawn), limit, out)
+                    }
+                    Rule::PolygonValidity { layer } => {
+                        grid::polygon_validity(store, id, (layer, drawn), out)
+                    }
+                    Rule::MinStep {
+                        layer,
+                        limit,
+                        kind,
+                        length_sum,
+                    } => width::min_step(store, id, layer, (limit, kind, length_sum), s, out),
+                    Rule::TipSpacingTable { layer, table } => facing::tip_spacing_table(
+                        store,
+                        id,
+                        layer,
+                        &self.class_tables[table as usize],
+                        s,
+                        out,
+                    ),
+                    Rule::ForbiddenSpacing {
+                        layer,
+                        min,
+                        max,
+                        prl,
+                    } => facing::forbidden_spacing(store, id, layer, (min, max, prl), s, out),
+                    Rule::EolWithinSpacing {
+                        layer,
+                        eol_width,
+                        within,
+                        parallel,
+                        end_to_end,
+                        limit,
+                    } => facing::eol_within_spacing(
+                        store,
+                        id,
+                        layer,
+                        (eol_width, within, limit),
+                        (parallel, end_to_end),
+                        s,
+                        out,
+                    ),
+                    Rule::ExactPitch {
+                        layer,
+                        vertical,
+                        pitch,
+                    } => facing::exact_pitch(store, id, layer, vertical, pitch, s, out),
+                    Rule::ConvexCornerSpacing {
+                        layer,
+                        corner_to_corner,
+                        except_eol,
+                        limit,
+                    } => facing::convex_corner_spacing(
+                        store,
+                        id,
+                        layer,
+                        (corner_to_corner, except_eol),
+                        limit,
+                        s,
+                        out,
+                    ),
+                    Rule::SpanLength { layer, table } => facing::span_length(
+                        store,
+                        id,
+                        layer,
+                        &self.span_tables[table as usize],
+                        s,
+                        out,
+                    ),
+                    Rule::TwoWidthSpacingTable { layer, table } => spacing::two_width_table(
+                        store,
+                        id,
+                        layer,
+                        &self.class_tables[table as usize],
+                        s,
+                        out,
+                    ),
+                    Rule::EolKeepOut {
+                        layer,
+                        eol_width,
+                        backward,
+                        side,
+                        forward,
+                    } => facing::eol_keep_out(
+                        store,
+                        id,
+                        layer,
+                        eol_width,
+                        (backward, side, forward),
+                        s,
+                        out,
+                    ),
                 }
-                Rule::AttachedWideSpacing {
-                    layer,
-                    width_threshold,
-                    attached,
-                    limit,
-                } => spacing::wide_dependent(
-                    store,
-                    id,
-                    layer,
-                    (width_threshold, attached),
-                    limit,
-                    s,
-                    out,
-                ),
-                Rule::EdgeMinLength { layer, limit } => {
-                    edge::min_length(store, id, layer, limit, out)
-                }
-                Rule::EdgeSpacing { a, b, limit } => edge::spacing(store, id, a, b, limit, out),
-                Rule::EdgeEnclosure {
-                    edges,
-                    outer,
-                    limit,
-                } => edge::enclosure(store, id, edges, outer, limit, s, out),
-                Rule::Count {
-                    layer,
-                    limit,
-                    sense,
-                } => area::count(store, id, (layer, drawn), limit, sense, s, out),
-                Rule::AspectRatio { layer, limit } => {
-                    area::aspect_ratio(store, id, layer, limit, s, out)
-                }
-                Rule::TotalArea { layer, limit } => {
-                    area::total_area(store, id, (layer, drawn), limit, s, out)
-                }
-                Rule::CutClass { layer, classes } => {
-                    width::cut_class(store, id, layer, &self.classes[classes as usize], s, out)
-                }
-                Rule::EdgeWidth { layer, limit } => {
-                    edge::facing(store, id, layer, limit, true, out)
-                }
-                Rule::EdgeFacingSpace { layer, limit } => {
-                    edge::facing(store, id, layer, limit, false, out)
-                }
-                Rule::RegionDensity {
-                    layer,
-                    region,
-                    limit,
-                    sense,
-                } => area::region_density(store, id, (layer, region), limit, sense, s, out),
-                Rule::AllowedWidth { layer, widths } => {
-                    width::allowed_width(store, id, layer, &self.widths[widths as usize], s, out)
-                }
-                Rule::MinInteriorAngle { layer, limit } => {
-                    grid::min_interior_angle(store, id, (layer, drawn), limit, out)
-                }
-                Rule::PolygonValidity { layer } => {
-                    grid::polygon_validity(store, id, (layer, drawn), out)
-                }
-                Rule::MinStep {
-                    layer,
-                    limit,
-                    kind,
-                    length_sum,
-                } => width::min_step(store, id, layer, (limit, kind, length_sum), s, out),
-                Rule::TipSpacingTable { layer, table } => facing::tip_spacing_table(
-                    store,
-                    id,
-                    layer,
-                    &self.class_tables[table as usize],
-                    s,
-                    out,
-                ),
-                Rule::ForbiddenSpacing {
-                    layer,
-                    min,
-                    max,
-                    prl,
-                } => facing::forbidden_spacing(store, id, layer, (min, max, prl), s, out),
-                Rule::EolWithinSpacing {
-                    layer,
-                    eol_width,
-                    within,
-                    parallel,
-                    end_to_end,
-                    limit,
-                } => facing::eol_within_spacing(
-                    store,
-                    id,
-                    layer,
-                    (eol_width, within, limit),
-                    (parallel, end_to_end),
-                    s,
-                    out,
-                ),
-                Rule::ExactPitch {
-                    layer,
-                    vertical,
-                    pitch,
-                } => facing::exact_pitch(store, id, layer, vertical, pitch, s, out),
-                Rule::ConvexCornerSpacing {
-                    layer,
-                    corner_to_corner,
-                    except_eol,
-                    limit,
-                } => facing::convex_corner_spacing(
-                    store,
-                    id,
-                    layer,
-                    (corner_to_corner, except_eol),
-                    limit,
-                    s,
-                    out,
-                ),
-                Rule::SpanLength { layer, table } => {
-                    facing::span_length(store, id, layer, &self.span_tables[table as usize], s, out)
-                }
-                Rule::TwoWidthSpacingTable { layer, table } => spacing::two_width_table(
-                    store,
-                    id,
-                    layer,
-                    &self.class_tables[table as usize],
-                    s,
-                    out,
-                ),
-                Rule::EolKeepOut {
-                    layer,
-                    eol_width,
-                    backward,
-                    side,
-                    forward,
-                } => facing::eol_keep_out(
-                    store,
-                    id,
-                    layer,
-                    eol_width,
-                    (backward, side, forward),
-                    s,
-                    out,
-                ),
             };
             if self.warnings.contains(&id) {
                 out.severity[before..].fill(Severity::Warning);

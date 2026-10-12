@@ -21,7 +21,9 @@ use gpurify_geom::derive::{
     with_length_into, with_width_into, EdgeOp,
 };
 use gpurify_geom::ops::{point_in_ring, point_seg_dist2, Point, Seg};
-use gpurify_geom::view::{validate_layer_with, Angles, PolygonRef, RingRef, ValidatedLayer};
+use gpurify_geom::view::{
+    validate_layer_with, Angles, PolygonRef, RingRef, ValidatedLayer, ValidityError,
+};
 use gpurify_geom::Dbu;
 use gpurify_geom::GeometryStore;
 use gpurify_geom::LayerId;
@@ -102,11 +104,6 @@ pub enum LayoutError {
     /// Every length is measured on an integer grid of database units per micrometre.
     #[error("a database unit of {0:e} m is not a whole number of units per micrometre")]
     UnsupportedUnits(f64),
-    /// A derived layer's computation failed: usually an operand holding a
-    /// ring that is not simple and rectilinear (a diagonal edge, a
-    /// self-crossing), or sizing past the coordinate range.
-    #[error("derived layer {0:?} could not be computed: {1}")]
-    Derived(gpurify_geom::LayerId, BooleanError),
     /// The file could not be read or un-gzipped.
     #[error("io: {0}")]
     Io(String),
@@ -195,10 +192,14 @@ pub fn read_gds_bytes(path: &std::path::Path) -> Result<Vec<u8>, LayoutError> {
 /// [`len`](LayerTable::len) layers and hold shapes on drawn layers only;
 /// derived layers are appended in id order.
 ///
+/// A derived layer that cannot be computed (an operand edge at an angle
+/// other than a multiple of 45 degrees, `sized` past the coordinate domain,
+/// or an operand that was not computed itself) is left empty and marked
+/// ([`GeometryStore::mark_uncomputed`]): only the rules that read it refuse.
+///
 /// # Errors
 ///
-/// [`LayoutError::Derived`] naming the first derived layer that could not be
-/// computed.
+/// None today; the `Result` is kept for the reader's other refusals.
 ///
 /// # Panics
 ///
@@ -258,159 +259,192 @@ fn derive_layers_into(
             store.append_layer(*layer, &xs, &ys, &start, &len);
             continue;
         }
-        let blame = |why: BooleanError| LayoutError::Derived(*layer, why);
-        // An operand's polygons, merged: selections and sizing read whole
-        // shapes. Every operation takes edges at 45 degrees.
-        let mut merged = |id: LayerId, out: &mut ValidatedLayer| {
-            validate_layer_with(store, id, Angles::Octilinear, &mut raw)?;
-            merge_into(&raw, out)
-        };
+        // A layer that cannot be computed is marked and left empty: the rules
+        // that read it refuse, and every other rule runs.
+        let computed = (|| -> Result<bool, BooleanError> {
+            // An edge operand is read straight from the store, so its own mark
+            // is checked here; a polygon operand's is checked by validation.
+            if let Some(&id) = operands.iter().find(|&&id| store.is_uncomputed(id)) {
+                return Err(ValidityError::Uncomputed(id).into());
+            }
+            // An operand's polygons, merged: selections and sizing read whole
+            // shapes. Every operation takes edges at 45 degrees.
+            let mut merged = |id: LayerId, out: &mut ValidatedLayer| {
+                validate_layer_with(store, id, Angles::Octilinear, &mut raw)?;
+                merge_into(&raw, out)
+            };
 
-        if layers.is_edges(*layer) {
-            let receiver = operands[0];
-            match *op {
-                DerivedOp::Edges => {
-                    merged(receiver, &mut folded).map_err(blame)?;
-                    edges_into(&folded, &mut edges);
+            if layers.is_edges(*layer) {
+                let receiver = operands[0];
+                match *op {
+                    DerivedOp::Edges => {
+                        merged(receiver, &mut folded)?;
+                        edges_into(&folded, &mut edges);
+                    }
+                    DerivedOp::And | DerivedOp::Or | DerivedOp::Not => {
+                        let how = match op {
+                            DerivedOp::And => EdgeOp::And,
+                            DerivedOp::Or => EdgeOp::Or,
+                            _ => EdgeOp::Not,
+                        };
+                        edges.clear();
+                        edges.extend_from_slice(store.edges_on_layer(receiver));
+                        for &next in &operands[1..] {
+                            edge_boolean_into(
+                                &edges,
+                                store.edges_on_layer(next),
+                                how,
+                                &mut edges_out,
+                            );
+                            std::mem::swap(&mut edges, &mut edges_out);
+                        }
+                    }
+                    DerivedOp::Interacting(keep) => {
+                        merged(operands[1], &mut operand)?;
+                        edge_interacting_into(
+                            store.edges_on_layer(receiver),
+                            &operand,
+                            keep,
+                            &mut edges,
+                        );
+                    }
+                    DerivedOp::Part(inside) => {
+                        merged(operands[1], &mut operand)?;
+                        edge_part_into(
+                            store.edges_on_layer(receiver),
+                            &operand,
+                            inside,
+                            &mut edges,
+                        );
+                    }
+                    DerivedOp::WithLength(lo, hi) => {
+                        with_length_into(store.edges_on_layer(receiver), lo..=hi, &mut edges);
+                    }
+                    DerivedOp::Oriented(vertical) => {
+                        edges.clear();
+                        edges.extend(
+                            store
+                                .edges_on_layer(receiver)
+                                .iter()
+                                .filter(|e| {
+                                    if vertical {
+                                        e.a.x == e.b.x
+                                    } else {
+                                        e.a.y == e.b.y
+                                    }
+                                })
+                                .copied(),
+                        );
+                    }
+                    _ => unreachable!("the parser gives an edge result only to edge operations"),
                 }
+                return Ok(true);
+            }
+
+            match *op {
                 DerivedOp::And | DerivedOp::Or | DerivedOp::Not => {
-                    let how = match op {
-                        DerivedOp::And => EdgeOp::And,
-                        DerivedOp::Or => EdgeOp::Or,
-                        _ => EdgeOp::Not,
-                    };
-                    edges.clear();
-                    edges.extend_from_slice(store.edges_on_layer(receiver));
+                    validate_layer_with(store, operands[0], Angles::Octilinear, &mut folded)?;
                     for &next in &operands[1..] {
-                        edge_boolean_into(&edges, store.edges_on_layer(next), how, &mut edges_out);
-                        std::mem::swap(&mut edges, &mut edges_out);
+                        validate_layer_with(store, next, Angles::Octilinear, &mut operand)?;
+                        match op {
+                            DerivedOp::And => intersection_into(&folded, &operand, &mut combined),
+                            DerivedOp::Or => union_into(&folded, &operand, &mut combined),
+                            _ => subtraction_into(&folded, &operand, &mut combined),
+                        }?;
+                        std::mem::swap(&mut folded, &mut combined);
                     }
                 }
-                DerivedOp::Interacting(keep) => {
-                    merged(operands[1], &mut operand).map_err(blame)?;
-                    edge_interacting_into(
-                        store.edges_on_layer(receiver),
-                        &operand,
-                        keep,
-                        &mut edges,
-                    );
+                DerivedOp::Extended {
+                    begin,
+                    end,
+                    outside,
+                    inside,
+                } => extended_into(
+                    store.edges_on_layer(operands[0]),
+                    (begin, end, outside, inside),
+                    &mut folded,
+                )?,
+                _ => {
+                    merged(operands[0], &mut operand)?;
+                    // `with_text` reads the texts on its layer argument, not its shapes.
+                    if let (Some(&other), false) =
+                        (operands.get(1), matches!(op, DerivedOp::WithText { .. }))
+                    {
+                        merged(other, &mut combined)?;
+                    }
+                    let (a, b) = (&operand, &combined);
+                    match *op {
+                        DerivedOp::Sized(dx, dy) => sized_into(a, dx, dy, &mut folded),
+                        DerivedOp::Interacting(keep) => {
+                            interacting_into(a, b, keep, &mut folded);
+                            Ok(())
+                        }
+                        DerivedOp::Inside => inside_into(a, b, &mut folded),
+                        DerivedOp::Outside => outside_into(a, b, &mut folded),
+                        DerivedOp::Overlapping => overlapping_into(a, b, true, &mut folded),
+                        DerivedOp::Covering(keep) => covering_into(a, b, keep, &mut folded),
+                        DerivedOp::Holes => holes_into(a, &mut folded),
+                        DerivedOp::Extents => extents_into(a, &mut folded),
+                        DerivedOp::WithArea(lo, hi) => {
+                            with_area_into(a, lo..=hi, &mut folded);
+                            Ok(())
+                        }
+                        DerivedOp::WithWidth(lo, hi) => {
+                            with_width_into(a, lo..=hi, &mut folded);
+                            Ok(())
+                        }
+                        DerivedOp::Rectangles { square, keep } => {
+                            rectangles_into(a, square, keep, &mut folded);
+                            Ok(())
+                        }
+                        DerivedOp::WithBbox { longer, lo, hi } => {
+                            with_bbox_into(a, longer, lo..=hi, &mut folded);
+                            Ok(())
+                        }
+                        DerivedOp::WithText { keep, text } => {
+                            let pattern = layers.text(text);
+                            let matching: Vec<Point> = labels
+                                .iter()
+                                .filter(|label| {
+                                    label.layer == operands[1]
+                                        && glob_matches(pattern, strings.resolve(label.name))
+                                })
+                                .map(|label| label.at)
+                                .collect();
+                            // ponytail: every matching text against every shape; index the
+                            // points by x if a layer carries thousands of texts.
+                            let flags: Vec<bool> = (0..crate::narrow(a.len()))
+                                .map(|idx| {
+                                    let poly = a.get(idx);
+                                    let holds = matching.iter().any(|&p| {
+                                        poly.bbox().contains(Bbox::point(p.x, p.y))
+                                            && on_material(poly, p)
+                                    });
+                                    holds == keep
+                                })
+                                .collect();
+                            a.select_into(&flags, &mut folded);
+                            Ok(())
+                        }
+                        _ => unreachable!("the parser gives an edge operation an edge result"),
+                    }?;
                 }
-                DerivedOp::Part(inside) => {
-                    merged(operands[1], &mut operand).map_err(blame)?;
-                    edge_part_into(store.edges_on_layer(receiver), &operand, inside, &mut edges);
-                }
-                DerivedOp::WithLength(lo, hi) => {
-                    with_length_into(store.edges_on_layer(receiver), lo..=hi, &mut edges);
-                }
-                DerivedOp::Oriented(vertical) => {
-                    edges.clear();
-                    edges.extend(
-                        store
-                            .edges_on_layer(receiver)
-                            .iter()
-                            .filter(|e| (e.a.x == e.b.x) == vertical)
-                            .copied(),
-                    );
-                }
-                _ => unreachable!("the parser gives an edge result only to edge operations"),
             }
+
+            Ok(false)
+        })();
+        let edge_layer = match computed {
+            Ok(edge_layer) => edge_layer,
+            Err(_) => {
+                store.mark_uncomputed(*layer);
+                folded = ValidatedLayer::default();
+                edges.clear();
+                layers.is_edges(*layer)
+            }
+        };
+        if edge_layer {
             store.append_edges(*layer, &edges);
             continue;
-        }
-
-        match *op {
-            DerivedOp::And | DerivedOp::Or | DerivedOp::Not => {
-                validate_layer_with(store, operands[0], Angles::Octilinear, &mut folded)
-                    .map_err(|why| blame(why.into()))?;
-                for &next in &operands[1..] {
-                    validate_layer_with(store, next, Angles::Octilinear, &mut operand)
-                        .map_err(|why| blame(why.into()))?;
-                    match op {
-                        DerivedOp::And => intersection_into(&folded, &operand, &mut combined),
-                        DerivedOp::Or => union_into(&folded, &operand, &mut combined),
-                        _ => subtraction_into(&folded, &operand, &mut combined),
-                    }
-                    .map_err(blame)?;
-                    std::mem::swap(&mut folded, &mut combined);
-                }
-            }
-            DerivedOp::Extended {
-                begin,
-                end,
-                outside,
-                inside,
-            } => extended_into(
-                store.edges_on_layer(operands[0]),
-                (begin, end, outside, inside),
-                &mut folded,
-            )
-            .map_err(blame)?,
-            _ => {
-                merged(operands[0], &mut operand).map_err(blame)?;
-                // `with_text` reads the texts on its layer argument, not its shapes.
-                if let (Some(&other), false) =
-                    (operands.get(1), matches!(op, DerivedOp::WithText { .. }))
-                {
-                    merged(other, &mut combined).map_err(blame)?;
-                }
-                let (a, b) = (&operand, &combined);
-                match *op {
-                    DerivedOp::Sized(dx, dy) => sized_into(a, dx, dy, &mut folded),
-                    DerivedOp::Interacting(keep) => {
-                        interacting_into(a, b, keep, &mut folded);
-                        Ok(())
-                    }
-                    DerivedOp::Inside => inside_into(a, b, &mut folded),
-                    DerivedOp::Outside => outside_into(a, b, &mut folded),
-                    DerivedOp::Overlapping => overlapping_into(a, b, true, &mut folded),
-                    DerivedOp::Covering(keep) => covering_into(a, b, keep, &mut folded),
-                    DerivedOp::Holes => holes_into(a, &mut folded),
-                    DerivedOp::Extents => extents_into(a, &mut folded),
-                    DerivedOp::WithArea(lo, hi) => {
-                        with_area_into(a, lo..=hi, &mut folded);
-                        Ok(())
-                    }
-                    DerivedOp::WithWidth(lo, hi) => {
-                        with_width_into(a, lo..=hi, &mut folded);
-                        Ok(())
-                    }
-                    DerivedOp::Rectangles { square, keep } => {
-                        rectangles_into(a, square, keep, &mut folded);
-                        Ok(())
-                    }
-                    DerivedOp::WithBbox { longer, lo, hi } => {
-                        with_bbox_into(a, longer, lo..=hi, &mut folded);
-                        Ok(())
-                    }
-                    DerivedOp::WithText { keep, text } => {
-                        let pattern = layers.text(text);
-                        let matching: Vec<Point> = labels
-                            .iter()
-                            .filter(|label| {
-                                label.layer == operands[1]
-                                    && glob_matches(pattern, strings.resolve(label.name))
-                            })
-                            .map(|label| label.at)
-                            .collect();
-                        // ponytail: every matching text against every shape; index the
-                        // points by x if a layer carries thousands of texts.
-                        let flags: Vec<bool> = (0..crate::narrow(a.len()))
-                            .map(|idx| {
-                                let poly = a.get(idx);
-                                let holds = matching.iter().any(|&p| {
-                                    poly.bbox().contains(Bbox::point(p.x, p.y))
-                                        && on_material(poly, p)
-                                });
-                                holds == keep
-                            })
-                            .collect();
-                        a.select_into(&flags, &mut folded);
-                        Ok(())
-                    }
-                    _ => unreachable!("the parser gives an edge operation an edge result"),
-                }
-                .map_err(blame)?;
-            }
         }
 
         xs.clear();

@@ -912,9 +912,11 @@ impl<'a> Parser<'a> {
 
     /// `(cmp value {, cmp value})`: at most one lower and one upper bound, or one
     /// `==`. Inclusive, in grid units (square grid units for an area). With
-    /// `square`, a length bound `n` is on the squared measure, `n·|n|` (which
-    /// keeps the order), so a strict bound stays exact on an irrational length:
-    /// `> 70` is `>= 4901`, which a `√5000` neck meets.
+    /// `square`, a length bound `n` is on twice the squared measure, `2·n·|n|`
+    /// (which keeps the order), so a strict bound stays exact on an irrational
+    /// length, a 45-degree width whose square is a half unit included: `> 70`
+    /// is `>= 9801`, which a `√5000` neck (10000) and a `99/√2` width (9801)
+    /// both meet.
     fn bounds(&mut self, op: &str, dim: Dim, square: bool) -> R<(i128, i128)> {
         let open = self.expect("(")?;
         let (mut lo, mut hi) = (None, None);
@@ -934,7 +936,7 @@ impl<'a> Parser<'a> {
             } else {
                 i128::from(self.length(&value, op)?.raw())
             };
-            let n = if square { n * n.abs() } else { n };
+            let n = if square { 2 * n * n.abs() } else { n };
             let (low, high) = match cmp {
                 ">=" => (Some(n), None),
                 ">" => (Some(n + 1), None),

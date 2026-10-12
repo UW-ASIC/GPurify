@@ -199,6 +199,27 @@ format (v t6 `out.lyrdb`):
 
 ---
 
+### a8. 45-degree layouts (H12)
+
+`random_octilinear_layouts_agree_with_the_klayout_mirror` runs 1500 random layouts of
+chamfered rectangles, octagons and 45-degree bars through the kinds that measure 45-degree
+shapes (`width`, `notch`, `space` one layer and two, `area`, `hole_area`, `edge_length`,
+`forbidden`, `angle`, and booleans feeding them), compared as each kind's verdict below states.
+Three differences are documented, not defects, and the deck and lattice keep them out:
+
+- **Snapping.** A boolean result vertex where a rising and a falling 45-degree edge cross between
+  grid points is snapped by cutting the tip of its right angle (`boolean::union_into`);
+  KLayout rounds the point to the nearest grid point. The layouts lie on a 10 nm lattice, so
+  every crossing is on a 5 nm point of the 1 nm grid and nothing is snapped.
+- **`sized` on a 45-degree edge.** GPurify's is the Minkowski sum with the square
+  (`docs/deck.md`), which moves a diagonal edge `d·√2`; KLayout moves it `d`. The deck has no
+  `sized` layer.
+- **A chamfer's end and the far side.** KLayout's Euclidean `width` at its default
+  `ignore_angle` pairs two edges at 135 degrees, such as a chamfer and the opposite side;
+  GPurify's width is facing edges, necks and acute tips only (`width::narrowest_pair2`). The
+  mirror passes `shielded`, under which the material between them shields such a pair; a
+  remaining difference would show here as a disagreement.
+
 ## (b) Per kind
 
 Notation in the snippets:

@@ -36,6 +36,9 @@ pub struct GeometryStore {
     /// grouped by layer; `edge_layer_start` is CSR like `layer_start`.
     edges: Vec<Seg>,
     edge_layer_start: Vec<u32>,
+
+    /// Derived layers that could not be computed, ascending; each is empty.
+    uncomputed: Vec<LayerId>,
 }
 
 impl GeometryStore {
@@ -100,6 +103,21 @@ impl GeometryStore {
     pub fn poly_contains_point(&self, poly: PolyId, p: Point) -> bool {
         let (xs, ys) = self.poly_verts(poly);
         point_in_coords(xs, ys, p)
+    }
+
+    /// Marks a derived layer that could not be computed (an operand it cannot
+    /// read, a coordinate past the domain). It stays empty, and validating it
+    /// is [`crate::view::ValidityError::Uncomputed`], so every rule that reads
+    /// it refuses and nothing else is touched.
+    pub fn mark_uncomputed(&mut self, layer: LayerId) {
+        if let Err(at) = self.uncomputed.binary_search(&layer) {
+            self.uncomputed.insert(at, layer);
+        }
+    }
+
+    /// Whether [`Self::mark_uncomputed`] marked `layer`.
+    pub fn is_uncomputed(&self, layer: LayerId) -> bool {
+        self.uncomputed.binary_search(&layer).is_ok()
     }
 
     /// Returns the segments of one edge layer, each directed with the material
@@ -333,6 +351,7 @@ impl GeometryStoreBuilder {
             layer_start,
             edges: Vec::new(),
             edge_layer_start: vec![0; layer_count + 1],
+            uncomputed: Vec::new(),
         };
         (store, permutation)
     }
