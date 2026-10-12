@@ -236,6 +236,14 @@ fn rows(deck: &Deck, strings: &StrTable) -> (Vec<Row>, Vec<(String, &'static str
             skipped.push((id, "a cumulative row with a diode"));
             continue;
         }
+        // `antenna_check` reads a diode only on a layer of the extraction;
+        // one that is no conductor (a derived `diff.with_area`, a tap) joins
+        // a net in `GPurify` by lying on a conductor, which KLayout states
+        // no way to mirror (it would need its own `connect`).
+        if diode.is_some_and(|(d, _)| !stack.conductors.contains(&d)) {
+            skipped.push((id, "a diode layer that is no conductor"));
+            continue;
+        }
         let top = unique
             .iter()
             .filter_map(|c| standing(&stack, c.0))
