@@ -43,8 +43,8 @@
 //! # The simulator
 //!
 //! Every level above `interface` runs ngspice: the spec's
-//! [`spec::Simulator::binary`], `ngspice` on `PATH` by default, driven in pipe
-//! mode (`-p`). The corner's model lines are written into the deck verbatim,
+//! [`spec::Simulator::binary`], `ngspice` on `PATH` by default, run in batch
+//! mode (`-b`). The corner's model lines are written into the deck verbatim,
 //! so the models they name must be readable. `statistical` also needs each
 //! corner's [`spec::CornerSpec::mc_models`].
 //!

@@ -268,8 +268,8 @@ fn lib_leakage(lib: &str, when: &str) -> f64 {
 /// Testing-plan §4 L6, ledger F3: the inverter's `spice`-accuracy delay,
 /// transition and leakage against a direct ngspice run.
 ///
-/// `GPurify` characterises the cell on its extracted RC netlist, driving
-/// ngspice sessions over a pipe (`liberty::spice`). The reference takes that
+/// `GPurify` characterises the cell on its extracted RC netlist, running
+/// ngspice in batch mode (`liberty::spice`). The reference takes that
 /// netlist, the `.subckt` `GPurify` wrote, and nothing else from it: its own
 /// batch-mode deck per table point, with the documented stimulus (a linear
 /// ramp whose full swing takes `slew / 0.6`, the input held at its old level
