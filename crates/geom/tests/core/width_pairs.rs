@@ -6,8 +6,12 @@
 //! hand-derived widths.
 
 use gpurify_geom::boolean::union_into;
+use gpurify_geom::ops::Seg;
+use gpurify_geom::relation::{pair_threshold2, Metric, Relation, Zero};
 use gpurify_geom::view::{validate_layer_with, Angles, ValidatedLayer};
-use gpurify_geom::width::{narrowest_facing, narrowest_pair2, narrowest_width2, FacingScratch};
+use gpurify_geom::width::{
+    narrowest_facing, narrowest_pair2, narrowest_width2, poly_edges, FacingScratch,
+};
 use gpurify_geom::{Dbu, LayerId};
 use gpurify_testgen::prop::{check, seeds};
 use gpurify_testgen::shapes::LayoutBuilder;
@@ -167,4 +171,73 @@ fn a_u_turned_45_degrees_keeps_its_width_and_notch_times_root_two() {
         assert_eq!(measure(true), Some(width));
         assert_eq!(measure(false), Some(notch));
     }
+}
+
+/// `KLayout`'s width read edge pair by edge pair through
+/// `gpurify_geom::relation` (every ordered pair of a figure's edges, its own
+/// pair apart) equals [`narrowest_pair2`] on every figure, as twice squares,
+/// or both find nothing.
+fn pairs_agree(rings: &[Vec<(i64, i64)>]) -> Result<(), String> {
+    let layer = merged(rings);
+    for idx in 0..u32::try_from(layer.len()).expect("small") {
+        let poly = layer.get(idx);
+        let edges: Vec<Seg> = poly_edges(poly).map(|(a, b)| Seg { a: b, b: a }).collect();
+        let by_pairs = edges
+            .iter()
+            .enumerate()
+            .flat_map(|(i, &e)| {
+                edges
+                    .iter()
+                    .enumerate()
+                    .filter(move |&(j, _)| j != i)
+                    .filter_map(move |(_, &f)| {
+                        pair_threshold2(
+                            Relation::Width,
+                            Metric::Euclidean,
+                            Zero::WhenTouching,
+                            e,
+                            f,
+                        )
+                    })
+            })
+            .min();
+        let narrowest = narrowest_pair2(poly, true, Dbu::new_unchecked(FAR)).map(|(d2, _)| d2);
+        if by_pairs != narrowest {
+            return Err(format!(
+                "figure {idx}: {by_pairs:?} by pairs, {narrowest:?} narrowest"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Oracle: differential between two implementations of `KLayout`'s
+/// unshielded Euclidean width, `narrowest_pair2` (held to `KLayout` itself by
+/// the nightly mirror differential) and the edge-pair port in
+/// `gpurify_geom::relation`, on random merged octilinear shapes (chamfered
+/// rectangles, diamonds, right triangles, parallelograms) over 300 named
+/// seeds. A port that misreads a cut, an angle, a zero-distance mode or a
+/// near part disagrees on some figure.
+#[test]
+fn the_edge_pair_relation_reads_width_as_narrowest_pair2() {
+    check(
+        "relation_width",
+        seeds("relation_width", 300),
+        |rng| {
+            (0..rng.range(1, 5))
+                .map(|_| crate::boolean_octilinear::random_shape(rng))
+                .collect::<Vec<_>>()
+        },
+        |rings: &Vec<Vec<(i64, i64)>>| {
+            (0..rings.len())
+                .map(|skip| {
+                    let mut fewer = rings.clone();
+                    fewer.remove(skip);
+                    fewer
+                })
+                .filter(|fewer| !fewer.is_empty())
+                .collect()
+        },
+        |rings| pairs_agree(rings),
+    );
 }

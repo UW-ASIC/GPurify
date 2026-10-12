@@ -136,6 +136,7 @@ pub mod index;
 pub mod linalg;
 pub mod ops;
 pub mod rects;
+pub mod relation;
 pub mod store;
 pub mod view;
 pub mod width;

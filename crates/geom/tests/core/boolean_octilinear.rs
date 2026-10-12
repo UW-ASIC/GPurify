@@ -48,7 +48,7 @@ fn dedup(mut points: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
 
 /// A random octilinear shape inside `[0, SIDE]²`: a rectangle with chamfered
 /// corners, a diamond, a right triangle, or a parallelogram.
-fn random_shape(rng: &mut Rng) -> Vec<(i64, i64)> {
+pub(crate) fn random_shape(rng: &mut Rng) -> Vec<(i64, i64)> {
     match rng.range(0, 4) {
         0 => {
             let (x0, y0) = (rng.range(0, SIDE - 1), rng.range(0, SIDE - 1));

@@ -472,10 +472,22 @@ pub fn inside_into(
     b: &ValidatedLayer,
     out: &mut ValidatedLayer,
 ) -> Result<(), BooleanError> {
+    a.select_into(&inside_flags(a, b)?, out);
+    Ok(())
+}
+
+/// Per polygon of `a`: whether `b` covers it ([`inside_into`]'s test), at
+/// any octilinear angle. Where polygons of `a` overlap, a part of their
+/// union `b` leaves uncovered counts against each that holds a point of it
+/// near its lowest convex corner, as [`inside_into`] reads it.
+///
+/// # Errors
+///
+/// A failed boolean.
+pub fn inside_flags(a: &ValidatedLayer, b: &ValidatedLayer) -> Result<Vec<bool>, BooleanError> {
     let mut rest = ValidatedLayer::default();
     subtraction_into(a, b, &mut rest)?;
-    a.select_into(&free_of(a, &rest), out);
-    Ok(())
+    Ok(free_of(a, &rest))
 }
 
 /// `KLayout` `outside`: polygons of `a` sharing no area with `b`; touching is outside.
