@@ -703,7 +703,8 @@ fn fastcap_stratified(tool: &Path, stack: Stack, conductors: &[Conductor]) -> Ve
     std::fs::write(dir.join("in.lst"), list).expect("the scratch directory is writable");
     let out = oracle::run(
         tool,
-        &["-o4", "-t0.0001", "-lin.lst"],
+        // A relative residual of 1e-3, well inside the 5 % compared.
+        &["-o4", "-t0.001", "-lin.lst"],
         &dir,
         Duration::from_mins(20),
     );
@@ -711,11 +712,13 @@ fn fastcap_stratified(tool: &Path, stack: Stack, conductors: &[Conductor]) -> Ve
     grounded_matrix(&out, conductors, 1.0)
 }
 
-/// PEX-003: every entry of three stratified geometries within
-/// [`STRATIFIED`] of `FastCap`'s multi-dielectric solve: an 8 um `m1`
-/// plate and two coupled `m1` bars, the stack 7 up to `m1`'s top and 3.9
-/// over it, and an `m1` bar under a crossing `m2` bar, 7 up to `m1`'s top,
-/// 3.9 to `m2`'s bottom and 5 over it (two interfaces).
+/// PEX-003: every entry of two stratified geometries within
+/// [`STRATIFIED`] of `FastCap`'s multi-dielectric solve: two coupled `m1`
+/// bars, the stack 7 up to `m1`'s top and 3.9 over it, and an `m1` bar
+/// under a crossing `m2` bar, 7 up to `m1`'s top, 3.9 to `m2`'s bottom and
+/// 5 over it (two interfaces). (An 8 um plate's 15 000 panels ran `FastCap`
+/// past its 20 minutes; the stratified plate is proved against its closed
+/// form in `pex.rs`.)
 /// Oracle: differential against `FastCap` 2.0, an independent
 /// multi-dielectric boundary-element solver given the same windows.
 #[test]
@@ -728,14 +731,6 @@ fn fastcap_differential_stratified_dielectrics() {
         m2: Row { k: m2, ..COARSE.m2 },
     };
     let cases: Vec<(&str, Stack, Layout, Vec<&str>)> = vec![
-        (
-            "plate",
-            with(7.0, 3.9, 3.9),
-            Layout::default()
-                .rect("m1", 0, 0, 8_000, 8_000)
-                .label("m1_label", 500, 500, "A"),
-            vec!["A"],
-        ),
         (
             "pair",
             with(7.0, 3.9, 3.9),
@@ -774,6 +769,6 @@ fn fastcap_differential_stratified_dielectrics() {
             }
         }
     }
-    assert_eq!(compared, 9, "every entry compared");
+    assert_eq!(compared, 8, "every entry compared");
     assert!(broken.is_empty(), "{}", broken.join("\n"));
 }
