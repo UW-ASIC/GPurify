@@ -124,6 +124,11 @@
 //! - `lvs ignore_shorted "model"`: the same for each device of the model
 //!   whose every terminal is on one net, a dummy (catalog LVS-035; Netgen's
 //!   `ignore shorted`).
+//! - `lvs recognize_gates`: plain transistors in series or in parallel on
+//!   different gates of their own merge into one device whose gates are
+//!   interchangeable ([`ParamNames::gates`]; catalog LVS-047; Silvaco
+//!   Guardian's series and parallel reduction "with different gate
+//!   terminals").
 //! - `lvs max_res r` and `lvs min_caps c`: the same for each resistor
 //!   stating an `r` above `r` and each capacitor stating a `c` below `c`,
 //!   taken for opens (catalog LVS-034; `KLayout`'s `max_res` and
@@ -206,6 +211,7 @@
 pub mod checks;
 mod compare;
 mod controls;
+mod gates;
 pub mod graph;
 pub mod reduce;
 mod refine;

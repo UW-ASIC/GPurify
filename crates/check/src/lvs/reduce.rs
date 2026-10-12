@@ -71,6 +71,11 @@
 //!   plates `lvs permute` joins may meet either way. A ring of passives,
 //!   or a chain closing on one net, stays as drawn. Diodes and bipolars
 //!   never merge in series, as neither tool merges them.
+//! - **Logic gates** (catalog LVS-047): with [`ParamNames::gates`], once
+//!   neither law merges anything, plain identical transistors in parallel
+//!   or in series on different gates of their own become one device whose
+//!   gates are interchangeable (Silvaco Guardian's reduction; the rules are
+//!   the `gates` module's), and the laws run again.
 //! - **Multiplier** (catalog LVS-046): with both the `W` and `m` names given,
 //!   each MOS's `W` is multiplied by its `m` and the `m` is dropped, before
 //!   any merge. A MOS with no `W`, and every other device, keeps its `m`,
@@ -120,6 +125,13 @@ pub struct ParamNames {
     /// [`Self::relaxed`] as a resistance does, `KLayout`'s
     /// `InductorDeviceCombiner` (catalog LVS-065).
     pub inductance: Option<StrId>,
+    /// Whether plain transistors stacked in series, or set in parallel, on
+    /// different gates of their own merge into one device whose gates are
+    /// interchangeable, the reduction logic-gate recognition rests on
+    /// (Silvaco Guardian's series and parallel reduction "with different
+    /// gate terminals"; the deck's `lvs recognize_gates`; catalog LVS-047).
+    /// Off by default: an analog stack's order is part of the circuit.
+    pub gates: bool,
     /// Whether a resistor, capacitor, diode or bipolar stating its value
     /// merges in parallel by the value's law, and a resistor or capacitor
     /// in series by the opposite one, rather than keeping a count
@@ -496,6 +508,32 @@ pub fn reduce_with(src: &Graph, names: ParamNames) -> (Graph, Vec<Merge>) {
             MergeKind::Parallel
         } else if plan_into(&out, names, MergeKind::Series, &mut plan) {
             MergeKind::Series
+        } else if let Some((reduced, kind, groups)) = names
+            .gates
+            .then(|| crate::lvs::gates::pass(&out, names))
+            .flatten()
+        {
+            // Logic-gate reduction, once nothing else merges; its groups
+            // come ascending by lowest row, as a plan's do.
+            let mut next = Vec::with_capacity(groups.len());
+            for group in &groups {
+                let mut rows: Vec<u32> = group
+                    .iter()
+                    .flat_map(|&d| origin[d as usize].iter().copied())
+                    .collect();
+                rows.sort_unstable();
+                if group.len() > 1 {
+                    merges.push(Merge {
+                        kind,
+                        model: out.device_model[group[0] as usize],
+                        devices: rows.clone(),
+                    });
+                }
+                next.push(rows);
+            }
+            origin = next;
+            out = reduced;
+            continue;
         } else {
             break;
         };

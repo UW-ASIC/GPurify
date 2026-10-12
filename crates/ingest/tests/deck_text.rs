@@ -887,7 +887,8 @@ fn an_inductor_states_its_inductance() {
 /// one row. `lvs count` keeps its whole-number bounds, refusing bounds that
 /// admit nothing, none at all, a fraction or a second row for the model.
 /// Breaks if a unit is mis-scaled, a duplicate or a zero threshold is
-/// accepted, a net is paired twice, or a count bound is misread.
+/// accepted, a net is paired twice, or a count bound is misread. `lvs
+/// recognize_gates` sets its flag once.
 #[test]
 fn lvs_thresholds_and_same_nets_lower_as_stated() {
     let devices = "device mos poly model \"nfet\" terminals [poly, diff, diff]\n";
@@ -904,6 +905,12 @@ fn lvs_thresholds_and_same_nets_lower_as_stated() {
         "already stated",
     );
     one_error(&format!("{devices}lvs min_caps 0aF\n"), "must be positive");
+    let (deck, _) = ok(&format!("{devices}lvs recognize_gates\n"));
+    assert!(deck.lvs.recognize_gates);
+    one_error(
+        &format!("{devices}lvs recognize_gates\nlvs recognize_gates\n"),
+        "already recognised",
+    );
     let (deck, strings) = ok(&format!("{devices}lvs count \"nfet\" >= 2 <= 4000\n"));
     assert_eq!(deck.lvs.count.len(), 1);
     assert_eq!(

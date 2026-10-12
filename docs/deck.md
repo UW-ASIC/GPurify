@@ -773,6 +773,7 @@ lvs max_res 1Mohm
 lvs min_caps 10aF
 lvs same_nets "OUT_PAD" "OUT"
 lvs count "npn13G2" <= 4000
+lvs recognize_gates
 ```
 
 An `lvs` statement changes how LVS compares the devices of one model, which
@@ -895,6 +896,18 @@ bounds is reported as `lvs.device_count`, on the first device past the
 maximum, or on the model's first device (or nowhere, when it has none)
 under the minimum. A device is one recognised marker, so a bipolar with
 several emitters counts once. Each model has one row at most.
+
+**`lvs recognize_gates`** lets a logic gate's inputs be wired in any
+order, as Silvaco Guardian LVS's logic gate recognition does ("all N input
+terminals are swappable"): transistors of one model and identical sizes,
+each on a gate of its own, stacked in series through nodes that nothing
+else touches and that carry no label, or set in parallel on one source and
+drain, become one device whose gates are interchangeable. A NAND's stack
+in another order then matches, as does a NOR's. A device already merged
+this way is not merged again, so an AOI's or OAI's groups in another order
+still mismatch, and transistors of different sizes never merge, since
+swapping them would change the circuit. Off by default: in an analog
+circuit a stack's order is part of the design.
 
 **`lvs max_res r`** and **`lvs min_caps c`** leave out of the comparison,
 on both sides, every resistor whose resistance is above `r` and every

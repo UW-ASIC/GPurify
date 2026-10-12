@@ -257,6 +257,11 @@ pub fn compare_logged(
 ///   `ignore shorted` removes dummies. Its terminals are those compared: a
 ///   reference bulk the layout does not extract is already gone, so a dummy
 ///   with gate, source and drain on one net is shorted on both sides.
+/// - **`lvs recognize_gates`** (catalog LVS-047): [`ParamNames::gates`],
+///   so once nothing else merges, plain identical transistors stacked on
+///   different gates, or in parallel on them, become one device whose
+///   gates are interchangeable, Silvaco Guardian's reduction for logic
+///   gate recognition.
 /// - **`lvs max_res`, `lvs min_caps`** (catalog LVS-034): a resistor
 ///   stating an `r` above the one, or a capacitor stating a `c` below the
 ///   other, is dropped the same way on either side, as `KLayout`'s
@@ -316,6 +321,7 @@ pub fn compare_traced(
     let options = CompareOptions {
         params: ParamNames {
             relaxed: options.params.relaxed || controls.relaxed,
+            gates: options.params.gates || controls.recognize_gates,
             ..options.params
         },
         ..options
