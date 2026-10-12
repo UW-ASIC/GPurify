@@ -64,6 +64,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         region_density(),
         fill(),
         net_spacing(),
+        derived_net_spacing(),
         tap_distance(),
         labelled_short(),
         exemption(),
@@ -3213,6 +3214,81 @@ fn net_spacing() -> Vec<Fixture> {
         vec![],
     ));
     every_placement(cases)
+}
+
+/// Net spacing on a derived layer (DRC-081): sky130 hvnwell.8 "Min space
+/// between HV_nwell and any nwell on different nets" 2 µm, the HV n-well the
+/// n-well under `hvi`: `space(hv_nwell, nwell; nets: different) >= 2um`,
+/// `hv_nwell = nwell.interacting(hvi)`, which takes the nets of the n-well
+/// it is computed from.
+///
+/// Oracle: nets by construction: an HV well and a plain well 1999, 2000,
+/// 2001 apart (separate wells: one finding of 1999); the same two joined by
+/// an n-well bridge (one net: nothing, though 1000 apart); the HV well
+/// against its own n-well (one net, overlapping: nothing; a derived shape on
+/// no net would refuse the rule). And `nwell or hvi` with the `hvi` shape
+/// bridging two separate wells is one shape over two nets: on no net, so
+/// the rule refuses rather than guess.
+fn derived_net_spacing() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["nwell", "hvi"],
+        "connect conductors [nwell]\n\
+         connect touch_within_layer\n\
+         layer hv_nwell = nwell.interacting(hvi)\n\
+         rule hvnwell.8 space(hv_nwell, nwell; nets: different) >= 2um\n",
+    );
+    let hv = || {
+        Layout::default()
+            .rect("nwell", 0, 0, 3000, 3000)
+            .rect("hvi", -500, -500, 3500, 3500)
+    };
+    let case = |name: &str, layout: Layout, found: Vec<Finding>| {
+        fixture(
+            &format!("derived_net_spacing/{name}"),
+            &["DRC-081"],
+            &deck,
+            layout,
+            &[("hvnwell.8", found)],
+        )
+    };
+    let mut cases = Vec::new();
+    for (g, side) in sweep(2000) {
+        cases.push(case(
+            &format!("apart/{side}"),
+            hv().rect("nwell", 3000 + g, 0, 6000 + g, 3000),
+            below(g, 2000),
+        ));
+    }
+    cases.push(case(
+        "bridged",
+        hv().rect("nwell", 4000, 0, 7000, 3000)
+            .rect("nwell", 3000, 1000, 4000, 2000),
+        Vec::new(),
+    ));
+    cases.push(case("alone", hv(), Vec::new()));
+    let mut out = every_placement(cases);
+    out.push(
+        Fixture::new(
+            "derived_net_spacing/two_nets_under_one_shape",
+            &["DRC-081"],
+            &new_deck(
+                &["nwell", "hvi"],
+                "connect conductors [nwell]\n\
+                 connect touch_within_layer\n\
+                 layer either = nwell or hvi\n\
+                 rule e space(either, nwell; nets: different) >= 2um\n",
+            ),
+            DRC,
+        )
+        .layout(
+            Layout::default()
+                .rect("nwell", 0, 0, 1000, 1000)
+                .rect("nwell", 2000, 0, 3000, 1000)
+                .rect("hvi", 500, 400, 2500, 600),
+        )
+        .expect(Expect::outcome("e", Want::Refused)),
+    );
+    out
 }
 
 /// `tap_distance(nwell, ntap) <= 1000nm` (`max_distance_to_tap`, ERC-D1): one

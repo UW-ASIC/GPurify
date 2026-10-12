@@ -307,10 +307,21 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
             _ => &[],
         };
         for layer in judged {
-            if !connectivity
-                .conductors
-                .contains(&layer_of(&layers, strings, layer, &rule.id)?)
-            {
+            let id = layer_of(&layers, strings, layer, &rule.id)?;
+            // A net spacing may read a layer derived from a conductor: its
+            // shapes take the nets of the conductor shapes under them.
+            let mut from = vec![id];
+            let mut netted = false;
+            while let Some(next) = from.pop() {
+                if connectivity.conductors.contains(&next) {
+                    netted = true;
+                    break;
+                }
+                if rule.kind == "net_spacing" && layers.is_derived(next) {
+                    from.extend_from_slice(layers.operands(next));
+                }
+            }
+            if !netted {
                 return malformed(format!(
                     "rule {}: judges nets on {layer}, which is not a conductor",
                     rule.id

@@ -709,22 +709,97 @@ fn wide_parts(
 }
 
 /// Same-net or different-net spacing (gf180 NW.2a/2b), nets as extracted, on
-/// one layer or between two ([`net_pair_spacing`]). `Refused` when a shape on
-/// a layer carries no net. `examined` counts the pairs of the asked relation.
+/// one layer or between two ([`net_pair_spacing`]); a derived layer's shape
+/// on no net takes the net its `sources` give it ([`row_nets`]). `Refused`
+/// when a shape on a layer carries no net. `examined` counts the pairs of the
+/// asked relation.
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn net_spacing(
     store: &GeometryStore,
     nets: &NetTable,
     rule: StrId,
     layers: (LayerId, Option<LayerId>),
+    sources: (&[LayerId], &[LayerId]),
     same_net: bool,
     limit: Dbu,
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    net_pair_spacing(store, nets, rule, layers, limit, s, out, |a, b| {
+    let (a, b) = layers;
+    let Some(of_a) = row_nets(store, nets, a, sources.0, s) else {
+        return REFUSED;
+    };
+    let of_b = match b {
+        Some(b) => match row_nets(store, nets, b, sources.1, s) {
+            Some(of_b) => of_b,
+            None => return REFUSED,
+        },
+        None => Vec::new(),
+    };
+    let (first_a, first_b) = (
+        store.polys_on_layer(a).start,
+        b.map_or(0, |b| store.polys_on_layer(b).start),
+    );
+    let net_of = |row: PolyId, on_a: bool| {
+        if on_a {
+            of_a[(row.0 - first_a) as usize]
+        } else {
+            of_b[(row.0 - first_b) as usize]
+        }
+    };
+    pair_spacing_by_net(store, net_of, rule, layers, limit, s, out, |a, b| {
         ((a == b) == same_net).then_some(Some(limit))
     })
+}
+
+/// Per store row of `layer`, its net: its own, or, for a row on no net, the
+/// one net of the rows of `sources` its polygon overlaps with a positive
+/// area (every row of a polygon taking its polygon's). `None` when a row is
+/// left on no net, or the layer does not validate.
+fn row_nets(
+    store: &GeometryStore,
+    nets: &NetTable,
+    layer: LayerId,
+    sources: &[LayerId],
+    s: &mut Scratch,
+) -> Option<Vec<NetId>> {
+    let rows = store.polys_on_layer(layer);
+    let mut of: Vec<NetId> = rows.clone().map(|row| nets.net_of(PolyId(row))).collect();
+    if of.iter().all(|&net| net != NetId::NONE) {
+        return Some(of);
+    }
+    let mut own = LayerRects::default();
+    own.build(store, layer, s.validated.get(store, layer)?);
+    let mut under = Vec::with_capacity(sources.len());
+    for &source in sources {
+        let mut rects = LayerRects::default();
+        rects.build(store, source, s.validated.get(store, source)?);
+        under.push(SortedRects::new(rects.labelled()));
+    }
+    let mut found = Vec::new();
+    for poly in 0..u32::try_from(own.len()).expect("a layer indexes polygons with a u32") {
+        found.clear();
+        for &r in own.of(poly) {
+            for sorted in &under {
+                found.extend(
+                    sorted
+                        .overlapping(r)
+                        .map(|(_, row)| nets.net_of(row))
+                        .filter(|&net| net != NetId::NONE),
+                );
+            }
+        }
+        found.sort_unstable();
+        found.dedup();
+        if let [net] = found[..] {
+            for (at, &holder) in own.poly_of_row.iter().enumerate() {
+                if holder == poly && of[at] == NetId::NONE {
+                    of[at] = net;
+                }
+            }
+        }
+    }
+    of.iter().all(|&net| net != NetId::NONE).then_some(of)
 }
 
 /// Spacing between shapes that their two nets decide. On one layer (`b` is
@@ -755,6 +830,23 @@ pub(crate) fn net_pair_spacing(
     if unnetted {
         return REFUSED;
     }
+    let net_of = |row: PolyId, _: bool| nets.net_of(row);
+    pair_spacing_by_net(store, net_of, rule, (a, b), widest, s, out, need)
+}
+
+/// [`net_pair_spacing`] with each row's net from `net_of(row, on_a)`, which
+/// gives every row of the layers a net.
+#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
+fn pair_spacing_by_net(
+    store: &GeometryStore,
+    net_of: impl Fn(PolyId, bool) -> NetId,
+    rule: StrId,
+    (a, b): (LayerId, Option<LayerId>),
+    widest: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+    need: impl Fn(NetId, NetId) -> Option<Option<Dbu>>,
+) -> Verdict {
     let one_layer = match b {
         None => {
             if !prepare(store, a, widest, s) {
@@ -782,7 +874,7 @@ pub(crate) fn net_pair_spacing(
         if one_layer && label(p) == label(q) {
             continue;
         }
-        let Some(limit) = need(nets.net_of(p), nets.net_of(q)) else {
+        let Some(limit) = need(net_of(p, true), net_of(q, one_layer)) else {
             continue;
         };
         examined += 1;
