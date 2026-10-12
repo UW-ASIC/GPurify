@@ -660,6 +660,138 @@ fn lef_influence_holds_the_stub_s_first_micron_to_the_wide_spacing() {
     assert_eq!(found.of("inf"), [(len(450), len(500))]);
 }
 
+/// A map of the plane.
+type Symmetry = fn(i64, i64) -> (i64, i64);
+
+/// The eight symmetries of the square.
+const SYMMETRIES: [Symmetry; 8] = [
+    |x, y| (x, y),
+    |x, y| (-y, x),
+    |x, y| (-x, -y),
+    |x, y| (y, -x),
+    |x, y| (-x, y),
+    |x, y| (x, -y),
+    |x, y| (y, x),
+    |x, y| (-y, -x),
+];
+
+/// `M1.bef` on a 200 nm line 1.2 um long carrying a tab that makes it
+/// 330 nm wide for `tab` nm of its length, and a 200 nm line `gap` beside
+/// it, under symmetry `s`: the findings' measured and limit, one per drawn
+/// rectangle of the tabbed line that is too close.
+fn tabbed_line(s: Symmetry, tab: i64, gap: i64) -> Vec<(Measurement, Measurement)> {
+    let rects = [
+        [0, 0, 200, 1_200],
+        [-130, 0, 200, tab],
+        [200 + gap, 0, 400 + gap, 1_200],
+    ];
+    let moved: Vec<(&str, [i64; 4])> = rects
+        .iter()
+        .map(|&[xlo, ylo, xhi, yhi]| {
+            let ((ax, ay), (bx, by)) = (s(xlo, ylo), s(xhi, yhi));
+            ("met1", [ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)])
+        })
+        .collect();
+    run(IHP_M1, &moved).of("M1.bef")
+}
+
+/// IHP M1.e "Min. space of Metal1 lines if, at least one line is wider than
+/// 0.3 um and the parallel run is more than 1.0 um: 0.22" (SG13G2 layout
+/// rules 5.16; IHP-Open-PDK `drc/docs/main_rules.md`). The run is the wide
+/// line's: a 200 nm line with a 330 x 305 nm tab (`sg13g2_buf_2`'s Metal1)
+/// runs 1.2 um beside its neighbour, but its wide part only 305 nm, so the
+/// 0.18 um of M1.b holds, as IHP's `5_16_metal1.drc` reads it (separation
+/// from the wide part, projected). A tab 1001 nm long runs past 1 um and
+/// asks 0.22.
+///
+/// Oracle: foundry example, IHP M1.e on `sg13g2_buf_2` (clean under IHP's
+/// deck, finding N-f2-6), the cells by hand; under all eight symmetries, the
+/// gap swept one unit either side of each limit: a 305 nm tab flags 179 and
+/// not 180 or 181, a 1001 nm tab flags 219 and not 220 or 221, and a 1000 nm
+/// tab, whose run is not more than 1 um, does not flag 219.
+#[test]
+fn m1_e_reads_the_run_of_the_wide_part_not_of_the_whole_line() {
+    for (k, s) in SYMMETRIES.into_iter().enumerate() {
+        let found = tabbed_line(s, 305, 179);
+        assert!(
+            !found.is_empty() && found.iter().all(|&f| f == (len(179), len(180))),
+            "symmetry {k}: short tab, 179: {found:?}"
+        );
+        for gap in [180, 181] {
+            assert!(
+                tabbed_line(s, 305, gap).is_empty(),
+                "symmetry {k}: short tab, {gap}"
+            );
+        }
+        let found = tabbed_line(s, 1_001, 219);
+        assert!(
+            !found.is_empty() && found.iter().all(|&f| f == (len(219), len(220))),
+            "symmetry {k}: long tab, 219: {found:?}"
+        );
+        for gap in [220, 221] {
+            assert!(
+                tabbed_line(s, 1_001, gap).is_empty(),
+                "symmetry {k}: long tab, {gap}"
+            );
+        }
+        assert!(
+            tabbed_line(s, 1_000, 219).is_empty(),
+            "symmetry {k}: a 1 um tab, 219"
+        );
+    }
+}
+
+/// `M1.bef` on `rects` under symmetry `s`: the findings' measured and limit.
+fn moved_m1(s: Symmetry, rects: &[[i64; 4]]) -> Vec<(Measurement, Measurement)> {
+    let moved: Vec<(&str, [i64; 4])> = rects
+        .iter()
+        .map(|&[xlo, ylo, xhi, yhi]| {
+            let ((ax, ay), (bx, by)) = (s(xlo, ylo), s(xhi, yhi));
+            ("met1", [ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)])
+        })
+        .collect();
+    run(IHP_M1, &moved).of("M1.bef")
+}
+
+/// IHP M1.e reads the gap and the run on one stretch. The Metal1 of
+/// `sg13g2_dlhr_1`: a VSS rail 440 nm tall with a 330 nm finger, and a net
+/// 215 nm from the finger along 590 nm, and `low` nm above the rail along
+/// 1085 nm. The 215 gap runs only 590 nm, so 0.18 holds there; the 1085 nm
+/// stretch runs past 1 um, so 0.22 holds there, and 220 is clean. Joining
+/// the long run of one stretch to the short gap of another flagged 215
+/// against 0.22 on a cell IHP's deck passes.
+///
+/// Oracle: foundry example, IHP M1.e on `sg13g2_dlhr_1` (clean under IHP's
+/// `5_16_metal1.drc`, which projects each edge pair), the stretches by hand;
+/// under all eight symmetries, the long stretch's gap swept: 220 and 221
+/// clean, 219 flagged against 0.22.
+#[test]
+fn m1_e_reads_the_gap_and_the_run_on_the_same_stretch() {
+    let net = |low: i64| {
+        [
+            [0, -220, 8_640, 220],
+            [910, 220, 1_240, 1_250],
+            [1_455, 660, 1_930, 1_250],
+            [1_930, 720, 3_275, 890],
+            [3_105, 220 + low, 4_190, 630],
+            [3_105, 630, 3_275, 720],
+        ]
+    };
+    for (k, s) in SYMMETRIES.into_iter().enumerate() {
+        for low in [220, 221] {
+            assert!(
+                moved_m1(s, &net(low)).is_empty(),
+                "symmetry {k}: long stretch {low} above the rail"
+            );
+        }
+        let found = moved_m1(s, &net(219));
+        assert!(
+            !found.is_empty() && found.iter().all(|&f| f == (len(219), len(220))),
+            "symmetry {k}: long stretch 219: {found:?}"
+        );
+    }
+}
+
 // ---------------------------------------------------------- huge metal
 
 /// sky130 m1.3a "Min. spacing of features attached to or extending from

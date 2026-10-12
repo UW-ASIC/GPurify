@@ -799,6 +799,17 @@ pub(crate) fn spacing_table(
     let polys = &s.rects_a;
     let poly_of = |row: PolyId| polys.poly_of_row[(row.0 - first_row) as usize] as usize;
     let label = |row: PolyId| s.labels[(row.0 - first_row) as usize];
+    // The merged figure of each component label, for the runs of wide parts.
+    let mut figure_of: Vec<(u32, u32)> = (0..)
+        .zip(owners_of(&s.layer_out, &s.rects_a))
+        .filter(|&(_, owner)| owner.0 != u32::MAX)
+        .map(|(figure, owner)| (label(owner).0, figure))
+        .collect();
+    figure_of.sort_unstable();
+    let figure = |row: PolyId| {
+        let at = figure_of.partition_point(|&(l, _)| l < label(row).0);
+        s.layer_out.get(figure_of[at].1)
+    };
 
     let mut examined = 0u64;
     for (&(a, b), &whole) in s.pairs.iter().zip(&s.dists) {
@@ -807,9 +818,9 @@ pub(crate) fn spacing_table(
             continue;
         }
         examined += 1;
-        // A row's column: the last whose run, within that row's cell, it exceeds.
-        let column =
-            |row: usize| table.column(row, |cell| run_within(&runs, label(a), label(b), cell));
+        // The first row's column: the last whose run of the two figures,
+        // within that row's cell, it exceeds.
+        let column0 = table.column(0, |cell| run_within(&runs, label(a), label(b), cell));
         let (axs, ays) = store.poly_verts(a);
         let (bxs, bys) = store.poly_verts(b);
         let failed = (1..table.width.len()).rev().find_map(|row| {
@@ -819,13 +830,33 @@ pub(crate) fn spacing_table(
             if wide_a.is_empty() && wide_b.is_empty() {
                 return None;
             }
+            // A wide row's columns past the first: a stretch of the wide part
+            // facing the other figure, running past the column's length and
+            // closer than its cell, both read on that stretch (IHP M1.e "at
+            // least one line is wider than 0.3 um and the parallel run is
+            // more than 1.0 um"; IHP's deck projects from the wide part).
+            let mut stretches = wide_runs(wide_a, figure(b), widest);
+            stretches.extend(wide_runs(wide_b, figure(a), widest));
+            let projected = (1..table.prl.len()).rev().find_map(|column| {
+                let need = table.at(row, column);
+                stretches
+                    .iter()
+                    .filter(|&&(gap, run)| run > table.prl[column].raw() && gap < need.raw())
+                    .map(|&(gap, _)| gap)
+                    .min()
+                    .map(|gap| (DbuArea::new(i128::from(gap) * i128::from(gap)), need))
+            });
+            if let Some((d2, need)) = projected {
+                return Some(((d2, wide_at(store, (a, b), (wide_a, wide_b), d2)), need));
+            }
+            // The first column: any distance from the wide part.
             let d2 = rects_ring_dist2(wide_a, bxs, bys).min(rects_ring_dist2(wide_b, axs, ays));
-            let need = table.at(row, column(row));
+            let need = table.at(row, 0);
             let d2 = DbuArea::new(d2);
             (d2 < need.mul_wide(need))
                 .then(|| ((d2, wide_at(store, (a, b), (wide_a, wide_b), d2)), need))
         });
-        let need = table.at(0, column(0));
+        let need = table.at(0, column0);
         let failed = failed.or_else(|| {
             (whole < need.mul_wide(need)).then(|| ((whole, whole_at(store, (a, b), whole)), need))
         });
@@ -834,6 +865,75 @@ pub(crate) fn spacing_table(
         }
     }
     (Outcome::Ran, examined)
+}
+
+/// The stretches of `wide` rectangles facing an edge of `other` at most
+/// `within` away, each `(gap, run)`: per facing edge and gap, the union of
+/// what the rectangles' facing sides project onto the edge, so a wide part
+/// cut into abutting rectangles runs its whole length.
+fn wide_runs(wide: &[Bbox], other: gpurify_geom::PolygonRef<'_>, within: Dbu) -> Vec<(i64, i64)> {
+    let mut spans: Vec<(usize, i64, i64, i64)> = Vec::new();
+    let edges = std::iter::once(other.outer())
+        .chain(other.holes())
+        .flat_map(|ring| {
+            let (xs, ys) = ring.coords();
+            ring_segs(xs, ys).collect::<Vec<_>>()
+        })
+        .enumerate();
+    for (k, e) in edges {
+        for r in wide {
+            let (gap, lo, hi) = if e.a.x == e.b.x {
+                let gap = if e.a.x >= r.xhi {
+                    e.a.x - r.xhi
+                } else if e.a.x <= r.xlo {
+                    r.xlo - e.a.x
+                } else {
+                    continue;
+                };
+                (
+                    gap,
+                    r.ylo.max(e.a.y.min(e.b.y)),
+                    r.yhi.min(e.a.y.max(e.b.y)),
+                )
+            } else {
+                let gap = if e.a.y >= r.yhi {
+                    e.a.y - r.yhi
+                } else if e.a.y <= r.ylo {
+                    r.ylo - e.a.y
+                } else {
+                    continue;
+                };
+                (
+                    gap,
+                    r.xlo.max(e.a.x.min(e.b.x)),
+                    r.xhi.min(e.a.x.max(e.b.x)),
+                )
+            };
+            if gap <= within && lo < hi {
+                spans.push((k, gap.raw(), lo.raw(), hi.raw()));
+            }
+        }
+    }
+    spans.sort_unstable();
+    let mut out: Vec<(i64, i64)> = Vec::new();
+    let mut current = None::<(usize, i64, i64, i64)>;
+    for (k, gap, lo, hi) in spans {
+        current = match current {
+            Some((ck, cg, clo, chi)) if (ck, cg) == (k, gap) && lo <= chi => {
+                Some((ck, cg, clo, chi.max(hi)))
+            }
+            _ => {
+                if let Some((_, cg, clo, chi)) = current {
+                    out.push((cg, chi - clo));
+                }
+                Some((k, gap, lo, hi))
+            }
+        };
+    }
+    if let Some((_, cg, clo, chi)) = current {
+        out.push((cg, chi - clo));
+    }
+    out
 }
 
 /// What a two-width cell measures of a shape: `None` the whole shape (the
