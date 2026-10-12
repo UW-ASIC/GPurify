@@ -383,6 +383,11 @@ def via_stack(rule, layers, max)
     end
   end
 end
+# sky130 x.19: the layer's box starts at the origin, or its corner is reported.
+def origin(rule, layer)
+  b = layer.data.bbox
+  put({ rule: rule, pt: [b.left, b.bottom] }) unless b.empty? || (b.left == 0 && b.bottom == 0)
+end
 # LEF PROTRUSIONWIDTH w1 LENGTH 0 WIDTH w2 (grid units, at x2): the parts of
 # the merged layer no 2*w1 square covers that touch the part a 2*w2 square
 # fits in. At x2 every vertex is even, so sizing by w - 1 keeps exactly the
@@ -1401,6 +1406,11 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 )
                 .expect("a String");
                 exact("cut_class_spacing", Key::RowPair(name), Value::Ignore)
+            }
+            Rule::Origin { layer } => {
+                layers.reads(layer, &mut reads);
+                writeln!(body, "origin({q}, {})", var(layer)).expect("a String");
+                exact("origin", Key::Point, Value::Ignore)
             }
             Rule::ProtrusionWidth { layer, wide, limit } => {
                 layers.reads(layer, &mut reads);

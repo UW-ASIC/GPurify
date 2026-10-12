@@ -313,8 +313,9 @@ explains (kind 30).
 | 67 | critical_area | `critical_area(L; radius) <= a` | POINT | EXACT | exact | — |
 | 68 | keep_out_zone | `keep_out_zone(L; class, to, end_side, end_forward, side_side, side_forward)` | ROW PAIR | EXACT (scripted) | exact | new |
 | 69 | protrusion_width | `protrusion_width(L; wide) >= l` | POINT | EXACT (scripted) | exact | new |
+| 70 | origin | `origin(L)` | POINT | EXACT (scripted) | exact | new |
 
-45 kinds are EXACT (seven scripted over KLayout's polygons), 16 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
+46 kinds are EXACT (eight scripted over KLayout's polygons), 16 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`, and between two layers (`space(A, B; nets: ..)`), which is not mirrored. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1446,6 +1447,12 @@ keeps area exactly where a `2w` square fits, and growing it back gives their uni
 
 **Key**: POINT (the part's box centre). **Oracle**: LEF/DEF 5.8 `PROTRUSIONWIDTH ... LENGTH 0`
 ("the width of the protrusion wire should always be checked"). Fixtures `protrusion_width/*`.
+
+### 70. origin — EXACT (scripted)
+
+**GPurify** (`grid.rs` `origin`): the box of every row on the layer; unless its lower-left corner
+is `(0, 0)`, one finding there. **KLayout** (prelude `origin`): `layer.data.bbox`, the same
+corner. **Key**: POINT. **Oracle**: sky130 x.19 and the drawn boxes. Fixtures `origin/*`.
 
 ### Derived-layer operations
 

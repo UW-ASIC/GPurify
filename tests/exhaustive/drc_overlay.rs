@@ -71,6 +71,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         chip_and_device(),
         device_family(),
         chip_count(),
+        seal_origin(),
         chip_area(),
         frame(),
         dangling_metal(),
@@ -3851,6 +3852,56 @@ fn device_family() -> Vec<Fixture> {
         ));
     }
     every_placement(cases)
+}
+
+/// sky130 x.19 "Lower left corner of the seal ring should be at origin i.e
+/// (0,0)" (`origin(seal)`, DRC-095, DRC-097): a 4000 square seal ring with a
+/// 100 wall, drawn from `(dx, dy)` with a met1 square inside, under each of
+/// the eight symmetries about the origin. The rule is anchored on the origin,
+/// so a turn or mirror moves the corner it reads, and each placement's
+/// expectation is computed, not mapped.
+///
+/// Oracle: the image of the ring's box under the symmetry: its lower-left
+/// corner, and that corner's distance from the origin (3, 4 is 5), one
+/// finding there unless it is `(0, 0)`: only the unturned ring drawn from
+/// the origin passes, so a rule reading the box's first vertex, or any
+/// other corner, breaks a turned case.
+fn seal_origin() -> Vec<Fixture> {
+    let deck = new_deck(&["seal", "met1"], "rule x.19 origin(seal)\n");
+    let root = |d2: i64| (0..=d2).take_while(|r| r * r <= d2).last().unwrap_or(0);
+    let mut out = Vec::new();
+    for (dx, dy) in [(0, 0), (1, 0), (0, -1), (3, 4)] {
+        let drawn = ring(
+            Layout::default().rect("met1", dx + 500, dy + 500, dx + 600, dy + 600),
+            "seal",
+            (dx, dy, dx + 4000, dy + 4000),
+            (dx + 100, dy + 100, dx + 3900, dy + 3900),
+        );
+        for symmetry in Symmetry::ALL {
+            let corners = [
+                (dx, dy),
+                (dx + 4000, dy),
+                (dx, dy + 4000),
+                (dx + 4000, dy + 4000),
+            ]
+            .map(|p| symmetry.apply(p));
+            let x = corners.iter().map(|c| c.0).min().expect("four corners");
+            let y = corners.iter().map(|c| c.1).min().expect("four corners");
+            let found = if (x, y) == (0, 0) {
+                Vec::new()
+            } else {
+                vec![Finding::length(root(x * x + y * y)).at(x, y)]
+            };
+            out.push(fixture(
+                &format!("origin/{dx}_{dy}/{}", symmetry.name()),
+                &["DRC-095", "DRC-097"],
+                &deck,
+                drawn.transformed(symmetry, 0, 0),
+                &[("x.19", found)],
+            ));
+        }
+    }
+    out
 }
 
 /// A count per chip (`count`, DRC-091: IHP npn13G2.bR's devices per chip) and

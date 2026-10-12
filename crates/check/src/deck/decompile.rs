@@ -608,6 +608,7 @@ impl CompiledDeck {
                 }
                 row.length("limit", limit)
             }
+            Rule::Origin { layer } => one(layer),
             Rule::ProtrusionWidth { layer, wide, limit } => {
                 one(layer).length("wide", wide).length("limit", limit)
             }

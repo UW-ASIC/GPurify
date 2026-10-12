@@ -1803,6 +1803,26 @@ pub enum Rule {
         /// Index into [`RuleSet::widths`].
         widths: u32,
     },
+    /// A layer whose drawing does not start at the layout's origin.
+    ///
+    /// Deck: `origin(L)`, kind `origin`. The lower-left corner of the
+    /// bounding box of every shape on `L` must be `(0, 0)`: sky130 x.19
+    /// "Lower left corner of the seal ring should be at origin i.e (0,0)",
+    /// written on the seal ring's layer. A layer is placed as drawn, so the
+    /// rule reads the flattened coordinates, after every placement.
+    ///
+    /// One violation, at that corner, `measured` its distance from the
+    /// origin (floored) against a `limit` of 0. `shapes.0` is the layer's
+    /// first row. `examined` counts the layer's rows; an empty layer is
+    /// [`Outcome::Skipped`] with
+    /// [`SkipReason::EmptyLayer`](crate::report::SkipReason::EmptyLayer).
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-095, DRC-097. Rules: sky130 x.19.
+    Origin {
+        /// The layer whose box must start at the origin, drawn or derived.
+        layer: LayerId,
+    },
     /// A narrow part of a shape attached to its wide part: a protrusion
     /// narrower than `limit` from a wire at least `wide` wide.
     ///
@@ -3609,6 +3629,7 @@ impl RuleSet {
                         ),
                     }
                 }
+                "origin" => Rule::Origin { layer: one(spec)? },
                 "protrusion_width" => Rule::ProtrusionWidth {
                     layer: one(spec)?,
                     wide: length(spec, "wide")?,
@@ -4117,6 +4138,7 @@ impl RuleSet {
                         s,
                         out,
                     ),
+                    Rule::Origin { layer } => grid::origin(store, id, layer, out),
                     Rule::ProtrusionWidth { layer, wide, limit } => {
                         width::protrusion_width(store, id, layer, wide, limit, s, out)
                     }
@@ -4450,6 +4472,7 @@ impl Rule {
             // they are filed.
             Rule::Forbidden { .. }
             | Rule::MustBeInside { .. }
+            | Rule::Origin { .. }
             | Rule::Count { .. }
             | Rule::CutClass { .. }
             | Rule::AllowedWidth { .. }
@@ -4653,6 +4676,7 @@ impl Rule {
             Rule::EolWithinSpacing { .. } => "eol_within_spacing",
             Rule::EolKeepOut { .. } => "eol_keep_out",
             Rule::ProtrusionWidth { .. } => "protrusion_width",
+            Rule::Origin { .. } => "origin",
             Rule::KeepOutZone { .. } => "keep_out_zone",
             Rule::TwoWidthSpacingTable { .. } => "two_width_spacing_table",
             Rule::SpanLength { .. } => "span_length",
@@ -4704,6 +4728,7 @@ impl Rule {
             | Rule::EolKeepOut { layer, .. }
             | Rule::KeepOutZone { layer, .. }
             | Rule::ProtrusionWidth { layer, .. }
+            | Rule::Origin { layer }
             | Rule::TwoWidthSpacingTable { layer, .. }
             | Rule::SpanLength { layer, .. }
             | Rule::ConvexCornerSpacing { layer, .. }
