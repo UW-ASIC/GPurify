@@ -574,6 +574,17 @@ fn run_lvs(
             violations,
             runs,
         );
+        gpurify_check::lvs::check_device_counts(
+            gpurify_check::Design {
+                store: &loaded.store,
+                nets: &extracted.nets,
+                devices: &extracted.devices,
+            },
+            &loaded.deck.lvs.count,
+            &loaded.strings,
+            violations,
+            runs,
+        );
     });
 
     let verdict = match reference.top() {

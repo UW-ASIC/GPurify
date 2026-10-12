@@ -463,6 +463,15 @@ impl Printer<'_> {
         if let Some(af) = lvs.min_caps {
             let _ = writeln!(out, "lvs min_caps {}aF", number(af)?);
         }
+        for (model, min, max) in &lvs.count {
+            let _ = write!(out, "lvs count {}", quoted(model)?);
+            for (cmp, bound) in [(">=", min), ("<=", max)] {
+                if let Some(bound) = bound {
+                    let _ = write!(out, " {cmp} {bound}");
+                }
+            }
+            out.push('\n');
+        }
         for (layout, reference) in &lvs.same_nets {
             let _ = writeln!(
                 out,

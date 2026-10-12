@@ -1314,6 +1314,7 @@ impl<'a> Parser<'a> {
                 *slot = Some(amount);
                 Ok(())
             }
+            "count" => self.lvs_count(),
             "same_nets" => {
                 let layout = self.quoted("a layout net label in quotes")?;
                 let reference = self.quoted("a reference net name in quotes")?;
@@ -1345,7 +1346,7 @@ impl<'a> Parser<'a> {
                 &format!(
                     "unknown lvs control `{control}`; expected tolerance, ignore_parameter, \
                      asymmetric, permute, ignore, ignore_shorted, ports_by_name, range, topology, connect_implicit, \
-                     connect_explicit, max_res, min_caps or same_nets"
+                     connect_explicit, max_res, min_caps, same_nets or count"
                 ),
             )),
         }
@@ -1429,6 +1430,45 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 self.out.lvs.range.push((model, param, min, max));
+                Ok(())
+            }
+        }
+    }
+
+    /// `lvs count "model" >= min <= max`, either bound or both, each a whole
+    /// number of devices.
+    fn lvs_count(&mut self) -> R<()> {
+        let model = self.model()?;
+        let span = self.peek();
+        if self.out.lvs.count.iter().any(|row| row.0 == model) {
+            return Err(self.err_tok(span, &format!("\"{model}\" already has a count")));
+        }
+        let (mut min, mut max) = (None, None);
+        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+            let t = self.peek();
+            let slot = if self.eat(">=") {
+                &mut min
+            } else if self.eat("<=") {
+                &mut max
+            } else {
+                return Err(self.err_tok(t, &format!("expected >= or <=, found {}", self.found(t))));
+            };
+            let value = self.value()?;
+            let bound = self.count(&value, "count")?;
+            if slot.replace(bound).is_some() {
+                return Err(self.err_tok(t, "this bound is already given"));
+            }
+        }
+        match (min, max) {
+            (None, None) => {
+                let t = self.peek();
+                Err(self.err_tok(t, "a count needs >=, <= or both"))
+            }
+            (Some(low), Some(high)) if high < low => {
+                Err(self.err_tok(span, "the count admits no value"))
+            }
+            _ => {
+                self.out.lvs.count.push((model, min, max));
                 Ok(())
             }
         }

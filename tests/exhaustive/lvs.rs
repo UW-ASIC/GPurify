@@ -3408,6 +3408,35 @@ fn layout_rows() -> Vec<Fixture> {
         fixture.reference = Some(spice(c));
         out.push(fixture);
     }
+    // LVS-068: device counts. Three `nmos` and a `pmos` drawn: within
+    // `<= 3` and `>= 3`, one over `<= 2` (measured 3), one under `>= 4`
+    // (measured 3), and none of a model the layout lacks against `>= 1`
+    // (measured 0); `pmos` is not held to an `nmos` row. The counts are
+    // the drawing's, by construction.
+    let three = Circuit::new(
+        3,
+        vec![
+            Dev::mos(N, 0, 1, 2),
+            Dev::mos(N, 1, 0, 2),
+            Dev::mos(N, 2, 0, 1),
+            Dev::mos(Model::P, 0, 1, 2),
+        ],
+    );
+    let counted: [(&str, &str, Vec<Finding>); 5] = [
+        ("within", "\"nmos\" >= 3 <= 3", Vec::new()),
+        ("over", "\"nmos\" <= 2", vec![step(3)]),
+        ("under", "\"nmos\" >= 4", vec![step(3)]),
+        ("absent_model", "\"nmosb\" >= 1", vec![step(0)]),
+        ("other_model", "\"pmos\" <= 1", Vec::new()),
+    ];
+    for (name, bounds, findings) in counted {
+        let deck = format!("{}lvs count {bounds}\n", full_deck());
+        let mut fixture = Fixture::new(&format!("lvs/count/{name}"), &["LVS-068"], &deck, LVS)
+            .layout(draw(&three))
+            .expect(Expect::rule("lvs.device_count", findings));
+        fixture.reference = Some(spice(&three));
+        out.push(fixture);
+    }
 
     // LVS-006: an unlabelled track no terminal lands on floats; a labelled one
     // is a port and does not.
