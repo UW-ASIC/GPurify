@@ -885,9 +885,8 @@ fn routing(
                 Some(_) => {
                     let name = lx.next()?.to_owned();
                     let shapes = known_via(lx, &name, vias, lef)?;
-                    let at = last
-                        .ok_or_else(|| lx.err(format!("via {name} before any point")))?
-                        .0;
+                    let (at, at_ext) =
+                        last.ok_or_else(|| lx.err(format!("via {name} before any point")))?;
                     let orient = match lx.peek().and_then(Orient::parse) {
                         Some(o) => {
                             lx.next()?;
@@ -914,7 +913,10 @@ fn routing(
                         orient,
                         array,
                     });
-                    last = Some((at, None));
+                    // The point keeps its extension: a wire leaving it on
+                    // the via's other layer starts with it, as `OpenDB`
+                    // reads it.
+                    last = Some((at, at_ext));
                 }
             }
         }

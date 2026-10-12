@@ -71,7 +71,7 @@ jobs:
           nix develop .#oracles --command cargo test --test exhaustive --
           --ignored --test-threads=1
           klayout_antenna_differential openroad_antenna_differential
-          pdnsim_differential yosys_differential
+          pdnsim_differential yosys_differential openroad_lefdef_differential
       # The KLayout mirror (L6): corpus, merge-depth DRC fixtures and 3000
       # random layouts; and `gpurify xor` against KLayout's XOR on 1000
       # random layout pairs. One test at a time; each runs at most four klayouts.

@@ -37,6 +37,17 @@ pub fn lef() -> String {
             writeln!(out, "LAYER {cut}\n  TYPE CUT ;\nEND {cut}").expect("a String");
         }
     }
+    // The generate rules the generated vias name (OpenROAD reads a via's
+    // VIARULE only once the rule is defined).
+    for (rule, below, cut, above) in [("GEN12", "M1", "V1", "M2"), ("GEN23", "M2", "V2", "M3")] {
+        writeln!(
+            out,
+            "VIARULE {rule} GENERATE\n  LAYER {below} ;\n    ENCLOSURE 0.02 0.02 ;\n  \
+             LAYER {above} ;\n    ENCLOSURE 0.02 0.02 ;\n  LAYER {cut} ;\n    \
+             RECT -0.05 -0.05 0.05 0.05 ;\n    SPACING 0.2 BY 0.2 ;\nEND {rule}"
+        )
+        .expect("a String");
+    }
     out.push_str(
         "VIA VIA12 DEFAULT\n  LAYER M1 ;\n    RECT -0.07 -0.05 0.07 0.05 ;\n  \
          LAYER V1 ;\n    RECT -0.05 -0.05 0.05 0.05 ;\n  LAYER M2 ;\n    RECT -0.07 -0.09 0.07 0.09 ;\nEND VIA12\n\
@@ -56,43 +67,114 @@ pub fn lef() -> String {
 
 const ORIENTS: [&str; 8] = ["N", "S", "W", "E", "FN", "FS", "FW", "FE"];
 
-/// One routed path: from a lattice point, `steps` orthogonal moves, a via
-/// now and then. Returns the routing statement after `ROUTED`.
-fn path(rng: &mut Rng, special: Option<i64>, origin: (i64, i64)) -> String {
+/// One step of a routed path.
+enum Op {
+    /// Move along x (`true`) or y by this much.
+    Step(bool, i64),
+    /// A via up or down, and an extension stated at the via, if any.
+    Via(&'static str, Option<i64>),
+}
+
+/// One routed path: from a lattice point, orthogonal moves and a via now
+/// and then. Returns the routing statement after `ROUTED`.
+///
+/// With `free`, extensions go on any point and a special wire turns
+/// corners. Without it, the path keeps to what LEF/DEF 5.8, `OpenROAD` and
+/// `KLayout` draw alike: a special wire runs straight on each layer (at a
+/// turn `KLayout` joins what the reference and `OpenROAD` leave notched), a
+/// move never doubles back along the move before it, an extension sits
+/// only on the path's last point, at the end of a move longer than any
+/// wire's half width (`KLayout` cuts the whole path square at its end,
+/// trimming the move before a short last one), and one stated at a via only
+/// when a wire follows it (`KLayout` draws a lone one, `OpenROAD` and the
+/// reference draw nothing).
+fn path(rng: &mut Rng, special: Option<i64>, origin: (i64, i64), free: bool) -> String {
     let mut level = usize::try_from(rng.range(0, 3)).expect("small");
-    let width = |level: usize| {
-        special.map(|w| format!(" {}", w + 20 * i64::try_from(level).expect("small")))
-    };
-    let mut out = format!("{}{}", METALS[level].0, width(level).unwrap_or_default());
-    let (mut x, mut y) = origin;
-    write!(out, " ( {x} {y} )").expect("a String");
+    let start = level;
+    let mut ops: Vec<Op> = Vec::new();
+    // The current layer run's axis and the last move's direction.
+    let mut run_axis: Option<bool> = None;
+    let mut last: Option<(bool, i64)> = None;
     for _ in 0..rng.range(1, 6) {
         match rng.range(0, 6) {
             0 if level < 2 => {
                 let via = if level == 0 { "VIA12" } else { "VIA23" };
                 level += 1;
-                write!(out, " {via}").expect("a String");
-                if rng.range(0, 3) == 0 {
-                    write!(out, " ( * * {} )", rng.range(0, 6) * 10).expect("a String");
-                }
+                ops.push(Op::Via(
+                    via,
+                    (rng.range(0, 3) == 0).then(|| rng.range(0, 6) * 10),
+                ));
+                (run_axis, last) = (None, None);
             }
             1 if level > 0 => {
                 let via = if level == 1 { "VIA12" } else { "VIA23" };
                 level -= 1;
-                write!(out, " {via}").expect("a String");
+                ops.push(Op::Via(via, None));
+                (run_axis, last) = (None, None);
             }
             _ => {
-                let step = rng.range(1, 30) * 10 * if rng.range(0, 2) == 0 { 1 } else { -1 };
-                let ext = if rng.range(0, 4) == 0 {
+                let mut along_x = rng.range(0, 2) == 0;
+                if special.is_some() && !free {
+                    along_x = *run_axis.get_or_insert(along_x);
+                }
+                let mut sign = if rng.range(0, 2) == 0 { 1 } else { -1 };
+                if let Some((axis, s)) = last {
+                    if axis == along_x && !free {
+                        sign = s;
+                    }
+                }
+                ops.push(Op::Step(along_x, rng.range(1, 30) * 10 * sign));
+                last = Some((along_x, sign));
+            }
+        }
+    }
+    // A wire that starts at a via with a stated extension: long, for the
+    // same reason as a last move with one.
+    if !free {
+        for k in 1..ops.len() {
+            if let (Op::Via(_, Some(_)), Op::Step(_, delta)) = (&ops[k - 1], &ops[k]) {
+                if delta.abs() < 400 {
+                    let longer = 400 * delta.signum();
+                    if let Op::Step(_, d) = &mut ops[k] {
+                        *d = longer;
+                    }
+                }
+            }
+        }
+    }
+    let width = |level: usize| {
+        special.map(|w| format!(" {}", w + 20 * i64::try_from(level).expect("small")))
+    };
+    let mut out = format!("{}{}", METALS[start].0, width(start).unwrap_or_default());
+    let (mut x, mut y) = origin;
+    write!(out, " ( {x} {y} )").expect("a String");
+    for (k, op) in ops.iter().enumerate() {
+        let next_is_step = matches!(ops.get(k + 1), Some(Op::Step(..)));
+        match *op {
+            Op::Via(via, ext) => {
+                write!(out, " {via}").expect("a String");
+                if let Some(ext) = ext.filter(|_| free || next_is_step) {
+                    write!(out, " ( * * {ext} )").expect("a String");
+                }
+            }
+            Op::Step(along_x, mut delta) => {
+                let last_point = k + 1 == ops.len();
+                let ext = if (free || last_point) && rng.range(0, 4) == 0 {
+                    // KLayout cuts a path's end square across the whole
+                    // path: a last move shorter than the wire's half width
+                    // with a short extension would cut the move before it.
+                    if !free && delta.abs() < 400 {
+                        delta = 400 * delta.signum();
+                    }
                     format!(" {}", rng.range(0, 8) * 10)
                 } else {
                     String::new()
                 };
-                if rng.range(0, 2) == 0 {
-                    x += step;
+                if along_x {
+                    x += delta;
                     write!(out, " ( {x} *{ext} )").expect("a String");
                 } else {
-                    y += step;
+                    y += delta;
                     write!(out, " ( * {y}{ext} )").expect("a String");
                 }
             }
@@ -102,7 +184,7 @@ fn path(rng: &mut Rng, special: Option<i64>, origin: (i64, i64)) -> String {
 }
 
 /// The seed's design, in a die 40 µm a side.
-pub fn def(seed: u64) -> String {
+pub fn def(seed: u64, free: bool) -> String {
     let mut rng = Rng::new(seed);
     let at = |rng: &mut Rng| (rng.range(10, 390) * 100, rng.range(10, 390) * 100);
     let mut out = format!(
@@ -169,12 +251,12 @@ pub fn def(seed: u64) -> String {
         write!(
             out,
             "- s{s} ( * A ) + ROUTED {}",
-            path(&mut rng, Some(width), origin)
+            path(&mut rng, Some(width), origin, free)
         )
         .expect("a String");
         if rng.range(0, 2) == 0 {
             let origin = at(&mut rng);
-            write!(out, "\n  NEW {}", path(&mut rng, Some(width), origin)).expect("a String");
+            write!(out, "\n  NEW {}", path(&mut rng, Some(width), origin, free)).expect("a String");
         }
         let (x, y) = at(&mut rng);
         write!(
@@ -198,10 +280,10 @@ pub fn def(seed: u64) -> String {
             write!(out, " ( PIN p{n} )").expect("a String");
         }
         let origin = at(&mut rng);
-        write!(out, " + ROUTED {}", path(&mut rng, None, origin)).expect("a String");
+        write!(out, " + ROUTED {}", path(&mut rng, None, origin, free)).expect("a String");
         if rng.range(0, 2) == 0 {
             let origin = at(&mut rng);
-            write!(out, "\n  NEW {}", path(&mut rng, None, origin)).expect("a String");
+            write!(out, "\n  NEW {}", path(&mut rng, None, origin, free)).expect("a String");
         }
         if rng.range(0, 3) == 0 {
             let (x, y) = at(&mut rng);
