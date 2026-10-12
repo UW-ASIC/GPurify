@@ -304,12 +304,12 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
                     .to_string(),
             );
         };
-        let Some(reference) = reference else {
-            return usage("system requires a system netlist (--reference)".to_string());
+        let [reference] = reference.as_slice() else {
+            return usage("system requires one system netlist (--reference)".to_string());
         };
         return Ok(Cli {
             inputs: Inputs {
-                reference: Some(PathBuf::from(reference)),
+                reference: vec![PathBuf::from(reference)],
                 ..Inputs::default()
             },
             options: RunOptions {
@@ -440,7 +440,10 @@ mod tests {
             Some(std::path::Path::new("stack.json"))
         );
         assert_eq!(
-            cli.inputs.reference.as_deref(),
+            cli.inputs
+                .reference
+                .first()
+                .map(std::path::PathBuf::as_path),
             Some(std::path::Path::new("sys.spice"))
         );
         assert_eq!(cli.format, Format::Json);
