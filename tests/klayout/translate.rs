@@ -383,6 +383,15 @@ def via_stack(rule, layers, max)
     end
   end
 end
+# LEF PROTRUSIONWIDTH w1 LENGTH 0 WIDTH w2 (grid units, at x2): the parts of
+# the merged layer no 2*w1 square covers that touch the part a 2*w2 square
+# fits in. At x2 every vertex is even, so sizing by w - 1 keeps exactly the
+# union of the 2w squares.
+def protrusion_width(rule, layer, w1, w2)
+  m = layer.data.merged
+  open = lambda { |w| m.sized(-(w - 1)).sized(w - 1) }
+  emit(rule, (m - open.(w1)).interacting(open.(w2)))
+end
 # LEF58 KEEPOUTZONE as OpenROAD's router bloats a via: round each drawn cut
 # of class `cls` ([short, long]), a side zone grown along its long axis by
 # `sf` and across by `ss`, and an end zone grown along by `es` and across by
@@ -1392,6 +1401,18 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 )
                 .expect("a String");
                 exact("cut_class_spacing", Key::RowPair(name), Value::Ignore)
+            }
+            Rule::ProtrusionWidth { layer, wide, limit } => {
+                layers.reads(layer, &mut reads);
+                writeln!(
+                    body,
+                    "protrusion_width({q}, {}, {}, {})",
+                    var(layer),
+                    limit.raw(),
+                    wide.raw()
+                )
+                .expect("a String");
+                exact("protrusion_width", Key::Point, Value::Ignore)
             }
             Rule::KeepOutZone {
                 layer,

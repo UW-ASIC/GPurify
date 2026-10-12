@@ -555,6 +555,9 @@ kinds! {
         side: Dbu = "side",
         forward: Dbu = "forward",
     }
+    /// [`Rule::ProtrusionWidth`](crate::drc::Rule::ProtrusionWidth):
+    /// `protrusion_width(layer; wide) >= limit`.
+    protrusion_width(layer: one) [] { wide: Dbu = "wide", limit: Dbu = "limit" }
     /// [`Rule::KeepOutZone`](crate::drc::Rule::KeepOutZone):
     /// `keep_out_zone(layer; class: short x long, to: short x long | none,
     /// end_side, end_forward, side_side, side_forward)`.

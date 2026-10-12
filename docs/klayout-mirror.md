@@ -315,8 +315,9 @@ explains (kind 30).
 | 66 | density_balance | `density_balance(A, B[, d]; window, step) >= f` | POINT | EXACT | exact | — |
 | 67 | critical_area | `critical_area(L; radius) <= a` | POINT | EXACT | exact | — |
 | 68 | keep_out_zone | `keep_out_zone(L; class, to, end_side, end_forward, side_side, side_forward)` | ROW PAIR | EXACT (scripted) | exact | new |
+| 69 | protrusion_width | `protrusion_width(L; wide) >= l` | POINT | EXACT (scripted) | exact | new |
 
-44 kinds are EXACT (six scripted over KLayout's polygons), 16 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
+45 kinds are EXACT (seven scripted over KLayout's polygons), 16 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`, and between two layers (`space(A, B; nets: ..)`), which is not mirrored. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1434,6 +1435,20 @@ zone of its own, so this is scripted.
 
 **Key**: ROW PAIR (the two rows). **Oracle**: `OpenROAD` `drt` `checKeepOutZone_main` (the zones
 as it bloats a via) and `odb::Rect::overlaps` (strict). Fixtures `keep_out_zone/*`.
+
+### 69. protrusion_width — EXACT (scripted)
+
+**GPurify** (`width.rs` `protrusion_width`): the merged layer's narrow parts (what the union of
+every `limit` square inside it, `wide_rects_into`, does not cover) that touch its wide part (the
+union of every `wide` square inside it), one finding per part, at the centre of its box, measuring
+its narrowest width.
+
+**KLayout** (prelude `protrusion_width`): at ×2, `m - m.sized(-(w1 - 1)).sized(w1 - 1)`
+interacting `m.sized(-(w2 - 1)).sized(w2 - 1)`: with every vertex even, the erosion by `w - 1`
+keeps area exactly where a `2w` square fits, and growing it back gives their union.
+
+**Key**: POINT (the part's box centre). **Oracle**: LEF/DEF 5.8 `PROTRUSIONWIDTH ... LENGTH 0`
+("the width of the protrusion wire should always be checked"). Fixtures `protrusion_width/*`.
 
 ### Derived-layer operations
 

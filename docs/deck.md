@@ -328,6 +328,7 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `edge_length(L) >= len` | An edge shorter than the limit. |
 | `min_step(L; max_edges: n) >= len` | More than `n` edges shorter than the limit in a row: LEF `MINSTEP .. MAXEDGES`. |
 | `min_step(L; corner: outside, length_sum: len \| none) >= len` | Two or more edges shorter than the limit in a row at an outside (convex) corner, the two long edges either side turning left: LEF `MINSTEP .. OUTSIDECORNER`, its default. `corner: inside` is a concave corner (`INSIDECORNER`); `corner: step` one or more short edges between long edges running the same way (`STEP`). With `length_sum`, a run passes while its total length is at most that (`LENGTHSUM`). An end of line is no corner and no step. |
+| `protrusion_width(L; wide: len) >= len` | A part of a shape narrower than the limit (where no square that wide fits) attached to a part at least `wide` wide (where a `wide` square fits), a corner counting: LEF `PROTRUSIONWIDTH width1 LENGTH 0 WIDTH width2`. Reported once per such part with its narrowest width. A protrusion's length is not read: LEF's positive `LENGTH`, which exempts a long protrusion, is not modelled. |
 | `notch(L) >= len` | A gap narrower than the limit between two parts of the same shape. |
 | `space(L) >= len` | Two shapes on one layer closer than the limit. |
 | `space(A, B) >= len` | A shape on `A` closer than the limit to a shape on `B`. |
