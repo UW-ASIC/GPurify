@@ -1351,6 +1351,46 @@ impl<'a> Parser<'a> {
                 self.out.lvs.ignore_shorted.push(model);
                 Ok(())
             }
+            "max_res" | "min_caps" => {
+                let value = self.value()?;
+                let (dim, slot) = if control == "max_res" {
+                    (Dim::Resistance, &mut self.out.lvs.max_res)
+                } else {
+                    (Dim::Capacitance, &mut self.out.lvs.min_caps)
+                };
+                if slot.is_some() {
+                    return Err(self.err(span, &format!("`{control}` is already stated")));
+                }
+                let amount = self.quantity(&value, dim, &control)?.f64();
+                if !(amount > 0.0) {
+                    return Err(self.err(value.span(), &format!("`{control}` must be positive")));
+                }
+                let slot = if control == "max_res" {
+                    &mut self.out.lvs.max_res
+                } else {
+                    &mut self.out.lvs.min_caps
+                };
+                *slot = Some(amount);
+                Ok(())
+            }
+            "same_nets" => {
+                let layout = self.quoted("a layout net label in quotes")?;
+                let reference = self.quoted("a reference net name in quotes")?;
+                let taken = self
+                    .out
+                    .lvs
+                    .same_nets
+                    .iter()
+                    .any(|(a, b)| *a == layout || *b == reference);
+                if taken {
+                    return Err(self.err(
+                        span,
+                        "each net is paired by one same_nets statement at most",
+                    ));
+                }
+                self.out.lvs.same_nets.push((layout, reference));
+                Ok(())
+            }
             "asymmetric" => {
                 let model = self.model()?;
                 if self.out.lvs.asymmetric.contains(&model) {
@@ -1363,8 +1403,8 @@ impl<'a> Parser<'a> {
                 span,
                 &format!(
                     "unknown lvs control `{control}`; expected tolerance, ignore_parameter, \
-                     asymmetric, permute, ignore, ignore_shorted, ports_by_name, range, topology, connect_implicit or \
-                     connect_explicit"
+                     asymmetric, permute, ignore, ignore_shorted, ports_by_name, range, topology, connect_implicit, \
+                     connect_explicit, max_res, min_caps or same_nets"
                 ),
             )),
         }

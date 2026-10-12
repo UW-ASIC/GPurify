@@ -479,6 +479,20 @@ impl Printer<'_> {
             let names: Result<Vec<_>, _> = group.iter().map(|name| quoted(name)).collect();
             let _ = writeln!(out, "lvs connect_explicit {}", names?.join(" "));
         }
+        if let Some(ohm) = lvs.max_res {
+            let _ = writeln!(out, "lvs max_res {}ohm", number(ohm)?);
+        }
+        if let Some(af) = lvs.min_caps {
+            let _ = writeln!(out, "lvs min_caps {}aF", number(af)?);
+        }
+        for (layout, reference) in &lvs.same_nets {
+            let _ = writeln!(
+                out,
+                "lvs same_nets {} {}",
+                quoted(layout)?,
+                quoted(reference)?
+            );
+        }
         Ok(())
     }
 

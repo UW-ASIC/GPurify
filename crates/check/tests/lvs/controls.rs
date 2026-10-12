@@ -612,3 +612,126 @@ fn must_connect_nets_are_one_net_to_compare() {
     };
     assert_eq!(joined(&renamed, &explicit), Verdict::Match);
 }
+
+/// Oracle: `KLayout`'s `max_res` and `min_caps` ("the netlist compare will
+/// ignore resistor devices with a resistance value above the given
+/// threshold", "capacitance devices with a capacitance value below"), by
+/// hand. A layout of one transistor between nets 0 and 1 with a resistor
+/// of 10 Mohm and a capacitor of 5 aF across them, against a reference of
+/// the transistor alone, mismatches; it matches once `max_res` is 1 Mohm
+/// and `min_caps` 10 aF, and not with only one of them, nor with
+/// thresholds past the values (`max_res` 20 Mohm, `min_caps` 1 aF). A
+/// resistor stating no value is never above the threshold. Breaks if a
+/// threshold is read the wrong way round, in the wrong unit, or applied to
+/// another kind.
+#[test]
+fn value_thresholds_leave_out_parasitic_passives_as_opens() {
+    use gpurify_check::topology::TerminalRole::Pin;
+    let (r, c) = (StrId(42), StrId(43));
+    let options = CompareOptions {
+        params: ParamNames {
+            values: [Some(r), Some(c), None, None, None, None],
+            ..ParamNames::default()
+        },
+        ..CompareOptions::default()
+    };
+    let circuit = |passives: &[(DeviceKind, StrId, f64)]| {
+        let mut builder = GraphBuilder::new(4);
+        builder.device(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 2), (Source, 0), (Drain, 1), (Bulk, 3)],
+        );
+        for &(kind, name, value) in passives {
+            let model = if kind == DeviceKind::Resistor {
+                common::RES
+            } else {
+                CAP
+            };
+            let params: Vec<(StrId, f64)> =
+                (value > 0.0).then_some((name, value)).into_iter().collect();
+            builder.device_with_params(kind, model, &[(Pin(0), 0), (Pin(1), 1)], &params);
+        }
+        builder.finish()
+    };
+    let layout = circuit(&[
+        (DeviceKind::Resistor, r, 10e6),
+        (DeviceKind::Capacitor, c, 5e-18),
+    ]);
+    let reference = circuit(&[]);
+    let run = |max_res, min_caps| {
+        let controls = LvsControls {
+            max_res,
+            min_caps,
+            ..LvsControls::default()
+        };
+        compare_with(&layout, &reference, options, &controls).0 == Verdict::Match
+    };
+    assert!(!run(None, None));
+    assert!(run(Some(1e6), Some(10.0)));
+    assert!(!run(Some(1e6), None));
+    assert!(!run(None, Some(10.0)));
+    assert!(!run(Some(20e6), Some(10.0)));
+    assert!(!run(Some(1e6), Some(1.0)));
+    let unvalued = circuit(&[(DeviceKind::Resistor, r, 0.0)]);
+    let controls = LvsControls {
+        max_res: Some(1.0),
+        ..LvsControls::default()
+    };
+    assert_ne!(
+        compare_with(&unvalued, &reference, options, &controls).0,
+        Verdict::Match
+    );
+}
+
+/// Oracle: `KLayout`'s `same_nets!` ("if the specified nets do not match,
+/// an error is reported"), by hand. Two transistors gated by nets `A` and
+/// `B` and draining into `X` and `Y` are symmetric: a reference whose
+/// labels cross them (`A` gates the transistor draining into `Y`) matches
+/// by structure. Pairing layout `A` with reference `A` and layout `X` with
+/// reference `X` breaks the symmetry the wrong way, so the comparison
+/// mismatches; pairing layout `A` with reference `A` and layout `X` with
+/// reference `Y`, as the crossed reference wires them, matches. A row naming a net neither side
+/// has changes nothing. Breaks if a row does not hold its two nets
+/// together, or holds others.
+#[test]
+fn same_nets_hold_two_named_nets_together() {
+    let [a, b, x, y, vss, nowhere] = [70, 71, 72, 73, 74, 75].map(StrId);
+    let pair = |drains: [StrId; 2]| {
+        let mut builder = GraphBuilder::new(5);
+        for (net, name) in (0u32..).zip([a, b, drains[0], drains[1], vss]) {
+            builder.name_net(net, name);
+            builder.port(net);
+        }
+        for k in 0..2u32 {
+            builder.device(
+                DeviceKind::Mos,
+                NCH,
+                &[(Gate, k), (Source, 4), (Drain, 2 + k), (Bulk, 4)],
+            );
+        }
+        builder.finish()
+    };
+    let layout = pair([x, y]);
+    let crossed = pair([y, x]);
+    let same = |rows: &[(StrId, StrId)]| LvsControls {
+        same_nets: rows.to_vec(),
+        ..LvsControls::default()
+    };
+    assert_eq!(
+        verdict(&layout, &crossed, &LvsControls::default()),
+        Verdict::Match
+    );
+    assert_ne!(
+        verdict(&layout, &crossed, &same(&[(a, a), (x, x)])),
+        Verdict::Match
+    );
+    assert_eq!(
+        verdict(&layout, &crossed, &same(&[(a, a), (x, y)])),
+        Verdict::Match
+    );
+    assert_eq!(
+        verdict(&layout, &crossed, &same(&[(nowhere, nowhere)])),
+        Verdict::Match
+    );
+}
