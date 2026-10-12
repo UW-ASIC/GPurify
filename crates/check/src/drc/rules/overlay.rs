@@ -379,6 +379,67 @@ fn wide_part(
     )))
 }
 
+/// `LEF58_METALWIDTHVIAMAP` (DRC-067): each drawn cut of `cut` on a wire of
+/// `below` in `bands.0` and one of `above` in `bands.1` must be a `size`
+/// box, either way round. A cut lies on a wire of a band when the part of
+/// the merged metal at least `from` wide covers it and the part at least
+/// `below` wide does not. One violation per offending cut, at its centre.
+/// `examined` counts held cuts.
+pub(crate) fn metal_width_via(
+    store: &GeometryStore,
+    rule: StrId,
+    (cut, below, above): (LayerId, LayerId, LayerId),
+    bands: (WireBand, WireBand),
+    (width, height): (Dbu, Dbu),
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let mut parts = Vec::new();
+    for (metal, band) in [(below, bands.0), (above, bands.1)] {
+        let Some(drawn) = s.validated.get(store, metal) else {
+            return REFUSED;
+        };
+        let (Ok(from), Ok(over)) = (
+            wide_part(drawn, Some(band.from)),
+            wide_part(drawn, band.below),
+        ) else {
+            return REFUSED;
+        };
+        parts.push((from, over));
+    }
+    let covers = |part: &SortedRects<()>, b: Bbox| {
+        part.overlapping(b)
+            .fold(DbuArea::new(0), |sum, (clip, ())| sum + clip.area())
+            == b.area()
+    };
+    let mut examined = 0u64;
+    for row in store.polys_on_layer(cut) {
+        let b = store.poly_bbox(PolyId(row));
+        let held = parts.iter().all(|(from, over)| {
+            from.as_ref().is_some_and(|from| covers(from, b))
+                && !over.as_ref().is_some_and(|over| covers(over, b))
+        });
+        if !held {
+            continue;
+        }
+        examined += 1;
+        let (w, h) = (b.xhi - b.xlo, b.yhi - b.ylo);
+        if (w, h) == (width, height) || (w, h) == (height, width) {
+            continue;
+        }
+        out.push(Violation {
+            rule,
+            layer: cut,
+            severity: Severity::Error,
+            at: centre(b),
+            measured: Measurement::Count(0),
+            limit: Measurement::Count(1),
+            shapes: (PolyId(row), None),
+        });
+    }
+    (Outcome::Ran, examined)
+}
+
 /// Below the most negative real margin (`-2 * MAX_ABS_DBU`): seeds the host fold.
 const UNHOSTED: i64 = -(1 << 42);
 

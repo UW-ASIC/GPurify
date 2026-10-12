@@ -1132,6 +1132,57 @@ pub enum Rule {
         /// The tallest legal stack; at least 1.
         max_height: u16,
     },
+    /// A cut between wires of given widths that is not the via the layer's
+    /// width map names for them.
+    ///
+    /// Deck: `via_map(C, B, A; below_min: len, below_max: len, above_min:
+    /// len, above_max: len, cut: w x h)`, kind `metal_width_via`: one entry
+    /// of `LEF58_METALWIDTHVIAMAP`, `VIA cutLayer w1 w2 [w3 w4] viaName`,
+    /// which `OpenROAD` reads as the via to use where the metal below is
+    /// `w1` wide and the metal above `w2` (or, with four numbers, below in
+    /// `[w1, w2]` and above in `[w3, w4]`; `MetalWidthViaMapParser`), and
+    /// which `TritonRoute` checks by the via's cut box
+    /// (`checkMetalWidthViaTable_main`). No public LEF text defines it. A
+    /// via here is its cut: `cut` is the mapped via's cut size, either way
+    /// round, and an exact width is `min` equal to `max`. Cuts are the rows
+    /// of `C`, as drawn, read by their boxes. A cut is held when it lies on
+    /// a `B` wire whose width is in `below_min ..= below_max` and on an `A`
+    /// wire whose width is in `above_min ..= above_max`, each read as
+    /// [`WireBand`] reads a wire's width (where a square that wide fits in
+    /// the merged metal, covering the whole cut), and a held cut whose box
+    /// is not `cut` violates.
+    ///
+    /// One violation per offending cut, on `C` at its centre, `measured`
+    /// `Count(0)` (the mapped vias it matches) against `Count(1)`. `shapes.0`
+    /// is the cut's row. `examined` counts the held cuts. Records
+    /// [`Outcome::Refused`] when `B` or `A` fails validation.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-067. Rules: `LEF58_METALWIDTHVIAMAP` (`OpenROAD`).
+    ///
+    /// Limits: `TritonRoute` reads the metal width as the narrower side of
+    /// the largest rectangle of metal holding the cut, and its check passes
+    /// the metal above for both sides (`above=true` on both lookups, so the
+    /// metal below is never compared); this rule holds both, as the parser's
+    /// grammar states. `PGVIA` and `USEVIACUTCLASS` are not read, as
+    /// `TritonRoute` does not read them. Several entries for one pair of
+    /// widths are separate rows, each held on its own.
+    MetalWidthVia {
+        /// The cut layer; findings are reported on it.
+        cut: LayerId,
+        /// The metal below.
+        below: LayerId,
+        /// The metal above.
+        above: LayerId,
+        /// The widths of the metal below that hold a cut.
+        below_band: WireBand,
+        /// The widths of the metal above that hold a cut.
+        above_band: WireBand,
+        /// The mapped via's cut width, in grid units; positive.
+        width: Dbu,
+        /// The mapped via's cut height, in grid units; positive.
+        height: Dbu,
+    },
     /// Cuts on two layers closer than `limit`, unless they are one net's
     /// stacked cuts.
     ///
@@ -4030,6 +4081,31 @@ impl RuleSet {
                         max_height: u16::try_from(max_height).expect("checked against the ceiling"),
                     }
                 }
+                "metal_width_via" => {
+                    layers(spec, 3)?;
+                    let band = |lo: &'static str, hi: &'static str| {
+                        let (lo, hi) = (length(spec, lo)?, length(spec, hi)?);
+                        if lo > hi {
+                            return Err(DrcError::NonPositiveLimit {
+                                rule: name_of(spec.id),
+                                limit: (hi - lo).raw(),
+                            });
+                        }
+                        Ok(WireBand {
+                            from: lo,
+                            below: Some(hi + Dbu::new_unchecked(1)),
+                        })
+                    };
+                    Rule::MetalWidthVia {
+                        cut: layer(spec, 0),
+                        below: layer(spec, 1),
+                        above: layer(spec, 2),
+                        below_band: band("below_min", "below_max")?,
+                        above_band: band("above_min", "above_max")?,
+                        width: length(spec, "cut_width")?,
+                        height: length(spec, "cut_height")?,
+                    }
+                }
                 "stack_spacing" => {
                     layers(spec, 3)?;
                     Rule::StackSpacing {
@@ -5013,6 +5089,23 @@ impl RuleSet {
                         s,
                         out,
                     ),
+                    Rule::MetalWidthVia {
+                        cut,
+                        below,
+                        above,
+                        below_band,
+                        above_band,
+                        width,
+                        height,
+                    } => overlay::metal_width_via(
+                        store,
+                        id,
+                        (cut, below, above),
+                        (below_band, above_band),
+                        (width, height),
+                        s,
+                        out,
+                    ),
                     Rule::StackSpacing {
                         a,
                         b,
@@ -5494,6 +5587,16 @@ impl Rule {
                 StepNeighbour::BetweenEol(eol) => length(eol),
             }),
             Rule::CutSize { width, height, .. } => length(width).and(length(height)),
+            Rule::MetalWidthVia {
+                below_band,
+                above_band,
+                width,
+                height,
+                ..
+            } => length(below_band.from)
+                .and(length(above_band.from))
+                .and(length(width))
+                .and(length(height)),
             Rule::EolSpacing {
                 eol_width: first,
                 limit,
@@ -5798,6 +5901,7 @@ impl Rule {
             Rule::ViaStack { .. } => "via_stack",
             Rule::MaxCutSpacing { .. } => "max_cut_spacing",
             Rule::StackSpacing { .. } => "stack_spacing",
+            Rule::MetalWidthVia { .. } => "metal_width_via",
             Rule::ViaArraySpacing { .. } => "via_array_spacing",
             Rule::CutSpacing { .. } => "cut_spacing",
             Rule::CutClassSpacing { .. } => "cut_class_spacing",
@@ -5972,6 +6076,9 @@ impl Rule {
             Rule::OffGrid { .. } | Rule::ViaStack { .. } => [None, None, None],
             Rule::MaxCutSpacing { cut, others, .. } => [Some(cut), others, None],
             Rule::StackSpacing { a, b, metal, .. } => [Some(a), Some(b), Some(metal)],
+            Rule::MetalWidthVia {
+                cut, below, above, ..
+            } => [Some(cut), Some(below), Some(above)],
         }
     }
 }
