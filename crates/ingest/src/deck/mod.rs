@@ -953,11 +953,35 @@ pub struct LvsControls {
     /// per model: bounds on how many devices of the model the layout holds
     /// (catalog LVS-068).
     pub count: Vec<LvsCount>,
+    /// `lvs lde "model" od <layer> max <length> [well <layer> scref
+    /// <length>]`: the layout-dependent effects measured on the model's
+    /// transistors (catalog LVS-074), one row per model.
+    pub lde: Vec<LvsLde>,
     /// `lvs recognize_gates`: plain transistors in series or in parallel on
     /// different gates of their own become one device with interchangeable
     /// gates, so a NAND's or NOR's inputs may be wired in either order
     /// (Silvaco Guardian's gate reduction; catalog LVS-047).
     pub recognize_gates: bool,
+}
+
+/// One `lvs lde` statement: where a transistor's layout-dependent effects
+/// are measured from (catalog LVS-074). BSIM4 defines the instance
+/// parameters, `SA`/`SB` from the active-area (OD) edges and `SCA`, `SCB`,
+/// `SCC` from the well edges; the layers and the two lengths are the
+/// deck's, since no open PDK deck states them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LvsLde {
+    /// The transistor model, a `mos` device statement's.
+    pub model: StrId,
+    /// The active-area (OD) layer's name: `SA` and `SB` run from the gate's
+    /// edges to its edges.
+    pub od: StrId,
+    /// The farthest a distance is looked for, on the layout's grid; one
+    /// past it reads as it (Silvaco's `MAX_DISTANCE_VALUE`).
+    pub max: Dbu,
+    /// The well layer's name and the model's `SCREF`, on the layout's grid:
+    /// `SCA`, `SCB` and `SCC` follow from the distances to its edges.
+    pub well: Option<(StrId, Dbu)>,
 }
 
 /// One `lvs count` statement: the bounds, either or both, on the number of
@@ -1095,6 +1119,7 @@ pub struct ProcessStack {
 fn build_lvs(
     declared: &LvsSrc,
     devices: &[DeviceSource],
+    layers: &LayerTable,
     strings: &mut StrTable,
 ) -> Result<LvsControls, DeckError> {
     let known = |model: &str, control: &str| {
@@ -1164,6 +1189,37 @@ fn build_lvs(
     }
     if lvs.min_caps.is_some() {
         strings.intern("c");
+    }
+    for (model, od, max, well) in &declared.lde {
+        known(model, "lde")?;
+        if devices
+            .iter()
+            .any(|device| device.model == *model && device.kind != DeviceKind::Mos)
+        {
+            return Err(DeckError::Malformed(format!(
+                "lvs lde: \"{model}\" is not a mos device; layout-dependent effects are a transistor's"
+            )));
+        }
+        let mut layer = |name: &str| {
+            if layers.id(strings, name).is_some() {
+                Ok(strings.intern(name))
+            } else {
+                Err(DeckError::Malformed(format!(
+                    "lvs lde \"{model}\": unknown layer {name}"
+                )))
+            }
+        };
+        let od = layer(od)?;
+        let well = match well {
+            Some((name, scref)) => Some((layer(name)?, *scref)),
+            None => None,
+        };
+        lvs.lde.push(LvsLde {
+            model: strings.intern(model),
+            od,
+            max: *max,
+            well,
+        });
     }
     for &(ref model, min, max) in &declared.count {
         known(model, "count")?;
@@ -1255,7 +1311,13 @@ pub struct LvsSrc {
     pub(crate) count: Vec<(String, Option<u32>, Option<u32>)>,
     /// `lvs recognize_gates`.
     pub(crate) recognize_gates: bool,
+    /// `lvs lde`: `(model, od layer, max, (well layer, scref))`.
+    pub(crate) lde: Vec<LdeSrc>,
 }
+
+/// One `lvs lde` statement as written: `(model, od layer, max, (well
+/// layer, scref))`, the lengths on the layout's grid.
+pub(crate) type LdeSrc = (String, String, Dbu, Option<(String, Dbu)>);
 
 /// `lvs tolerance "model" param relative r absolute a`, the absolute part
 /// in the deck's unit ([`absolute_unit`]).
@@ -1311,6 +1373,18 @@ impl LvsSrc {
             ignore_shorted: controls.ignore_shorted.iter().map(|&id| name(id)).collect(),
             ports_by_name: controls.ports_by_name,
             recognize_gates: controls.recognize_gates,
+            lde: controls
+                .lde
+                .iter()
+                .map(|row| {
+                    (
+                        name(row.model),
+                        name(row.od),
+                        row.max,
+                        row.well.map(|(well, scref)| (name(well), scref)),
+                    )
+                })
+                .collect(),
             range: controls
                 .range
                 .iter()

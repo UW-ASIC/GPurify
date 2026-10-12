@@ -3397,6 +3397,7 @@ fn controlled() -> Vec<Fixture> {
             ));
         }
     }
+    out.extend(lde_fixtures());
     // LVS-047: logic-gate recognition. A NAND2 (nets a, b, out, gnd, vdd,
     // and x between its stack's transistors; a narrow transistor on `a`
     // alone tells `a` from `b`) drawn with `a` on top matches
@@ -3579,6 +3580,127 @@ fn controlled() -> Vec<Fixture> {
         ));
     }
     out
+}
+
+/// `SCA`, `SCB` and `SCC` written out again from Silvaco's application note
+/// ("Well Proximity and STI Stress Effect Parameters Extraction"), apart
+/// from `lvs::lde::wpe`, for the fixtures' expected values: distances
+/// `[SC1, SC2, SC3, SC4]`, `w`, `l` and `scref` in metres.
+fn silvaco_wpe(sc: [f64; 4], w: f64, l: f64, scref: f64) -> [f64; 3] {
+    let sca = scref * scref / (w * l)
+        * (w * (1.0 / sc[0] - 1.0 / (sc[0] + l))
+            + l * (1.0 / sc[1] - 1.0 / (sc[1] + w))
+            + w * (1.0 / sc[2] - 1.0 / (sc[2] + l))
+            + l * (1.0 / sc[3] - 1.0 / (sc[3] + w)));
+    let one = |n: f64, s: f64, e: f64| {
+        1.0 / (e * scref)
+            * (scref / n * s * (-n * s / scref).exp()
+                + scref * scref / (n * n) * (-n * s / scref).exp()
+                - scref / n * (s + e) * (-n * (s + e) / scref).exp()
+                - scref * scref / (n * n) * (-n * (s + e) / scref).exp())
+    };
+    let integral =
+        |n: f64| one(n, sc[1], w) + one(n, sc[3], w) + one(n, sc[0], l) + one(n, sc[2], l);
+    [sca, integral(10.0), integral(20.0)]
+}
+
+/// LVS-074: layout-dependent effects, construct-from-answer. One `nmos`
+/// drawn at the origin ([`draw_mos`]): its gate is `x` 500..650 by `y`
+/// 0..1000, its OD 0..1150 by 0..1000, and an OD strip `x` -300..0 by `y`
+/// 0..500 makes the source side's edge 800 nm from the gate over half the
+/// width and 500 nm over the other: BSIM4's effective distance is
+/// `1/(0.5/875 + 0.5/575) - 75` nm, 619.0 nm, and the drain side's 500 nm,
+/// so `sa` 500 nm and `sb` 619.0 nm. A well `x` -1500..2650 by `y`
+/// -2000..4000 puts the gate's edges 2000, 2000, 2000 and 3000 nm from its
+/// edges (`SC1` across the source end, `SC2` below, `SC3` across the drain
+/// end, `SC4` above); a well to the right only, from `x` 1000, puts the
+/// drain end 350 nm from it and the rest past `max`, 5000 nm. The cards
+/// state these, or one of them 5 % off.
+fn lde_fixtures() -> Vec<Fixture> {
+    let one = Circuit::new(3, vec![Dev::mos(Model::N, 0, 1, 2)]);
+    let deck = format!(
+        "{}layer wellm = gds(31, 0)\nlvs lde \"nmos\" od diff max 5000nm well wellm scref 1000nm\n",
+        full_deck()
+    );
+    let (w, l, scref) = (1000e-9, 150e-9, 1000e-9);
+    let sb = (1.0 / (0.5 / 875.0 + 0.5 / 575.0) - 75.0) * 1e-9;
+    let enclosed = silvaco_wpe([2000e-9, 2000e-9, 2000e-9, 3000e-9], w, l, scref);
+    let beside = silvaco_wpe([5000e-9, 5000e-9, 350e-9, 5000e-9], w, l, scref);
+    let card = |params: &[(&'static str, f64)]| {
+        let mut dev = Dev::mos(Model::N, 0, 1, 2);
+        for &(name, value) in params {
+            dev = dev.param(name, value);
+        }
+        spice(&Circuit::new(3, vec![dev]))
+    };
+    let lde = |enc: [f64; 3]| -> Vec<(&'static str, f64)> {
+        vec![
+            ("sa", 500e-9),
+            ("sb", sb),
+            ("sca", enc[0]),
+            ("scb", enc[1]),
+            ("scc", enc[2]),
+        ]
+    };
+    let off = |mut params: Vec<(&'static str, f64)>, name: &str| {
+        for p in &mut params {
+            if p.0 == name {
+                p.1 *= 1.05;
+            }
+        }
+        params
+    };
+    let mut swapped = lde(enclosed);
+    swapped.swap(0, 1);
+    let around = |layout: Layout| layout.rect("wellm", -1500, -2000, 2650, 4000);
+    let right = |layout: Layout| layout.rect("wellm", 1000, -3000, 3000, 4000);
+    let drawn = draw(&one).rect("diff", -300, 0, 0, 500);
+    // Name, drawing, the card's parameters, whether it matches.
+    type Case = (&'static str, Layout, Vec<(&'static str, f64)>, bool);
+    let cases: [Case; 7] = [
+        ("enclosed", around(drawn.clone()), lde(enclosed), true),
+        (
+            "enclosed_sa_sb_either_way",
+            around(drawn.clone()),
+            swapped,
+            true,
+        ),
+        (
+            "enclosed_sb_off",
+            around(drawn.clone()),
+            off(lde(enclosed), "sb"),
+            false,
+        ),
+        (
+            "enclosed_sca_off",
+            around(drawn.clone()),
+            off(lde(enclosed), "sca"),
+            false,
+        ),
+        (
+            "enclosed_scb_off",
+            around(drawn.clone()),
+            off(lde(enclosed), "scb"),
+            false,
+        ),
+        ("well_beside", right(drawn.clone()), lde(beside), true),
+        (
+            "well_beside_vs_enclosed",
+            right(drawn),
+            lde(enclosed),
+            false,
+        ),
+    ];
+    cases
+        .into_iter()
+        .map(|(name, layout, params, matched)| {
+            let mut fixture = Fixture::new(&format!("lvs/lde/{name}"), &["LVS-074"], &deck, LVS)
+                .layout(layout)
+                .expect(Expect::Lvs(matched));
+            fixture.reference = Some(card(&params));
+            fixture
+        })
+        .collect()
 }
 
 /// An `lvs.short_path` row measuring step `k` of its path (the harness

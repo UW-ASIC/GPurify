@@ -124,6 +124,10 @@
 //! - `lvs ignore_shorted "model"`: the same for each device of the model
 //!   whose every terminal is on one net, a dummy (catalog LVS-035; Netgen's
 //!   `ignore shorted`).
+//! - `lvs lde "model" od <layer> max <length> [well <layer> scref
+//!   <length>]`: the model's transistors carry BSIM4's `sa`, `sb` and, with
+//!   a well, `sca`, `scb`, `scc` ([`lde`]; catalog LVS-074), compared like
+//!   any measure; a card's `sa` and `sb` are sorted as a pair.
 //! - `lvs recognize_gates`: plain transistors in series or in parallel on
 //!   different gates of their own merge into one device whose gates are
 //!   interchangeable ([`ParamNames::gates`]; catalog LVS-047; Silvaco
@@ -213,6 +217,7 @@ mod compare;
 mod controls;
 mod gates;
 pub mod graph;
+pub mod lde;
 pub mod reduce;
 mod refine;
 pub mod verdict;
@@ -225,5 +230,6 @@ pub use checks::{
 pub use compare::{compare, compare_logged, compare_traced, compare_with, CompareOptions, Traced};
 pub use controls::join_must_connect;
 pub use graph::Graph;
+pub use lde::add_lde_params;
 pub use reduce::{Merge, MergeKind, ParamNames};
 pub use verdict::{Discrepancy, Verdict};

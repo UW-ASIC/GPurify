@@ -490,6 +490,22 @@ impl Printer<'_> {
         if let Some(af) = lvs.min_caps {
             let _ = writeln!(out, "lvs min_caps {}aF", number(af)?);
         }
+        for (model, od, max, well) in &lvs.lde {
+            let _ = write!(
+                out,
+                "lvs lde {} od {od} max {}",
+                quoted(model)?,
+                self.length(i128::from(max.raw()))?
+            );
+            if let Some((well, scref)) = well {
+                let _ = write!(
+                    out,
+                    " well {well} scref {}",
+                    self.length(i128::from(scref.raw()))?
+                );
+            }
+            out.push('\n');
+        }
         for (model, min, max) in &lvs.count {
             let _ = write!(out, "lvs count {}", quoted(model)?);
             for (cmp, bound) in [(">=", min), ("<=", max)] {

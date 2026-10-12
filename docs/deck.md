@@ -774,6 +774,7 @@ lvs min_caps 10aF
 lvs same_nets "OUT_PAD" "OUT"
 lvs count "npn13G2" <= 4000
 lvs recognize_gates
+lvs lde "nfet" od diff max 10um well nwell scref 950nm
 ```
 
 An `lvs` statement changes how LVS compares the devices of one model, which
@@ -908,6 +909,23 @@ this way is not merged again, so an AOI's or OAI's groups in another order
 still mismatch, and transistors of different sizes never merge, since
 swapping them would change the circuit. Off by default: in an analog
 circuit a stack's order is part of the design.
+
+**`lvs lde "model" od <layer> max <length> well <layer> scref <length>`**
+measures BSIM4's layout-dependent effect parameters on every transistor of
+the model, so a post-layout schematic stating them is compared: `sa` and
+`sb`, the distances from the gate's two ends to the edges of the active
+area (`od`), the effective distance where that edge is not straight
+(BSIM4's `1/(SA + L/2)` averaged over the gate's width), compared as a
+pair, smaller first, since BSIM4's stress model reads only their inverse
+sum; and, with `well`, `sca`, `scb` and `scc`, the well-proximity
+integrals, from the median distance between each gate edge and the first
+well edge beyond it, in the closed forms of Silvaco's public application
+note on well proximity and STI stress extraction, with the model's
+`SCREF`. A distance past `max` reads as `max`. `od` and `max` are needed,
+`well` and `scref` go together, and the model must be a `mos`. The gate
+must be one rectangle inside the active area, or nothing is measured.
+Nothing here is a foundry's value: the layers, `max` and `SCREF` are the
+deck's.
 
 **`lvs max_res r`** and **`lvs min_caps c`** leave out of the comparison,
 on both sides, every resistor whose resistance is above `r` and every

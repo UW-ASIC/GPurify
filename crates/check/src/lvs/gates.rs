@@ -78,12 +78,17 @@ fn plain(graph: &Graph, device: u32, names: ParamNames) -> Option<Plain> {
             return None;
         }
     }
-    let diffusion = names.diffusion.iter().flatten().any(|&name| {
-        graph
-            .params_of(device)
-            .iter()
-            .any(|&(stated, _)| stated == name)
-    });
+    let diffusion = names
+        .diffusion
+        .iter()
+        .chain(&names.stress)
+        .flatten()
+        .any(|&name| {
+            graph
+                .params_of(device)
+                .iter()
+                .any(|&(stated, _)| stated == name)
+        });
     if diffusion {
         return None;
     }

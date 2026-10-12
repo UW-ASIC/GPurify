@@ -334,6 +334,12 @@ pub fn compare_traced(
     drop_unextracted_bulk(layout, &mut declared);
     let values = (options.params.values[0], options.params.values[1]);
     let reference_rows = drop_ignored_devices(&mut declared, controls, values);
+    // The stress distances are a pair, smaller first, as the layout's are
+    // measured (`lde`).
+    crate::lvs::lde::sort_stress_pair(
+        &mut declared,
+        (options.params.stress[0], options.params.stress[1]),
+    );
     protect_labelled(layout, &mut declared);
     let mut measured = layout.clone();
     // A threshold reads the layout's own value, whether or not the
