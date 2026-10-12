@@ -1,4 +1,4 @@
-//! The forty-seven tables, the deck parser that fills them, and the dispatcher.
+//! The forty-nine tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
@@ -88,6 +88,12 @@ pub struct RuleSet {
     pub ir_drop: electrical::IrDropTable,
     /// `em_current_density` rows: [`electrical::EmCurrentDensityTable`].
     pub em_current_density: electrical::EmCurrentDensityTable,
+    /// `em_rms` rows: [`electrical::EmCurrentDensityTable`], checked by
+    /// [`electrical::check_em_ac`] against the RMS current.
+    pub em_rms: electrical::EmCurrentDensityTable,
+    /// `em_peak` rows: [`electrical::EmCurrentDensityTable`], checked by
+    /// [`electrical::check_em_ac`] against the peak current.
+    pub em_peak: electrical::EmCurrentDensityTable,
     /// `electromigration` rows: [`electrical::ElectromigrationTable`].
     pub electromigration: electrical::ElectromigrationTable,
     /// `dynamic_ir_drop` rows: [`electrical::DynamicIrDropTable`].
@@ -174,6 +180,13 @@ pub struct RunInputs<'a> {
     pub networks: Result<&'a NetNetworks, PowerError>,
     /// The solved supply grid, or `None` when intent declared no supplies.
     pub power: Power<'a>,
+    /// The supply grid loaded with each net's RMS current, and the intent
+    /// whose budgets are those currents
+    /// ([`IntentMap::with_budget`]); `None` when no `em_rms` row or no net
+    /// states one.
+    pub rms: (&'a IntentMap, Power<'a>),
+    /// As `rms`, for each net's peak current and the `em_peak` rows.
+    pub peak: (&'a IntentMap, Power<'a>),
     /// The die boundary: the denominator of every density.
     pub die: Bbox,
     /// The deck's grid, stack and connectivity. The grid turns a width in
@@ -676,7 +689,7 @@ impl RuleSet {
                     table.current_exponent.push(exponent);
                     close_csr(&mut table.layer_start, table.layer.len());
                 }
-                "em_current_density" => {
+                "em_current_density" | "em_rms" | "em_peak" => {
                     let layers = row.layers_from(1)?;
                     let max_density = Qty::new(row.number("max_density")?);
                     let per_cut = Qty::new(row.number("max_current_per_cut")?);
@@ -685,7 +698,11 @@ impl RuleSet {
                         Some(width) => Some((width, Qty::new(row.number("narrow_current")?))),
                         None => None,
                     };
-                    let table = &mut set.em_current_density;
+                    let table = match kind {
+                        "em_rms" => &mut set.em_rms,
+                        "em_peak" => &mut set.em_peak,
+                        _ => &mut set.em_current_density,
+                    };
                     row.head(&mut table.head)?;
                     table.layer.extend_from_slice(layers);
                     table.max_density.extend(layers.iter().map(|_| max_density));
@@ -1216,6 +1233,8 @@ impl RuleSet {
             "drain_source" => &self.drain_source.head,
             "electromigration" => &self.electromigration.head,
             "em_current_density" => &self.em_current_density.head,
+            "em_rms" => &self.em_rms.head,
+            "em_peak" => &self.em_peak.head,
             "dynamic_ir_drop" => &self.dynamic_ir_drop.head,
             "em_thermal" => &self.em_thermal.head,
             "esd_latchup" => &self.esd_latchup.head,
@@ -1335,8 +1354,12 @@ impl RuleSet {
                 c.positive("activation_energy_ev", t.activation_energy_ev[r])?;
                 c.positive("current_exponent", t.current_exponent[r])?;
             }
-            "em_current_density" => {
-                let t = &self.em_current_density;
+            "em_current_density" | "em_rms" | "em_peak" => {
+                let t = match kind {
+                    "em_rms" => &self.em_rms,
+                    "em_peak" => &self.em_peak,
+                    _ => &self.em_current_density,
+                };
                 for at in span(&t.layer_start) {
                     c.positive("max_density", t.max_density[at].raw())?;
                     c.positive("max_current_per_cut", t.max_current_per_cut[at].raw())?;
@@ -1584,6 +1607,8 @@ impl RuleSet {
             &self.p2p_resistance.head,
             &self.ir_drop.head,
             &self.em_current_density.head,
+            &self.em_rms.head,
+            &self.em_peak.head,
             &self.electromigration.head,
             &self.dynamic_ir_drop.head,
             &self.em_thermal.head,
@@ -1646,6 +1671,8 @@ impl RuleSet {
             states,
             networks,
             power,
+            rms,
+            peak,
             die,
             process,
             operating_temperature,
@@ -1703,6 +1730,8 @@ impl RuleSet {
             out,
             runs,
         );
+        electrical::check_em_ac(rms.1, rms.0, grid, &self.em_rms, out, runs);
+        electrical::check_em_ac(peak.1, peak.0, grid, &self.em_peak, out, runs);
         electrical::check_electromigration(
             power,
             intent,

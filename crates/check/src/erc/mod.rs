@@ -127,6 +127,48 @@ pub fn check(
         }),
     };
 
+    // The AC current rules' grids: the supply grid again, each net loaded with
+    // its RMS, then its peak, current in place of its budget. Built only for
+    // rows that read them, and only when some net states that current.
+    let ac_intent = [
+        intent_map.with_budget(|limits| limits.rms_current_ua),
+        intent_map.with_budget(|limits| limits.peak_current_ua),
+    ];
+    let wanted = [
+        !rules.em_rms.head.is_empty(),
+        !rules.em_peak.head.is_empty(),
+    ];
+    let mut ac_grid = [PowerGrid::default(), PowerGrid::default()];
+    let mut ac_solution = [PowerSolution::default(), PowerSolution::default()];
+    let mut ac_built = [Ok(false), Ok(false)];
+    for k in 0..2 {
+        if !wanted[k] || ac_intent[k].limit_net.is_empty() {
+            continue;
+        }
+        ac_built[k] = power::extract_into(
+            design.store,
+            design.nets,
+            design.devices,
+            &ac_intent[k],
+            process,
+            &mut ac_grid[k],
+        )
+        .and_then(|()| {
+            if ac_grid[k].is_empty() {
+                return Ok(false);
+            }
+            power::solve_into(&ac_grid[k], &mut scratch.solve, &mut ac_solution[k]).map(|()| true)
+        });
+    }
+    let ac: [power::Power<'_>; 2] = std::array::from_fn(|k| match ac_built[k] {
+        Err(error) => Err(error),
+        Ok(false) => Ok(None),
+        Ok(true) => Ok(Some(Solved {
+            grid: &ac_grid[k],
+            solution: &ac_solution[k],
+        })),
+    });
+
     rules.run(
         RunInputs {
             design,
@@ -137,6 +179,8 @@ pub fn check(
             states: &state_voltage,
             networks: built.map(|()| &networks),
             power,
+            rms: (&ac_intent[0], ac[0]),
+            peak: (&ac_intent[1], ac[1]),
             die,
             process,
             operating_temperature: temperature,

@@ -61,7 +61,10 @@ result from them is weaker than it looks.
   only itself: heat from neighbouring wires, heat carried along a line to
   cooler vias, and resistance rising with temperature are not modelled, so a
   dense bundle of wires reads cooler than it is. Its current is the static
-  budget's, so AC signal-line RMS and peak limits stay missing (ERC-E7).
+  budget's. `em_rms` and `em_peak` take each net's RMS and peak current from
+  the intent, every load in phase, so out-of-phase loads read strict; LEF's
+  frequency and width tables are not read, and signal lines carry no current
+  (ERC-E7).
 - `dynamic_ir_drop` is vectorless: every load on a net switches at once in
   one worst cycle, with no timing windows (which errs high). The grid is
   resistors and decap only, with no package, bump or wire inductance, and
@@ -304,7 +307,7 @@ says which foundry manual, standard or tool defines each one.
 | ERC-C14 | ESD layout rules on recognised devices (clamp distance to pad, minimum ESD-path metal width) | missing | Numeric limits are NDA |
 | ERC-D5 | Voltage-aware aggressor/victim | partial | Aggressors are chosen by pad connection or layer, not by the voltage the intent propagates; the whole victim polygon is held to the limit |
 | ERC-D9 | PMOS/NMOS devices sharing one well | missing | Named as a Calibre PERC layout check without a public definition of which sharing is illegal |
-| ERC-E7 | RMS / Joule heating / peak limits | missing | Public limits exist: LEF 5.8's ACCURRENTDENSITY tables by frequency and width, and the sky130 tech LEF's RMS limits (6.1 mA/um met1-met2, 14.9 met3-met4, 22.34 met5, Tj 90 C). The intent states only a DC current budget per net, so no RMS or peak current reaches a check |
+| ERC-E7 | RMS / Joule heating / peak limits | partial | em_rms and em_peak check the supply grid solved with the intent rms_current_ua or peak_current_ua per net in place of its budget, each load one waveform in phase (exact on the linear grid; out-of-phase loads read strict). LEF ACCURRENTDENSITY tables by frequency and width are not read: one density per layer (and narrow one band), as a single-entry table; signal nets carry no current, as for every grid rule |
 | ERC-E9 | PDN integrity (floating stripes, unconnected instances) | partial | Flags unconnected conductors; PDN-specific checks (floating stripes, instance supply terminals) are missing |
 | ERC-E11 | Dynamic / vectorless IR | partial | Vectorless worst cycle: every load on a net switches in phase once, a triangular pulse from its budget, toggle rate and rise time, against the net's decap; an RC grid with no package, bump or wire inductance (L di/dt), and one feed point per supply (limitations.md, "Power grid") |
 | ERC-E12 | Stress voiding / slotting | partial | cheesing requires a slot in wide shapes, and the slot geometry (IHP Slt.*, gf180 MSLOT.*) is DRC width, enclosure and spacing; JEP139 and JESD214 are stress-migration test methods that state no layout rule, so the stress-voiding rules beyond slotting (vias landing on wide metal) have no public limit |

@@ -44,7 +44,7 @@ fn id_of(kind: &str) -> StrId {
 }
 
 /// The kinds that cannot answer their question without design intent.
-const INTENT_GATED: [&str; 30] = [
+const INTENT_GATED: [&str; 32] = [
     "combinational_loop",
     "dielectric_field",
     "domain_crossing",
@@ -52,6 +52,8 @@ const INTENT_GATED: [&str; 30] = [
     "dynamic_ir_drop",
     "electromigration",
     "em_current_density",
+    "em_peak",
+    "em_rms",
     "esd_cross_domain",
     "esd_exposed",
     "esd_ground_coupling",
@@ -223,6 +225,22 @@ fn every_kind() -> RuleSet {
         },
         em_current_density: electrical::EmCurrentDensityTable {
             head: head(id_of("em_current_density")),
+            layer_start: vec![0, 1],
+            layer: vec![LayerId(0)],
+            max_density: vec![density(1e9)],
+            max_current_per_cut: vec![microamps(200.0)],
+            narrow: vec![None],
+        },
+        em_rms: electrical::EmCurrentDensityTable {
+            head: head(id_of("em_rms")),
+            layer_start: vec![0, 1],
+            layer: vec![LayerId(0)],
+            max_density: vec![density(1e9)],
+            max_current_per_cut: vec![microamps(200.0)],
+            narrow: vec![None],
+        },
+        em_peak: electrical::EmCurrentDensityTable {
+            head: head(id_of("em_peak")),
             layer_start: vec![0, 1],
             layer: vec![LayerId(0)],
             max_density: vec![density(1e9)],
@@ -484,6 +502,8 @@ impl Cell {
             states: &[],
             networks: Ok(&self.networks),
             power: Ok(None),
+            rms: (intent, Ok(None)),
+            peak: (intent, Ok(None)),
             die: Bbox {
                 xlo: dbu(0),
                 ylo: dbu(0),

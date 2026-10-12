@@ -768,19 +768,24 @@ impl CompiledDeck {
                 .number("current_exponent", t.current_exponent[r]);
             file(&t.head, r, row);
         }
-        let t = &erc.em_current_density;
-        for r in 0..t.head.len() {
-            let layers = span(&t.layer_start, r);
-            let first = layers.start;
-            let mut row = Row::new("em_current_density", &t.layer[layers])
-                .number("max_density", t.max_density[first].raw())
-                .number("max_current_per_cut", t.max_current_per_cut[first].raw());
-            if let Some((width, current)) = t.narrow[first] {
-                row = row
-                    .length("narrow_width", width)
-                    .number("narrow_current", current.raw());
+        for (kind, t) in [
+            ("em_current_density", &erc.em_current_density),
+            ("em_rms", &erc.em_rms),
+            ("em_peak", &erc.em_peak),
+        ] {
+            for r in 0..t.head.len() {
+                let layers = span(&t.layer_start, r);
+                let first = layers.start;
+                let mut row = Row::new(kind, &t.layer[layers])
+                    .number("max_density", t.max_density[first].raw())
+                    .number("max_current_per_cut", t.max_current_per_cut[first].raw());
+                if let Some((width, current)) = t.narrow[first] {
+                    row = row
+                        .length("narrow_width", width)
+                        .number("narrow_current", current.raw());
+                }
+                file(&t.head, r, row);
             }
-            file(&t.head, r, row);
         }
         let t = &erc.esd_latchup;
         for r in 0..t.head.len() {

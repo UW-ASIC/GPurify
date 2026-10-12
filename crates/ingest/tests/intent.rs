@@ -60,7 +60,7 @@ fn an_intent_file_that_cannot_be_opened_is_an_error_rather_than_an_empty_intent(
     }
 }
 
-/// Oracle: construct-from-answer. Each of the four limits, stated as zero,
+/// Oracle: construct-from-answer. Each of the limits, stated as zero,
 /// is refused with a message naming that limit's key; a current budget is not
 /// "an IR-drop limit" and not a voltage.
 #[test]
@@ -70,6 +70,8 @@ fn a_bad_limit_names_the_limit_it_is() {
         "max_drop_fraction",
         "max_overvoltage_mv",
         "budget_current_ua",
+        "rms_current_ua",
+        "peak_current_ua",
     ] {
         let source = format!(
             r#"{{"domains":{{"core":{{"voltage_mv":1800}}}},

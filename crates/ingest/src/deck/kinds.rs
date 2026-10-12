@@ -248,6 +248,13 @@ const EM_NARROW: &[Param] = &[
     p("width", "narrow_width", Dim::Length),
     p("current", "narrow_current", Dim::Current),
 ];
+/// The current-density limits of `em_current_density`, `em_rms` and
+/// `em_peak`.
+const EM_DENSITY: &[Param] = &[
+    p("max_density", "max_density", Dim::CurrentPerWidth),
+    p("max_current_per_cut", "max_current_per_cut", Dim::Current),
+    opt("narrow", "", Dim::Group(EM_NARROW)),
+];
 /// `esd_path`'s parameters, the same with a source layer or without.
 const ESD_PATH: &[Param] = &[
     opt("clamps", "clamp", Dim::Models),
@@ -1041,16 +1048,9 @@ pub(crate) const KINDS: &[Kind] = &[
             p("current_exponent", "current_exponent", Dim::Scalar),
         ],
     ),
-    erc(
-        "em_current_density",
-        &[0],
-        true,
-        &[
-            p("max_density", "max_density", Dim::CurrentPerWidth),
-            p("max_current_per_cut", "max_current_per_cut", Dim::Current),
-            opt("narrow", "", Dim::Group(EM_NARROW)),
-        ],
-    ),
+    erc("em_current_density", &[0], true, EM_DENSITY),
+    erc("em_rms", &[0], true, EM_DENSITY),
+    erc("em_peak", &[0], true, EM_DENSITY),
     erc(
         "esd_latchup",
         &[0, 1],
