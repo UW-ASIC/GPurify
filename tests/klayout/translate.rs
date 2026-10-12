@@ -360,6 +360,23 @@ end
 # LEF MAXVIASTACK over raw cut layers, bottom to top: a cut stacks on a cut
 # of the layer before whose box it overlaps with positive area; each cut at
 # height `max + 1` of a taller chain, with the tallest chain through it.
+# Each cut of `cuts` with no cut of `others` (its own box excluded) whose
+# box centre is within `lim` of its own, Euclidean (LEF58_MAXSPACING as
+# OpenROAD reads it). Centres are box-side sums, twice the centre.
+def max_cut_spacing(rule, cuts, others, lim)
+  centre = lambda { |b| [b.left + b.right, b.bottom + b.top] }
+  near = others.data.each.map { |o| o.bbox }
+  cuts.data.each do |c|
+    b = c.bbox
+    cx, cy = centre.(b)
+    ok = near.any? do |o|
+      next false if o == b
+      ox, oy = centre.(o)
+      (ox - cx)**2 + (oy - cy)**2 <= (2 * lim)**2
+    end
+    put({ rule: rule }.merge(poly(c))) unless ok
+  end
+end
 def via_stack(rule, layers, max)
   cuts = layers.map { |l| l.data.each.to_a }
   over = lambda { |a, b| a.left < b.right && b.left < a.right && a.bottom < b.top && b.bottom < a.top }
@@ -1313,6 +1330,20 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 )
                 .expect("a String");
                 exact("cut_spacing", Key::RowPair(name), Value::Ignore)
+            }
+            Rule::MaxCutSpacing { cut, others, limit } => {
+                layers.reads(cut, &mut reads);
+                let near = others.unwrap_or(cut);
+                layers.reads(near, &mut reads);
+                writeln!(
+                    body,
+                    "max_cut_spacing({q}, {}.dup.raw, {}.dup.raw, {})",
+                    var(cut),
+                    var(near),
+                    lim(limit)
+                )
+                .expect("a String");
+                exact("max_cut_spacing", Key::Row(None), Value::Ignore)
             }
             Rule::ViaStack { stack, max_height } => {
                 let cuts: Vec<String> = set.stacks[stack as usize]

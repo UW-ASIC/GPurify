@@ -52,6 +52,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         redundant_via(),
         minimum_cut(),
         via_stack(),
+        max_cut_spacing(),
         via_array_spacing(depth),
         center_spacing(),
         adjacent_cut_spacing(),
@@ -2033,6 +2034,106 @@ fn via_stack() -> Vec<Fixture> {
             .rect("v3", 0, 0, 100, 100)
             .rect("v3", 200, 0, 300, 100),
         vec![count(3), count(3)],
+    ));
+    every_placement(cases)
+}
+
+/// `max_space(v1) <= 1000nm` and `max_space(big, v1) <= 1000nm` with `big =
+/// v1.with_bbox_min(>= 150nm)` (`max_cut_spacing`, DRC-034):
+/// `LEF58_MAXSPACING 1.0 [CUTCLASS]` as `OpenROAD`'s `getLonelyVias` reads
+/// it, a cut (of the class) with no other cut on the layer whose centre is
+/// within 1000 of its own lonely, one finding at its centre measuring the
+/// nearest centre distance rounded up.
+///
+/// Oracle: centres placed by construction: two 100 cuts 999, 1000 and 1001
+/// apart (both lonely only at 1001); a 600 x 800 diagonal (1000, legal) and
+/// a 600 x 801 one (1000.8, both lonely at 1001); a lone cut (no other: a
+/// count of 0 against 1); a chain 1000 then 1500 apart, whose far cut alone
+/// is lonely (1500). With a class: a 200 cut 900 from a 100 cut is not
+/// lonely, the 100 cut is not held; 1200 apart, the 200 cut is lonely; a 200
+/// cut alone does not count its own row on the whole layer.
+fn max_cut_spacing() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["v1"],
+        "layer big = v1.with_bbox_min(>= 150nm)\n\
+         rule lone max_space(v1) <= 1000nm\nrule cls max_space(big, v1) <= 1000nm\n",
+    );
+    let case = |name: &str, layout: Layout, lone: Vec<Finding>, cls: Vec<Finding>| {
+        fixture(
+            &format!("max_cut_spacing/{name}"),
+            &["DRC-034"],
+            &deck,
+            layout,
+            &[("lone", lone), ("cls", cls)],
+        )
+    };
+    let cut = |x: i64, y: i64| (x, y, x + 100, y + 100);
+    let far = |d: i64, at: &[(i64, i64)]| -> Vec<Finding> {
+        at.iter()
+            .map(|&(x, y)| Finding::length(d).at(x, y))
+            .collect()
+    };
+    let mut cases = Vec::new();
+    for (d, side) in sweep(1000) {
+        let lonely = if d > 1000 {
+            far(d, &[(50, 50), (d + 50, 50)])
+        } else {
+            Vec::new()
+        };
+        cases.push(case(
+            &format!("pair/{side}"),
+            rects(Layout::default(), "v1", &[cut(0, 0), cut(d, 0)]),
+            lonely,
+            vec![],
+        ));
+    }
+    cases.push(case(
+        "diagonal/at",
+        rects(Layout::default(), "v1", &[cut(0, 0), cut(600, 800)]),
+        vec![],
+        vec![],
+    ));
+    cases.push(case(
+        "diagonal/above",
+        rects(Layout::default(), "v1", &[cut(0, 0), cut(600, 801)]),
+        far(1001, &[(50, 50), (650, 851)]),
+        vec![],
+    ));
+    cases.push(case(
+        "alone",
+        rects(Layout::default(), "v1", &[cut(0, 0)]),
+        vec![count(0)],
+        vec![],
+    ));
+    cases.push(case(
+        "chain",
+        rects(
+            Layout::default(),
+            "v1",
+            &[cut(0, 0), cut(1000, 0), cut(2500, 0)],
+        ),
+        far(1500, &[(2550, 50)]),
+        vec![],
+    ));
+    // A 200 cut centred at (100, 100).
+    let big = (0, 0, 200, 200);
+    cases.push(case(
+        "class/near",
+        rects(Layout::default(), "v1", &[big, (950, 50, 1050, 150)]),
+        vec![],
+        vec![],
+    ));
+    cases.push(case(
+        "class/far",
+        rects(Layout::default(), "v1", &[big, (1250, 50, 1350, 150)]),
+        far(1200, &[(100, 100), (1300, 100)]),
+        far(1200, &[(100, 100)]),
+    ));
+    cases.push(case(
+        "class/alone",
+        rects(Layout::default(), "v1", &[big]),
+        vec![count(0)],
+        vec![count(0)],
     ));
     every_placement(cases)
 }

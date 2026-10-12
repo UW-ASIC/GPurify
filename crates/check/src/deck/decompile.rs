@@ -328,6 +328,10 @@ impl CompiledDeck {
                 }
                 row.value("min_count", ParamValue::Count(min_count.into()))
             }
+            Rule::MaxCutSpacing { cut, others, limit } => {
+                let layers: Vec<LayerId> = std::iter::once(cut).chain(others).collect();
+                Row::new(rule.kind(), &layers).length("limit", limit)
+            }
             Rule::ViaStack { stack, max_height } => Row::new(
                 rule.kind(),
                 self.drc
