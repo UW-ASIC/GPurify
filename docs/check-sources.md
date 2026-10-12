@@ -62,7 +62,7 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 
 | Domain | implemented | expressible | partial | missing | verify | out of scope |
 |---|---:|---:|---:|---:|---:|---:|
-| DRC | 50 | 6 | 44 | 6 | 0 | 0 |
+| DRC | 50 | 6 | 45 | 5 | 0 | 0 |
 | LVS | 24 | 1 | 15 | 8 | 0 | 0 |
 | ERC | 63 | 4 | 10 | 4 | 0 | 0 |
 | PEX | 9 | 0 | 6 | 1 | 0 | 0 |
@@ -325,6 +325,7 @@ single oracle is a named gap that ledger P1 closes.
 | DRC-110 | Recommended rules reported as warnings | implemented | IHP:R suffix,4.1; SKY:RR,RC; A7:type R; LEF:PREFERENCLOSURE | FR; SY; MR |
 | DRC-111 | DFM scoring of recommended rules | partial | CAL:YieldAnalyzer | SY; MR |
 | DRC-113 | Litho / CMP simulation hotspots | partial | CAL:LFD,CMPAnalyzer; PEG; Ouma2002 | CF; MR; SY |
+| DRC-115 | Equation-based DRC | partial | CAL:eqDRC; patents P10,P11 | CF; SY |
 | DRC-124 | Layout input exceptions (missing cell reference, duplicate cell, magnified or angled placement, odd or zero path width, spike, vertex count) | partial | CAL:LAYOUT INPUT EXCEPTION SEVERITY,DRC MAXIMUM VERTEX | SY; MR |
 | DRC-129 | Inter-die alignment and overlap (bump and pad alignment, rotation, cross-die spacing) | implemented | CAL:3DSTACK | SY; MR |
 | LVS-005 | Short isolation / localisation | partial | CAL:LVS ISOLATE SHORT,LVS ISOLATE OPENS; ICV:ShortFinder; PEG | SY; MR |

@@ -119,6 +119,11 @@ const PROVED_BY_TEST: &[(&str, &str)] = &[
         "FLOW-006",
         "tests/engine/custom.rs::a_binary_s_own_deck_runs_its_custom_rules_by_name",
     ),
+    // An equation-based limit is a Rust custom rule, not a deck kind.
+    (
+        "DRC-115",
+        "crates/check/tests/deck/custom.rs::an_equation_based_limit_is_a_custom_rule",
+    ),
     // A system is several dies, which one fixture's single layout cannot hold.
     (
         "DRC-129",
