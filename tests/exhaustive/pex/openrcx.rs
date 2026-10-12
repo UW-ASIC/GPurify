@@ -198,6 +198,8 @@ fn theirs(spef: &str) -> Totals {
         .collect()
 }
 
+/// Proves catalog PEX-014.
+///
 /// Oracle: differential against `OpenRCX` with LEF RC (module docs): every
 /// net's resistance equal, and its capacitance `2 · W · fringe_cap` above
 /// `OpenRCX`'s, on 30 seeded designs.

@@ -75,6 +75,8 @@ fn coupling_and_widths(extra: &str) -> (f64, Vec<(f64, bool)>) {
     (coupling, widths)
 }
 
+/// Proves catalog PEX-011.
+///
 /// A `pex_device` line adds, per nfet, `(gate_contact + gate_diffusion) ·
 /// W` between its gate and each of its source and drain, and nothing to the
 /// pfet it does not name.

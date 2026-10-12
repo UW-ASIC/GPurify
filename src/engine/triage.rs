@@ -163,6 +163,8 @@ mod tests {
         assert_eq!((got[0].lo.x.raw(), got[0].hi.x.raw()), (0, 16));
     }
 
+    /// Proves catalog FLOW-010.
+    ///
     /// Oracle: naive reference: on 40 seeded tables, the clusters are the
     /// connected components of the "same rule and at most reach apart"
     /// graph, found by a brute-force flood fill over all pairs.

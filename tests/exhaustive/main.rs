@@ -44,6 +44,39 @@ use std::sync::Mutex;
 /// With these, every implemented, partial and expressible row of every
 /// domain, flow included, is proved by a fixture or a named test.
 const PROVED_BY_TEST: &[(&str, &str)] = &[
+    // X5's rows run on DEF designs and decks the fixture harness does not draw.
+    (
+        "FLOW-003",
+        "tests/engine/def.rs::every_integration_fault_planted_in_a_def_is_found",
+    ),
+    (
+        "FLOW-004",
+        "tests/engine/def.rs::a_top_level_wire_is_checked_against_a_block_abstract",
+    ),
+    (
+        "FLOW-010",
+        "src/engine/triage.rs::clusters_match_a_brute_force_flood_fill",
+    ),
+    (
+        "PEX-011",
+        "tests/engine/device_region.rs::a_pex_device_line_adds_gate_to_contact_and_diffusion_capacitance",
+    ),
+    (
+        "PEX-012",
+        "tests/engine/def.rs::fill_between_two_plates_is_in_series_grounded_or_gone",
+    ),
+    (
+        "PEX-014",
+        "tests/exhaustive/pex/openrcx.rs::openrcx_differential_on_def_wires",
+    ),
+    (
+        "PEX-015",
+        "tests/engine/def.rs::a_through_silicon_via_adds_its_liner_capacitance",
+    ),
+    (
+        "PEX-016",
+        "tests/engine/def.rs::point_to_point_resistance_and_net_coupling_are_reported",
+    ),
     (
         "PEX-010",
         "tests/exhaustive/pex.rs::spef_carries_the_closed_form_totals",
