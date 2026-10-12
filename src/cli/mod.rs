@@ -131,6 +131,19 @@ fn render(cli: &args::Cli, decks: &[(&str, DeckFn)]) -> Result<(Summary, String)
         args::Format::Text => {
             format::write_violations(&outputs, &loaded.strings, loaded.grid, &mut text);
             format::write_summary(&summary, &mut text);
+            if let Some(extracted) = &extracted {
+                reports(
+                    cli,
+                    &loaded,
+                    extracted,
+                    outputs.parasitics.as_ref(),
+                    &mut text,
+                )
+                .map_err(|why| {
+                    eprintln!("error: {why}");
+                    ExitCode::FAILURE
+                })?;
+            }
             Ok(())
         }
         args::Format::Json => json::write_report(
@@ -181,6 +194,32 @@ fn render(cli: &args::Cli, decks: &[(&str, DeckFn)]) -> Result<(Summary, String)
     };
     written.map_err(|error| fail(&error))?;
     Ok((summary, text))
+}
+
+/// The `--p2p` and `--coupling` reports, one line per pair (PEX-016).
+fn reports(
+    cli: &args::Cli,
+    loaded: &crate::engine::Loaded,
+    extracted: &crate::engine::Extracted,
+    network: Option<&gpurify_extract::ParasiticNetwork>,
+    text: &mut String,
+) -> Result<(), String> {
+    use std::fmt::Write as _;
+    for (net, points) in &cli.p2p {
+        for (i, j, ohms) in crate::engine::p2p::resistance(loaded, extracted, net, points)? {
+            let ((xa, ya), (xb, yb)) = (points[i], points[j]);
+            let _ = writeln!(
+                text,
+                "p2p {net} ({xa}, {ya}) um to ({xb}, {yb}) um: {ohms:.6} ohm"
+            );
+        }
+    }
+    for (a, b) in &cli.coupling {
+        let network = network.ok_or("--coupling needs a parasitic network, and PEX made none")?;
+        let ff = crate::engine::p2p::coupling(loaded, extracted, network, a, b)?;
+        let _ = writeln!(text, "coupling {a} {b}: {ff:.6} fF");
+    }
+    Ok(())
 }
 
 /// `lib`: load and extract once, then generate every requested accuracy.

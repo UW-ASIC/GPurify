@@ -28,6 +28,11 @@ pub struct Cli {
     /// `system`: the system description, checked with `inputs.reference`
     /// as its system netlist; `inputs.layout` and `inputs.deck` are empty.
     pub system: Option<PathBuf>,
+    /// `pex --p2p NET:X,Y:X,Y…`: a net and the points (µm) to report the
+    /// resistance between.
+    pub p2p: Vec<(String, Vec<(f64, f64)>)>,
+    /// `pex --coupling A:B`: two nets to report the coupling between.
+    pub coupling: Vec<(String, String)>,
 }
 
 /// What `lib` was asked for.
@@ -74,6 +79,8 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     let mut accuracy: Option<&str> = None;
     let mut output_dir: Option<&str> = None;
     let mut lef: Vec<&str> = Vec::new();
+    let mut p2p: Vec<(String, Vec<(f64, f64)>)> = Vec::new();
+    let mut coupling: Vec<(String, String)> = Vec::new();
 
     let mut tokens = rest.iter().map(String::as_str);
     while let Some(token) = tokens.next() {
@@ -92,6 +99,34 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
             "--accuracy" => accuracy = Some(value()?),
             "--output-dir" => output_dir = Some(value()?),
             "--lef" => lef.push(value()?),
+            "--p2p" => {
+                let text = value()?;
+                let mut parts = text.split(':');
+                let net = parts.next().unwrap_or_default().to_owned();
+                let points = parts
+                    .map(|point| {
+                        let (x, y) = point.split_once(',')?;
+                        Some((x.parse::<f64>().ok()?, y.parse::<f64>().ok()?))
+                    })
+                    .collect::<Option<Vec<_>>>()
+                    .filter(|points| points.len() >= 2 && !net.is_empty());
+                let Some(points) = points else {
+                    return usage(format!(
+                        "--p2p {text}: expected NET:X,Y:X,Y with two or more points in µm"
+                    ));
+                };
+                p2p.push((net, points));
+            }
+            "--coupling" => {
+                let text = value()?;
+                let Some((a, b)) = text
+                    .split_once(':')
+                    .filter(|(a, b)| !a.is_empty() && !b.is_empty())
+                else {
+                    return usage(format!("--coupling {text}: expected NET:NET"));
+                };
+                coupling.push((a.to_owned(), b.to_owned()));
+            }
             "--format" => {
                 format = match value()? {
                     "text" => Format::Text,
@@ -174,6 +209,11 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         return usage(format!(
             "{subcommand} takes --lef only with a DEF layout (*.def)"
         ));
+    }
+    // The reports print with the text report, after PEX ran.
+    let reports = !p2p.is_empty() || !coupling.is_empty();
+    if reports && (subcommand != "pex" || format != Format::Text) {
+        return usage("--p2p and --coupling report with `pex` in text format".to_string());
     }
     if is_lib && format != Format::Text {
         return usage("lib writes its files under --output-dir and takes no --format".to_string());
@@ -290,6 +330,8 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         lib,
         other: layouts.get(1).copied().map(PathBuf::from),
         system: None,
+        p2p,
+        coupling,
     })
 }
 
@@ -394,6 +436,25 @@ mod tests {
         let cli = parse_str("pex top.def --deck d --lef tech.lef --lef cells.lef").expect("legal");
         let lefs: Vec<_> = cli.inputs.lef.iter().filter_map(|p| p.to_str()).collect();
         assert_eq!(lefs, ["tech.lef", "cells.lef"]);
+    }
+
+    /// Oracle: construct-from-answer, against `docs/usage.md`: `--p2p` reads a
+    /// net and its points in µm, `--coupling` two nets; both only with
+    /// `pex` in text, and a malformed value is refused.
+    #[test]
+    fn the_p2p_and_coupling_reports_take_their_nets_and_points() {
+        let cli = parse_str("pex t --deck d --p2p VDD:1,2:3.5,-4 --coupling a:b").expect("legal");
+        assert_eq!(cli.p2p, [("VDD".to_owned(), vec![(1.0, 2.0), (3.5, -4.0)])]);
+        assert_eq!(cli.coupling, [("a".to_owned(), "b".to_owned())]);
+        for argv in [
+            "pex t --deck d --p2p VDD:1,2",
+            "pex t --deck d --p2p VDD:1,2:x,3",
+            "pex t --deck d --coupling a",
+            "drc t --deck d --coupling a:b",
+            "pex t --deck d --format spef --p2p v:1,2:3,4",
+        ] {
+            assert!(parse_str(argv).is_err(), "{argv}");
+        }
     }
 
     /// Oracle: `docs/usage.md`: `--format` defaults to `text`, and `all` is all

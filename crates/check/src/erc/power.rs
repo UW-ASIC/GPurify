@@ -64,6 +64,10 @@ pub enum PowerError {
     /// voltage, a solved voltage or current, or a probe that would not invert.
     #[error("node {0} carries a non-finite electrical value")]
     NotFinite(u32),
+    /// A point [`extract_points_into`] was asked to measure from lies on no
+    /// conducting shape of its net (its index among the points).
+    #[error("point {0} lies on no conducting shape of the net")]
+    NotOnNet(usize),
 }
 
 /// The process data an extraction needs, borrowed.
@@ -2088,6 +2092,105 @@ pub fn extract_nets_into(
         out.edge_start.insert(0, 0);
     }
     Ok(())
+}
+
+/// Build one net's network, as [`extract_nets_into`] does, with a terminal
+/// at each of `points` instead of at its devices: what a point-to-point
+/// resistance report measures between (catalog PEX-016). Returns each
+/// point's node, in order; [`effective_resistance_into`] on the one row of
+/// `out` then gives the resistance between every two of them.
+///
+/// Each point taps the conducting shape of the net that holds it (its
+/// boundary included), at its position along that shape's chain.
+///
+/// # Errors
+///
+/// [`PowerError::NoSheetResistance`] as [`extract_into`] returns it, and
+/// [`PowerError::NotOnNet`] for a point on no conducting shape of the net
+/// (its index in `points`).
+pub fn extract_points_into(
+    store: &GeometryStore,
+    nets: &NetTable,
+    process: Process<'_>,
+    net: NetId,
+    points: &[Point],
+    out: &mut NetNetworks,
+) -> Result<Vec<u32>, PowerError> {
+    *out = NetNetworks::default();
+    let conductor = conductor_mask(process.connectivity, store.layer_count());
+    let sheet = sheet_resistances(process, store.layer_count())?;
+    let candidate: Vec<PolyId> = conducting(store, &conductor, nets.polys_of(net))
+        .filter(|&poly| !nets.holes.is_hole(poly))
+        .collect();
+    let mut shape_in_row = vec![NONE; store.poly_count()];
+    for (index, &poly) in candidate.iter().enumerate() {
+        shape_in_row[poly.idx()] = u32::try_from(index).expect("a shape index is a u32");
+    }
+    let mut links = Connections::default();
+    connections_into(store, process.connectivity, &mut links);
+    let both_noded =
+        |&(a, b, _, _): &Link| shape_in_row[a as usize] != NONE && shape_in_row[b as usize] != NONE;
+    links.metal.retain(both_noded);
+    links.via.retain(both_noded);
+    let shape_of = |poly: u32| shape_in_row[poly as usize];
+    let mut taps = TapTable::default();
+    for (local, &poly) in candidate.iter().enumerate() {
+        let host = store.poly_bbox(poly);
+        taps.push(
+            u32::try_from(local).expect("a shape index is a u32"),
+            tap_on(host, host),
+        );
+    }
+    let metal_req = taps.push_links(store, &links.metal, shape_of);
+    let via_req = taps.push_links(store, &links.via, shape_of);
+    let mut requests = Vec::with_capacity(points.len());
+    for (k, &at) in points.iter().enumerate() {
+        let local = candidate
+            .iter()
+            .position(|&poly| store.poly_contains_point(poly, at))
+            .ok_or(PowerError::NotOnNet(k))?;
+        let host = store.poly_bbox(candidate[local]);
+        requests.push(taps.push(
+            u32::try_from(local).expect("a shape index is a u32"),
+            tap_on(host, Bbox::point(at.x, at.y)),
+        ));
+    }
+    taps.finish(candidate.len());
+    let nodes: Vec<u32> = requests
+        .iter()
+        .map(|&request| taps.req_node[request as usize])
+        .collect();
+    let mut terminal = nodes.clone();
+    terminal.sort_unstable();
+    terminal.dedup();
+    out.net.push(net);
+    out.terminal.extend_from_slice(&terminal);
+    for node in 0..taps.node_shape.len() {
+        let poly = candidate[taps.node_shape[node] as usize];
+        out.node_poly.push(poly);
+        out.node_at
+            .push(tap_point(store.poly_bbox(poly), taps.node_along[node]));
+    }
+    let mut profile = ChainProfile::default();
+    push_edges(
+        store,
+        process,
+        &sheet,
+        &candidate,
+        &taps,
+        [(&links.metal[..], metal_req), (&links.via[..], via_req)],
+        &mut profile,
+        |edge| {
+            out.edge_from.push(edge.from);
+            out.edge_to.push(edge.to);
+            out.edge_resistance.push(Qty::new(edge.ohms));
+        },
+    );
+    let at = |n: usize| u32::try_from(n).expect("an index is a u32");
+    out.node_start = vec![0, at(out.node_poly.len())];
+    out.terminal_start = vec![0, at(out.terminal.len())];
+    out.edge_start = vec![0, at(out.edge_from.len())];
+    Ok(nodes)
 }
 
 /// One net's run of a link list sorted by net.

@@ -352,6 +352,60 @@ fn fill_between_two_plates_is_in_series_grounded_or_gone() {
     }
 }
 
+/// The point-to-point and net-to-net reports (PEX-016) on two parallel
+/// met1 wires.
+///
+/// Oracle: closed forms. Between x = 10 and x = 60 µm along a 0.2 µm wire
+/// of 0.1 Ω/□ the resistance is `0.1 · 50 / 0.2 = 25 Ω` (and 0 from a
+/// point to itself); the wires, 100.2 µm long and 0.8 µm apart in k = 3.9
+/// with met1 0.1 µm thick, couple by `ε₀ k t L / S = 8.854… · 3.9 · 0.1 ·
+/// 100.2 / 0.8` aF (Weste & Harris ch. 6). A point off the net is refused.
+#[test]
+fn point_to_point_resistance_and_net_coupling_are_reported() {
+    let inputs = inputs(
+        "p2p",
+        &design(
+            "NETS 2 ;\n- a + ROUTED met1 ( 0 0 ) ( 100000 0 ) ;\n\
+             - b + ROUTED met1 ( 0 1000 ) ( 100000 1000 ) ;\nEND NETS",
+        ),
+    );
+    let options = RunOptions {
+        checks: Checks {
+            drc: false,
+            erc: false,
+            lvs: false,
+            pex: true,
+        },
+        lvs: gpurify_check::lvs::CompareOptions::default(),
+        quasistatic_nets: Vec::new(),
+    };
+    let (loaded, extracted, outputs, _) = run(&inputs, &options).expect("the DEF runs");
+    let r = gpurify::engine::p2p::resistance(
+        &loaded,
+        &extracted,
+        "a",
+        &[(10.0, 0.0), (60.0, 0.05), (10.0, 0.0)],
+    )
+    .expect("the points are on a");
+    assert_eq!(r.len(), 3);
+    assert!((r[0].2 - 25.0).abs() < 1e-9, "{r:?}");
+    assert_eq!((r[1].0, r[1].1, r[1].2), (0, 2, 0.0));
+    let network = outputs.parasitics.expect("PEX ran");
+    let c = gpurify::engine::p2p::coupling(&loaded, &extracted, &network, "a", "b")
+        .expect("both are nets");
+    let want = 8.854_187_812_8 * 3.9 * 0.1 * 100.2 / 0.8 / 1000.0;
+    assert!((c - want).abs() < 1e-9, "{c} against {want}");
+    assert!(gpurify::engine::p2p::resistance(
+        &loaded,
+        &extracted,
+        "a",
+        &[(10.0, 0.5), (20.0, 0.0)]
+    )
+    .unwrap_err()
+    .contains("no conducting shape"));
+    assert!(gpurify::engine::p2p::coupling(&loaded, &extracted, &network, "a", "zz").is_err());
+}
+
 /// A DEF whose layer the deck does not have is refused naming it, and an
 /// unreadable LEF names its path.
 ///
