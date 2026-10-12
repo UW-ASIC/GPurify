@@ -407,6 +407,14 @@ kinds! {
     /// [`Rule::CriticalArea`](crate::drc::Rule::CriticalArea):
     /// `critical_area(layer; radius: radius) <= limit`.
     critical_area(layer: one) [] { radius: Dbu = "radius", limit: DbuArea = "limit" }
+    /// [`Rule::MeanCriticalArea`](crate::drc::Rule::MeanCriticalArea):
+    /// `critical_area(layer; radii: [..], weights: [..]) <= limit`, one weight
+    /// per radius ([`DefectSizes`](crate::drc::ruleset::DefectSizes)).
+    mean_critical_area(layer: one) [] {
+        radii: &[Dbu] = "radii",
+        weights: &[f64] = "weights",
+        limit: DbuArea = "limit",
+    }
     /// [`Rule::DensityBalance`](crate::drc::Rule::DensityBalance):
     /// `density_balance(a, b[, boundary]; window: window, step: step) >= limit`;
     /// `limit` a fraction.

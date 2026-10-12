@@ -569,6 +569,19 @@ pub(crate) const KINDS: &[Kind] = &[
         &[],
     ),
     // Short-circuit critical area for a square defect of half-side `radius`:
+    // `critical_area(met1; radius: 100nm) <= 50um2`; with `radii` and
+    // `weights`, the mean over a defect-size distribution the deck samples.
+    drc(
+        "critical_area",
+        Cmp::Le,
+        "mean_critical_area",
+        &[0],
+        AREA,
+        &[
+            p("radii", "radii", Dim::LengthList),
+            p("weights", "weights", Dim::FractionList),
+        ],
+    ),
     // `critical_area(met1; radius: 100nm) <= 50um2`.
     drc(
         "critical_area",

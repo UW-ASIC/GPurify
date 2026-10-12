@@ -53,6 +53,7 @@ fn limits(
         cut_area_bands: deck.drc.cut_area_bands.clone(),
         patterns: deck.drc.patterns.clone(),
         net_sources: deck.drc.net_sources.clone(),
+        defect_sizes: deck.drc.defect_sizes.clone(),
         warnings: Vec::new(),
         first_derived: None,
     };

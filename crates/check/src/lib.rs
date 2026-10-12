@@ -104,6 +104,7 @@
 //! | `dfm_score(L[, outer]; check, required, recommended, rate) >= score` | `dfm_score` | [`drc::Rule::DfmScore`] | a design whose DFM score over a recommended rule's findings is below the sign-off | DRC-111 |
 //! | `pattern(L; window: w x h, shapes: [..], ignore: [..] \| none)` | `pattern_match` | [`drc::Rule::PatternMatch`] | a place where the layer matches a deck-supplied pattern in any orientation | DRC-114 |
 //! | `cut_area_change(pre, post, lower, upper; cuts: [..], change: [..])` | `cut_area_change` | [`drc::Rule::CutAreaChange`] | a connector whose cut area changed between two databases by more than its cut count allows | DRC-068 |
+//! | `critical_area(L; radii: [..], weights: [..]) <= area` | `mean_critical_area` | [`drc::Rule::MeanCriticalArea`] | too much mean short-circuit critical area over a deck-sampled defect-size distribution | DRC-112 |
 //! | `cover_density(L, C[, boundary]; window, step, cover: [..], density: [..], inclusive)` | `cover_density` | [`drc::Rule::CoverDensity`] | a window whose density is below the band its coverage by another layer picks | DRC-076 |
 //! | `origin(L)` | `origin` | [`drc::Rule::Origin`] | a layer whose box does not start at the origin | DRC-095, DRC-097 |
 //! | `protrusion_width(L; wide: len) >= len` | `protrusion_width` | [`drc::Rule::ProtrusionWidth`] | a part narrower than the limit attached to a part at least `wide` wide | DRC-125 |

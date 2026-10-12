@@ -8,7 +8,7 @@
 
 use super::width::rects_layer;
 use super::{centre, owners_by_point, owners_of, SortedRects, Verdict, REFUSED};
-use crate::drc::ruleset::CoverBands;
+use crate::drc::ruleset::{CoverBands, DefectSizes};
 use crate::drc::Scratch;
 use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
@@ -503,8 +503,6 @@ pub(crate) fn cover_density(
 /// each grown by `radius` (square corners). One violation when it is above
 /// `limit`, at the centre of that area's bounding box, naming no shape.
 /// `examined` counts figures.
-// ponytail: every pair of figures by their grown boxes, O(figures²); sweep by
-// x if a large layer makes this slow.
 pub(crate) fn critical_area(
     store: &GeometryStore,
     rule: StrId,
@@ -514,8 +512,76 @@ pub(crate) fn critical_area(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !merge_layer(store, layer, s, false) {
+    let Some((area, extent, examined)) = short_area(store, layer, radius, s) else {
         return REFUSED;
+    };
+    if area > limit {
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(extent),
+            measured: Measurement::Area(area),
+            limit: Measurement::Area(limit),
+            shapes: (PolyId(u32::MAX), None),
+        });
+    }
+    (Outcome::Ran, examined)
+}
+
+/// The mean short-circuit critical area over a defect-size distribution the
+/// deck discretises: `Σ weight · critical area at radius`, each term as
+/// [`critical_area`] measures it. One violation when it is above `limit`, at
+/// the centre of the box of every radius's critical area, measuring the
+/// mean floored, naming no shape. `examined` counts figures.
+pub(crate) fn mean_critical_area(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    sizes: &DefectSizes,
+    limit: DbuArea,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let (mut mean, mut extent, mut examined) = (0.0f64, Bbox::EMPTY, 0);
+    for (&radius, &weight) in sizes.radius.iter().zip(&sizes.weight) {
+        let Some((area, box_of, figures)) = short_area(store, layer, radius, s) else {
+            return REFUSED;
+        };
+        mean += weight * to_f64(area.raw());
+        extent = extent.union(box_of);
+        examined = figures;
+    }
+    if mean > to_f64(limit.raw()) {
+        #[allow(clippy::cast_possible_truncation, reason = "an area far below 2^127")]
+        let floored = mean.floor() as i128;
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(extent),
+            measured: Measurement::Area(DbuArea::new(floored)),
+            limit: Measurement::Area(limit),
+            shapes: (PolyId(u32::MAX), None),
+        });
+    }
+    (Outcome::Ran, examined)
+}
+
+/// [`critical_area`]'s measure: the critical area for a defect of half-side
+/// `radius`, the box holding it (empty when it has none), and the figure
+/// count. `None` when the layer does not merge or growing leaves the
+/// coordinate domain.
+// ponytail: every pair of figures by their grown boxes, O(figures²); sweep by
+// x if a large layer makes this slow.
+fn short_area(
+    store: &GeometryStore,
+    layer: LayerId,
+    radius: Dbu,
+    s: &mut Scratch,
+) -> Option<(DbuArea, Bbox, u64)> {
+    if !merge_layer(store, layer, s, false) {
+        return None;
     }
     let r = radius.raw();
     let grow = |b: Bbox| -> Option<Bbox> {
@@ -526,9 +592,11 @@ pub(crate) fn critical_area(
             yhi: Dbu::new(b.yhi.raw() + r)?,
         })
     };
-    let Some(grown) = s.rects.iter().map(|&b| grow(b)).collect::<Option<Vec<_>>>() else {
-        return REFUSED;
-    };
+    let grown = s
+        .rects
+        .iter()
+        .map(|&b| grow(b))
+        .collect::<Option<Vec<_>>>()?;
     let figures: Vec<&[Bbox]> = s
         .rect_start
         .windows(2)
@@ -552,29 +620,13 @@ pub(crate) fn critical_area(
     }
     let examined = figures.len() as u64;
     if critical.is_empty() {
-        return (Outcome::Ran, examined);
+        return Some((DbuArea::new(0), Bbox::EMPTY, examined));
     }
-    let Ok(pieces) = rects_layer(&critical) else {
-        return REFUSED;
-    };
-    if union_into(&pieces, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
-        return REFUSED;
-    }
+    let pieces = rects_layer(&critical).ok()?;
+    union_into(&pieces, &ValidatedLayer::default(), &mut s.layer_out).ok()?;
     decompose_into(&s.layer_out, &mut s.rects, &mut s.rect_start);
-    let area = covered_area(&s.rects);
-    if area > limit {
-        let extent = s.rects.iter().fold(Bbox::EMPTY, |acc, &b| acc.union(b));
-        out.push(Violation {
-            rule,
-            layer,
-            severity: Severity::Error,
-            at: centre(extent),
-            measured: Measurement::Area(area),
-            limit: Measurement::Area(limit),
-            shapes: (PolyId(u32::MAX), None),
-        });
-    }
-    (Outcome::Ran, examined)
+    let extent = s.rects.iter().fold(Bbox::EMPTY, |acc, &b| acc.union(b));
+    Some((covered_area(&s.rects), extent, examined))
 }
 
 /// Whole-die density (gf180 M1.4 "30 % over the entire die", IHP M1.j/k): the

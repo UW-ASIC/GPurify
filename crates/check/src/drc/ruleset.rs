@@ -1976,6 +1976,37 @@ pub enum Rule {
         /// Index into [`RuleSet::cut_area_bands`].
         bands: u32,
     },
+    /// Too much mean short-circuit critical area over a defect-size
+    /// distribution.
+    ///
+    /// Deck: `critical_area(L; radii: [len, ..], weights: [frac, ..]) <=
+    /// area`, kind `mean_critical_area`. The mean is `Σ weight · A(radius)`,
+    /// each `A` the critical area [`Rule::CriticalArea`] measures for a square
+    /// defect of that half-side: the average critical area over a defect-size
+    /// distribution (Stapper, IBM J. Res. Dev. 27(6), 1983; Papadopoulou and
+    /// Lee, IEEE TCAD 18(4), 1999; Calibre `YieldAnalyzer` averages it the
+    /// same way, Siemens white paper 81850), the distribution discretised by
+    /// the deck at the radii it lists, with the weight of each (a defect
+    /// density over size, such as Stapper's `1/r³`, sampled and normalised by
+    /// the deck). Values deck-supplied; no public deck states them.
+    ///
+    /// One violation when the mean is above `limit`, at the centre of the box
+    /// of every radius's critical area, `measured` the mean floored. The
+    /// comparison is exact in `f64`. `examined` counts figures.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-112.
+    ///
+    /// Limits: shorts only, as [`Rule::CriticalArea`]; figures stand for
+    /// nets.
+    MeanCriticalArea {
+        /// The layer measured.
+        layer: LayerId,
+        /// Index into [`RuleSet::defect_sizes`].
+        sizes: u32,
+        /// The largest legal mean, in square grid units; positive.
+        limit: DbuArea,
+    },
     /// A window whose density on `layer` is below what its coverage by
     /// `cover` asks for.
     ///
@@ -2670,6 +2701,29 @@ impl CutAreaBands {
     }
 }
 
+/// The defect sizes of [`Rule::MeanCriticalArea`]: each radius (a square
+/// defect's half-side) with its weight.
+///
+/// Every table in a [`RuleSet`] passed [`DefectSizes::is_valid`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct DefectSizes {
+    /// The radii, in grid units: positive and rising strictly.
+    pub radius: Vec<Dbu>,
+    /// One weight per radius, from 0 to 1.
+    pub weight: Vec<f64>,
+}
+
+impl DefectSizes {
+    /// Whether there is a size, one weight each, every radius positive and
+    /// rising strictly, every weight from 0 to 1.
+    pub fn is_valid(&self) -> bool {
+        self.radius.first().is_some_and(|r| r.raw() > 0)
+            && self.radius.len() == self.weight.len()
+            && self.radius.windows(2).all(|pair| pair[0] < pair[1])
+            && self.weight.iter().all(|w| (0.0..=1.0).contains(w))
+    }
+}
+
 /// The bands of [`Rule::CoverDensity`]: per band, the coverage of the
 /// covering layer from which it applies and the density it asks of the
 /// held layer.
@@ -3079,6 +3133,8 @@ pub struct RuleSet {
     /// computed from: a shape of it on no net of its own takes the one net of
     /// the shapes of these it overlaps.
     pub net_sources: Vec<(LayerId, Vec<LayerId>)>,
+    /// The defect sizes each [`Rule::MeanCriticalArea`] names.
+    pub defect_sizes: Vec<DefectSizes>,
     /// The tables [`Rule::CutClassSpacing`] names.
     pub cut_tables: Vec<CutClassTable>,
     /// The cut layers, bottom to top, of each [`Rule::ViaStack`].
@@ -3478,6 +3534,33 @@ impl RuleSet {
                         upper: layer(spec, 3),
                         bands: u32::try_from(set.cut_area_bands.len() - 1)
                             .expect("a deck has few tables"),
+                    }
+                }
+                "mean_critical_area" => {
+                    let layer = one(spec)?;
+                    let wanted = strings.get("weights");
+                    let weight = rules
+                        .params_of(spec)
+                        .iter()
+                        .filter(|&&(name, _)| Some(name) == wanted)
+                        .map(|&(_, stated)| match stated {
+                            ParamValue::Ratio(v) => Ok(v),
+                            _ => Err(wrong_type(spec, "weights")),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let sizes = DefectSizes {
+                        radius: lengths(spec, "radii")?,
+                        weight,
+                    };
+                    if !sizes.is_valid() {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    set.defect_sizes.push(sizes);
+                    Rule::MeanCriticalArea {
+                        layer,
+                        sizes: u32::try_from(set.defect_sizes.len() - 1)
+                            .expect("a deck has few tables"),
+                        limit: area_limit(spec, "limit")?,
                     }
                 }
                 "cover_density" => {
@@ -4380,6 +4463,19 @@ impl RuleSet {
                         radius,
                         limit,
                     } => area::critical_area(store, id, layer, radius, limit, s, out),
+                    Rule::MeanCriticalArea {
+                        layer,
+                        sizes,
+                        limit,
+                    } => area::mean_critical_area(
+                        store,
+                        id,
+                        layer,
+                        &self.defect_sizes[sizes as usize],
+                        limit,
+                        s,
+                        out,
+                    ),
                     Rule::ViaRedundancy {
                         cut,
                         lower,
@@ -5085,6 +5181,7 @@ impl Rule {
             // The bands are checked where they are filed.
             Rule::CoverDensity { window, step, .. } => length(window).and(length(step)),
             Rule::CutAreaChange { .. } | Rule::PatternMatch { .. } => Ok(()),
+            Rule::MeanCriticalArea { limit, .. } => area(limit),
             Rule::ViaRedundancy {
                 pitch,
                 space,
@@ -5350,6 +5447,7 @@ impl Rule {
             Rule::CriticalArea { .. } => "critical_area",
             Rule::DensityBalance { .. } => "density_balance",
             Rule::CoverDensity { .. } => "cover_density",
+            Rule::MeanCriticalArea { .. } => "mean_critical_area",
             Rule::CutAreaChange { .. } => "cut_area_change",
             Rule::PatternMatch { .. } => "pattern_match",
             Rule::DfmScore { .. } => "dfm_score",
@@ -5407,6 +5505,7 @@ impl Rule {
             | Rule::MinEnclosedArea { layer, .. }
             | Rule::Cheesing { layer, .. }
             | Rule::CriticalArea { layer, .. }
+            | Rule::MeanCriticalArea { layer, .. }
             | Rule::RedundantVia { layer, .. }
             | Rule::ViaArraySpacing { layer, .. }
             | Rule::CutSpacing { layer, .. }

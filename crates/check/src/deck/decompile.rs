@@ -393,6 +393,22 @@ impl CompiledDeck {
                     .value("colors", ParamValue::Count(colors.into()))
                     .length("color_spacing", color_spacing)
             }
+            Rule::MeanCriticalArea {
+                layer,
+                sizes,
+                limit,
+            } => {
+                let mut row = one(layer);
+                if let Some(sizes) = self.drc.defect_sizes.get(sizes as usize) {
+                    for &radius in &sizes.radius {
+                        row = row.length("radii", radius);
+                    }
+                    for &weight in &sizes.weight {
+                        row = row.number("weights", weight);
+                    }
+                }
+                row.value("limit", ParamValue::Area(limit))
+            }
             Rule::CriticalArea {
                 layer,
                 radius,
