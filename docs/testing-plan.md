@@ -150,6 +150,8 @@ A layer without one is not a test.
 | F102 | **SPEF had no `*DATE`** when no timestamp was given, and the CLI never gives one. IEEE 1481 `header_def` requires `*DATE qstring`; OpenSTA's grammar has no empty alternative, so it rejected every SPEF the CLI wrote. **Fixed in P1:** `*DATE ""`. | `src/export/parasitic.rs` | **Reader rejects the file.** Found by P1. |
 | F103 | **SPEF stated `*L_UNIT 1 PH`**, a unit IEEE 1481 does not define (inductance: HENRY, MH, UH); OpenSTA warns (1644) and ignores the scale. **Fixed in P1:** `*L_UNIT 0.000001 UH`, every value unchanged. | `src/export/parasitic.rs` | **Wrong inductance scale in readers.** Found by P1. |
 | F104 | **A deck grid with a long mantissa overflowed when squared** for an area rule (`grid 55555555555555555555555555nm`, then any area): a panic, not a typed error. **Fixed:** the square is a checked multiply that refuses with a diagnostic; the fuzz input is kept in `fuzz/regressions/deck/`. | `crates/ingest/src/deck/parse.rs` | **Panic on hostile input.** Found by the `deck` fuzz target (B30's heavy run). |
+| F105 | **A number too large for f64 parsed as infinity** (`pex m thickness 1e999nm`, `sheet 1e999ohm`). **Fixed in D4:** refused, with a test row for each. | deck parser | **Infinite parameter accepted.** Found by D. |
+| F106 | **A `for` loop could splice a unit (`%`, `/`) into a rule id** that no `rule` statement can write back, so the deck could not be shared as text (`for x in [1%] { rule a{x} … }`). **Fixed in D4:** the printer refuses it. | deck printer | **Deck not round-trippable.** Found by D. |
 
 ---
 
@@ -516,11 +518,11 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | X4 | Exhaustive fixtures: every ERC kind, closed forms and enumerated topologies (supersedes C6 for ERC) | ERC-* | done |
 | X5 | Exhaustive fixtures: LVS over every small circuit and every single fault, against a brute-force isomorphism; device classes, reductions, hierarchy | LVS-* | done |
 | X6 | Exhaustive fixtures: PEX analytic geometries, matrix laws, refinement convergence (supersedes C6 for PEX) | PEX-* | done |
-| D1 | Deck library P0: `gpurify::pdks` constants | deck §5 | doing (agent/d) |
-| D2 | Deck library P1: `CompiledDeck`, engine takes it, validation on typed rules | deck §5 | doing (agent/d) |
-| D3 | Deck library P2: query API with the shared spacing-threshold function | deck §5 | doing (agent/d) |
-| D4 | Deck library P3: builder, overrides with provenance, printer, macro kind table | deck §5, L9b | doing (agent/d) |
-| D5 | Deck library P4: custom rules, `gpurify::cli::main_with` | deck §5, L9b | doing (agent/d) |
+| D1 | Deck library P0: `gpurify::pdks` constants | deck §5 | done (agent/d) |
+| D2 | Deck library P1: `CompiledDeck`, engine takes it, validation on typed rules | deck §5 | done (agent/d) |
+| D3 | Deck library P2: query API with the shared spacing-threshold function | deck §5 | done (agent/d) |
+| D4 | Deck library P3: builder, overrides with provenance, printer, macro kind table | deck §5, L9b | done (agent/d) |
+| D5 | Deck library P4: custom rules, `gpurify::cli::main_with` | deck §5, L9b | done (agent/d) |
 | E1 | `fuzz/` targets + stable regression replay (deck round trip needs D4) | L4 | done (the deck round trip waits for D4's printer) |
 | F1 | `.#oracles` nix shell; KLayout mirror-deck translator per [klayout-mirror.md](klayout-mirror.md) (32 kinds exact, 11 approximate, 3 none (`multi_patterning`, `polygon_validity`, `min_step`)); retire the stale `drc_oracle.rb` families | L6 | done: tests/klayout (release tier: corpus, merge-depth DRC fixtures, 3000 random layouts; 32 kinds exact, 11 approximate, 3 none (multi_patterning, polygon_validity, min_step)); reconciled with B24 (angle on drawn layers, with_width measured exactly); found F88 |
 | F2 | Foundry-deck cross-check: sky130, gf180mcu, IHP, with ledgers | L6, F4 | doing (agent/f2) |
