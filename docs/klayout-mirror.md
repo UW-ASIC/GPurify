@@ -214,16 +214,18 @@ Three differences are documented, not defects, and the deck and lattice keep the
 - **`sized` on a 45-degree edge.** GPurify's is the Minkowski sum with the square
   (`docs/deck.md`), which moves a diagonal edge `d·√2`; KLayout moves it `d`. The deck has no
   `sized` layer.
-- **A chamfer's end and the far side.** KLayout's Euclidean `width` at its default
-  `angle_limit` (90) pairs two edges at 135 degrees, such as a chamfer and the opposite side,
-  and its `notch` pairs the two edges of a 225-degree inside corner at distance 0; GPurify's
-  width is antiparallel facing edges, necks and acute tips (`width::narrowest_pair2`), and its
-  notch antiparallel facing edges. The first octilinear run showed both (1265 width, 128
-  notch rows), so the mirror's `width` and `notch` pass `angle_limit(1)`: only antiparallel
-  pairs, which on rectilinear layouts is every pair the default took (no two edges there meet
-  at an angle under 90 degrees but parallel ones). An acute tip, which only a pair at 45
-  degrees finds, is then outside the mirror: the random shapes have none, the deck measures no
-  boolean that could make one, and `tests/drc_octilinear.rs` holds tips by hand.
+- **A 225-degree inside corner in `notch`.** KLayout's `notch` at its default `angle_limit`
+  (90) pairs the two edges of a 225-degree inside corner at distance 0; GPurify's notch is
+  antiparallel facing edges. The first octilinear run showed it (128 notch rows), so the
+  mirror's `notch` passes `angle_limit(1)`: only antiparallel pairs, which on rectilinear
+  layouts is every pair the default took.
+
+`width` is KLayout's at its default `angle_limit` (90): GPurify pairs two edges at 135 degrees,
+such as a chamfer and the side across from it, as KLayout's `euclidian_near_part_of_edge` does
+(`width::narrowest_pair2`), and an acute tip is 0 wide on both sides. The foundry decks measure
+width so: gf180mcu's `fd_pv` unit structures flag a box chamfered next to a side shorter than
+the limit (NW.1a, M1.1 and the other width rows of `docs/xcheck/gf180mcu.tsv`), which the
+antiparallel-only width of the first runs missed.
 - **Edge length** is compared as the Euclidean length, floored (a 45-degree edge `k` steps
   long is `k·√2`); the harness read `|dx| + |dy|` before, which a 45-degree edge exceeds.
 
@@ -330,7 +332,7 @@ The counts were measured on 990376b (after B20 and B24), with the translator rec
 **KLayout**
 
 ```ruby
-emit(id, L.width(LIM, euclidian, shielded, angle_limit(1)))
+emit(id, L.width(LIM, euclidian, shielded))
 ```
 
 - Euclidean width covers both GPurify measures. (v T4: two 100-DBU squares offset by 70 give a

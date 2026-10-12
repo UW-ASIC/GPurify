@@ -129,6 +129,20 @@ fn bar(c: i64, d: i64) -> Vec<(i64, i64)> {
     ]
 }
 
+/// A 45-degree bar between the lines `y = x + c` and `y = x + c + d`, 1000
+/// long in x, each end inside a pad 1010 wide: its narrowest width is the
+/// bar's own. A bar's end on its own is narrower, a short side and the far
+/// 45-degree edge being a width pair at 135 degrees (`KLayout`'s Euclidean
+/// `width`); the pads meet the bar at concave corners only.
+fn padded(c: i64, d: i64) -> [Vec<(i64, i64)>; 3] {
+    let pad = |x0: i64, x1: i64, y0: i64, y1: i64| vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
+    [
+        vec![(0, c), (1000, 1000 + c), (1000, 1000 + c + d), (0, c + d)],
+        pad(-1000, 10, c - 1000, c + d + 1010),
+        pad(990, 2000, c - 10, 2000 + c + d),
+    ]
+}
+
 /// DRC-038, diagonal width; DRC-037, bent 45-degree features.
 ///
 /// Oracle: hand-derived. The bar between `y = x` and `y = x + 7` is `7/√2 =
@@ -140,14 +154,14 @@ fn bar(c: i64, d: i64) -> Vec<(i64, i64)> {
 fn a_45_degree_bar_is_as_wide_as_its_perpendicular() {
     let found = run(
         "rule w5 width(met1) >= 5nm\nrule w4 width(met1) >= 4nm",
-        &[bar(0, 7)],
+        &padded(0, 7),
     );
     assert_eq!(found.outcome("w5"), Outcome::Ran);
     assert_eq!(found.of("w5"), [(len(4), len(5))]);
     assert!(found.of("w4").is_empty());
     let found = run(
         "rule w200 width(met1) >= 200nm\nrule w201 width(met1) >= 201nm",
-        &[bar(0, 283)],
+        &padded(0, 283),
     );
     assert!(found.of("w200").is_empty());
     assert_eq!(found.of("w201"), [(len(200), len(201))]);
@@ -217,6 +231,43 @@ fn half_unit_areas_and_diagonal_edge_lengths_compare_exactly() {
     );
     assert_eq!(found.of("e15"), vec![(len(14), len(15)); 4]);
     assert!(found.of("e14").is_empty());
+}
+
+/// Oracle: hand-derived, as `KLayout` reads an edge (one straight stretch
+/// of boundary). A 100 x 50 box with a triangle standing on its top edge by
+/// its 90-degree tip, at (50, 50), is one figure (the connected corner
+/// model) whose ring leaves the top edge at the tip and comes back to it:
+/// the top is still one edge 100 long. `edge_length >= 60nm` flags the box's
+/// two 50-long sides only; the triangle's sides are `50·√2 ≈ 70.7`.
+#[test]
+fn an_edge_a_tip_touches_is_one_edge() {
+    let found = run(
+        "rule e60 edge_length(met1) >= 60nm",
+        &[
+            vec![(0, 0), (100, 0), (100, 50), (0, 50)],
+            vec![(50, 50), (100, 100), (0, 100)],
+        ],
+    );
+    assert_eq!(found.outcome("e60"), Outcome::Ran);
+    assert_eq!(found.of("e60"), vec![(len(50), len(60)); 2]);
+}
+
+/// Oracle: hand-derived, as `KLayout`'s Euclidean `width` reads a tip on an
+/// edge. A 100 x 50 box with a diamond (90-degree corners, `30·√2 ≈ 42.4`
+/// across) standing on its top edge by one corner, at (50, 50), is one
+/// figure (the connected corner model), but the corner on the middle of an
+/// edge is no 0-wide neck: no two edges there are antiparallel on one line.
+/// `width >= 45nm` flags the figure at the diamond's 42 (floored).
+#[test]
+fn a_corner_on_an_edge_is_no_neck() {
+    let found = run(
+        "rule w45 width(met1) >= 45nm",
+        &[
+            vec![(0, 0), (100, 0), (100, 50), (0, 50)],
+            vec![(50, 50), (80, 80), (50, 110), (20, 80)],
+        ],
+    );
+    assert_eq!(found.of("w45"), [(len(42), len(45))]);
 }
 
 /// Oracle: hand-derived. A 40 square with a diamond hole of radius 5 (area
@@ -389,7 +440,7 @@ fn a_strict_width_bound_is_exact_on_a_half_unit_square() {
     let found = run(
         "rule over forbidden(met1.with_width(> 70nm))\n\
          rule under forbidden(met1.with_width(<= 70nm))",
-        &[bar(0, 99)],
+        &padded(0, 99),
     );
     assert_eq!(found.of("over").len(), 1);
     assert!(found.of("under").is_empty());

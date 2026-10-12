@@ -678,7 +678,7 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 let name = fig(layer, &mut reads);
                 writeln!(
                     body,
-                    "emit({q}, {}.width({}, euclidian, shielded, angle_limit(1)))",
+                    "emit({q}, {}.width({}, euclidian, shielded))",
                     var(layer),
                     lim(limit)
                 )

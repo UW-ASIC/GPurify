@@ -204,10 +204,12 @@ Every result keeps its vertices on the grid and its edges at multiples of 45°:
 Of the checks, `width`, `notch`, `space`, `area`, `hole_area`,
 `edge_length` and `forbidden` measure 45° shapes; every other check refuses a layer with a
 45° edge. `width` is the distance between facing edges, measured square to
-them, a neck between two inside corners measured corner to corner, and 0 at a
-corner sharper than 90°; two edges that only converge, such as a chamfer and
-the far side, are not a width (KLayout's Euclidean `width` at its default
-`ignore_angle` measures that pair too). Distances to a 45° edge can fall
+them, a neck between two inside corners measured corner to corner, 0 at a
+corner sharper than 90°, and, for an axis edge and a 45° edge at 135° to each
+other (a chamfer and the side across from it), the distance between the parts
+of each on the other's inner side, as KLayout's Euclidean `width` measures it
+and the foundry decks check it: a box chamfered next to a side shorter than
+the limit is too narrow there. Distances to a 45° edge can fall
 between whole units and are compared exactly; a reported value is floored.
 
 Wherever a rule takes a layer, it can take a layer expression instead:

@@ -293,14 +293,21 @@ fn neck2(poly: PolygonRef<'_>, limit: Dbu) -> Option<(i128, Point)> {
 ///   `KLayout` deck checks as a Euclidean `width` between the 45-degree
 ///   edges), end to end past each other (a neck, as at the inner corners of
 ///   two overlapping rectangles);
-/// - a point where the figure meets itself (two concave corners at one
-///   point, the connected corner model): width 0;
-/// - an acute tip, a corner of less than 90 degrees: width 0.
+/// - two antiparallel edges on one line that touch, where the figure meets
+///   itself across a point (the connected corner model): width 0; a tip
+///   touching the middle of an edge is not such a pair;
+/// - an acute tip, a corner of less than 90 degrees: width 0;
+/// - two edges at 135 degrees to each other, an axis edge and a 45-degree one
+///   (a chamfer and the side across from it, a 45-degree corner cut across an
+///   L's inner corner), each with an end strictly on the other's material
+///   side: the distance between the parts of each on the other's material
+///   side, as `KLayout`'s Euclidean `width` at its default `angle_limit` of 90
+///   pairs them. The foundry decks measure width so (gf180mcu's `fd_pv` unit
+///   structures flag a chamfered `NW.1a` box whose side next to the chamfer
+///   is under the limit).
 ///
-/// Two edges at 45 or 135 degrees to each other (a chamfer's end and the far
-/// side) are not a width pair, as they are not at `KLayout`'s `angle_limit`
-/// of 1 degree. A notch is two antiparallel edges facing across empty space
-/// over a stretch of positive length, as [`narrowest_facing`] reads one.
+/// A notch is two antiparallel edges facing across empty space over a
+/// stretch of positive length, as [`narrowest_facing`] reads one.
 ///
 /// Over `n` edges, the pairs within `limit` in x: `O(n²)` only when every
 /// edge sits in one `limit`-wide column.
@@ -337,6 +344,9 @@ pub fn narrowest_pair2(
             if facing(e, f, material_between) {
                 let (d2, p, q) = seg_seg_near2(e, f);
                 keep(d2, mid4(p, q));
+            } else if let Some((e, f)) = material_between.then(|| slanted(e, f)).flatten() {
+                let (d2, p, q) = seg_seg_near2(e, f);
+                keep(d2, mid4(p, q));
             }
         }
     }
@@ -344,9 +354,6 @@ pub fn narrowest_pair2(
         return best;
     }
 
-    // Concave corners, by point: two at one point are a pinch, where the
-    // figure meets itself (the connected corner model), a neck of width 0.
-    let mut concave: Vec<(i64, i64)> = Vec::new();
     for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
         let (xs, ys) = ring.coords();
         let n = xs.len();
@@ -362,23 +369,59 @@ pub fn narrowest_pair2(
             if turn > 0 && dot > 0 {
                 // A left turn by more than 90 degrees: an acute tip.
                 keep(0, Point { x: xs[c], y: ys[c] });
-            } else if turn < 0 {
-                concave.push((x, y));
             }
         }
     }
-    concave.sort_unstable();
-    if let Some(pair) = concave.windows(2).find(|pair| pair[0] == pair[1]) {
-        let (x, y) = pair[0];
-        keep(
-            0,
-            Point {
-                x: Dbu::new_unchecked(x),
-                y: Dbu::new_unchecked(y),
-            },
-        );
-    }
     best
+}
+
+/// The parts of `e` and `f` a width measures when they are at 135 degrees to
+/// each other and each has an end strictly on the other's material side
+/// (`KLayout`'s `euclidian_near_part_of_edge`): each cut to the other's
+/// material side, line included. `None` for any other pair.
+fn slanted(e: Seg, f: Seg) -> Option<(Seg, Seg)> {
+    let dir = |s: Seg| {
+        (
+            i128::from(s.b.x.raw() - s.a.x.raw()),
+            i128::from(s.b.y.raw() - s.a.y.raw()),
+        )
+    };
+    let ((ux, uy), (vx, vy)) = (dir(e), dir(f));
+    if ux * vy == uy * vx || ux * vx + uy * vy >= 0 {
+        return None;
+    }
+    // How far `of` is on `line`'s left, its material side, scaled.
+    let side = |line: Seg, of: Point| {
+        let (lx, ly) = dir(line);
+        lx * i128::from(of.y.raw() - line.a.y.raw()) - ly * i128::from(of.x.raw() - line.a.x.raw())
+    };
+    // `s` cut to `line`'s material side; it has an end strictly there.
+    let cut = |s: Seg, line: Seg| {
+        let (a, b) = (side(line, s.a), side(line, s.b));
+        if a <= 0 && b <= 0 {
+            return None;
+        }
+        if a >= 0 && b >= 0 {
+            return Some(s);
+        }
+        // An axis edge meets a 45-degree line, and a 45-degree edge an axis
+        // line, at a lattice point.
+        let (dx, dy) = dir(s);
+        let at = |n: i128, of: i64| {
+            debug_assert_eq!(n % (a - b), 0, "an octilinear crossing is on the lattice");
+            Dbu::new_unchecked(of + i64::try_from(n / (a - b)).expect("on the segment"))
+        };
+        let x = Point {
+            x: at(dx * a, s.a.x.raw()),
+            y: at(dy * a, s.a.y.raw()),
+        };
+        Some(if a > 0 {
+            Seg { a: s.a, b: x }
+        } else {
+            Seg { a: x, b: s.b }
+        })
+    };
+    Some((cut(e, f)?, cut(f, e)?))
 }
 
 /// Whether `(e, f)` face each other: antiparallel and each strictly on the
@@ -403,7 +446,13 @@ fn facing(e: Seg, f: Seg, material_between: bool) -> bool {
         let (wx, wy) = (of.x.raw() - line.a.x.raw(), of.y.raw() - line.a.y.raw());
         (i128::from(lx) * i128::from(wy) - i128::from(ly) * i128::from(wx)).signum()
     };
-    if side(e, f.a) != want || side(f, e.a) != want {
+    let (fe, ef) = (side(e, f.a), side(f, e.a));
+    // Antiparallel on one line and touching: where the figure meets itself
+    // across a point (the connected corner model), a width of 0.
+    if material_between && fe == 0 && ef == 0 {
+        return crate::ops::segments_intersect(e, f);
+    }
+    if fe != want || ef != want {
         return false;
     }
     if material_between {

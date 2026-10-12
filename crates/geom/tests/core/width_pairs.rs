@@ -98,10 +98,30 @@ fn width2(rings: &[Vec<(i64, i64)>]) -> Option<i128> {
 /// Oracle: hand-derived Euclidean widths. A 45-degree bar with square ends
 /// between `y = x` and `y = x + 10` is `10/√2` wide (twice squared, 100); a diamond
 /// of radius 10 is `10·√2` across its parallel sides (400), its corners being
-/// right angles; a chamfered square keeps its side width 20 (800); a right
-/// triangle's two 45-degree tips are acute, so 0 wide.
+/// right angles; a right triangle's two 45-degree tips are acute, so 0 wide.
+/// A 20-square with corners chamfered by 2 pairs each chamfer with the side
+/// across, at 135 degrees, as `KLayout`'s Euclidean `width` does: from the
+/// chamfer's end (18, 0) to the side's end (0, 2), `√328` (656), under 20.
 #[test]
 fn octilinear_widths_are_euclidean() {
+    // gf180mcu `fd_pv` unit structures the foundry's deck flags (shifted to
+    // the origin). NW.1a: a 2580 x 1720 box chamfered at one corner, its side
+    // next to the chamfer 855 long; the chamfer's end is 855 from the bottom.
+    let nw = vec![(0, 0), (2580, 0), (2580, 1720), (865, 1720), (0, 855)];
+    assert_eq!(width2(&[nw]), Some(2 * 855 * 855));
+    // DF.1a: an L of 221-wide arms whose outer corner is cut by a 158
+    // chamfer; the inner corner (221, 221) is `284/√2` from the chamfer's
+    // line `x + y = 158`, under the arms' 221.
+    let l = vec![
+        (158, 0),
+        (884, 0),
+        (884, 221),
+        (221, 221),
+        (221, 884),
+        (0, 884),
+        (0, 158),
+    ];
+    assert_eq!(width2(&[l]), Some(284 * 284));
     let bar = vec![(0, 0), (40, 40), (35, 45), (-5, 5)];
     assert_eq!(width2(&[bar]), Some(100));
     let diamond = vec![(10, 0), (0, 10), (-10, 0), (0, -10)];
@@ -116,7 +136,7 @@ fn octilinear_widths_are_euclidean() {
         (0, 18),
         (0, 2),
     ];
-    assert_eq!(width2(&[chamfered]), Some(800));
+    assert_eq!(width2(&[chamfered]), Some(656));
     let triangle = vec![(0, 0), (10, 0), (0, 10)];
     assert_eq!(width2(&[triangle]), Some(0));
 }

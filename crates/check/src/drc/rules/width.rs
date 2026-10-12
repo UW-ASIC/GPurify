@@ -349,8 +349,9 @@ pub(crate) fn min_edge_length(
 /// Every straight run of a polygon's boundary, holes included: consecutive
 /// edges of a ring running one way are one run. A merged ring keeps a vertex
 /// where it passes straight through a point it also turns at (a 45-degree
-/// tip touching an edge, the connected corner model); the edge there is
-/// still one edge, as `KLayout` reads it.
+/// tip touching an edge, the connected corner model), and one that leaves an
+/// edge at a point it touches and comes back to it there continues that edge;
+/// either way the edge is still one edge, as `KLayout` reads it.
 fn straight_runs(poly: gpurify_geom::view::PolygonRef<'_>) -> Vec<(Point, Point)> {
     let mut runs = Vec::new();
     for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
@@ -374,7 +375,38 @@ fn straight_runs(poly: gpurify_geom::view::PolygonRef<'_>) -> Vec<(Point, Point)
             }
         }
     }
-    runs
+    // A ring that leaves a straight edge at a point it also touches (a tip on
+    // the edge) comes back and goes on: the two pieces are one edge.
+    let mut by_start: std::collections::BTreeMap<(Point, (i64, i64)), usize> = runs
+        .iter()
+        .enumerate()
+        .map(|(k, &(a, b))| ((a, heading(a, b)), k))
+        .collect();
+    let mut merged: Vec<(Point, Point)> = Vec::with_capacity(runs.len());
+    let mut taken = vec![false; runs.len()];
+    // A piece some other piece ends at is reached from that one.
+    let continues: std::collections::BTreeSet<(Point, (i64, i64))> =
+        runs.iter().map(|&(a, b)| (b, heading(a, b))).collect();
+    for k in 0..runs.len() {
+        let (a, b) = runs[k];
+        if taken[k] || continues.contains(&(a, heading(a, b))) {
+            continue;
+        }
+        taken[k] = true;
+        let (way, mut end) = (heading(a, b), b);
+        while let Some(&next) = by_start.get(&(end, way)) {
+            if taken[next] {
+                break;
+            }
+            taken[next] = true;
+            by_start.remove(&(end, way));
+            end = runs[next].1;
+        }
+        merged.push((a, end));
+    }
+    // Pieces on a closed straight loop (impossible) or not reached stay as they are.
+    merged.extend((0..runs.len()).filter(|&k| !taken[k]).map(|k| runs[k]));
+    merged
 }
 
 /// The direction an axis-aligned edge runs, as signs along x and y.

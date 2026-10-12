@@ -162,23 +162,23 @@ M5.2b	M5.2b	M5.2b	agrees
 M5.3	M5.3	M5.3	agrees	
 M5.4	M5.4	M5.4	differs	The density unit structures' die is their 2/222 or 3/222 marker box, which the foundry's extent counts and GPurify's die (the deck's drawn layers) does not: a 13.99 % fail reads 100 %.
 V1.1	V1.1	V1.1	agrees	
-V1.2a	V1.2a	V1.2a	agrees	
+V1.2a	V1.2a	V1.2a	differs	The fd_pv Singular fail (two vias meeting only at a corner): GPurify reads them as one figure (the connected corner model), which V1.1 flags as not 260 x 260 nm; the foundry's KLayout space flags it as 0 spacing. Compared since H12: the unit layout's 45-degree metal no longer refuses the run.
 V1.2b	V1.2b	V1.2b	differs	The deck reads 4x4 or larger as a cluster of more than 15 cuts (deck note): a 4x4 array less one corner plus one cut at 0.26 um is held to 0.36 um.
 V1.4a	V1.4a	V1.4a	agrees	
 V2.1	V2.1	V2.1	agrees	
-V2.2a	V2.2a	V2.2a	agrees	
+V2.2a	V2.2a	V2.2a	differs	The fd_pv Singular fail (two vias meeting only at a corner): GPurify reads them as one figure (the connected corner model), which V2.1 flags as not 260 x 260 nm; the foundry's KLayout space flags it as 0 spacing. Compared since H12: the unit layout's 45-degree metal no longer refuses the run.
 V2.2b	V2.2b	V2.2b	differs	As V1.2b.
 V2.4a	V2.4a	V2.4a	agrees	
 V3.1	V3.1	V3.1	agrees	
-V3.2a	V3.2a	V3.2a	agrees	
+V3.2a	V3.2a	V3.2a	differs	The fd_pv Singular fail (two vias meeting only at a corner): GPurify reads them as one figure (the connected corner model), which V3.1 flags as not 260 x 260 nm; the foundry's KLayout space flags it as 0 spacing. Compared since H12: the unit layout's 45-degree metal no longer refuses the run.
 V3.2b	V3.2b	V3.2b	differs	As V1.2b.
 V3.4a	V3.4a	V3.4a	agrees	
 V4.1	V4.1	V4.1	agrees	
-V4.2a	V4.2a	V4.2a	agrees	
+V4.2a	V4.2a	V4.2a	differs	The fd_pv Singular fail (two vias meeting only at a corner): GPurify reads them as one figure (the connected corner model), which V4.1 flags as not 260 x 260 nm; the foundry's KLayout space flags it as 0 spacing. Compared since H12: the unit layout's 45-degree metal no longer refuses the run.
 V4.2b	V4.2b	V4.2b	differs	As V1.2b.
 V4.4a	V4.4a	V4.4a	agrees	
 V5.1	V5.1	V5.1	agrees	
-V5.2a	V5.2a	V5.2a	agrees	
+V5.2a	V5.2a	V5.2a	differs	The fd_pv Singular fail (two vias meeting only at a corner): GPurify reads them as one figure (the connected corner model), which V5.1 flags as not 260 x 260 nm; the foundry's KLayout space flags it as 0 spacing. Compared since H12: the unit layout's 45-degree metal no longer refuses the run.
 V5.2b	V5.2b	V5.2b	differs	As V1.2b.
 V5.4a	V5.4a	V5.4a	agrees	
 V2.3b	V2.3b	V2.3b	agrees	
