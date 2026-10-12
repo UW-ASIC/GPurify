@@ -95,9 +95,9 @@ come from and using the foundry's rule ids:
 
 | File | Drawn layers | Rules | Devices |
 |---|---:|---:|---:|
-| `ihp_sg13g2` | 75 | 459 | 12 |
-| `gf180mcu` | 55 | 263 | 27 |
-| `sky130` | 60 | 271 | 30 |
+| `ihp_sg13g2` | 75 | 460 | 12 |
+| `gf180mcu` | 56 | 286 | 27 |
+| `sky130` | 59 | 271 | 30 |
 | `generic_finfet` (ASAP7) | 45 | 178 | 0 |
 
 From Rust, each is also compiled into the library as a constant
