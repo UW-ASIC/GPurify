@@ -337,9 +337,10 @@ impl CompiledDeck {
             Rule::StackSpacing {
                 a,
                 b,
+                metal,
                 same_only,
                 limit,
-            } => two(a, b)
+            } => Row::new(rule.kind(), &[a, b, metal])
                 .value("same_net", ParamValue::Flag(same_only))
                 .length("limit", limit),
             Rule::MaxCutSpacing { cut, others, limit } => {

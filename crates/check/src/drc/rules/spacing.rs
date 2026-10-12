@@ -755,7 +755,7 @@ pub(crate) fn net_spacing(
         limit,
         s,
         out,
-        |(_, a), (_, b)| ((a == b) == same_net).then_some(Some(limit)),
+        |a, b| ((a == b) == same_net).then_some(Some(limit)),
     )
 }
 
@@ -810,39 +810,70 @@ fn row_nets(
 }
 
 /// LEF `SPACING cutSpacing [SAMENET] LAYER secondLayer STACK` (DRC-065):
-/// every pair of a cut on `a` and a cut on `b` (only same-net pairs with
-/// `same_only`) closer than `limit`, overlap included, except a same-net
-/// pair one of whose boxes covers the other's (stacked). `examined` counts
-/// the pairs judged, the stacked ones included.
+/// every pair of a cut on `a` and a cut on `b` closer than `limit`, overlap
+/// included, except a same-net pair one of whose boxes covers the other's
+/// (stacked); with `same_only`, same-net pairs only. A cut carries no net of
+/// its own: it takes the lowest net of the `metal` shapes it overlaps (the
+/// metal both cut layers land on), none when it overlaps none, which is no
+/// net's. `examined` counts the pairs judged, the stacked ones included.
+/// `Refused` when a layer will not validate.
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn stack_spacing(
     store: &GeometryStore,
     nets: &NetTable,
     rule: StrId,
-    (a, b): (LayerId, LayerId),
+    (a, b, metal): (LayerId, LayerId, LayerId),
     same_only: bool,
     limit: Dbu,
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    net_row_spacing(
-        store,
-        nets,
-        rule,
-        (a, Some(b)),
-        limit,
-        s,
-        out,
-        |(p, np), (q, nq)| {
-            let same = np == nq;
-            if same_only && !same {
-                return None;
-            }
-            let (bp, bq) = (store.poly_bbox(p), store.poly_bbox(q));
-            let stacked = same && (bp.contains(bq) || bq.contains(bp));
-            Some((!stacked).then_some(limit))
-        },
-    )
+    if s.validated.get(store, a).is_none() || s.validated.get(store, b).is_none() {
+        return REFUSED;
+    }
+    let Some(drawn) = s.validated.get(store, metal) else {
+        return REFUSED;
+    };
+    s.rects_a.build(store, metal, drawn);
+    let on_metal = SortedRects::new(
+        s.rects_a
+            .labelled()
+            .into_iter()
+            .map(|(r, row)| (r, nets.net_of(row)))
+            .filter(|&(_, net)| net != NetId::NONE)
+            .collect(),
+    );
+    let net_of = |cut: PolyId| {
+        on_metal
+            .overlapping(store.poly_bbox(cut))
+            .map(|(_, net)| net)
+            .min()
+    };
+    SpatialIndex::build_into(store, a, &mut s.index_a);
+    SpatialIndex::build_into(store, b, &mut s.index_b);
+    cross_layer_pairs_into(store, &s.index_a, &s.index_b, limit, &mut s.pairs);
+    pair_distances_into(store, &s.pairs, limit, &mut s.dists);
+    s.holes.build(store, [a, b]);
+    join_nested(store, &s.holes, &s.pairs, &mut s.dists);
+    let limit2 = limit.mul_wide(limit);
+    let mut examined = 0u64;
+    for (&(p, q), &d2) in s.pairs.iter().zip(&s.dists) {
+        let (np, nq) = (net_of(p), net_of(q));
+        let same = np.is_some() && np == nq;
+        if same_only && !same {
+            continue;
+        }
+        examined += 1;
+        let (bp, bq) = (store.poly_bbox(p), store.poly_bbox(q));
+        if same && (bp.contains(bq) || bq.contains(bp)) {
+            continue;
+        }
+        if d2 < limit2 {
+            let found = (d2, whole_at(store, (p, q), d2));
+            out.push(spacing_violation(rule, a, (p, q), found, limit));
+        }
+    }
+    (Outcome::Ran, examined)
 }
 
 /// Spacing between shapes that their two nets decide. On one layer (`b` is
@@ -859,35 +890,11 @@ pub(crate) fn net_pair_spacing(
     store: &GeometryStore,
     nets: &NetTable,
     rule: StrId,
-    layers: (LayerId, Option<LayerId>),
-    widest: Dbu,
-    s: &mut Scratch,
-    out: &mut Violations,
-    need: impl Fn(NetId, NetId) -> Option<Option<Dbu>>,
-) -> Verdict {
-    net_row_spacing(
-        store,
-        nets,
-        rule,
-        layers,
-        widest,
-        s,
-        out,
-        |(_, a), (_, b)| need(a, b),
-    )
-}
-
-/// [`net_pair_spacing`] with `need` given each shape's row beside its net.
-#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
-pub(crate) fn net_row_spacing(
-    store: &GeometryStore,
-    nets: &NetTable,
-    rule: StrId,
     (a, b): (LayerId, Option<LayerId>),
     widest: Dbu,
     s: &mut Scratch,
     out: &mut Violations,
-    need: impl Fn((PolyId, NetId), (PolyId, NetId)) -> Option<Option<Dbu>>,
+    need: impl Fn(NetId, NetId) -> Option<Option<Dbu>>,
 ) -> Verdict {
     let unnetted = std::iter::once(a).chain(b).any(|layer| {
         store
@@ -912,7 +919,7 @@ fn pair_spacing_by_net(
     widest: Dbu,
     s: &mut Scratch,
     out: &mut Violations,
-    need: impl Fn((PolyId, NetId), (PolyId, NetId)) -> Option<Option<Dbu>>,
+    need: impl Fn(NetId, NetId) -> Option<Option<Dbu>>,
 ) -> Verdict {
     let one_layer = match b {
         None => {
@@ -941,7 +948,7 @@ fn pair_spacing_by_net(
         if one_layer && label(p) == label(q) {
             continue;
         }
-        let Some(limit) = need((p, net_of(p, true)), (q, net_of(q, one_layer))) else {
+        let Some(limit) = need(net_of(p, true), net_of(q, one_layer)) else {
             continue;
         };
         examined += 1;

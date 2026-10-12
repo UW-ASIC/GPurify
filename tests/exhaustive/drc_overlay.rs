@@ -2142,9 +2142,10 @@ fn via_stack() -> Vec<Fixture> {
     every_placement(cases)
 }
 
-/// `stack_space(v2, v1; same_net: true) >= 200nm` (`ss`, LEF Spacing Rule
-/// Example 7's `SPACING 0.20 SAMENET LAYER cut12 STACK` on cut23) and
-/// `stack_space(v2, v1) >= 200nm` (`all`) (`stack_spacing`, DRC-065):
+/// `stack_space(v2, v1, m2; same_net: true) >= 200nm` (`ss`, LEF Spacing
+/// Rule Example 7's `SPACING 0.20 SAMENET LAYER cut12 STACK` on cut23, the
+/// cuts' nets read off `m2`) and `stack_space(v2, v1, m2) >= 200nm` (`all`)
+/// (`stack_spacing`, DRC-065):
 /// "same-net cuts on two different layers can be stacked if they are
 /// aligned. If the cuts are not the same size, the smaller cut must be
 /// completely covered by the larger cut ... If both cuts are the same size,
@@ -2161,8 +2162,8 @@ fn stack_spacing() -> Vec<Fixture> {
         &["m1", "v1", "m2", "v2", "m3"],
         "connect conductors [m1, m2, m3]\nconnect touch_within_layer\n\
          connect via v1 [m1, m2]\nconnect via v2 [m2, m3]\n\
-         rule ss stack_space(v2, v1; same_net: true) >= 200nm\n\
-         rule all stack_space(v2, v1) >= 200nm\n",
+         rule ss stack_space(v2, v1, m2; same_net: true) >= 200nm\n\
+         rule all stack_space(v2, v1, m2) >= 200nm\n",
     );
     let case = |name: &str, layout: Layout, ss: Vec<Finding>, all: Vec<Finding>| {
         fixture(
