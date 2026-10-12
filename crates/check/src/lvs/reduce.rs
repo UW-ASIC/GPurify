@@ -125,6 +125,11 @@ pub struct ParamNames {
     /// [`Self::relaxed`] as a resistance does, `KLayout`'s
     /// `InductorDeviceCombiner` (catalog LVS-065).
     pub inductance: Option<StrId>,
+    /// `sa` and `sb`, a transistor's STI stress distances ([`crate::lvs::lde`]):
+    /// a series merge or a gate merge would swallow the edges they are
+    /// measured to, so a transistor stating either merges only in
+    /// parallel, and then only with one stating the same.
+    pub stress: [Option<StrId>; 2],
     /// Whether plain transistors stacked in series, or set in parallel, on
     /// different gates of their own merge into one device whose gates are
     /// interchangeable, the reduction logic-gate recognition rests on
@@ -699,10 +704,17 @@ fn prepare(src: &Graph, names: ParamNames, plan: &mut Plan, devices: usize, nets
         let passive = law
             .and_then(|law| law.series_sums(kind, names))
             .filter(|_| roles.len() == 2);
+        let stressed = names
+            .stress
+            .iter()
+            .flatten()
+            .any(|&name| params.iter().any(|&(stated, _)| stated == name));
         plan.series_sig.push(match passive {
             Some(sums) => bound.then(|| signature(params, &sums, None)),
-            None => (states_length && bound && diffusions == 0 && !series_passive(kind))
-                .then(|| signature(params, &[names.length], None)),
+            None => {
+                (states_length && bound && diffusions == 0 && !stressed && !series_passive(kind))
+                    .then(|| signature(params, &[names.length], None))
+            }
         });
     }
 }

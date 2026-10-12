@@ -855,7 +855,8 @@ fn an_inductor_states_its_inductance() {
 /// admit nothing, none at all, a fraction or a second row for the model.
 /// Breaks if a unit is mis-scaled, a duplicate or a zero threshold is
 /// accepted, a net is paired twice, or a count bound is misread. `lvs
-/// recognize_gates` sets its flag once.
+/// recognize_gates` sets its flag once; `lvs lde` keeps its layers and
+/// lengths, needs `od` and `max`, and takes `well` and `scref` together.
 #[test]
 fn lvs_thresholds_and_same_nets_lower_as_stated() {
     let devices = "device mos poly model \"nfet\" terminals [poly, diff, diff]\n";
@@ -872,6 +873,28 @@ fn lvs_thresholds_and_same_nets_lower_as_stated() {
         "already stated",
     );
     one_error(&format!("{devices}lvs min_caps 0aF\n"), "must be positive");
+    let (deck, strings) = ok(&format!(
+        "{devices}lvs lde \"nfet\" max 10um od diff well met3 scref 950nm\n"
+    ));
+    let row = deck.lvs.lde[0];
+    let id = |name: &str| strings.get(name).expect("interned");
+    assert_eq!((row.model, row.od), (id("nfet"), id("diff")));
+    assert_eq!(row.max.raw(), 10_000);
+    assert_eq!(
+        row.well.map(|(well, scref)| (well, scref.raw())),
+        Some((id("met3"), 950))
+    );
+    for (body, needle) in [
+        ("lvs lde \"nfet\" od diff\n", "needs od and max"),
+        (
+            "lvs lde \"nfet\" od diff max 1um well met3\n",
+            "go together",
+        ),
+        ("lvs lde \"nfet\" od diff max 0um\n", "must be positive"),
+        ("lvs lde \"nfet\" od diff max 1um od diff\n", "given twice"),
+    ] {
+        one_error(&format!("{devices}{body}"), needle);
+    }
     let (deck, _) = ok(&format!("{devices}lvs recognize_gates\n"));
     assert!(deck.lvs.recognize_gates);
     one_error(

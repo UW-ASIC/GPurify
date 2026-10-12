@@ -543,12 +543,24 @@ fn run_lvs(
         );
     };
 
-    let layout = gpurify_check::lvs::graph::from_layout(
+    let mut layout = gpurify_check::lvs::graph::from_layout(
         &extracted.nets,
         &extracted.devices,
         &extracted.ports,
         &loaded.strings,
         Some(loaded.grid),
+    );
+    // The layout-dependent effects the deck's `lvs lde` rows ask for.
+    gpurify_check::lvs::add_lde_params(
+        &mut layout,
+        gpurify_check::Design {
+            store: &loaded.store,
+            nets: &extracted.nets,
+            devices: &extracted.devices,
+        },
+        (&loaded.deck.lvs.lde, &loaded.deck.layers),
+        &loaded.strings,
+        loaded.grid,
     );
     append_stage(out, |violations, runs| {
         gpurify_check::lvs::check_layout(
@@ -669,6 +681,7 @@ pub(crate) fn param_names(strings: &gpurify_ingest::StrTable) -> gpurify_check::
             name("pe"),
         ],
         inductance: name("ind"),
+        stress: [name("sa"), name("sb")],
         gates: false,
         relaxed: false,
     }

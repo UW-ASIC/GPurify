@@ -1338,6 +1338,7 @@ impl<'a> Parser<'a> {
                 Ok(())
             }
             "count" => self.lvs_count(),
+            "lde" => self.lvs_lde(),
             "same_nets" => {
                 let layout = self.quoted("a layout net label in quotes")?;
                 let reference = self.quoted("a reference net name in quotes")?;
@@ -1369,7 +1370,7 @@ impl<'a> Parser<'a> {
                 &format!(
                     "unknown lvs control `{control}`; expected tolerance, ignore_parameter, \
                      asymmetric, permute, ignore, ignore_shorted, ports_by_name, range, topology, connect_implicit, \
-                     connect_explicit, max_res, min_caps, same_nets, count or recognize_gates"
+                     connect_explicit, max_res, min_caps, same_nets, count, lde or recognize_gates"
                 ),
             )),
         }
@@ -1456,6 +1457,57 @@ impl<'a> Parser<'a> {
                 Ok(())
             }
         }
+    }
+
+    /// `lvs lde "model" od <layer> max <length> [well <layer> scref
+    /// <length>]`, the keys in any order, each once; `od` and `max` are
+    /// needed, `well` and `scref` go together.
+    fn lvs_lde(&mut self) -> R<()> {
+        let model = self.model()?;
+        let span = self.peek();
+        if self.out.lvs.lde.iter().any(|row| row.0 == model) {
+            return Err(self.err_tok(span, &format!("\"{model}\" already has an lde row")));
+        }
+        let (mut od, mut max, mut well, mut scref) = (None, None, None, None);
+        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+            let (key, at) = self.ident("od, max, well or scref")?;
+            let taken = match key.as_str() {
+                "od" => od.replace(self.layer_word()?).is_some(),
+                "well" => well.replace(self.layer_word()?).is_some(),
+                "max" | "scref" => {
+                    let value = self.value()?;
+                    let length = self.length(&value, &key)?;
+                    if length.raw() <= 0 {
+                        return Err(self.err(value.span(), &format!("`{key}` must be positive")));
+                    }
+                    let slot = if key == "max" { &mut max } else { &mut scref };
+                    slot.replace(length).is_some()
+                }
+                _ => {
+                    return Err(self.err(
+                        at,
+                        &format!("unknown lde key `{key}`; expected od, max, well or scref"),
+                    ))
+                }
+            };
+            if taken {
+                return Err(self.err(at, &format!("`{key}` is given twice")));
+            }
+        }
+        let (Some(od), Some(max)) = (od, max) else {
+            let t = self.peek();
+            return Err(self.err_tok(t, "an lde row needs od and max"));
+        };
+        let well = match (well, scref) {
+            (Some(well), Some(scref)) => Some((well, scref)),
+            (None, None) => None,
+            _ => {
+                let t = self.peek();
+                return Err(self.err_tok(t, "well and scref go together"));
+            }
+        };
+        self.out.lvs.lde.push((model, od, max, well));
+        Ok(())
     }
 
     /// `lvs count "model" >= min <= max`, either bound or both, each a whole

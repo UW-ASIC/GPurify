@@ -63,7 +63,7 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 | Domain | implemented | expressible | partial | missing | verify | out of scope |
 |---|---:|---:|---:|---:|---:|---:|
 | DRC | 43 | 6 | 43 | 14 | 0 | 0 |
-| LVS | 31 | 1 | 11 | 5 | 0 | 0 |
+| LVS | 31 | 1 | 12 | 4 | 0 | 0 |
 | ERC | 53 | 4 | 13 | 11 | 0 | 0 |
 | PEX | 7 | 0 | 3 | 6 | 0 | 0 |
 | Flow | 2 | 0 | 2 | 6 | 0 | 0 |
@@ -316,6 +316,7 @@ single oracle is a named gap that ledger P1 closes.
 | LVS-047 | Logic-gate recognition | partial | CAL:LVS RECOGNIZE GATES; SubGemini; Silvaco Guardian LVS app note Logic Gate Recognition (2020) and example 4 | SY; MR |
 | LVS-066 | Device flavour (HVT/LVT) by implant marker | expressible | GF:App.A; IHP LVS decks | SY; MR |
 | LVS-071 | Spectre reader | implemented | - | SY; MR; fuzz |
+| LVS-074 | Layout-dependent-effect parameters (LOD SA/SB/SD, WPE SCA/SCB/SCC) | partial | BSIM4; SRC:datasheet; Silvaco SmartDRC/LVS app note Well Proximity and STI Stress Effect Parameters Extraction (2022) | CF; SE; SY |
 | ERC-A9 | Minimum protection-diode size | expressible | IHP:Ant.g | SE:IHP Ant.g; MR; SY |
 | ERC-A10 | Diode well legality | expressible | IHP:Ant.h,Ant.i | FR; SY |
 | ERC-A13 | Exemption for substrate-shorted nets | implemented | SKY:.ar.1 | SE:SKY .ar.1; MR; SY |

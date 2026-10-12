@@ -351,7 +351,7 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
             Ok((strings.intern(rule), layer))
         })
         .collect::<Result<Vec<_>, DeckError>>()?;
-    let lvs = build_lvs(&doc.lvs, &doc.devices, strings)?;
+    let lvs = build_lvs(&doc.lvs, &doc.devices, &layers, strings)?;
     let temperature_law = match doc.temperature {
         None => None,
         Some((operating_k, nominal_k)) => {
