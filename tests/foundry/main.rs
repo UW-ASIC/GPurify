@@ -742,7 +742,6 @@ fn foundry_deck_ihp_sg13g2() {
         "solderbump",
         "schottkydiode",
         "npnsubstratetie",
-        "contbar",
         "metalslits",
         "pad",
     ];

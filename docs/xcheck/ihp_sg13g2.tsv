@@ -405,26 +405,26 @@ MIM.h MIM.h.via	MIM.h Mim.h	MIM.h	agrees
 Pad.i	Pad.i	Pad.i	agrees	
 Pin.e	Pin.e	Pin.e	agrees	
 -	AFil.i	AFil.i	ours_missing	Activ:filler to PWell:block edges: shape-to-edge spacing (deck: waiting)
--	Ant.e_Metal1	Ant.e_Metal1	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
--	Ant.e_Metal2	Ant.e_Metal2	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
--	Ant.e_Metal3	Ant.e_Metal3	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
--	Ant.e_Metal4	Ant.e_Metal4	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
--	Ant.e_Metal5	Ant.e_Metal5	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
--	Ant.e_TopMetal1	Ant.e_TopMetal1	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
--	Ant.e_TopMetal2	Ant.e_TopMetal2	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
--	Ant.f_TopVia1	Ant.f_TopVia1	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
--	Ant.f_TopVia2	Ant.f_TopVia2	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
--	Ant.f_Via1	Ant.f_Via1	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
--	Ant.f_Via2	Ant.f_Via2	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
--	Ant.f_Via3	Ant.f_Via3	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
--	Ant.f_Via4	Ant.f_Via4	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
--	Ant.g	Ant.g	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
+Ant.e_Metal1	Ant.e_Metal1	Ant.e_Metal1	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+Ant.e_Metal2	Ant.e_Metal2	Ant.e_Metal2	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+Ant.e_Metal3	Ant.e_Metal3	Ant.e_Metal3	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+Ant.e_Metal4	Ant.e_Metal4	Ant.e_Metal4	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+Ant.e_Metal5	Ant.e_Metal5	Ant.e_Metal5	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+Ant.e_TopMetal1	Ant.e_TopMetal1	Ant.e_TopMetal1	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+Ant.e_TopMetal2	Ant.e_TopMetal2	Ant.e_TopMetal2	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+Ant.f_TopVia1	Ant.f_TopVia1	Ant.f_TopVia1	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+Ant.f_TopVia2	Ant.f_TopVia2	Ant.f_TopVia2	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+Ant.f_Via1	Ant.f_Via1	Ant.f_Via1	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+Ant.f_Via2	Ant.f_Via2	Ant.f_Via2	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+Ant.f_Via3	Ant.f_Via3	Ant.f_Via3	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+Ant.f_Via4	Ant.f_Via4	Ant.f_Via4	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+Ant.g	Ant.g	Ant.g	not_comparable	the antenna unit cells are not run (their other rows are ERC)
 -	Ant.h	Ant.h	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
 -	Ant.i	Ant.i	ours_missing	antenna limits with a protection diode: the deck holds every gate to the unprotected limits (deck note)
 -	Cnt.c.SRAM	Cnt.c.SRAM	ours_missing	SRAM and digital-boundary variants: not in the deck
 -	Cnt.c.digibnd	Cnt.c.digibnd	ours_missing	SRAM and digital-boundary variants: not in the deck
 -	CntB.a	CntB.a	ours_missing	ContBar rules: need a square/bar shape class (deck note)
--	CntB.a1	CntB.a1	ours_missing	ContBar rules: need a square/bar shape class (deck note)
+CntB.a1	CntB.a1	CntB.a1	agrees	
 -	CntB.b	CntB.b	ours_missing	ContBar rules: need a square/bar shape class (deck note)
 -	CntB.b1	CntB.b1	ours_missing	ContBar rules: need a square/bar shape class (deck note)
 -	CntB.b2	CntB.b2	ours_missing	ContBar rules: need a square/bar shape class (deck note)
@@ -439,9 +439,9 @@ Pin.e	Pin.e	Pin.e	agrees
 -	CntB.h1	CntB.h1	ours_missing	ContBar rules: need a square/bar shape class (deck note)
 -	CntB.j	CntB.j	ours_missing	ContBar rules: need a square/bar shape class (deck note)
 -	GFil.i	GFil.i	ours_missing	GatPoly:nofill maximum area: not expressible (deck note)
--	Gat.a3	Gat.a3	ours_missing	channel length across the gate (deck: waiting)
--	Gat.a4	Gat.a4	ours_missing	channel length across the gate (deck: waiting)
--	Gat.f	Gat.f	ours_missing	rectangles only: needs a shape class (deck: waiting)
+Gat.a3	Gat.a3	Gat.a3	agrees	
+Gat.a4	Gat.a4	Gat.a4	agrees	
+Gat.f	Gat.f	Gat.f	agrees	
 -	Gat.g	Gat.g	ours_missing	45-degree variants: GPurify refuses 45-degree geometry outright (deck note)
 -	LBE.b1	LBE.b1	ours_missing	maximum area: no kind (deck: waiting)
 -	LBE.d	LBE.d	ours_missing	EdgeSeal inner edge and LBE ring: left out
