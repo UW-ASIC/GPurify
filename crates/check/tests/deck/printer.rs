@@ -200,3 +200,37 @@ extraction rcc coupling_threshold 0.1fF
         assert!(printed.contains(line), "{line} not in\n{printed}");
     }
 }
+
+/// A deck's parasitic models (`pex_fill`, `pex_device`) survive printing,
+/// and one naming what the deck lacks is refused.
+/// Oracle: round trip; and the refusals `docs/deck.md` states (a fill
+/// layer that carries no net, a model no `device mos` declares, a key
+/// missing).
+#[test]
+fn a_deck_with_pex_models_survives_printing() {
+    let text = "grid 1nm
+layer poly = gds(66, 20)
+layer diff = gds(65, 20)
+layer met1 = gds(68, 20)
+layer fill1 = gds(68, 28)
+layer gate = poly and diff
+connect conductors [poly, diff, met1, fill1]
+device mos gate model \"nfet\" terminals [poly, diff, diff]
+pex fill1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9 area_cap 25.8aF/um2 fringe_cap 40.5aF/um
+pex_fill fill1 floating
+pex_device \"nfet\" gate_contact_cap 0.3aF/um gate_diffusion_cap 0.25aF/um
+";
+    let mut strings = StrTable::default();
+    let deck = compile(text, grid(), &mut strings).expect("the deck compiles");
+    assert_eq!(deck.pex_models.fill.len(), 1);
+    assert_eq!(deck.pex_models.device[0].gate_diffusion_af_um, 0.25);
+    assert_round_trip("pex models", &deck, &mut strings);
+    let refused = |swap: (&str, &str)| {
+        let text = text.replace(swap.0, swap.1);
+        compile(&text, grid(), &mut StrTable::default()).is_err()
+    };
+    assert!(refused(("pex_fill fill1", "pex_fill gate")));
+    assert!(refused(("pex_device \"nfet\"", "pex_device \"pfet\"")));
+    assert!(refused((" gate_diffusion_cap 0.25aF/um", "")));
+    assert!(refused(("floating", "sometimes")));
+}

@@ -143,6 +143,23 @@ pub struct PexModels {
     /// net drawn only on that conductor (a metal fill piece) is extracted
     /// (catalog PEX-012).
     pub fill: Vec<(String, FillTreatment)>,
+    /// `pex_device "<model>" gate_contact_cap <c> gate_diffusion_cap <c>`,
+    /// in deck order: the device-region capacitances of a MOS model,
+    /// per µm of gate width (catalog PEX-011).
+    pub device: Vec<DeviceParasitics>,
+}
+
+/// One `pex_device` line: the capacitances in a MOS device's region that
+/// its SPICE model leaves to extraction, each per µm of gate width and per
+/// side (source and drain).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceParasitics {
+    /// The device statement's model, as written.
+    pub model: String,
+    /// Gate to the source/drain contact, aF/µm.
+    pub gate_contact_af_um: f64,
+    /// Gate to the diffusion beside it (outer fringe), aF/µm.
+    pub gate_diffusion_af_um: f64,
 }
 
 /// How PEX treats metal fill (`pex_fill`), as `StarRC` and Quantus offer it.

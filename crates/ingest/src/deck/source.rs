@@ -376,6 +376,27 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
     };
 
     let pex_models = check_pex_models(&doc.pex_models, &layers, &connectivity, strings)?;
+    for (at, device) in pex_models.device.iter().enumerate() {
+        let mos = doc
+            .devices
+            .iter()
+            .any(|d| d.model == device.model && d.kind == super::DeviceKind::Mos);
+        if !mos {
+            return Err(DeckError::Malformed(format!(
+                "pex_device \"{}\": no `device mos` statement has that model",
+                device.model
+            )));
+        }
+        if pex_models.device[..at]
+            .iter()
+            .any(|d| d.model == device.model)
+        {
+            return Err(DeckError::Malformed(format!(
+                "pex_device \"{}\": stated twice",
+                device.model
+            )));
+        }
+    }
     Ok(Deck {
         layers,
         rules,
