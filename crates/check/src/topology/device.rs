@@ -10,7 +10,7 @@ use crate::topology::net::{polys_intersect, retain_intersecting_into, Holes, Net
 use gpurify_geom::boolean::{intersection_into, BooleanError};
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{area2, isqrt};
-use gpurify_geom::view::validate_layer_into;
+use gpurify_geom::view::{validate_layer_with, Angles};
 use gpurify_geom::{Dbu, DbuArea};
 use gpurify_geom::{GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_ingest::deck::{Connectivity, DeviceKind, DeviceRecognition, DeviceValue};
@@ -797,16 +797,27 @@ pub fn refuse_conducting_channels(
             }
 
             // Exact area intersection: edge-only abutment intersects to nothing.
-            validate_layer_into(store, marker, &mut marker_area).map_err(BooleanError::from)?;
-            validate_layer_into(store, layer, &mut conductor_area).map_err(BooleanError::from)?;
+            validate_layer_with(store, marker, Angles::Octilinear, &mut marker_area)
+                .map_err(BooleanError::from)?;
+            validate_layer_with(store, layer, Angles::Octilinear, &mut conductor_area)
+                .map_err(BooleanError::from)?;
             intersection_into(&marker_area, &conductor_area, &mut overlap)?;
             if !overlap.is_empty() {
                 // The overlap's own rows are the boolean's scratch store's.
                 let mut drawn = LayerRects::default();
                 let mut owner = PolyId(u32::MAX);
                 for (id, area) in [(marker, &marker_area), (layer, &conductor_area)] {
-                    drawn.build(store, id, area);
-                    owner = owner.min(owners_of(&overlap, &drawn)[0]);
+                    owner = owner.min(if area.is_rectilinear() {
+                        drawn.build(store, id, area);
+                        owners_of(&overlap, &drawn)[0]
+                    } else {
+                        // ponytail: a 45-degree layer names its lowest row, not
+                        // the one under the overlap; cut by point if it matters.
+                        (0..u32::try_from(area.len()).expect("a u32 index"))
+                            .map(|p| area.get(p).provenance())
+                            .min()
+                            .unwrap_or(PolyId(u32::MAX))
+                    });
                 }
                 return Err(ChannelError::ConductingChannel {
                     marker,

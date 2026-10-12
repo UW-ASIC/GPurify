@@ -1115,20 +1115,17 @@ fn a_channel_over_live_conductor_area_is_refused_naming_the_polygon() {
     assert_eq!(poly, ids.of(channel).min(ids.of(diff)));
 }
 
-/// Oracle: construct-from-answer. A non-rectilinear source/drain layer is a
-/// channel overlap the rectilinear splitter cannot represent, so the guard
-/// must refuse it naming the polygon rather than approximate or skip it.
-#[test]
-fn a_non_rectilinear_source_drain_layer_is_refused_not_split() {
+/// A channel guard's run over one MOS row: `CHANNEL` and `POLY` boxes and one
+/// `DIFF` polygon.
+fn channel_guard(diff_x: &[i64], diff_y: &[i64]) -> (Result<(), ChannelError>, PolyId, PolyId) {
     const CHANNEL: LayerId = LayerId(0);
     const POLY: LayerId = LayerId(1);
     const DIFF: LayerId = LayerId(2);
 
     let mut layout = LayoutBuilder::new(3);
-    layout.rect(CHANNEL, 200, 0, 250, 200);
+    let channel = layout.push(CHANNEL, &[200, 250, 250, 200], &[0, 0, 200, 200]);
     layout.rect(POLY, 200, -50, 250, 250);
-    // A triangle: every edge check the boolean runs on this layer refuses.
-    let triangle = layout.push(DIFF, &[0, 500, 250], &[0, 0, 200]);
+    let diff = layout.push(DIFF, diff_x, diff_y);
     let (store, ids) = layout.finish();
 
     let mut strings = StrTable::default();
@@ -1145,14 +1142,44 @@ fn a_non_rectilinear_source_drain_layer_is_refused_not_split() {
         intra_layer_touch: true,
         ..Connectivity::default()
     };
+    (
+        refuse_conducting_channels(&store, &connectivity, &recognition),
+        ids.of(channel),
+        ids.of(diff),
+    )
+}
 
-    let refused = refuse_conducting_channels(&store, &connectivity, &recognition)
-        .expect_err("a slanted diffusion cannot be split and must not be guessed at");
+/// Oracle: construct-from-answer. A source/drain polygon with an edge at
+/// neither an axis nor 45 degrees cannot be intersected exactly, so the guard
+/// must refuse it naming the polygon rather than approximate or skip it.
+#[test]
+fn a_non_octilinear_source_drain_layer_is_refused_not_split() {
+    // A triangle whose sides rise 200 over 250.
+    let (refused, _, triangle) = channel_guard(&[0, 500, 250], &[0, 0, 200]);
     assert_eq!(
         refused,
-        ChannelError::Geometry(BooleanError::Validity(ValidityError::NotRectilinear(
-            ids.of(triangle)
+        Err(ChannelError::Geometry(BooleanError::Validity(
+            ValidityError::NotOctilinear(triangle)
         ))),
-        "the refusal names the polygon the splitter cannot represent"
+        "the refusal names the polygon the boolean cannot represent"
     );
+}
+
+/// Oracle: hand-derived overlap (H12). A source/drain triangle with 45-degree
+/// sides is intersected exactly: one reaching under the channel box
+/// (x 200..250, its apex at (250, 250)) is a conducting channel on `DIFF`, and
+/// one whose apex stops at x 150 is clean. The run does not refuse either.
+#[test]
+fn a_45_degree_source_drain_layer_is_intersected() {
+    let (found, channel, diff) = channel_guard(&[0, 500, 250], &[0, 0, 250]);
+    let Err(ChannelError::ConductingChannel {
+        conductor, poly, ..
+    }) = found
+    else {
+        panic!("a conducting channel, not {found:?}");
+    };
+    assert_eq!(conductor, LayerId(2));
+    assert_eq!(poly, channel.min(diff));
+    let (clean, ..) = channel_guard(&[0, 150, 0], &[0, 150, 150]);
+    assert_eq!(clean, Ok(()));
 }
