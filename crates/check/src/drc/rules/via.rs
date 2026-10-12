@@ -13,7 +13,7 @@ use super::{
 use crate::drc::ruleset::CutAreaBands;
 use crate::drc::{CutClassTable, Scratch};
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
-use gpurify_geom::boolean::intersection_into;
+use gpurify_geom::boolean::{intersection_into, BooleanError};
 use gpurify_geom::connectivity::components_into;
 use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, Point};
@@ -568,6 +568,105 @@ pub(crate) fn keep_out_zone(
     (Outcome::Ran, examined)
 }
 
+/// The connectors of two merged layers: each pair of a `lower` and an `upper`
+/// figure that overlap, its footprint their overlap.
+struct Connectors {
+    /// The footprint, merged.
+    feet: ValidatedLayer,
+    /// The footprint's rectangles, each labelled with its piece.
+    pieces: SortedRects<u32>,
+    /// Per footprint piece, its connector.
+    of_piece: Vec<usize>,
+    /// Per connector, the box of its footprint.
+    bounds: Vec<Bbox>,
+    /// Per connector, its `(lower, upper)` figures.
+    figures: Vec<(u32, u32)>,
+}
+
+impl Connectors {
+    fn new(under: &ValidatedLayer, over: &ValidatedLayer) -> Result<Self, BooleanError> {
+        let mut feet = ValidatedLayer::default();
+        intersection_into(under, over, &mut feet)?;
+        let (under, over) = (figure_rects(under), figure_rects(over));
+        let (mut rects, mut start) = (Vec::new(), Vec::new());
+        decompose_into(&feet, &mut rects, &mut start);
+        let pair: Vec<(u32, u32)> = start
+            .windows(2)
+            .map(|span| {
+                let r = rects[span[0] as usize];
+                (first_label(&under, r), first_label(&over, r))
+            })
+            .collect();
+        let mut figures = pair.clone();
+        figures.sort_unstable();
+        figures.dedup();
+        let of_piece: Vec<usize> = pair
+            .iter()
+            .map(|p| figures.binary_search(p).expect("every pair is listed"))
+            .collect();
+        let mut bounds = vec![Bbox::EMPTY; figures.len()];
+        for (piece, &at) in (0u32..).zip(&of_piece) {
+            bounds[at] = bounds[at].union(feet.get(piece).bbox());
+        }
+        Ok(Self {
+            pieces: figure_rects(&feet),
+            feet,
+            of_piece,
+            bounds,
+            figures,
+        })
+    }
+
+    /// Per connector, the merged figures of `cuts` overlapping its footprint,
+    /// in figure order; a cut over two connectors is in each.
+    fn cuts(&self, cuts: &ValidatedLayer) -> Vec<Vec<u32>> {
+        let mut held = vec![Vec::new(); self.figures.len()];
+        let (mut rects, mut start) = (Vec::new(), Vec::new());
+        decompose_into(cuts, &mut rects, &mut start);
+        let mut hit = Vec::new();
+        for (cut, span) in (0u32..).zip(start.windows(2)) {
+            hit.clear();
+            for &r in &rects[span[0] as usize..span[1] as usize] {
+                hit.extend(
+                    self.pieces
+                        .overlapping(r)
+                        .map(|(_, piece)| self.of_piece[piece as usize]),
+                );
+            }
+            hit.sort_unstable();
+            hit.dedup();
+            for &at in &hit {
+                held[at].push(cut);
+            }
+        }
+        held
+    }
+
+    /// Per connector, the area of `layer` inside its footprint.
+    fn area_in(&self, layer: &ValidatedLayer) -> Result<Vec<DbuArea>, BooleanError> {
+        let mut inside = ValidatedLayer::default();
+        intersection_into(layer, &self.feet, &mut inside)?;
+        let (mut rects, mut start) = (Vec::new(), Vec::new());
+        decompose_into(&inside, &mut rects, &mut start);
+        let mut sums = vec![DbuArea::new(0); self.figures.len()];
+        for &r in &rects {
+            let at = self.of_piece[first_label(&self.pieces, r) as usize];
+            sums[at] = sums[at] + r.area();
+        }
+        Ok(sums)
+    }
+}
+
+/// The label of the first rectangle of `sorted` overlapping `r`, which one
+/// must.
+fn first_label(sorted: &SortedRects<u32>, r: Bbox) -> u32 {
+    sorted
+        .overlapping(r)
+        .map(|(_, label)| label)
+        .next()
+        .expect("a footprint lies on both layers")
+}
+
 /// sky130 ct.irdrop and via.irdrop as a deck states them: each connector (a
 /// merged `lower` figure and a merged `upper` figure that overlap, its
 /// footprint their overlap) is held, by the number of merged `pre` cuts
@@ -591,75 +690,14 @@ pub(crate) fn cut_area_change(
     ) else {
         return REFUSED;
     };
-    let mut feet = ValidatedLayer::default();
-    if intersection_into(&under, &over, &mut feet).is_err() {
-        return REFUSED;
-    }
-    let (under, over, pieces) = (
-        figure_rects(&under),
-        figure_rects(&over),
-        figure_rects(&feet),
-    );
-    let first = |sorted: &SortedRects<u32>, r: Bbox| {
-        sorted
-            .overlapping(r)
-            .map(|(_, label)| label)
-            .next()
-            .expect("a footprint lies on both layers")
-    };
-    // Each footprint piece's connector: the two figures it lies in.
-    let (mut rects, mut start) = (Vec::new(), Vec::new());
-    decompose_into(&feet, &mut rects, &mut start);
-    let connector: Vec<(u32, u32)> = start
-        .windows(2)
-        .map(|span| {
-            let r = rects[span[0] as usize];
-            (first(&under, r), first(&over, r))
-        })
-        .collect();
-    let mut keys = connector.clone();
-    keys.sort_unstable();
-    keys.dedup();
-    let index = |piece: u32| {
-        keys.binary_search(&connector[piece as usize])
-            .expect("every piece's connector is listed")
-    };
-    let mut bounds = vec![Bbox::EMPTY; keys.len()];
-    for piece in 0..u32::try_from(connector.len()).expect("a layer's pieces fit a u32") {
-        bounds[index(piece)] = bounds[index(piece)].union(feet.get(piece).bbox());
-    }
-    let area_in = |cuts: &ValidatedLayer| -> Option<Vec<DbuArea>> {
-        let mut inside = ValidatedLayer::default();
-        intersection_into(cuts, &feet, &mut inside).ok()?;
-        let (mut rects, mut start) = (Vec::new(), Vec::new());
-        decompose_into(&inside, &mut rects, &mut start);
-        let mut sums = vec![DbuArea::new(0); keys.len()];
-        for &r in &rects {
-            let at = index(first(&pieces, r));
-            sums[at] = sums[at] + r.area();
-        }
-        Some(sums)
-    };
-    let (Some(was), Some(is)) = (area_in(&before), area_in(&after)) else {
+    let Ok(connectors) = Connectors::new(&under, &over) else {
         return REFUSED;
     };
-    // Each cut counts once in every connector it overlaps.
-    let mut cuts = vec![0u32; keys.len()];
-    decompose_into(&before, &mut rects, &mut start);
-    let mut hit = Vec::new();
-    for span in start.windows(2) {
-        hit.clear();
-        for &r in &rects[span[0] as usize..span[1] as usize] {
-            hit.extend(pieces.overlapping(r).map(|(_, piece)| index(piece)));
-        }
-        hit.sort_unstable();
-        hit.dedup();
-        for &at in &hit {
-            cuts[at] += 1;
-        }
-    }
-    for at in 0..keys.len() {
-        let Some(limit) = bands.limit(cuts[at]) else {
+    let (Ok(was), Ok(is)) = (connectors.area_in(&before), connectors.area_in(&after)) else {
+        return REFUSED;
+    };
+    for (at, cuts) in connectors.cuts(&before).iter().enumerate() {
+        let Some(limit) = bands.limit(u32::try_from(cuts.len()).unwrap_or(u32::MAX)) else {
             continue;
         };
         let change = DbuArea::new((was[at].raw() - is[at].raw()).abs());
@@ -668,12 +706,96 @@ pub(crate) fn cut_area_change(
                 rule,
                 layer: pre,
                 severity: Severity::Error,
-                at: centre(bounds[at]),
+                at: centre(connectors.bounds[at]),
                 measured: Measurement::Area(change),
                 limit: Measurement::Area(limit),
                 shapes: (PolyId(u32::MAX), None),
             });
         }
     }
-    (Outcome::Ran, keys.len() as u64)
+    (Outcome::Ran, connectors.figures.len() as u64)
+}
+
+/// The redundant-via rate of Xu et al. (ASP-DAC 2005), `1 - dead / vias`: a
+/// via is a connector's cuts ([`Connectors`]); a single-cut via is dead when
+/// none of its cut's four neighbours (its box moved `pitch` along x or y)
+/// lies wholly on both of its figures at least `space` from every cut. One
+/// violation when the rate is below `limit`, on `cut`, at the centre of the
+/// first dead via's cut, measuring the rate. `examined` counts vias.
+#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
+pub(crate) fn via_redundancy(
+    store: &GeometryStore,
+    rule: StrId,
+    (cut, lower, upper): (LayerId, LayerId, LayerId),
+    (pitch, space): (Dbu, Dbu),
+    limit: f64,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let (Some(under), Some(over), Some(cuts)) = (
+        merged(store, lower, s),
+        merged(store, upper, s),
+        merged(store, cut, s),
+    ) else {
+        return REFUSED;
+    };
+    let Ok(connectors) = Connectors::new(&under, &over) else {
+        return REFUSED;
+    };
+    let (under_rects, over_rects) = (figure_rects(&under), figure_rects(&over));
+    let boxes: Vec<Bbox> = cuts.bboxes().to_vec();
+    let space2 = space.mul_wide(space);
+    // Whether figure `figure` of `sorted` covers all of `b`.
+    let covers = |sorted: &SortedRects<u32>, figure: u32, b: Bbox| {
+        sorted
+            .overlapping(b)
+            .filter(|&(_, label)| label == figure)
+            .fold(DbuArea::new(0), |sum, (part, _)| sum + part.area())
+            == b.area()
+    };
+    let room = |b: Bbox, (lo, hi): (u32, u32)| {
+        let p = pitch.raw();
+        [(p, 0), (-p, 0), (0, p), (0, -p)]
+            .into_iter()
+            .any(|(dx, dy)| {
+                let shift = |v: Dbu, by: i64| Dbu::new_unchecked(v.raw() + by);
+                let c = Bbox {
+                    xlo: shift(b.xlo, dx),
+                    ylo: shift(b.ylo, dy),
+                    xhi: shift(b.xhi, dx),
+                    yhi: shift(b.yhi, dy),
+                };
+                covers(&under_rects, lo, c)
+                    && covers(&over_rects, hi, c)
+                    && boxes.iter().all(|&other| bbox_gap2(c, other) >= space2)
+            })
+    };
+    let held = connectors.cuts(&cuts);
+    let vias: Vec<usize> = (0..held.len()).filter(|&at| !held[at].is_empty()).collect();
+    let dead: Vec<usize> = vias
+        .iter()
+        .copied()
+        .filter(|&at| {
+            held[at].len() == 1 && !room(boxes[held[at][0] as usize], connectors.figures[at])
+        })
+        .collect();
+    #[allow(clippy::cast_precision_loss, reason = "via counts are far below 2^52")]
+    let rate = if vias.is_empty() {
+        1.0
+    } else {
+        1.0 - dead.len() as f64 / vias.len() as f64
+    };
+    if rate < limit {
+        let first = held[dead[0]][0] as usize;
+        out.push(Violation {
+            rule,
+            layer: cut,
+            severity: Severity::Error,
+            at: centre(boxes[first]),
+            measured: Measurement::Ratio(rate),
+            limit: Measurement::Ratio(limit),
+            shapes: (PolyId(u32::MAX), None),
+        });
+    }
+    (Outcome::Ran, vias.len() as u64)
 }

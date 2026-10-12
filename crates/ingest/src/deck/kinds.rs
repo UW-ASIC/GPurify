@@ -562,6 +562,19 @@ pub(crate) const KINDS: &[Kind] = &[
             DENSITY,
         )
     },
+    // The redundant-via rate, 1 - dead / vias (Xu et al., ASP-DAC 2005): a
+    // single-cut via is dead when no cut fits beside it at `pitch`.
+    drc(
+        "via_redundancy",
+        Cmp::Ge,
+        "via_redundancy",
+        &[0, 1, 2],
+        DENSITY_LIMIT,
+        &[
+            p("pitch", "pitch", Dim::Length),
+            p("space", "space", Dim::Length),
+        ],
+    ),
     // A DFM score over a recommended rule's findings, each 0 at the required
     // value and 1 at the recommended one, combined with a failure rate:
     // `dfm_score(met1; check: space, required: 180nm, recommended: 220nm,

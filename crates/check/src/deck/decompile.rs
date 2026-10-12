@@ -399,6 +399,17 @@ impl CompiledDeck {
             } => one(layer)
                 .length("radius", radius)
                 .value("limit", ParamValue::Area(limit)),
+            Rule::ViaRedundancy {
+                cut,
+                lower,
+                upper,
+                pitch,
+                space,
+                limit,
+            } => Row::new(rule.kind(), &[cut, lower, upper])
+                .length("pitch", pitch)
+                .length("space", space)
+                .number("limit", limit),
             Rule::DfmScore {
                 check,
                 layer,

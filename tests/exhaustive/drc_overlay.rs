@@ -85,6 +85,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         cut_area_change(),
         pattern_match(),
         dfm_score(),
+        via_redundancy(),
         critical_area(),
         stitch(),
         trim_cut(),
@@ -4689,6 +4690,86 @@ fn critical_area() -> Vec<Fixture> {
             [vec![], vec![], vec![], vec![]],
         ),
     ])
+}
+
+/// The redundant-via rate (`via_redundancy`, DRC-117, Xu et al. ASP-DAC 2005
+/// with deck-supplied values): cuts `v` 100 square between `m1` and `m2`, a
+/// second cut 200 along an axis, 100 from every cut, a rate of 0.5 signing
+/// off.
+///
+/// Oracle: the rate `1 - dead / vias` by hand: a cut on a 1000 square pad
+/// (room: rate 1), on pads no larger than itself (dead: 0, found), two cuts
+/// on such a pad (doubled already: 1); a cut whose only free neighbour lies
+/// 99, 100, 101 from a stray cut (dead at 99: found); one dead of two vias
+/// (0.5, at the sign-off) and two of three (1/3, found).
+fn via_redundancy() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["v", "m1", "m2"],
+        "rule vr via_redundancy(v, m1, m2; pitch: 200nm, space: 100nm) >= 0.5\n",
+    );
+    let pad = |layout: Layout, (xlo, ylo, xhi, yhi): Rect| {
+        layout
+            .rect("m1", xlo, ylo, xhi, yhi)
+            .rect("m2", xlo, ylo, xhi, yhi)
+    };
+    let tight =
+        |layout: Layout, x: i64| pad(layout, (x, 0, x + 100, 100)).rect("v", x, 0, x + 100, 100);
+    let roomy = |layout: Layout| pad(layout, (0, 0, 1000, 1000)).rect("v", 100, 100, 200, 200);
+    let rate = |dead: u32, vias: u32| -> Vec<Finding> {
+        let r = 1.0 - f64::from(dead) / f64::from(vias);
+        if r < 0.5 {
+            vec![Finding {
+                measured: Some(Measurement::Ratio(r)),
+                at: None,
+            }]
+        } else {
+            Vec::new()
+        }
+    };
+    let case = |name: &str, layout: Layout, found: Vec<Finding>| {
+        fixture(
+            &format!("via_redundancy/{name}"),
+            &["DRC-117"],
+            &deck,
+            layout,
+            &[("vr", found)],
+        )
+    };
+    let mut cases = vec![
+        case("room", roomy(Layout::default()), rate(0, 1)),
+        case("no_room", tight(Layout::default(), 0), rate(1, 1)),
+        case(
+            "doubled",
+            pad(Layout::default(), (0, 0, 100, 300))
+                .rect("v", 0, 0, 100, 100)
+                .rect("v", 0, 200, 100, 300),
+            rate(0, 1),
+        ),
+        case(
+            "one_of_two",
+            tight(roomy(Layout::default()), 3000),
+            rate(1, 2),
+        ),
+        case(
+            "two_of_three",
+            tight(tight(roomy(Layout::default()), 3000), 5000),
+            rate(2, 3),
+        ),
+    ];
+    // Only +x is free: the strip ends 100 below and above the cut and at its
+    // left; m2 ends past the neighbour at 400; a stray cut on m1 alone.
+    for (gap, side) in sweep(100) {
+        cases.push(case(
+            &format!("stray/{side}"),
+            Layout::default()
+                .rect("m1", 0, 0, 2000, 300)
+                .rect("m2", 100, 0, 400, 300)
+                .rect("v", 100, 100, 200, 200)
+                .rect("v", 400 + gap, 100, 500 + gap, 200),
+            rate(u32::from(gap < 100), 1),
+        ));
+    }
+    every_placement(cases)
 }
 
 /// DFM scoring (`dfm_score`, DRC-111, arXiv:1805.10016 with deck-supplied
