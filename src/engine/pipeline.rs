@@ -56,6 +56,9 @@ pub struct Loaded {
     pub reference: Option<Netlist>,
     /// The design intent; `Some` exactly when [`Inputs::intent`] is.
     pub intent: Option<DesignIntent>,
+    /// The DEF and its LEFs, when the layout is a DEF: what the
+    /// integration checks ([`crate::engine::integration`]) read.
+    pub design: Option<lefdef::Design>,
 }
 
 /// Everything derived from what was loaded, shared read-only by all four checks.
@@ -140,7 +143,7 @@ pub fn load_with(inputs: &Inputs, decks: &[(&str, DeckFn)]) -> Result<Loaded, Lo
                 .map_err(|why| why.in_file(&inputs.deck.display().to_string()))?,
         })
     };
-    let (library, grid, deck) = if is_def(&inputs.layout) {
+    let (library, grid, deck, design) = if is_def(&inputs.layout) {
         // A DEF states its grid in its UNITS; its LEFs are read on it, and
         // the deck too, whose layers the design is then drawn on.
         let read = |path: &std::path::Path, file| {
@@ -174,7 +177,7 @@ pub fn load_with(inputs: &Inputs, decks: &[(&str, DeckFn)]) -> Result<Loaded, Lo
             &strings,
         )?;
         let library = gpurify_ingest::layout::gds::Library::parse(&bytes, &mut strings)?;
-        (library, grid, deck)
+        (library, grid, deck, Some(lefdef::Design { def, lef }))
     } else {
         let bytes = gpurify_ingest::layout::read_gds_bytes(&inputs.layout)?;
         // Layout strings are interned before the deck's, which fixes every StrId.
@@ -182,7 +185,7 @@ pub fn load_with(inputs: &Inputs, decks: &[(&str, DeckFn)]) -> Result<Loaded, Lo
         // The deck's lengths are converted on the layout's grid, so the layout states it.
         let grid = library.grid()?;
         let deck = compile(grid, &mut strings)?;
-        (library, grid, deck)
+        (library, grid, deck, None)
     };
     let (store, mut provenance) = library.flatten(&deck, &strings, UnknownLayers::Reject)?;
     provenance.resolve_labels(&store, &deck.connectivity)?;
@@ -215,6 +218,7 @@ pub fn load_with(inputs: &Inputs, decks: &[(&str, DeckFn)]) -> Result<Loaded, Lo
         provenance,
         reference,
         intent,
+        design,
     })
 }
 
@@ -300,6 +304,7 @@ fn in_file(mut why: LefDefError, path: &std::path::Path) -> LefDefError {
 /// call it before [`run_checks`](crate::engine::run::run_checks).
 pub fn intern_report_ids(strings: &mut StrTable) {
     gpurify_check::lvs::intern_rule_ids(strings);
+    crate::engine::integration::intern_rule_ids(strings);
 }
 
 /// Read a reference netlist. The first subcircuit opener picks the dialect

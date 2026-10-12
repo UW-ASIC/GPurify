@@ -5,6 +5,7 @@
 //! [`StageStatus::Refused`] carrying its reason, never an empty result, and
 //! either fails [`Summary::passed`].
 
+pub mod integration;
 pub mod pipeline;
 pub mod run;
 pub mod system;

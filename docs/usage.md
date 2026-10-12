@@ -52,6 +52,17 @@ reader is LEF/DEF 5.8's subset that draws geometry; what it does not read
 is refused with its line, never skipped
 ([`gpurify_ingest::lefdef`](../crates/ingest/src/lefdef/mod.rs)).
 
+Since every block is drawn as its LEF abstract, `drc` on a DEF checks the
+top-level routing against the blocks' pins and obstructions (interface
+DRC). It also runs six integration checks on the design itself, each
+reported like a rule: `def.fill_outside_die` (a `FILLS` shape not wholly
+inside the `DIEAREA`), `def.component_outside_die`,
+`def.component_overlap` (two placed components overlapping, `COVER`
+macros such as bumps aside), `def.off_site` (a `CORE` cell whose
+placement point is no site of a `ROW`), `def.pin_off_track` (a DEF pin
+whose centre is on no `TRACKS` of its layer) and
+`def.off_manufacturing_grid` (a vertex off the LEF `MANUFACTURINGGRID`).
+
 ## Reading the report
 
 Every rule in the deck reports one of three outcomes, and the count of shapes

@@ -333,8 +333,8 @@ says which foundry manual, standard or tool defines each one.
 
 | Id | Check | Status | What is missing |
 |---|---|---|---|
-| FLOW-003 | SoC integration (macro sync, ports off grid, fill outside boundary, block/pad-ring overlap) | missing | Cheap from LEF/DEF + GDS |
-| FLOW-004 | Interface DRC top vs blocks | missing | — |
+| FLOW-003 | SoC integration (macro sync, ports off grid, fill outside boundary, block/pad-ring overlap) | partial | With a DEF layout, DRC runs six integration checks (gpurify::engine::integration), each from LEF/DEF 5.8: a FILLS shape outside the DIEAREA, a component outside it, two placed components overlapping (CLASS COVER aside), a CORE cell off its ROW's sites, a DEF pin whose centre is on no TRACKS of its layer, a vertex off the LEF MANUFACTURINGGRID. Not checked: macro synchronisation (a macro's own GDS against its LEF abstract) |
+| FLOW-004 | Interface DRC top vs blocks | partial | A DEF layout draws every placed block's LEF abstract (pins and obstructions, checked against KLayout's LEF/DEF reader) with the top-level routing, and DRC checks them together: top-level shapes against the blocks' boundaries. Not done: a block's own layout is not read (no hierarchical DRC; its abstract stands in), and a finding between two shapes of one abstract is not told from one at the interface |
 | FLOW-005 | In-design / live DRC | partial | Shared-deck library (Philis) is the first step |
 | FLOW-006 | User-programmable rules | partial | DRC custom rules as Rust fn pointers (deck::CustomRule via DeckBuilder::custom; runner owns accounting) and gpurify::cli::main_with for a binary with its own decks; ERC custom rules and a KLayout snippet per rule not yet (deck-library plan P5) |
 | FLOW-007 | Fill insertion (density-driven, timing-aware) | missing | DRC-073 checks fill; this generates it |

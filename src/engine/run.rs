@@ -227,6 +227,11 @@ pub fn run_checks(
     let mut out = Outputs::default();
     let staged = !loaded.deck.stages.name.is_empty();
     let drc = if options.checks.drc {
+        if let Some(design) = &loaded.design {
+            append_stage(&mut out, |violations, runs| {
+                crate::engine::integration::check(design, &loaded.strings, violations, runs);
+            });
+        }
         run_drc(loaded, extracted, &mut out)
     } else {
         StageStatus::NotSelected

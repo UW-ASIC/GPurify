@@ -54,6 +54,7 @@ fn empty_loaded(store: GeometryStore, deck: Deck) -> Loaded {
         provenance: Provenance::default(),
         reference: None,
         intent: None,
+        design: None,
     }
 }
 
@@ -557,6 +558,7 @@ fn sky130_lvs(rects: &[(&str, i64, i64, i64, i64)], reference: &str) -> (Verdict
         provenance,
         reference: Some(reference),
         intent: None,
+        design: None,
     };
     let extracted = extract(&loaded).expect("extracts");
     let (out, summary) =
