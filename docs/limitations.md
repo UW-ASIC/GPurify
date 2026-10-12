@@ -218,9 +218,7 @@ says which foundry manual, standard or tool defines each one.
 | DRC-068 | Cut-area conservation between two databases | partial | gpurify xor compares two layouts layer by layer, as KLayout's xor does: every region where a drawn layer differs, with its area, so a cut layer's lost or added area is found. Not checked, and not checkable from public sources: the irdrop tolerance per connector by cut count (ct.irdrop.1-3, via.irdrop.1-4 to via4.irdrop.1-4). Its flags are CU (Cu back end only, which sky130 does not offer) and IR (an Al layout against its slotted Cu twin); no public source defines a connector, and the unit (um) was added by a script (skywater-pdk 9039be3), not by SkyWater. No public deck implements it; see docs/limitations.md |
 | DRC-075 | Wide-metal slotting | partial | Slot required is a kind (cheesing); slot geometry uses the generic kinds; slit density over a plate is region_density (IHP Slt.i). Missing: a maximum slot spacing (GF180 MSLOT.4) and staggered slots (MSLOT.6) |
 | DRC-076 | Waffle-window density | missing | Not implemented, by decision: the rule text (SKY m1.- to m4.-, flag RC) gives a 700 um window and coverage bands but no window step, and no public deck codes it. Cadence's public SKY130 DRM (2025-07-22) lists it as obsolete and removed and cmm*/waffleDrop as unsupported; see docs/limitations.md |
-| DRC-081 | Net spacing between two layers / on wells | missing | Net spacing takes one layer; only sky130 connects wells as nets |
-| DRC-082 | Voltage-dependent spacing (VA-DRC) | missing | Top cross-source gap; needs ERC-F1 voltage propagation |
-| DRC-083 | HV tag propagation (shorted to HV becomes HV) | partial | hv_domain flags devices whose terminals span supply domains; layout shorted to an HV net is not tagged HV |
+| DRC-081 | Net spacing between two layers / on wells | partial | space(A, B; nets: different) spaces two conductor layers, overlap included; a derived or tag layer carries no nets, so sky130 nwell.7 (dnwell), hvnwell.8 and hv.nwell.1 (HV n-well by hvi or text tag) and vhvi.8 cannot be written, and no shipped deck carries one |
 | DRC-084 | Floating interconnect / must-join ports | partial | Flags conductor shapes that reach no device; LEF58 must-join-all-ports is not modelled |
 | DRC-086 | Shorts between labelled nets | partial | Reported in every run as lvs.net_seed_conflict, naming both labelled shapes, located at the first; no abort |
 | DRC-090 | Device-family rules (R, MIM, BJT, varactor, inductor, fuse, Schottky, LDMOS, photodiode, SRAM) | partial | Geometry is expressible through markers; exact resistor widths are width(L; allowed: [..]) (sky130 rpm.1b-1f) and channel length and width width(E) (DRC-011). Missing: licon counts per resistor terminal (rpm.1g-1k) and varactor taps (varac.2, varac.6) |
@@ -329,15 +327,9 @@ says which foundry manual, standard or tool defines each one.
 | ERC-E12 | Stress voiding / slotting | partial | cheesing requires a slot in wide shapes; stress-voiding rules beyond slotting are missing |
 | ERC-E13 | Thermal-aware / statistical EM, self-heating | missing | In scope since 2026-10-11 (was: One temperature, 85 C (limitations.md, "Power grid")) |
 | ERC-F4 | HCI susceptibility flag | missing | — |
-| ERC-F7 | Missing isolation at switchable-domain outputs | missing | Needs power states |
-| ERC-F8 | Power-state-dependent undriven gates | missing | — |
-| ERC-F10 | HV tag consistency | partial | The domain span across a device is checked; tag consistency (LV and HV n-wells on one net) is not |
-| ERC-F11 | Voltage-dependent spacing | missing | Same row as DRC-082 |
-| ERC-F13 | Inter-metal dielectric breakdown | missing | — |
 | ERC-F14 | Power-intent supply connectivity (power switches, always-on and retention cells on the supplies the UPF declares) | missing | Needs UPF input; IEEE 1801 not read (check-sources.md §5) |
 | ERC-G8 | Combinational loops | missing | Digital only, optional |
 | ERC-G9 | Path check: nets with no path to power or ground | missing | — |
-| ERC-H1 | Static leakage / HiZ / floating in power-down | missing | — |
 | ERC-H2 | Analog constraints (symmetry, common centroid, matching, orientation, dummies, WPE, STI) | missing | Overlaps Philis's own properties |
 | ERC-H3 | Netlist path checks (gate to ground within N devices; net types) | missing | — |
 

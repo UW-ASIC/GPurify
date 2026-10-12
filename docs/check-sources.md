@@ -62,9 +62,9 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 
 | Domain | implemented | expressible | partial | missing | verify | out of scope |
 |---|---:|---:|---:|---:|---:|---:|
-| DRC | 31 | 4 | 36 | 35 | 0 | 0 |
+| DRC | 33 | 4 | 36 | 33 | 0 | 0 |
 | LVS | 17 | 1 | 16 | 14 | 0 | 0 |
-| ERC | 27 | 2 | 14 | 38 | 0 | 0 |
+| ERC | 35 | 2 | 12 | 32 | 0 | 0 |
 | PEX | 4 | 0 | 3 | 9 | 0 | 0 |
 | Flow | 0 | 0 | 1 | 9 | 0 | 0 |
 
