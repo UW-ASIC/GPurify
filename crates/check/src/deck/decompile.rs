@@ -399,6 +399,24 @@ impl CompiledDeck {
             } => one(layer)
                 .length("radius", radius)
                 .value("limit", ParamValue::Area(limit)),
+            Rule::PatternMatch { layer, pattern } => {
+                let mut row = one(layer);
+                if let Some(pattern) = self.drc.patterns.get(pattern as usize) {
+                    row = row
+                        .length("window_w", pattern.window.0)
+                        .length("window_h", pattern.window.1);
+                    for (xs, ys, boxes) in [
+                        ("shape_x", "shape_y", &pattern.shapes),
+                        ("ignore_x", "ignore_y", &pattern.ignore),
+                    ] {
+                        for b in boxes {
+                            row = row.length(xs, b.xlo).length(xs, b.xhi);
+                            row = row.length(ys, b.ylo).length(ys, b.yhi);
+                        }
+                    }
+                }
+                row
+            }
             Rule::CutAreaChange {
                 pre,
                 post,

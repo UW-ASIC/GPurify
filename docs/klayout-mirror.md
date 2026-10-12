@@ -319,8 +319,9 @@ explains (kind 30).
 | 70 | origin | `origin(L)` | POINT | EXACT (scripted) | exact | new |
 | 71 | cover_density | `cover_density(L, C[, d]; window, step, cover, density, inclusive)` | POINT | EXACT (scripted) | exact | new |
 | 72 | cut_area_change | `cut_area_change(pre, post, lower, upper; cuts, change)` | POINT | EXACT (scripted) | exact | new |
+| 73 | pattern_match | `pattern(L; window, shapes, ignore)` | POINT | EXACT (scripted) | exact | new |
 
-48 kinds are EXACT (ten scripted over KLayout's polygons), 16 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
+49 kinds are EXACT (eleven scripted over KLayout's polygons), 16 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`, and between two layers (`space(A, B; nets: ..)`), which is not mirrored. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1478,6 +1479,17 @@ the footprint above the band's limit is a finding at the footprint box's centre.
 `cut_area_change`): every pair of merged `lower` and `upper` polygons that overlap, the same count
 (`overlapping`) and areas. **Key**: POINT. **Oracle**: sky130 ct.irdrop in shape with deck-supplied
 values; fixtures `cut_area_change/*`.
+
+### 73. pattern_match — EXACT (scripted)
+
+**GPurify** (`pattern.rs` `pattern_match`): in each of the eight orientations, the pattern's anchor
+(the least corner of its merged shapes inside the window and off every don't-care box) is put on
+each corner of the merged layer; the placed window matches when the layer clipped to it and the
+placed shapes, both less the don't-care boxes, have no symmetric difference. One finding per
+distinct window, at its centre. **KLayout** (prelude `pattern`): the same placements with
+`RBA::Trans` (four turns, with and without the mirror), the same comparison by `Region#^`.
+**Key**: POINT. **Oracle**: US7757190B2's definition with deck-supplied patterns; fixtures
+`pattern/*`.
 
 ### Derived-layer operations
 

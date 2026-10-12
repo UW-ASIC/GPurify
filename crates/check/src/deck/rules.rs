@@ -403,6 +403,18 @@ kinds! {
         step: Dbu = "step",
         limit: f64 = "limit",
     }
+    /// [`Rule::PatternMatch`](crate::drc::Rule::PatternMatch):
+    /// `pattern(layer; window: w x h, shapes: [..], ignore: [..] | none)`; the
+    /// shapes and don't-care boxes as corner coordinates, two corners per
+    /// rectangle, x and y apart ([`Pattern`](crate::drc::ruleset::Pattern)).
+    pattern_match(layer: one) [] {
+        window_w: Dbu = "window_w",
+        window_h: Dbu = "window_h",
+        shape_x: &[Dbu] = "shape_x",
+        shape_y: &[Dbu] = "shape_y",
+        ignore_x: &[Dbu] = "ignore_x",
+        ignore_y: &[Dbu] = "ignore_y",
+    }
     /// [`Rule::CutAreaChange`](crate::drc::Rule::CutAreaChange):
     /// `cut_area_change(pre, post, lower, upper; cuts: [..], change: [..])`,
     /// one cut count and one area per band

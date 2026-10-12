@@ -51,6 +51,7 @@ fn limits(
         span_tables: deck.drc.span_tables.clone(),
         cover_bands: deck.drc.cover_bands.clone(),
         cut_area_bands: deck.drc.cut_area_bands.clone(),
+        patterns: deck.drc.patterns.clone(),
         warnings: Vec::new(),
         first_derived: None,
     };

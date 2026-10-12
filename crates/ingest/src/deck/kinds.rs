@@ -589,6 +589,20 @@ pub(crate) const KINDS: &[Kind] = &[
             DENSITY,
         )
     },
+    // A deck-supplied pattern found wherever the layer matches it, in any of
+    // the eight orientations, with don't-care boxes (pattern-matching DRC).
+    drc(
+        "pattern",
+        Cmp::Absent,
+        "pattern_match",
+        &[0],
+        None,
+        &[
+            p("window", "window_w", Dim::LengthPair("window_h")),
+            p("shapes", "shape_x", Dim::LengthPairList("shape_y")),
+            opt("ignore", "ignore_x", Dim::LengthPairList("ignore_y")),
+        ],
+    ),
     // A connector's cut area held between two databases drawn as two layers,
     // by its cut count (sky130 ct.irdrop, via.irdrop; every value the deck's).
     drc(
