@@ -104,6 +104,9 @@ fn cell(model: Model) -> &'static str {
         Model::Clamp => "clamp",
         Model::NfetB => "nfet_b",
         Model::PfetB => "pfet_b",
+        // H6's gate-conditional transistors; the corpus above draws none.
+        Model::NfetC => "nfet_c",
+        Model::PfetC => "pfet_c",
     }
 }
 
