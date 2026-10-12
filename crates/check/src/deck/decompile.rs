@@ -7,7 +7,7 @@ use crate::erc::rules::antenna::AntennaMeasure;
 use crate::report::LimitSense;
 use crate::report::Severity;
 use gpurify_geom::{LayerId, StrId, StrTable};
-use gpurify_ingest::deck::{DeckSource, ParamSource, ParamValue, RuleSource};
+use gpurify_ingest::deck::{DeckSource, LvsSrc, ParamSource, ParamValue, RuleSource};
 use std::collections::HashMap;
 
 /// One rule's row as it is filed, in engine names.
@@ -66,6 +66,7 @@ impl CompiledDeck {
             self.temperature.map(gpurify_geom::Qty::raw),
             strings,
         );
+        source.lvs = LvsSrc::from_controls(&self.lvs, &source.devices, strings);
         let name = |layer: LayerId| strings.resolve(self.layers.name(layer)).to_owned();
         // The sheets as written, at the nominal temperature, with their
         // coefficients, rather than at the operating one with none.
@@ -364,6 +365,110 @@ impl CompiledDeck {
                 }
                 row
             }
+            Rule::TipSpacingTable { layer, table } => {
+                let mut row = one(layer);
+                if let Some(table) = self.drc.class_tables.get(table as usize) {
+                    for &class in &table.class {
+                        row = row.length("length", class);
+                    }
+                    for &cell in &table.space {
+                        row = row.length("space", cell);
+                    }
+                }
+                row
+            }
+            Rule::TwoWidthSpacingTable { layer, table } => {
+                let mut row = one(layer);
+                if let Some(table) = self.drc.class_tables.get(table as usize) {
+                    for &width in &table.class {
+                        row = row.length("width", width);
+                    }
+                    for &run in &table.prl {
+                        row = match run {
+                            Some(run) => row.length("prl", run),
+                            None => row.value("prl", ParamValue::Flag(false)),
+                        };
+                    }
+                    for &cell in &table.space {
+                        row = row.length("space", cell);
+                    }
+                }
+                row
+            }
+            Rule::SpanLength { layer, table } => {
+                let mut row = one(layer);
+                if let Some(table) = self.drc.span_tables.get(table as usize) {
+                    for &span in &table.x {
+                        row = row.length("x_spans", span);
+                    }
+                    for &span in &table.y {
+                        row = row.length("y_spans", span);
+                    }
+                }
+                row
+            }
+            Rule::ForbiddenSpacing {
+                layer,
+                min,
+                max,
+                prl,
+            } => one(layer)
+                .length("min", min)
+                .length("max", max)
+                .length("prl", prl),
+            Rule::EolWithinSpacing {
+                layer,
+                eol_width,
+                within,
+                parallel,
+                end_to_end,
+                limit,
+            } => {
+                let mut row = one(layer)
+                    .length("eol_width", eol_width)
+                    .length("eol_within", within);
+                if let Some(parallel) = parallel {
+                    row = row
+                        .length("par_space", parallel.space)
+                        .length("par_within", parallel.within)
+                        .value("two_edges", ParamValue::Flag(parallel.two_edges));
+                }
+                if let Some(space) = end_to_end {
+                    row = row.length("end_to_end", space);
+                }
+                row.length("limit", limit)
+            }
+            Rule::EolKeepOut {
+                layer,
+                eol_width,
+                backward,
+                side,
+                forward,
+            } => one(layer)
+                .length("eol_width", eol_width)
+                .length("backward", backward)
+                .length("side", side)
+                .length("forward", forward),
+            Rule::ConvexCornerSpacing {
+                layer,
+                corner_to_corner,
+                except_eol,
+                limit,
+            } => {
+                let mut row =
+                    one(layer).value("corner_to_corner", ParamValue::Flag(corner_to_corner));
+                if let Some(width) = except_eol {
+                    row = row.length("except_eol", width);
+                }
+                row.length("limit", limit)
+            }
+            Rule::ExactPitch {
+                layer,
+                vertical,
+                pitch,
+            } => one(layer)
+                .value("vertical", ParamValue::Flag(vertical))
+                .length("limit", pitch),
         }
     }
 

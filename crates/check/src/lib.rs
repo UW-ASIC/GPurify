@@ -83,6 +83,14 @@
 //! | `region_density(L, R) >= frac`, `<= frac` | `region_density` | [`drc::Rule::RegionDensity`] | a shape of `R` inside which `L` covers too little or too much | DRC-072, DRC-075 |
 //! | `total_area(L) <= area` | `total_area` | [`drc::Rule::TotalArea`] | more area on `L` in the whole layout than the limit | DRC-091 |
 //! | `aspect_ratio(L) <= r` | `aspect_ratio` | [`drc::Rule::AspectRatio`] | a shape whose bounding box is longer than `r` times its width | DRC-022 |
+//! | `tip_space_table(L; length: [..], space: [[..]])` | `tip_spacing_table` | [`drc::Rule::TipSpacingTable`] | facing edges closer than the cell their two length classes select | DRC-031 |
+//! | `forbidden_space(L; min: len, max: len, prl: len)` | `forbidden_spacing` | [`drc::Rule::ForbiddenSpacing`] | facing edges running alongside at a gap in a forbidden range | DRC-033 |
+//! | `eol_space(L; eol_width: len, within: len, parallel: .., end_to_end: ..) >= len` | `eol_within_spacing` | [`drc::Rule::EolWithinSpacing`] | too little space in a LEF end-of-line keep-out, with parallel-edge and end-to-end qualifiers | DRC-029 |
+//! | `eol_keep_out(L; eol_width: len, backward: len, side: len, forward: len)` | `eol_keep_out` | [`drc::Rule::EolKeepOut`] | another shape inside an end of line's keep-out box | DRC-030 |
+//! | `two_width_table(L; width: [..], prl: [..], space: [[..]])` | `two_width_spacing_table` | [`drc::Rule::TwoWidthSpacingTable`] | two shapes closer than the cell both their widths select | DRC-027 |
+//! | `span_length(L; x: [..], y: [..])` | `span_length` | [`drc::Rule::SpanLength`] | a span of a shape not on the list of legal spans | DRC-036 |
+//! | `corner_space(L; corner_to_corner: bool, except_eol: len \| none) >= len` | `convex_corner_spacing` | [`drc::Rule::ConvexCornerSpacing`] | facing convex corners closer than the limit, by the larger axis gap, ends of line exempt | DRC-032 |
+//! | `pitch(L, vertical \| horizontal) == len` | `exact_pitch` | [`drc::Rule::ExactPitch`] | neighbouring rectangles whose centres are not exactly the pitch apart | DRC-035 |
 //!
 //! ## Electrical rules
 //!
@@ -129,22 +137,27 @@
 //! ## Layout against schematic
 //!
 //! LVS compares the extracted layout with a reference netlist ([`lvs::compare`])
-//! and reports under these ids. The first six are [`lvs::Discrepancy`] variants;
-//! the rest are checks on the layout's own graph ([`lvs::check_layout`]).
+//! and reports under these ids. The first seven are [`lvs::Discrepancy`] variants;
+//! the rest are checks on the layout's own graph ([`lvs::check_layout`]), and
+//! on its devices' measures where the deck states ranges
+//! ([`lvs::check_param_ranges`]).
 //!
 //! | Report id | Raised by | Flags | Catalog |
 //! |---|---|---|---|
 //! | `lvs.unpaired_device` | [`lvs::Discrepancy::UnpairedDevice`] | a device with no partner on the other side | LVS-011, LVS-012, LVS-013, LVS-049 |
-//! | `lvs.unpaired_net` | [`lvs::Discrepancy::UnpairedNet`] | a net with no partner on the other side | LVS-015, LVS-016 |
+//! | `lvs.unpaired_net` | [`lvs::Discrepancy::UnpairedNet`] | a net with no partner on the other side | LVS-001, LVS-015, LVS-016 |
 //! | `lvs.terminal_mismatch` | [`lvs::Discrepancy::TerminalMismatch`] | paired devices whose terminals reach different nets | LVS-015 |
 //! | `lvs.parameter_mismatch` | [`lvs::Discrepancy::ParameterMismatch`] | paired devices whose parameters differ beyond the tolerance | LVS-014 |
 //! | `lvs.undeclared_param` | [`lvs::Discrepancy::UndeclaredParam`] | a parameter the reference card states that the layout does not measure | LVS-020 |
+//! | `lvs.model_mismatch` | [`lvs::Discrepancy::ModelMismatch`] | two devices wired alike whose models differ | LVS-013 |
 //! | `lvs.class_imbalance` | [`lvs::Discrepancy::ClassImbalance`] | a class with different member counts on the two sides | LVS-012, LVS-015, LVS-049 |
 //! | `lvs.floating_net` | [`lvs::check_layout`] | a layout net that reaches no device | LVS-006 |
 //! | `lvs.label_conflict` | [`lvs::check_layout`] | one label on several nets | LVS-001, LVS-002 |
 //! | `lvs.net_seed_conflict` | [`lvs::check_layout`] | several labels on one net: a short between named nets | DRC-086, LVS-001, LVS-005 |
 //! | `lvs.terminal_net` | [`lvs::check_layout`] | a device marker no recogniser could bind, or a terminal on no net | LVS-004 |
 //! | `lvs.terminal_count` | [`lvs::check_layout`] | a device with the wrong number of terminals | LVS-004 |
+//! | `lvs.param_range` | [`lvs::check_param_ranges`] | a device parameter outside the range the deck states for its model | LVS-068 |
+//! | `lvs.short_path` | [`lvs::check_net_seed_conflicts`] | a step of the path a short between two labels runs along | LVS-005 |
 
 pub mod deck;
 pub mod drc;

@@ -1,6 +1,8 @@
 //! The rule set: one [`Rule`] per deck row, the deck parser, and the driver.
 
-use crate::drc::rules::{area, edge, grid, overlay, patterning, presence, spacing, via, width};
+use crate::drc::rules::{
+    area, edge, facing, grid, overlay, patterning, presence, spacing, via, width,
+};
 use crate::drc::{DrcError, Scratch};
 use crate::report::{record_run, LimitSense, Outcome, RuleRun, Violations};
 use crate::topology::NetTable;
@@ -310,9 +312,11 @@ pub enum Rule {
     /// DRC-032. Rules: ASAP7 M1.S.6, GF180 MT30.3; `LEF58_CORNERSPACING`;
     /// `KLayout` `corners`.
     ///
-    /// Limits: the `CONVEXCORNER`, `CONCAVECORNER` and `EXCEPTEOL` variants
-    /// are missing. sky130 poly.4, which the manual measures between
-    /// parallel edges only, over-reports when written with this kind.
+    /// Limits: `LEF58_CORNERSPACING CONVEXCORNER`, which measures the larger
+    /// axis gap and can exempt ends of line, is
+    /// [`Rule::ConvexCornerSpacing`]; `CONCAVECORNER` is missing. sky130
+    /// poly.4, which the manual measures between parallel edges only,
+    /// over-reports when written with this kind.
     CornerToCorner {
         /// The layer measured, drawn or derived.
         layer: LayerId,
@@ -901,8 +905,8 @@ pub enum Rule {
     /// DRC-025, DRC-026, DRC-027. Rules: IHP M1.b, M1.e and M1.f; LEF
     /// `SPACINGTABLE PARALLELRUNLENGTH`.
     ///
-    /// Limits: the row is keyed on the wider shape only. LEF
-    /// `SPACINGTABLE TWOWIDTHS` keys on both widths and cannot be written.
+    /// The row is keyed on the wider shape only; LEF `SPACINGTABLE
+    /// TWOWIDTHS`, keyed on both widths, is [`Rule::TwoWidthSpacingTable`].
     SpacingTable {
         /// The layer measured, drawn or derived.
         layer: LayerId,
@@ -926,7 +930,17 @@ pub enum Rule {
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-028. Rules: sky130 m1.3a; LEF `SPACING RANGE INFLUENCE`.
     ///
-    /// Limits: equivalence with LEF `INFLUENCE` is unverified.
+    /// This is LEF `SPACING spacing RANGE minWidth maxWidth INFLUENCE
+    /// influenceLength` with its plain `RANGE` row: "any length of the stub
+    /// wire that is less than or equal to influenceLength from the wide wire
+    /// inherits the wide wire spacing" (LEF/DEF 5.8, `SPACING`), for a wide
+    /// part at least `width_threshold` wide.
+    ///
+    /// Limits: the stub-width `RANGE stubMinWidth stubMaxWidth` and LEF
+    /// `SPACINGTABLE INFLUENCE` (spacing between two stubs near a wide wire)
+    /// are missing, and so is the wide range's upper bound. The growth is
+    /// square, so near a corner of the wide part a little more of a stub is
+    /// held than LEF's distance asks (fails closed).
     AttachedWideSpacing {
         /// The layer measured, drawn or derived.
         layer: LayerId,
@@ -1333,6 +1347,412 @@ pub enum Rule {
         /// for no allowance, and always `None` with [`StepKind::MaxEdges`].
         length_sum: Option<Dbu>,
     },
+    /// Two shapes whose facing edges are closer than the cell the two edges'
+    /// lengths select: tip to tip, tip to side and side to side, each by
+    /// width class.
+    ///
+    /// Deck: `tip_space_table(L; length: [..], space: [[..], ..])`, kind
+    /// `tip_spacing_table`. Edges are the merged layer's, each whole however
+    /// it was drawn, so a line end drawn as two strips is one end. Two edges
+    /// of different merged figures face each other when they are parallel,
+    /// each faces out of its own material toward the other across empty
+    /// space, and their spans overlap by a positive length; their gap is the
+    /// distance between their lines. Edges that meet only diagonally do not
+    /// face ([`Rule::CornerToCorner`] measures those). Each edge takes the
+    /// class of the last `length` its own length reaches, so `[0nm, 24nm,
+    /// 37nm]` classes edges below 24 nm, from 24 to 36 nm, and above 36 nm,
+    /// and a facing pair needs `space[class of one][class of the other]`. The
+    /// table is square and symmetric, and need not rise: a tip may need more
+    /// space than a side.
+    ///
+    /// One violation per pair of merged figures with a facing pair closer
+    /// than its cell: `measured` the smallest such gap, `limit` that pair's
+    /// cell (the largest among equally near pairs), at the middle of the
+    /// stretch the two edges face each other over. `shapes` is the lowest
+    /// drawn row under each figure. `examined` counts facing pairs of edges
+    /// in different figures closer than the table's largest cell.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-031. Rules: ASAP7 M1.S.1 to M1.S.5, side to side when both edges
+    /// are over 36 nm, tip to side when one is at most 36 nm, tip to tip by
+    /// the two tips' classes (ASAP7 DRM r1p7, Table 3.12.1 and Fig. 3.12.1).
+    ///
+    /// Limits: the facing edges' own lengths pick the cell, so a line end
+    /// that steps is classed by the step's edge. ASAP7 M4.S.3 and M4.S.4,
+    /// tip to tip between lines on adjacent tracks, measure ends that do not
+    /// face each other and are not this table.
+    TipSpacingTable {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// Index into [`RuleSet::class_tables`].
+        table: u32,
+    },
+    /// Two shapes whose facing edges run alongside each other at a gap in a
+    /// forbidden range.
+    ///
+    /// Deck: `forbidden_space(L; min: len, max: len, prl: len)`, kind
+    /// `forbidden_spacing`. Edges and facing are as for
+    /// [`Rule::TipSpacingTable`]: whole edges of the merged layer, of
+    /// different merged figures, parallel and facing each other across empty
+    /// space over a positive run. A facing pair whose run (the length over
+    /// which their spans overlap) is longer than `prl`, and whose gap lies
+    /// from `min` to `max`, both included, is forbidden. A wider gap is
+    /// legal, and so is a narrower one, which the minimum-spacing rule
+    /// judges. This is `OpenROAD` `TritonRoute`'s reading of
+    /// `LEF58_TWOWIRESFORBIDDENSPACING`: the range is closed
+    /// (`isForbiddenSpacing`) and the run strictly longer (`isValidPrl`).
+    ///
+    /// One violation per pair of merged figures with a forbidden facing
+    /// pair: `measured` the smallest such gap and `limit` `max` plus one grid
+    /// unit (the narrowest legal gap above the range), at the middle of the
+    /// stretch the two edges face each other over. `shapes` is the lowest
+    /// drawn row under each figure. `examined` counts facing pairs of edges
+    /// in different figures at most `max` apart that run longer than `prl`.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-033. Rules: `LEF58_TWOWIRESFORBIDDENSPACING` and the range of
+    /// `LEF58_FORBIDDENSPACING`.
+    ///
+    /// Limits: no preferred direction, so both orientations are checked. The
+    /// qualifiers on which wires the range binds are missing: the two-wire
+    /// form's `MINSPANLENGTH` and `MAXSPANLENGTH`, and
+    /// `LEF58_FORBIDDENSPACING`'s `WIDTH`, `WITHIN` and `TWOEDGES`.
+    /// `TritonRoute` reports a `LEF58_FORBIDDENSPACING` pair only when a
+    /// third shape lies in its gap; that reading is not modelled.
+    ForbiddenSpacing {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// The narrowest forbidden gap, in grid units; positive.
+        min: Dbu,
+        /// The widest forbidden gap, in grid units; at least `min`.
+        max: Dbu,
+        /// The run a facing pair must exceed to be judged, in grid units; 0
+        /// or more.
+        prl: Dbu,
+    },
+    /// Too little space in front of an end of line, as LEF `SPACING
+    /// ENDOFLINE` defines it: a keep-out widened past the end's sides, which
+    /// may apply only beside parallel edges, with its own space between two
+    /// ends.
+    ///
+    /// Deck: `eol_space(L; eol_width: len, within: len, parallel: none |
+    /// (space: len, within: len, two_edges: bool), end_to_end: len | none) >=
+    /// len`, kind `eol_within_spacing`. An end of line is an edge of the
+    /// merged layer strictly shorter than `eol_width` whose two corners are
+    /// convex: a line's end, not the floor of a notch (`TritonRoute`'s
+    /// `checkMetalEndOfLine_eol_isEolEdge`). Its keep-out spans the end
+    /// widened by `within` on each side, both ends open, and reaches straight
+    /// out of the material from the end's line, open at its far side (LEF
+    /// 5.8: "spacing greater than or equal to eolSpace beyond the EOL
+    /// anywhere within (that is, less than) eolWithin distance"). An edge of
+    /// another merged figure, parallel to the end and facing it, at a depth
+    /// of 0 or more out from the end's line, whose span overlaps the widened
+    /// span by a positive length, violates when its depth is below the space
+    /// it needs: `end_to_end` when that edge is itself an end of line and
+    /// `end_to_end` is given (`LEF58_SPACING ENDOFLINE ... ENDTOEND`), else
+    /// `limit`.
+    ///
+    /// With `parallel`, the rule applies to an end only where a parallel
+    /// edge runs beside its line (LEF `PARALLELEDGE parSpace WITHIN
+    /// parWithin`): at a corner of the end, an edge of the merged layer, of
+    /// any figure (the line's own included), parallel to the line's side
+    /// there and facing it, less than `space` out from that side's line,
+    /// whose span overlaps by a positive length the stretch from the
+    /// parallel `within` back behind the end's line to the end's own
+    /// `within` past it. With `two_edges`, both corners need one
+    /// (`TWOEDGES`).
+    ///
+    /// One violation per pair of merged figures with such an approach, from
+    /// either figure's end: `measured` the smallest depth (straight out from
+    /// the end, not Euclidean, as the keep-out is a box), `limit` the space
+    /// it needed, at the middle of the stretch where the facing edge overlaps
+    /// the widened span, midway between their lines. `shapes` is the lowest
+    /// drawn row under each figure. `examined` counts the ends of line the
+    /// rule applies to.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-029. Rules: LEF `SPACING eolSpace ENDOFLINE eolWidth WITHIN
+    /// eolWithin [PARALLELEDGE parSpace WITHIN parWithin [TWOEDGES]]` (LEF/DEF
+    /// 5.8 Language Reference, Figures 1-17 to 1-19 and Example 1-18);
+    /// `LEF58_SPACING ENDOFLINE ... ENDTOEND`; `TritonRoute` `FlexGC_eol.cpp`.
+    ///
+    /// Limits: `ENCLOSECUT`, the `LEF58_SPACING ENDOFLINE` qualifiers
+    /// `MINLENGTH`, `MAXLENGTH`, `ENDPRLSPACING` and `WRONGDIRSPACING`, and
+    /// the `ENDTOEND` extensions are missing. An edge beside the line, behind
+    /// the end's line, is not in the keep-out; the minimum spacing measures
+    /// it, and LEF asks `eolWithin` to be under that spacing.
+    EolWithinSpacing {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// An edge strictly shorter than this, with convex corners, is an end
+        /// of line, in grid units; positive.
+        eol_width: Dbu,
+        /// How far past each side of the end the keep-out reaches, exclusive,
+        /// in grid units; 0 or more.
+        within: Dbu,
+        /// The parallel-edge condition; `None` applies the rule to every end.
+        parallel: Option<EolParallel>,
+        /// The space between two ends of line facing each other, in grid
+        /// units; positive. `None` holds them to `limit`.
+        end_to_end: Option<Dbu>,
+        /// The space an end of line needs, in grid units; positive.
+        limit: Dbu,
+    },
+    /// Material of another shape inside the keep-out box of an end of line.
+    ///
+    /// Deck: `eol_keep_out(L; eol_width: len, backward: len, side: len,
+    /// forward: len)`, kind `eol_keep_out`. An end of line is as for
+    /// [`Rule::EolWithinSpacing`]: an edge of the merged layer strictly
+    /// shorter than `eol_width` with both corners convex. Its keep-out is the
+    /// box spanning the end widened by `side` on each side, from `backward`
+    /// behind the end's line (into its line) to `forward` past it. Material
+    /// of another merged figure overlapping the box with a positive area is a
+    /// violation; touching it is not (`LEF58_EOLKEEPOUT eolWidth EXTENSION
+    /// backwardExt sideExt forwardExt`, as `OpenROAD` `TritonRoute` checks it:
+    /// `getEolKeepOutQueryBox`, and `checkMetalEOLkeepout_helper`'s
+    /// interior intersection with another pin's rectangles).
+    ///
+    /// One violation per end of line and intruding figure: `measured` the
+    /// area of that figure inside the box against a `limit` of 0, at the
+    /// centre of the bounding box of that area (floored). `shapes` is the
+    /// lowest drawn row under the end's figure, then under the intruder's.
+    /// `examined` counts ends of line.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-030. Rules: `LEF58_EOLKEEPOUT`.
+    ///
+    /// Limits: the `EXCEPTWITHIN`, `CORNERONLY` and `CLASS` qualifiers are
+    /// missing, and so is `LEF58_EOLEXTENSIONSPACING`.
+    EolKeepOut {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// An edge strictly shorter than this, with convex corners, is an end
+        /// of line, in grid units; positive.
+        eol_width: Dbu,
+        /// How far the box reaches behind the end's line, in grid units; 0 or
+        /// more.
+        backward: Dbu,
+        /// How far the box reaches past each side of the end, in grid units;
+        /// 0 or more.
+        side: Dbu,
+        /// How far the box reaches past the end's line, in grid units;
+        /// positive.
+        forward: Dbu,
+    },
+    /// Two shapes closer than their cell of a two-width spacing table: the
+    /// space depends on the widths of both shapes, and per width on the run
+    /// between them.
+    ///
+    /// Deck: `two_width_table(L; width: [..], prl: [none | len, ..], space:
+    /// [[..], ..])`, kind `two_width_spacing_table`. The same widths head the
+    /// rows and the columns, each with its optional run (LEF: the table
+    /// "implicitly has the same widths (and optional parallel run lengths)
+    /// for the row and column headings"). Pairs are shapes in different
+    /// merged figures, never a polygon and its own hole. A shape is wider
+    /// than a width where a `width + 1` square fits in the merged layer, as
+    /// [`Rule::SpacingTable`] reads width, and every shape is wider than the
+    /// first width, 0. A width applies to a shape when the shape is wider
+    /// than it and, where the width states a run, the two figures run
+    /// alongside each other for more than that run (measured as for
+    /// [`Rule::SpacingTable`], on the edges facing each other at most the cell
+    /// apart). Each cell whose row applies to one shape and whose column to
+    /// the other holds the pair to it, measured between the parts of the two
+    /// shapes that wide (a whole shape for the first row or column). The
+    /// cells never fall, so this is LEF's rule, the cell at the last row and
+    /// the last column that apply, with each part held to its own width: a
+    /// thin tab of a wide plate is held as thin.
+    ///
+    /// One violation per pair, at its highest failing cell (the largest space
+    /// it fails, the nearest of those), with `limit` that cell and `measured`
+    /// the distance there, at the midpoint of the points it measured.
+    /// `examined` counts the pairs.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-027. Rules: LEF `SPACINGTABLE TWOWIDTHS {WIDTH width [PRL
+    /// runLength] {spacing} ...}` (LEF/DEF 5.8 Language Reference, "Two-Width
+    /// Spacing Tables", with its worked example).
+    ///
+    /// Limits: a negative run, which LEF lets reach diagonal pairs, cannot be
+    /// written; a width with no run is `none`. The table must be symmetric,
+    /// as which shape is the first is not a property of the pair.
+    TwoWidthSpacingTable {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// Index into [`RuleSet::class_tables`].
+        table: u32,
+    },
+    /// A span of a shape whose length is not on the layer's list of legal
+    /// spans.
+    ///
+    /// Deck: `span_length(L; x: [..], y: [..])`, kind `span_length`. A span
+    /// is the length of a maximal run of material along a horizontal (x) or
+    /// vertical (y) line through a figure of the merged layer: every chord
+    /// such a line cuts from the figure, so an L has the spans of both its
+    /// arms, and a ring the width of its band as well as its outer size. A
+    /// horizontal span must be one of `x` exactly, or at least the last of
+    /// them; a vertical one the same with `y` (`LEF58_SPANLENGTHTABLE`: "All of
+    /// the given span lengths are exact values, except for the last one,
+    /// which is greater than equal to the value. All of the possible span
+    /// lengths of an object in both directions should be checked"). For a LEF
+    /// layer whose `DIRECTION` is horizontal, `y` is its `SPANLENGTHTABLE` and
+    /// `x` its `SPANLENGTHTABLE ... WRONGDIRECTION` (the same list when it has
+    /// none), and the other way round for a vertical layer.
+    ///
+    /// One violation per maximal region of a figure over which one illegal
+    /// span runs unchanged (a rectangle: the chord, swept across the lines it
+    /// is the chord of), at its centre (floored). `measured` is the span and
+    /// `limit` the shortest legal span longer than it. `shapes.0` is the
+    /// lowest drawn row under the figure. `examined` counts the regions of
+    /// unchanged span, both axes.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-036. Rules: `LEF58_SPANLENGTHTABLE {spanLength} ... [WRONGDIRECTION]`
+    /// (LEF/DEF 5.8 Language Reference, "Span Length Table Rule" and Figure
+    /// 1-31).
+    ///
+    /// Limits: `ORTHOGONAL` (a length between two inside facing corners) and
+    /// `EXCEPTOTHERSPAN` are missing.
+    SpanLength {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// Index into [`RuleSet::span_tables`].
+        table: u32,
+    },
+    /// Two shapes whose facing convex corners are closer than `limit`, as
+    /// `LEF58_CORNERSPACING CONVEXCORNER` measures them.
+    ///
+    /// Deck: `corner_space(L; corner_to_corner: bool, except_eol: len | none) >= len`,
+    /// kind `convex_corner_spacing`. Corners are as for
+    /// [`Rule::CornerToCorner`]: convex corners of the merged layer, of
+    /// different merged figures, facing each other (each beyond the other on
+    /// both axes, out along opposite diagonals). Their distance is the larger
+    /// of their two axis gaps (`TritonRoute`'s `maxXY`, the longer side of
+    /// the box between a corner and the other shape), or with
+    /// `corner_to_corner: true` the Euclidean one (`CORNERTOCORNER`). With
+    /// `except_eol`, a corner of an end of line (an edge at the corner
+    /// strictly shorter than `except_eol` whose two corners are convex) on
+    /// either shape is exempt (`EXCEPTEOL eolWidth`).
+    ///
+    /// One violation per pair of merged figures with facing corners closer
+    /// than `limit`: `measured` the smallest such distance (floored when
+    /// Euclidean), at the midpoint of those two corners; among equally near
+    /// pairs, the Euclidean nearest, and among those the middle of the box
+    /// bounding their midpoints. `shapes` is the lowest drawn row under each
+    /// figure. `examined` counts the facing pairs of corners judged.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-032. Rules: `LEF58_CORNERSPACING CONVEXCORNER [CORNERTOCORNER]
+    /// [EXCEPTEOL eolWidth] WIDTH 0 SPACING spacing`; `TritonRoute`
+    /// `checkMetalCornerSpacing_main`.
+    ///
+    /// Limits: one spacing for every width (the `WIDTH` table by the
+    /// corner's shape width, and separate horizontal and vertical spacings,
+    /// are missing); `CONCAVECORNER`, `SAMEMASK`, `CORNERONLY`,
+    /// `EXCEPTJOGLENGTH`, `EXCEPTSAMENET` and `EXCEPTSAMEMETAL` are missing.
+    ConvexCornerSpacing {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// Whether the distance is Euclidean (`CORNERTOCORNER`) rather than
+        /// the larger axis gap.
+        corner_to_corner: bool,
+        /// Ends of line strictly shorter than this exempt their corners, in
+        /// grid units; positive. `None` exempts none.
+        except_eol: Option<Dbu>,
+        /// The smallest legal corner distance, in grid units; positive.
+        limit: Dbu,
+    },
+    /// Two neighbouring rectangles whose centres are not exactly `pitch`
+    /// apart along one axis.
+    ///
+    /// Deck: `pitch(L, vertical) == len` or `pitch(L, horizontal) == len`,
+    /// kind `exact_pitch`. Every figure of the merged layer must be a
+    /// rectangle, as fins and gates are (ASAP7 FIN.AUX.1 and GATE.AUX.1, "may
+    /// not bend"); a layer with any other figure is refused. Along the axis
+    /// (y for `vertical`), the neighbours of a rectangle are the rectangles
+    /// that overlap it on the other axis by a positive length and lie past
+    /// it, nearest first: those whose low side is the lowest among them. A
+    /// rectangle and each neighbour must have their centre lines exactly
+    /// `pitch` apart. A missing line between two others is a pitch of twice
+    /// the value, and a violation.
+    ///
+    /// One violation per rectangle and neighbour off the pitch, in the middle
+    /// of the gap between them over their overlap. `measured` is the
+    /// distance between their centre lines, floored when it is a half unit;
+    /// `limit` is `pitch`. `shapes` is the lowest drawn row under each.
+    /// `examined` counts the neighbouring pairs.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-035. Rules: ASAP7 FIN.S.1 ("Exact vertical FIN pitch", 27 nm) and
+    /// GATE.S.1 ("Exact horizontal GATE pitch", 54 nm), DRM r1p7 Tables 3.3.1
+    /// and 3.4.1.
+    ///
+    /// Limits: the pitch is between neighbours, not to a track grid: LEF
+    /// `PITCH` tracks, `LEF58_PITCH FIRSTLASTPITCH` and
+    /// `LEF58_RIGHTWAYONGRIDONLY` (wires on the routing grid) are missing.
+    ExactPitch {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// Whether the pitch is along y (between lines stacked vertically)
+        /// rather than along x.
+        vertical: bool,
+        /// The exact centre-to-centre distance, in grid units; positive.
+        pitch: Dbu,
+    },
+}
+
+/// The legal spans of [`Rule::SpanLength`], per axis: every listed length but
+/// the last is legal exactly, and the last and anything longer are legal.
+///
+/// Every table in a [`RuleSet`] passed [`SpanTable::is_valid`]; one built by
+/// hand must too, or [`RuleSet::run`] may judge every span illegal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpanTable {
+    /// The legal lengths of horizontal spans, in grid units: positive and
+    /// rising strictly.
+    pub x: Vec<Dbu>,
+    /// The legal lengths of vertical spans, in grid units: positive and
+    /// rising strictly.
+    pub y: Vec<Dbu>,
+}
+
+impl SpanTable {
+    /// Whether both lists are non-empty, positive and strictly rising.
+    /// [`RuleSet::from_deck`] refuses a table that is not
+    /// ([`DrcError::BadTable`]).
+    pub fn is_valid(&self) -> bool {
+        [&self.x, &self.y].into_iter().all(|legal| {
+            legal.first().is_some_and(|first| first.raw() > 0)
+                && legal.windows(2).all(|pair| pair[0] < pair[1])
+        })
+    }
+
+    /// The shortest legal span on `legal` longer than `span`, or `None` when
+    /// `span` itself is legal.
+    pub(crate) fn next_legal(legal: &[Dbu], span: i64) -> Option<i64> {
+        let last = legal.last()?.raw();
+        if span >= last || legal.iter().any(|length| length.raw() == span) {
+            return None;
+        }
+        legal
+            .iter()
+            .map(|length| length.raw())
+            .find(|&length| length > span)
+    }
+}
+
+/// The parallel-edge condition of an end-of-line rule (LEF `PARALLELEDGE
+/// parSpace WITHIN parWithin [TWOEDGES]`), read by
+/// [`Rule::EolWithinSpacing`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EolParallel {
+    /// How far out from the line's side a parallel edge may lie, exclusive,
+    /// in grid units; positive.
+    pub space: Dbu,
+    /// How far back from the end's line the parallel edge's stretch reaches,
+    /// exclusive, in grid units; 0 or more.
+    pub within: Dbu,
+    /// Whether both sides of the line need a parallel edge.
+    pub two_edges: bool,
 }
 
 /// Which runs of short edges a [`Rule::MinStep`] rejects, after LEF
@@ -1460,6 +1880,75 @@ pub struct SpacingQuery {
     pub end_of_line: Option<Dbu>,
 }
 
+/// A square table indexed by a class of each of two edges or shapes, for
+/// [`Rule::TipSpacingTable`] (classes by edge length) and
+/// [`Rule::TwoWidthSpacingTable`] (classes by width, each with an optional
+/// run): a pair needs `space[i][j]`, with `i` the class of one and `j` that
+/// of the other. Classes start at 0, so every edge or shape has one.
+///
+/// Every table in a [`RuleSet`] passed its kind's check
+/// ([`ClassTable::is_valid_tips`], [`ClassTable::is_valid_two_widths`]); one
+/// built by hand must too, or [`RuleSet::run`] may panic indexing it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassTable {
+    /// The class thresholds, in grid units: starts at 0 and rises.
+    pub class: Vec<Dbu>,
+    /// Per class, a run a pair must exceed for the class to apply; `None`
+    /// checks no run. Empty for a table that reads no runs.
+    pub prl: Vec<Option<Dbu>>,
+    /// Row-major, `class.len()` rows of `class.len()` cells, each a positive
+    /// space in grid units; symmetric.
+    pub space: Vec<Dbu>,
+}
+
+impl ClassTable {
+    /// Whether the table is square, symmetric and positive, with classes
+    /// from 0 rising strictly and no runs: what [`Rule::TipSpacingTable`]
+    /// reads. [`RuleSet::from_deck`] refuses one that is not
+    /// ([`DrcError::BadTable`]).
+    pub fn is_valid_tips(&self) -> bool {
+        self.prl.is_empty()
+            && self.is_square()
+            && self.class.windows(2).all(|pair| pair[0] < pair[1])
+    }
+
+    /// Whether the table is square, symmetric and positive, its cells never
+    /// fall along a row (nor, by symmetry, a column), its widths start at 0
+    /// and never fall, and its runs start with none (the first width states
+    /// no run) and never fall among those stated, each 0 or more: what
+    /// [`Rule::TwoWidthSpacingTable`] reads (LEF: "The width and runLength
+    /// values must be the same or increasing", the spacings "the same or
+    /// increasing from left to right, and from top to bottom").
+    /// [`RuleSet::from_deck`] refuses one that is not
+    /// ([`DrcError::BadTable`]).
+    pub fn is_valid_two_widths(&self) -> bool {
+        let n = self.class.len();
+        let runs: Vec<Dbu> = self.prl.iter().flatten().copied().collect();
+        self.prl.len() == n
+            && self.prl.first().is_some_and(Option::is_none)
+            && runs.iter().all(|run| run.raw() >= 0)
+            && runs.windows(2).all(|pair| pair[0] <= pair[1])
+            && self.is_square()
+            && self.class.windows(2).all(|pair| pair[0] <= pair[1])
+            && (0..n).all(|i| (1..n).all(|j| self.at(i, j - 1) <= self.at(i, j)))
+    }
+
+    /// Classes from 0, one row and column per class, every cell positive and
+    /// mirrored across the diagonal.
+    fn is_square(&self) -> bool {
+        let n = self.class.len();
+        self.class.first().is_some_and(|first| first.raw() == 0)
+            && self.space.len() == n * n
+            && self.space.iter().all(|cell| cell.raw() > 0)
+            && (0..n).all(|i| (0..i).all(|j| self.at(i, j) == self.at(j, i)))
+    }
+
+    /// The cell for classes `i` and `j`.
+    pub(crate) fn at(&self, i: usize, j: usize) -> Dbu {
+        self.space[i * self.class.len() + j]
+    }
+}
+
 /// Every DRC rule the deck configures, in deck order.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RuleSet {
@@ -1474,6 +1963,12 @@ pub struct RuleSet {
     /// The width lists each [`Rule::AllowedWidth`] names: grid units, each
     /// positive, sorted, without repeats, never empty.
     pub widths: Vec<Vec<Dbu>>,
+    /// The tables [`Rule::TipSpacingTable`] names.
+    /// The tables [`Rule::TipSpacingTable`] and
+    /// [`Rule::TwoWidthSpacingTable`] name.
+    pub class_tables: Vec<ClassTable>,
+    /// The tables [`Rule::SpanLength`] names.
+    pub span_tables: Vec<SpanTable>,
     /// The deck's first derived layer: it and every higher id are computed,
     /// and the layers below it are drawn. `None` when every layer is drawn,
     /// as in a rule set built in code. A [`Rule::Density`] or
@@ -1503,7 +1998,9 @@ impl RuleSet {
     /// - [`DrcError::UnrepresentableAngle`] when an allowed angle is not a
     ///   multiple of 45 degrees;
     /// - what [`Rule::validate`] refuses: a limit that is not positive, or a
-    ///   spacing table that is not complete and monotone.
+    ///   spacing table that is not complete and monotone;
+    /// - [`DrcError::BadTable`] when a class or span table fails its kind's
+    ///   check, or a forbidden range has `min` above `max`.
     pub fn from_deck(deck: &Deck, strings: &StrTable) -> Result<Self, DrcError> {
         let rules = &deck.rules;
         let name_of = |id: StrId| strings.resolve(id).to_owned();
@@ -1572,6 +2069,44 @@ impl RuleSet {
         let bounded = |spec: &RuleSpec| match spec.layer_len {
             1 => Ok((layer(spec, 0), None)),
             _ => two(spec).map(|(layer, boundary)| (layer, Some(boundary))),
+        };
+        // A length that may be 0, as a run a pair must exceed.
+        let at_least_zero = |spec: &RuleSpec, param| -> Result<Dbu, DrcError> {
+            let ParamValue::Length(value) = value(spec, param)? else {
+                return Err(wrong_type(spec, param));
+            };
+            if value.raw() < 0 {
+                return Err(DrcError::NonPositiveLimit {
+                    rule: name_of(spec.id),
+                    limit: value.raw(),
+                });
+            }
+            Ok(value)
+        };
+        // A parameter a row may leave out (`none` in the deck).
+        let optional = |spec: &RuleSpec, param: &'static str| {
+            strings
+                .get(param)
+                .and_then(|interned| rules.param(spec, interned))
+        };
+        let flag = |spec: &RuleSpec, param| -> Result<bool, DrcError> {
+            match value(spec, param)? {
+                ParamValue::Flag(set) => Ok(set),
+                _ => Err(wrong_type(spec, param)),
+            }
+        };
+        // Every length given for a list parameter, in deck order.
+        let lengths = |spec: &RuleSpec, param: &'static str| -> Result<Vec<Dbu>, DrcError> {
+            let wanted = strings.get(param);
+            rules
+                .params_of(spec)
+                .iter()
+                .filter(|&&(name, _)| Some(name) == wanted)
+                .map(|&(_, stated)| match stated {
+                    ParamValue::Length(length) => Ok(length),
+                    _ => Err(wrong_type(spec, param)),
+                })
+                .collect()
         };
         let sense = |spec: &RuleSpec| -> Result<LimitSense, DrcError> {
             let ParamValue::Flag(maximum) = value(spec, "maximum")? else {
@@ -1815,22 +2350,10 @@ impl RuleSet {
                 }
                 "spacing_table" => {
                     let layer = one(spec)?;
-                    let lengths = |param: &'static str| -> Result<Vec<Dbu>, DrcError> {
-                        let wanted = strings.get(param);
-                        rules
-                            .params_of(spec)
-                            .iter()
-                            .filter(|&&(name, _)| Some(name) == wanted)
-                            .map(|&(_, stated)| match stated {
-                                ParamValue::Length(length) => Ok(length),
-                                _ => Err(wrong_type(spec, param)),
-                            })
-                            .collect()
-                    };
                     set.tables.push(SpacingTable {
-                        prl: lengths("prl")?,
-                        width: lengths("width")?,
-                        space: lengths("space")?,
+                        prl: lengths(spec, "prl")?,
+                        width: lengths(spec, "width")?,
+                        space: lengths(spec, "space")?,
                     });
                     Rule::SpacingTable {
                         layer,
@@ -2010,6 +2533,132 @@ impl RuleSet {
                         region,
                         limit: ratio(spec, "limit")?,
                         sense: sense(spec)?,
+                    }
+                }
+                "tip_spacing_table" => {
+                    let layer = one(spec)?;
+                    let table = ClassTable {
+                        class: lengths(spec, "length")?,
+                        prl: Vec::new(),
+                        space: lengths(spec, "space")?,
+                    };
+                    if !table.is_valid_tips() {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    set.class_tables.push(table);
+                    Rule::TipSpacingTable {
+                        layer,
+                        table: u32::try_from(set.class_tables.len() - 1)
+                            .expect("a deck has few tables"),
+                    }
+                }
+                "eol_within_spacing" => {
+                    let layer = one(spec)?;
+                    let eol_width = length(spec, "eol_width")?;
+                    let within = at_least_zero(spec, "eol_within")?;
+                    let parallel = match optional(spec, "par_space") {
+                        None => None,
+                        Some(_) => Some(EolParallel {
+                            space: length(spec, "par_space")?,
+                            within: at_least_zero(spec, "par_within")?,
+                            two_edges: flag(spec, "two_edges")?,
+                        }),
+                    };
+                    let end_to_end = match optional(spec, "end_to_end") {
+                        None => None,
+                        Some(_) => Some(length(spec, "end_to_end")?),
+                    };
+                    Rule::EolWithinSpacing {
+                        layer,
+                        eol_width,
+                        within,
+                        parallel,
+                        end_to_end,
+                        limit: length(spec, "limit")?,
+                    }
+                }
+                "two_width_spacing_table" => {
+                    let layer = one(spec)?;
+                    let wanted = strings.get("prl");
+                    let prl = rules
+                        .params_of(spec)
+                        .iter()
+                        .filter(|&&(name, _)| Some(name) == wanted)
+                        .map(|&(_, stated)| match stated {
+                            ParamValue::Length(run) => Ok(Some(run)),
+                            ParamValue::Flag(false) => Ok(None),
+                            _ => Err(wrong_type(spec, "prl")),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let table = ClassTable {
+                        class: lengths(spec, "width")?,
+                        prl,
+                        space: lengths(spec, "space")?,
+                    };
+                    if !table.is_valid_two_widths() {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    set.class_tables.push(table);
+                    Rule::TwoWidthSpacingTable {
+                        layer,
+                        table: u32::try_from(set.class_tables.len() - 1)
+                            .expect("a deck has few tables"),
+                    }
+                }
+                "exact_pitch" => Rule::ExactPitch {
+                    layer: one(spec)?,
+                    vertical: flag(spec, "vertical")?,
+                    pitch: length(spec, "limit")?,
+                },
+                "convex_corner_spacing" => {
+                    let layer = one(spec)?;
+                    let corner_to_corner = flag(spec, "corner_to_corner")?;
+                    let except_eol = match optional(spec, "except_eol") {
+                        None => None,
+                        Some(_) => Some(length(spec, "except_eol")?),
+                    };
+                    Rule::ConvexCornerSpacing {
+                        layer,
+                        corner_to_corner,
+                        except_eol,
+                        limit: length(spec, "limit")?,
+                    }
+                }
+                "span_length" => {
+                    let layer = one(spec)?;
+                    let table = SpanTable {
+                        x: lengths(spec, "x_spans")?,
+                        y: lengths(spec, "y_spans")?,
+                    };
+                    if !table.is_valid() {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    set.span_tables.push(table);
+                    Rule::SpanLength {
+                        layer,
+                        table: u32::try_from(set.span_tables.len() - 1)
+                            .expect("a deck has few tables"),
+                    }
+                }
+                "eol_keep_out" => Rule::EolKeepOut {
+                    layer: one(spec)?,
+                    eol_width: length(spec, "eol_width")?,
+                    backward: at_least_zero(spec, "backward")?,
+                    side: at_least_zero(spec, "side")?,
+                    forward: length(spec, "forward")?,
+                },
+                "forbidden_spacing" => {
+                    let layer = one(spec)?;
+                    let (min, max) = (length(spec, "min")?, length(spec, "max")?);
+                    let prl = at_least_zero(spec, "prl")?;
+                    if min > max {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    Rule::ForbiddenSpacing {
+                        layer,
+                        min,
+                        max,
+                        prl,
                     }
                 }
                 other => {
@@ -2291,6 +2940,81 @@ impl RuleSet {
                     kind,
                     length_sum,
                 } => width::min_step(store, id, layer, (limit, kind, length_sum), s, out),
+                Rule::TipSpacingTable { layer, table } => facing::tip_spacing_table(
+                    store,
+                    id,
+                    layer,
+                    &self.class_tables[table as usize],
+                    s,
+                    out,
+                ),
+                Rule::ForbiddenSpacing {
+                    layer,
+                    min,
+                    max,
+                    prl,
+                } => facing::forbidden_spacing(store, id, layer, (min, max, prl), s, out),
+                Rule::EolWithinSpacing {
+                    layer,
+                    eol_width,
+                    within,
+                    parallel,
+                    end_to_end,
+                    limit,
+                } => facing::eol_within_spacing(
+                    store,
+                    id,
+                    layer,
+                    (eol_width, within, limit),
+                    (parallel, end_to_end),
+                    s,
+                    out,
+                ),
+                Rule::ExactPitch {
+                    layer,
+                    vertical,
+                    pitch,
+                } => facing::exact_pitch(store, id, layer, vertical, pitch, s, out),
+                Rule::ConvexCornerSpacing {
+                    layer,
+                    corner_to_corner,
+                    except_eol,
+                    limit,
+                } => facing::convex_corner_spacing(
+                    store,
+                    id,
+                    layer,
+                    (corner_to_corner, except_eol),
+                    limit,
+                    s,
+                    out,
+                ),
+                Rule::SpanLength { layer, table } => {
+                    facing::span_length(store, id, layer, &self.span_tables[table as usize], s, out)
+                }
+                Rule::TwoWidthSpacingTable { layer, table } => spacing::two_width_table(
+                    store,
+                    id,
+                    layer,
+                    &self.class_tables[table as usize],
+                    s,
+                    out,
+                ),
+                Rule::EolKeepOut {
+                    layer,
+                    eol_width,
+                    backward,
+                    side,
+                    forward,
+                } => facing::eol_keep_out(
+                    store,
+                    id,
+                    layer,
+                    eol_width,
+                    (backward, side, forward),
+                    s,
+                    out,
+                ),
             };
             record_run(runs, out, before, id, outcome, examined);
             // A rule over every layer (`angle` with none named, `off_grid`)
@@ -2457,13 +3181,36 @@ impl Rule {
             } => count(colors.into()).and(length(color_spacing)),
             Rule::MustContain { min_count, .. } => count(min_count),
             // A shape count of zero is a limit: none allowed, or at least none.
-            // The cut and width lists are checked where they are filed.
+            // The cut and width lists, the class and span tables, the runs
+            // that may be 0 and a forbidden range's order are checked where
+            // they are filed.
             Rule::Forbidden { .. }
             | Rule::MustBeInside { .. }
             | Rule::Count { .. }
             | Rule::CutClass { .. }
             | Rule::AllowedWidth { .. }
-            | Rule::PolygonValidity { .. } => Ok(()),
+            | Rule::PolygonValidity { .. }
+            | Rule::TipSpacingTable { .. }
+            | Rule::TwoWidthSpacingTable { .. }
+            | Rule::SpanLength { .. } => Ok(()),
+            Rule::ForbiddenSpacing { min, max, .. } => length(min).and(length(max)),
+            Rule::EolWithinSpacing {
+                eol_width,
+                parallel,
+                end_to_end,
+                limit,
+                ..
+            } => length(eol_width)
+                .and(parallel.map_or(Ok(()), |parallel| length(parallel.space)))
+                .and(end_to_end.map_or(Ok(()), length))
+                .and(length(limit)),
+            Rule::EolKeepOut {
+                eol_width, forward, ..
+            } => length(eol_width).and(length(forward)),
+            Rule::ConvexCornerSpacing {
+                except_eol, limit, ..
+            } => except_eol.map_or(Ok(()), length).and(length(limit)),
+            Rule::ExactPitch { pitch, .. } => length(pitch),
             Rule::SpacingTable { table, .. } => {
                 if tables
                     .get(table as usize)
@@ -2596,6 +3343,14 @@ impl Rule {
             Rule::MinInteriorAngle { .. } => "min_interior_angle",
             Rule::PolygonValidity { .. } => "polygon_validity",
             Rule::MinStep { .. } => "min_step",
+            Rule::TipSpacingTable { .. } => "tip_spacing_table",
+            Rule::ForbiddenSpacing { .. } => "forbidden_spacing",
+            Rule::EolWithinSpacing { .. } => "eol_within_spacing",
+            Rule::EolKeepOut { .. } => "eol_keep_out",
+            Rule::TwoWidthSpacingTable { .. } => "two_width_spacing_table",
+            Rule::SpanLength { .. } => "span_length",
+            Rule::ConvexCornerSpacing { .. } => "convex_corner_spacing",
+            Rule::ExactPitch { .. } => "exact_pitch",
         }
     }
 
@@ -2631,7 +3386,15 @@ impl Rule {
             | Rule::EdgeWidth { layer, .. }
             | Rule::EdgeFacingSpace { layer, .. }
             | Rule::AllowedWidth { layer, .. }
-            | Rule::MinStep { layer, .. } => [Some(layer), None],
+            | Rule::MinStep { layer, .. }
+            | Rule::TipSpacingTable { layer, .. }
+            | Rule::ForbiddenSpacing { layer, .. }
+            | Rule::EolWithinSpacing { layer, .. }
+            | Rule::EolKeepOut { layer, .. }
+            | Rule::TwoWidthSpacingTable { layer, .. }
+            | Rule::SpanLength { layer, .. }
+            | Rule::ConvexCornerSpacing { layer, .. }
+            | Rule::ExactPitch { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. }
             | Rule::NetSpacing {
                 layer: a, other: b, ..

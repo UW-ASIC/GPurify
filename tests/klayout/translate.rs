@@ -241,6 +241,26 @@ def with_width2(layer, lo, hi)
     (lo.nil? || w2 >= lo) && (hi.nil? || w2 < hi)
   end
 end
+# The distance between the lines of two parallel edges.
+def line_gap(e, f) ; e.dy == 0 ? (e.y1 - f.y1).abs : (e.x1 - f.x1).abs ; end
+# The last class threshold an edge's whole length reaches.
+def length_class(e, classes) ; classes.rindex { |t| t <= e.length } ; end
+# Each facing pair of whole edges `pairs` holds (an `isolated` check with
+# `projection` and `whole_edges`) that is closer than the cell its two edges'
+# length classes select.
+def tip_table(rule, pairs, classes, space)
+  pairs.data.each do |ep|
+    e, f = ep.first, ep.second
+    need = space[length_class(e, classes)][length_class(f, classes)]
+    put({ rule: rule, ep: [seg(e), seg(f)] }) if line_gap(e, f) < need
+  end
+end
+# Each facing pair `pairs` holds whose lines are at least `lo` apart.
+def forbidden_gap(rule, pairs, lo)
+  pairs.data.each do |ep|
+    put({ rule: rule, ep: [seg(ep.first), seg(ep.second)] }) if line_gap(ep.first, ep.second) >= lo
+  end
+end
 "#;
 
 /// A Ruby string literal.
@@ -1232,6 +1252,166 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 .expect("a String");
                 exact(kind, Key::Point, Value::Length)
             }
+            Rule::TipSpacingTable { layer, table } => {
+                let name = fig(layer, &mut reads);
+                let table = &set.class_tables[table as usize];
+                let widest = table.space.iter().map(|cell| cell.raw()).max().unwrap_or(0);
+                let rows: Vec<String> = table
+                    .space
+                    .chunks(table.class.len())
+                    .map(|row| format!("[{}]", doubled(row)))
+                    .collect();
+                writeln!(
+                    body,
+                    "tip_table({q}, {}.isolated({}, projection, transparent, whole_edges), [{}], [{}])",
+                    var(layer),
+                    2 * widest,
+                    doubled(&table.class),
+                    rows.join(", ")
+                )
+                .expect("a String");
+                exact(
+                    "tip_spacing_table",
+                    Key::Pair(name.clone(), name, false),
+                    Value::Length,
+                )
+            }
+            Rule::TwoWidthSpacingTable { layer, table } => {
+                let name = fig(layer, &mut reads);
+                let table = &set.class_tables[table as usize];
+                let n = table.class.len();
+                let v = var(layer);
+                // The part of the layer wider than width `i` (x2: sizing by
+                // the undoubled width removes what is at most that wide).
+                let part = |i: usize| {
+                    if i == 0 {
+                        v.clone()
+                    } else {
+                        format!("{v}.sized(-{w}).sized({w})", w = table.class[i].raw())
+                    }
+                };
+                for r in 0..n {
+                    for c in 0..n {
+                        let s = 2 * table.space[r * n + c].raw();
+                        let run = [table.prl[r], table.prl[c]]
+                            .into_iter()
+                            .flatten()
+                            .map(|prl| 2 * prl.raw() + 1)
+                            .max()
+                            .map_or(String::new(), |run| {
+                                format!(", projection_limits({run}, nil)")
+                            });
+                        if r == 0 && c == 0 {
+                            writeln!(body, "emit({q}, {v}.isolated({s}, euclidian, transparent{run}))")
+                        } else {
+                            writeln!(
+                                body,
+                                "emit({q}, {}.separation({}, {s}, euclidian, transparent{run}))",
+                                part(r),
+                                part(c)
+                            )
+                        }
+                        .expect("a String");
+                    }
+                }
+                approx(
+                    "two_width_spacing_table",
+                    Compare::KlayoutWithin,
+                    Key::Pair(name.clone(), name.clone(), true),
+                    Value::Ignore,
+                    vec![name],
+                )
+            }
+            Rule::ConvexCornerSpacing {
+                except_eol: Some(_),
+                ..
+            } => (
+                "convex_corner_spacing",
+                Verdict::None("KLayout cannot exempt the corners of an end of line"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
+            Rule::ConvexCornerSpacing {
+                layer,
+                corner_to_corner,
+                except_eol: None,
+                limit,
+            } => {
+                let name = fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "emit({q}, {}.isolated({}, {}, transparent, projection_limits(0, 1)))",
+                    var(layer),
+                    lim(limit),
+                    if corner_to_corner { "euclidian" } else { "square" }
+                )
+                .expect("a String");
+                approx(
+                    "convex_corner_spacing",
+                    Compare::GpurifyWithin,
+                    Key::Pair(name.clone(), name, false),
+                    Value::Ignore,
+                    vec![],
+                )
+            }
+            Rule::ExactPitch { .. } => (
+                "exact_pitch",
+                Verdict::None("KLayout has no centre-to-centre pitch between neighbouring shapes"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
+            Rule::SpanLength { .. } => (
+                "span_length",
+                Verdict::None("KLayout measures widths between edges, not the set of a shape's chords"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
+            Rule::EolKeepOut { .. } => (
+                "eol_keep_out",
+                Verdict::None("KLayout has no end-of-line keep-out box"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
+            Rule::EolWithinSpacing { .. } => (
+                "eol_within_spacing",
+                Verdict::None(
+                    "KLayout has no end-of-line keep-out widened past the end, parallel-edge trigger or end-to-end space",
+                ),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
+            Rule::ForbiddenSpacing {
+                layer,
+                min,
+                max,
+                prl,
+            } => {
+                let name = fig(layer, &mut reads);
+                writeln!(
+                    body,
+                    "forbidden_gap({q}, {}.isolated({}, projection, transparent, projection_limits({}, nil)), {})",
+                    var(layer),
+                    lim(max) + 1,
+                    lim(prl) + 1,
+                    lim(min)
+                )
+                .expect("a String");
+                exact(
+                    "forbidden_spacing",
+                    Key::Pair(name.clone(), name, false),
+                    Value::Length,
+                )
+            }
         };
         reads.sort();
         reads.dedup();
@@ -1267,6 +1447,15 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
 }
 
 type Spec = (&'static str, Verdict, Compare, Key, Value, Vec<String>);
+
+/// Lengths doubled for the ×2 layout, as a Ruby list's items.
+fn doubled(lengths: &[gpurify::geom::Dbu]) -> String {
+    lengths
+        .iter()
+        .map(|length| (2 * length.raw()).to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 fn exact(kind: &'static str, key: Key, value: Value) -> Spec {
     (kind, Verdict::Exact, Compare::Exact, key, value, vec![])

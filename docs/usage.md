@@ -93,11 +93,15 @@ Before matching, both sides are reduced, mostly the way netgen reduces them
 (the differences are listed below):
 
 - **Parallel:** devices of one model with every terminal on the same nets
-  become one device. Source and drain are interchangeable, and so are a
-  resistor's ends. For transistors, W and `nf` are summed, and every other
-  parameter, L included, must agree. Any other device keeps its value and
+  become one device. Source and drain are interchangeable, except on a
+  model the deck declares `lvs asymmetric` (see
+  [deck.md](deck.md#lvs-controls)), and so are a resistor's ends and any
+  pins the deck declares with `lvs permute`. For transistors, W and `nf`
+  are summed, and every other parameter, L included, must agree. Any other device keeps its value and
   counts: two equal capacitors in parallel are one with `m=2`, which matches
-  a card with `m=2` but not one card of twice the capacitance. A transistor
+  a card with `m=2` but not one card of twice the capacitance, unless the
+  deck relaxes the topology (`lvs topology relaxed`), when they combine by
+  value. A transistor
   whose card states no W has no width to sum and counts the same way: two
   unsized transistors in parallel match a card with `m=2`, not a card
   without it. A transistor's source and drain diffusions (`as`, `ad`, `ps`,
@@ -105,8 +109,9 @@ Before matching, both sides are reduced, mostly the way netgen reduces them
   finger calls its source.
 - **Series:** transistors stacked through a node nothing else touches, with
   their gates strapped, become one device whose L is the sum, if every other
-  parameter agrees. Both must state L: with no length to add, two transistors
-  in series stay two, so a stack does not match one unsized transistor.
+  parameter agrees. An asymmetric transistor never merges in series. Both
+  must state L: with no length to add, two transistors in series stay two,
+  so a stack does not match one unsized transistor.
   Transistors stating a diffusion do not merge in series: the diffusion
   between them would vanish, and no rule says what becomes of it.
 - **Multiplier:** a transistor card's `m` multiplies its `W` and diffusions
@@ -133,7 +138,10 @@ netgen's):
 - netgen measures a parameter's difference against the mean of the two
   values, and this tool against the larger, so netgen's `2t/(2 − t)`
   (2.0202 % for 2 %) is this tool's `t`;
-- netgen matches the top cell's pins by name; this tool never compares names;
+- netgen matches the top cell's pins by name; this tool uses a net's label
+  only to choose among nets nothing else tells apart (as KLayout's
+  `consider_net_names`), and compares port names only when the deck asks
+  (`lvs ports_by_name`);
 - when the deck extracts no bulk, the reference's bulks are dropped here;
   netgen has no such rule, so its setup must tie every bulk to one net on
   both sides.
@@ -152,7 +160,9 @@ pair the way its diffusions agree, so a card with them the other way round
 is the same transistor. Each parameter a
 schematic card states is compared on that device, within 2 % of the larger
 value, except the counts `m` and `nf`: they are whole numbers and must be
-equal, so `m=50` does not match `m=51`. A card that
+equal, so `m=50` does not match `m=51`. The deck's `lvs tolerance` for a
+parameter of a model replaces either (see
+[deck.md](deck.md#lvs-controls)). A card that
 leaves a parameter out says nothing about it, whatever other cards of the
 same model state, and a parameter the layout does not measure is reported
 (`lvs.undeclared_param`) rather than passed.
@@ -168,6 +178,25 @@ resistor, capacitor or diode card, other tools' names for the area and
 perimeter are read as this tool's: KLayout's `A` and `P`, and ngspice's
 diode `pj`, are `area`, `perim` and `perim`. A parameter stated twice, under
 any of its names, is refused.
+
+A device drawn with the wrong model, or written with one, but wired as
+its counterpart is reported as one `lvs.model_mismatch` naming both
+models, when nothing else differs; otherwise the devices are unpaired.
+
+## LVS controls
+
+The deck's `lvs` statements change the comparison per device model (see
+[deck.md](deck.md#lvs-controls)): a parameter's tolerance, or leaving it out
+(`lvs tolerance`, `lvs ignore_parameter`); ports held to their labels
+(`lvs ports_by_name`); a transistor whose source and
+drain do not swap (`lvs asymmetric`); pins that do (`lvs permute`); and
+devices left out of the comparison altogether, fill or decap cells one side
+does not state (`lvs ignore`), or dummies with every terminal on one net
+(`lvs ignore_shorted`). Must-connect nets, rails joined only above this
+layout, are one net to compare (`lvs connect_implicit`, `lvs
+connect_explicit`). And `lvs range` holds a model's drawn devices to the
+sizes the foundry allows (`lvs.param_range`). The layout's own checks still see every
+device.
 
 ## Exit code
 

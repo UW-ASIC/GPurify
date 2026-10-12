@@ -62,8 +62,8 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 
 | Domain | implemented | expressible | partial | missing | verify | out of scope |
 |---|---:|---:|---:|---:|---:|---:|
-| DRC | 33 | 4 | 36 | 33 | 0 | 0 |
-| LVS | 17 | 1 | 16 | 14 | 0 | 0 |
+| DRC | 33 | 4 | 40 | 29 | 0 | 0 |
+| LVS | 24 | 1 | 14 | 9 | 0 | 0 |
 | ERC | 43 | 3 | 9 | 26 | 0 | 0 |
 | PEX | 4 | 0 | 3 | 9 | 0 | 0 |
 | Flow | 0 | 0 | 2 | 8 | 0 | 0 |
@@ -294,6 +294,7 @@ single oracle is a named gap that ledger P1 closes.
 
 | Id | Check | Status | Defined by (public) | Evidence |
 |---|---|---|---|---|
+| DRC-036 | Span-length table | partial | LEF58_SPANLENGTHTABLE | SE; MR; SY |
 | DRC-037 | Bent / 45-degree features | partial | IHP:M1.g,Mn.g,Gat.g; GF:PL.7,MT30.4; SKY:via.14a | FR; MR; SY |
 | DRC-081 | Net spacing between two layers / on wells | partial | SKY:nwell.7,hvnwell.8,hv.nwell.1,vhvi.8; IHP:NW.b1,NBL.c | SY; MR |
 | DRC-082 | Voltage-dependent spacing (VA-DRC) | implemented | SKY:hvnwell.8,hv.*; LEF58_VOLTAGESPACING; CAL; ICV; PEG; EMP | SY; MR |

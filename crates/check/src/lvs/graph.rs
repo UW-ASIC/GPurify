@@ -117,7 +117,7 @@ pub(crate) fn channel_ends(graph: &Graph, device: u32) -> (Option<u32>, Option<u
 }
 
 /// The SPICE parameter name each measured [`DeviceParam`] compares under.
-const fn spice_param_name(param: DeviceParam) -> &'static str {
+pub(crate) const fn spice_param_name(param: DeviceParam) -> &'static str {
     match param {
         DeviceParam::Width => "w",
         DeviceParam::Length => "l",

@@ -64,13 +64,21 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         min_spacing(depth),
         min_spacing_diff(depth),
         eol_spacing(depth),
+        eol_within_spacing(depth),
+        eol_keep_out(depth),
         prl_spacing(depth),
         corner_to_corner(depth),
+        convex_corner_spacing(depth),
         wide_spacing(depth),
         attached_wide_spacing(depth),
         net_spacing(depth),
         net_spacing_two_layers(depth),
         spacing_table(depth),
+        two_width_spacing_table(depth),
+        tip_spacing_table(depth),
+        forbidden_spacing(depth),
+        span_length(depth),
+        exact_pitch(depth),
         min_area(depth),
         min_enclosed_area(depth),
         off_grid(depth),
@@ -91,6 +99,21 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
 /// Repeats each fixture under every symmetry at every offset.
 pub fn every_placement(fixtures: Vec<Fixture>) -> Vec<Fixture> {
     every_placement_at(fixtures, &OFFSETS)
+}
+
+/// Repeats each fixture under the four symmetries of the square that keep
+/// the axes (no quarter turn) at every offset, for a rule tied to an axis:
+/// a quarter turn makes a vertical pitch a horizontal one.
+fn every_axis_placement(fixtures: &[Fixture]) -> Vec<Fixture> {
+    let mut out = Vec::new();
+    for fixture in fixtures {
+        for &(dx, dy) in &OFFSETS {
+            for &symmetry in Symmetry::ALL.iter().filter(|s| s.turns % 2 == 0) {
+                out.push(fixture.transformed(symmetry, dx, dy));
+            }
+        }
+    }
+    out
 }
 
 /// Repeats each fixture under every symmetry at each of `offsets`.
@@ -1884,6 +1907,284 @@ fn eol_spacing(depth: Depth) -> Vec<Fixture> {
     out
 }
 
+// --------------------------------------------------------- eol_within_spacing
+
+/// LEF/DEF 5.8 Example 1-18 in nanometres, `SPACING 1.2 ENDOFLINE 1.3 WITHIN
+/// 0.6`, with `parallel` and `end_to_end` as the deck writes them.
+fn lef_eol(parallel: &str, end_to_end: &str) -> String {
+    one_layer_deck(&format!(
+        "rule e eol_space(met1; eol_width: 1300nm, within: 600nm, parallel: {parallel}, \
+         end_to_end: {end_to_end}) >= 1200nm"
+    ))
+}
+
+/// A 1000 wide line ending at y = 0: its top is an end of line (shorter
+/// than 1300, both corners convex) facing up, its keep-out x in
+/// (-600, 1600), y from 0 up to 1200.
+const LINE: [i64; 4] = [0, -5000, 1000, 0];
+
+/// `eol_space(met1; eol_width: 1300nm, within: 600nm, parallel: ..,
+/// end_to_end: ..) >= 1200nm` (`eol_within_spacing`, DRC-029), LEF's
+/// `SPACING ENDOFLINE`: a facing edge of another figure in an end's keep-out
+/// (the end widened by `within` each side, out to the limit) fails by its
+/// depth; one finding per pair of figures, at the middle of the stretch
+/// where the facing edge overlaps the widened end.
+///
+/// Without `parallel`: a 5000 wide bar's depth swept around 1200 (LEF
+/// Figure 1-23 a, b); a 2000 square 300 above, its side swept around 600
+/// past the end (Figure 1-23 c, d: within is "less than"); a 1000 long edge
+/// whose one corner is concave (no end, clean); an end facing its own figure.
+/// With `PARALLELEDGE 1.1 WITHIN 0.5` (Figure 1-24), a bar 1000 above fails
+/// only with a neighbour beside the line: its distance swept around 1100,
+/// its top swept around 500 behind the end's line; none at all, clean. With
+/// `TWOEDGES`, one side is not enough and two are. With `end_to_end:
+/// 1400nm`, two ends facing each other need 1400 (swept), and an end facing
+/// a side still 1200.
+fn eol_within_spacing(depth: Depth) -> Vec<Fixture> {
+    let mut cases = Vec::new();
+    let mut case = |shape: String, deck: &str, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("eol_within_spacing/{shape}"),
+            &["DRC-029"],
+            deck,
+            layout,
+            vec![("e", findings)],
+        ));
+    };
+    let plain = lef_eol("none", "none");
+    let parallel = lef_eol("(space: 1100nm, within: 500nm, two_edges: false)", "none");
+    let two_edges = lef_eol("(space: 1100nm, within: 500nm, two_edges: true)", "none");
+    let ends = lef_eol("none", "1400nm");
+    // A 7000 wide bar 1000 above the line: inside the keep-out, its bottom
+    // overlapping the widened end over x = -600..1600.
+    let bar_above = [-3000, 1000, 4000, 2000];
+    let at_1000 = || vec![pin(Finding::length(1000), 1000, 1000)];
+    for g in sweep(depth, 1200) {
+        let findings = if g < 1200 {
+            vec![pin(Finding::length(g), 1000, g)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("depth/{}", side(g, 1200)),
+            &plain,
+            met1(&[LINE, [-2000, g, 3000, g + 1000]]),
+            findings,
+        );
+    }
+    for d in sweep(depth, 600) {
+        let findings = if d < 600 {
+            vec![pin(Finding::length(300), 2600 + d, 300)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("within/{}", side(d, 600)),
+            &plain,
+            met1(&[LINE, [1000 + d, 300, 3000 + d, 2300]]),
+            findings,
+        );
+    }
+    // A tab on a base: its left side is 1000 long but its lower corner is
+    // concave, so it is no end, and the wide shape 500 to its left is clean.
+    case(
+        "concave_corner_is_no_end".into(),
+        &plain,
+        met1(&[
+            [-3000, -5000, 4000, -1000],
+            [0, -1000, 1000, 0],
+            [-3000, -900, -500, 3000],
+        ]),
+        Vec::new(),
+    );
+    // The line's end faces a bar 1000 above that a frame joins to the line.
+    case(
+        "facing_its_own_figure".into(),
+        &plain,
+        met1(&[
+            LINE,
+            [0, -6000, 3000, -5000],
+            [2000, -6000, 3000, 1000],
+            [-2000, 1000, 3000, 2000],
+        ]),
+        Vec::new(),
+    );
+    for p in sweep(depth, 1100) {
+        let findings = if p < 1100 { at_1000() } else { Vec::new() };
+        case(
+            format!("parallel_space/{}", side(p, 1100)),
+            &parallel,
+            met1(&[LINE, bar_above, [-p - 2000, -5000, -p, 0]]),
+            findings,
+        );
+    }
+    for t in sweep(depth, -500) {
+        let findings = if t > -500 { at_1000() } else { Vec::new() };
+        case(
+            format!("parallel_within/{}", side(t, -500)),
+            &parallel,
+            met1(&[LINE, bar_above, [-2500, -5000, -500, t]]),
+            findings,
+        );
+    }
+    case(
+        "no_parallel_edge".into(),
+        &parallel,
+        met1(&[LINE, bar_above]),
+        Vec::new(),
+    );
+    case(
+        "two_edges/one_side".into(),
+        &two_edges,
+        met1(&[LINE, bar_above, [-2500, -5000, -500, 0]]),
+        Vec::new(),
+    );
+    case(
+        "two_edges/both_sides".into(),
+        &two_edges,
+        met1(&[
+            LINE,
+            bar_above,
+            [-2500, -5000, -500, 0],
+            [1500, -5000, 3500, 0],
+        ]),
+        at_1000(),
+    );
+    for g in sweep(depth, 1400) {
+        let findings = if g < 1400 {
+            vec![pin(Finding::length(g), 1000, g)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("end_to_end/{}", side(g, 1400)),
+            &ends,
+            met1(&[LINE, [0, g, 1000, g + 5000]]),
+            findings,
+        );
+    }
+    case(
+        "end_to_side_keeps_the_limit".into(),
+        &ends,
+        met1(&[LINE, [-2000, 1300, 3000, 2300]]),
+        Vec::new(),
+    );
+    let mut out = every_placement(cases);
+    out.push(vacuous(
+        "eol_within_spacing",
+        &["DRC-029"],
+        "rule e eol_space(met1; eol_width: 1300nm, within: 600nm, parallel: none, \
+         end_to_end: none) >= 1200nm",
+        &["e"],
+    ));
+    out
+}
+
+// --------------------------------------------------------------- eol_keep_out
+
+/// `eol_keep_out(met1; eol_width: 1300nm, backward: 200nm, side: 300nm,
+/// forward: 1000nm)` (`eol_keep_out`, DRC-030), `LEF58_EOLKEEPOUT 1.3
+/// EXTENSION 0.2 0.3 1.0`: the line's end (1000 wide, both corners convex)
+/// keeps out x = -300..1300, y = -200..1000; each other figure overlapping
+/// that box with a positive area is one finding, measuring the area inside,
+/// at the centre of its box.
+///
+/// The box's far side swept with a bar's bottom around y = 1000, its side
+/// with a block's left side around x = 1300, its back with a block beside
+/// the line whose top is swept around y = -200 (touching is outside). Two
+/// figures inside are two findings; a bar drawn as two rectangles is one
+/// figure, one finding with the summed area; the line's own figure turning
+/// back into the box is not an intruder.
+fn eol_keep_out(depth: Depth) -> Vec<Fixture> {
+    const RULE: &str =
+        "rule k eol_keep_out(met1; eol_width: 1300nm, backward: 200nm, side: 300nm, forward: 1000nm)";
+    let deck = one_layer_deck(RULE);
+    let mut cases = Vec::new();
+    let mut case = |shape: String, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("eol_keep_out/{shape}"),
+            &["DRC-030"],
+            &deck,
+            layout,
+            vec![("k", findings)],
+        ));
+    };
+    for g in sweep(depth, 1000) {
+        let findings = if g < 1000 {
+            vec![pin(
+                Finding::area(i128::from(1600 * (1000 - g))),
+                1000,
+                g + 1000,
+            )]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("forward/{}", side(g, 1000)),
+            met1(&[LINE, [-2000, g, 3000, g + 500]]),
+            findings,
+        );
+    }
+    for d in sweep(depth, 300) {
+        let findings = if d < 300 {
+            vec![pin(
+                Finding::area(i128::from((300 - d) * 500)),
+                2300 + d,
+                1500,
+            )]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("side/{}", side(d, 300)),
+            met1(&[LINE, [1000 + d, 500, 3000 + d, 2500]]),
+            findings,
+        );
+    }
+    for b in sweep(depth, -200) {
+        let findings = if b > -200 {
+            vec![pin(
+                Finding::area(i128::from(200 * (b + 200))),
+                2400,
+                b - 200,
+            )]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("backward/{}", side(b, -200)),
+            met1(&[LINE, [1100, b - 2000, 3100, b]]),
+            findings,
+        );
+    }
+    case(
+        "two_figures".into(),
+        met1(&[LINE, [-2000, 300, 200, 1800], [700, 300, 2500, 1800]]),
+        vec![
+            pin(Finding::area(350_000), -100, 1300),
+            pin(Finding::area(420_000), 2000, 1300),
+        ],
+    );
+    case(
+        "one_figure_drawn_twice".into(),
+        met1(&[LINE, [-2000, 500, 500, 1500], [500, 500, 3000, 1500]]),
+        vec![pin(Finding::area(800_000), 1000, 1500)],
+    );
+    case(
+        "own_figure_in_the_box".into(),
+        met1(&[
+            LINE,
+            [0, -6000, 3000, -5000],
+            [2000, -6000, 3000, 1100],
+            [-500, 600, 3000, 1100],
+        ]),
+        Vec::new(),
+    );
+    let mut out = every_placement(cases);
+    out.push(vacuous("eol_keep_out", &["DRC-030"], RULE, &["k"]));
+    out
+}
+
 // ---------------------------------------------------------------- prl_spacing
 
 /// `prl_space(met1; prl: 500nm) >= 101nm` (`prl_spacing`, DRC-026): pairs in
@@ -2107,6 +2408,128 @@ fn corner_to_corner(depth: Depth) -> Vec<Fixture> {
         &["DRC-032"],
         "rule cc corner_space(met1) >= 101nm",
         &["cc"],
+    ));
+    out
+}
+
+// ------------------------------------------------------ convex_corner_spacing
+
+/// `corner_space(met1; corner_to_corner: .., except_eol: ..) >= 101nm`.
+fn corner_deck(corner_to_corner: bool, except_eol: &str) -> String {
+    one_layer_deck(&format!(
+        "rule c corner_space(met1; corner_to_corner: {corner_to_corner}, except_eol: {except_eol}) \
+         >= 101nm"
+    ))
+}
+
+/// `corner_space(met1; corner_to_corner: .., except_eol: ..) >= 101nm`
+/// (`convex_corner_spacing`, DRC-032), `LEF58_CORNERSPACING CONVEXCORNER`:
+/// facing convex corners of different figures measured by the larger axis
+/// gap (`TritonRoute`'s `maxXY`), or Euclidean with `corner_to_corner`; one
+/// finding per pair of figures, midway between the nearest corners.
+///
+/// Diagonal pairs `d` apart on both axes: the larger gap is `d`, the
+/// Euclidean one `d·√2` (the same pairs as `corner_to_corner`). A pair 50
+/// apart on y with the x gap swept around 101: the larger gap is the x gap,
+/// and Euclidean it is clean at 100 (111.8). Side by side, no facing
+/// corners; touching at a corner, one figure. With `except_eol: 200nm`, a
+/// 100 wide line end's corners are exempt on either shape, and two wide
+/// squares' are not.
+fn convex_corner_spacing(depth: Depth) -> Vec<Fixture> {
+    let square = corner_deck(false, "none");
+    let euclid = corner_deck(true, "none");
+    let eol = corner_deck(false, "200nm");
+    let mut cases = Vec::new();
+    let mut case = |shape: String, deck: &str, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("convex_corner_spacing/{shape}"),
+            &["DRC-032"],
+            deck,
+            layout,
+            vec![("c", findings)],
+        ));
+    };
+    for d in diagonals(depth) {
+        let (layout, euclidean) = diagonal_pair(("met1", "met1"), d);
+        let larger = if d < 101 {
+            vec![pin(Finding::length(d), 2000 + d, 2000 + d)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("diagonal/square/d{d}"),
+            &square,
+            layout.clone(),
+            larger,
+        );
+        case(
+            format!("diagonal/euclidean/d{d}"),
+            &euclid,
+            layout,
+            euclidean,
+        );
+    }
+    for d in sweep(depth, 101) {
+        let findings = if d < 101 {
+            vec![pin(Finding::length(d), 2000 + d, 2050)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("skewed/{}", side(d, 101)),
+            &square,
+            met1(&[[0, 0, 1000, 1000], [1000 + d, 1050, 2000 + d, 2050]]),
+            findings,
+        );
+    }
+    case(
+        "skewed_euclidean".into(),
+        &euclid,
+        met1(&[[0, 0, 1000, 1000], [1100, 1050, 2100, 2050]]),
+        Vec::new(),
+    );
+    case(
+        "side_by_side".into(),
+        &square,
+        met1(&[[0, 0, 1000, 1000], [1050, 0, 2050, 1000]]),
+        Vec::new(),
+    );
+    case(
+        "one_figure".into(),
+        &square,
+        met1(&[[0, 0, 1000, 1000], [1000, 1000, 2000, 2000]]),
+        Vec::new(),
+    );
+    case(
+        "except_eol/line_end".into(),
+        &eol,
+        met1(&[[0, 0, 100, 1000], [150, 1050, 1150, 2050]]),
+        Vec::new(),
+    );
+    case(
+        "except_eol/other_line_end".into(),
+        &eol,
+        met1(&[[0, 0, 1000, 1000], [1050, 1050, 1150, 2050]]),
+        Vec::new(),
+    );
+    case(
+        "except_eol/wide_corners".into(),
+        &eol,
+        met1(&[[0, 0, 1000, 1000], [1050, 1050, 2050, 2050]]),
+        vec![pin(Finding::length(50), 2050, 2050)],
+    );
+    case(
+        "line_end_without_except".into(),
+        &square,
+        met1(&[[0, 0, 100, 1000], [150, 1050, 1150, 2050]]),
+        vec![pin(Finding::length(50), 250, 2050)],
+    );
+    let mut out = every_placement(cases);
+    out.push(vacuous(
+        "convex_corner_spacing",
+        &["DRC-032"],
+        "rule c corner_space(met1; corner_to_corner: false, except_eol: none) >= 101nm",
+        &["c"],
     ));
     out
 }
@@ -2737,6 +3160,514 @@ fn spacing_table(depth: Depth) -> Vec<Fixture> {
     ));
     let mut out = every_placement(cases);
     out.push(vacuous("spacing_table", &["DRC-025"], TABLE, &["t"]));
+    out
+}
+
+// ---------------------------------------------------- two_width_spacing_table
+
+/// LEF/DEF 5.8's two-width table ("Two-Width Spacing Tables"), in
+/// nanometres: widths 0, 0.25, 1.5 and 3.0 µm with runs none, 0, 1.5 and
+/// 3.0 µm, and the manual's cells.
+const TWO_WIDTHS: &str = "rule t two_width_table(met1;
+    width: [0nm, 250nm, 1500nm, 3000nm],
+    prl:   [none, 0nm, 1500nm, 3000nm],
+    space: [[150nm, 200nm, 500nm, 1000nm],
+            [200nm, 250nm, 500nm, 1000nm],
+            [500nm, 500nm, 600nm, 1000nm],
+            [1000nm, 1000nm, 1000nm, 1200nm]])";
+
+/// `two_width_table` (`two_width_spacing_table`, DRC-027): a pair needs the
+/// cell at the last width that applies to each shape, a width applying to a
+/// shape wider than it whose figures run alongside for more than its run.
+///
+/// LEF's own worked example (SE), each case's gap swept one step around its
+/// space: widths 250 and 250 with no run, 150; 250 and 260 with no run, 150;
+/// 250 and 260 with a run of 100, 200; 260 and 260 with a run of 100, 250.
+/// The 1500 run swept around 1500 between two 1600 wide plates 550 apart
+/// (600 only past it). A 260 wide line 220 from the thin tab of a 2 µm plate
+/// is clean: the plate is wide, the tab is not (holding the whole shape to
+/// its widest part would ask 250). A ring's own hole, and touching shapes,
+/// are no pair.
+fn two_width_spacing_table(depth: Depth) -> Vec<Fixture> {
+    let deck = one_layer_deck(TWO_WIDTHS);
+    let mut cases = Vec::new();
+    let mut case = |shape: String, catalog: &[&'static str], layout: Layout, findings| {
+        cases.push(fixture(
+            &format!("two_width_spacing_table/{shape}"),
+            catalog,
+            &deck,
+            layout,
+            vec![("t", findings)],
+        ));
+    };
+    // Lines `wa` and `wb` wide, `g` apart, overlapping by `r` along y.
+    for (example, wa, wb, r, need) in [
+        ("w250_w250_run0", 250, 250, 0, 150),
+        ("w250_w260_run0", 250, 260, 0, 150),
+        ("w250_w260_run100", 250, 260, 100, 200),
+        ("w260_w260_run100", 260, 260, 100, 250),
+    ] {
+        for g in sweep(depth, need) {
+            let findings = if g < need {
+                vec![pin(Finding::length(g), 2 * wa + g, 4000 - r)]
+            } else {
+                Vec::new()
+            };
+            case(
+                format!("lef_example/{example}/{}", side(g, need)),
+                &["DRC-027"],
+                met1(&[[0, 0, wa, 2000], [wa + g, 2000 - r, wa + g + wb, 4000 - r]]),
+                findings,
+            );
+        }
+    }
+    for r in sweep(depth, 1500) {
+        let findings = if r > 1500 {
+            vec![pin(Finding::length(550), 3750, 6000 - r)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("run_1500/{}", side(r, 1500)),
+            &["DRC-027"],
+            met1(&[[0, 0, 1600, 3000], [2150, 3000 - r, 3750, 6000 - r]]),
+            findings,
+        );
+    }
+    case(
+        "thin_tab_is_thin".into(),
+        &["DRC-027"],
+        met1(&[
+            [0, 0, 2000, 2000],
+            [900, 2000, 1000, 3000],
+            [1220, 2500, 1480, 4000],
+        ]),
+        Vec::new(),
+    );
+    case(
+        "own_hole".into(),
+        &["DRC-027"],
+        Layout::default().polygon("met1", &holed([0, 0, 2000, 2000], [100, 100, 1900, 1900])),
+        Vec::new(),
+    );
+    case(
+        "touching".into(),
+        &["DRC-027"],
+        met1(&[[0, 0, 400, 2000], [400, 0, 500, 2000]]),
+        Vec::new(),
+    );
+    let mut out = every_placement(cases);
+    out.push(vacuous(
+        "two_width_spacing_table",
+        &["DRC-027"],
+        TWO_WIDTHS,
+        &["t"],
+    ));
+    out
+}
+
+// ---------------------------------------------------------- tip_spacing_table
+
+/// The ASAP7 M1 tip table (DRM r1p7, Table 3.12.1): edges below 24 nm, from
+/// 24 to 36 nm, and above 36 nm; M1.S.1 side to side 18, M1.S.2 tip to side
+/// 25, M1.S.3 tip to tip 27 (both 24 to 36), M1.S.4 31 (both below 24),
+/// M1.S.5 31 (one of each).
+const TIPS: &str = "rule t tip_space_table(met1;
+    length: [0nm, 24nm, 37nm],
+    space: [[31nm, 31nm, 25nm],
+            [31nm, 27nm, 25nm],
+            [25nm, 25nm, 18nm]])";
+
+/// `tip_space_table` (`tip_spacing_table`, DRC-031): whole edges of the
+/// merged layer in different figures that face each other over a positive
+/// run need the cell of their two length classes; one finding per pair of
+/// figures, its smallest offending gap, at the middle of the stretch the
+/// two edges face each other over.
+///
+/// Each ASAP7 rule's gap swept around its value (FR; positive gaps only, as
+/// shapes that touch merge): side to side, tip to
+/// side from a 20 and from a 30 wide line, tip to tip at both widths and
+/// mixed. Each class boundary swept at a gap between its two cells: tips 23,
+/// 24 and 25 wide 28 apart (31 below 24, 27 from it), and 36, 37 and 38 wide
+/// 20 apart (27 to 36, 18 above). Clean: a diagonal pair (no run), a notch
+/// inside one figure, and a 30 wide tip drawn as two 15 wide strips 28 from
+/// another (one 30 wide end, 27; a check classing drawn edges would ask
+/// 31). Three bars, two findings; a figure facing a bar 15 and 10 away
+/// along two steps, one finding at the nearer.
+fn tip_spacing_table(depth: Depth) -> Vec<Fixture> {
+    let deck = one_layer_deck(TIPS);
+    let mut cases = Vec::new();
+    let mut case = |shape: String, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("tip_spacing_table/{shape}"),
+            &["DRC-031"],
+            &deck,
+            layout,
+            vec![("t", findings)],
+        ));
+    };
+    // Two lines `wa` and `wb` wide, tip to tip `g` apart, both starting at
+    // x = 0: they face each other over the narrower width.
+    let tips = |wa: i64, wb: i64, g: i64| met1(&[[0, 0, wa, 1000], [0, 1000 + g, wb, 2000 + g]]);
+    let found = |g: i64, need: i64, x2: i64, y2: i64| {
+        if g < need {
+            vec![pin(Finding::length(g), x2, y2)]
+        } else {
+            Vec::new()
+        }
+    };
+    for g in sweep(depth, 18).into_iter().filter(|&g| g > 0) {
+        case(
+            format!("side_to_side/{}", side(g, 18)),
+            met1(&[[0, 0, 100, 1000], [100 + g, 0, 200 + g, 1000]]),
+            found(g, 18, 200 + g, 1000),
+        );
+    }
+    for w in [20, 30] {
+        for g in sweep(depth, 25).into_iter().filter(|&g| g > 0) {
+            case(
+                format!("tip_to_side/w{w}/{}", side(g, 25)),
+                met1(&[[0, 0, w, 1000], [-500, 1000 + g, 500, 1100 + g]]),
+                found(g, 25, w, 2000 + g),
+            );
+        }
+    }
+    for (rule, wa, wb, need) in [("s3", 30, 30, 27), ("s4", 20, 20, 31), ("s5", 30, 20, 31)] {
+        for g in sweep(depth, need).into_iter().filter(|&g| g > 0) {
+            case(
+                format!("tip_to_tip/{rule}/{}", side(g, need)),
+                tips(wa, wb, g),
+                found(g, need, wa.min(wb), 2000 + g),
+            );
+        }
+    }
+    for w in sweep(depth, 24).into_iter().filter(|&w| w > 0) {
+        let need = if w < 24 {
+            31
+        } else if w < 37 {
+            27
+        } else {
+            18
+        };
+        case(
+            format!("class_24/{}", side(w, 24)),
+            tips(w, w, 28),
+            found(28, need, w, 2028),
+        );
+    }
+    for w in sweep(depth, 37) {
+        let need = if w < 24 {
+            31
+        } else if w < 37 {
+            27
+        } else {
+            18
+        };
+        case(
+            format!("class_37/{}", side(w, 37)),
+            tips(w, w, 20),
+            found(20, need, w, 2020),
+        );
+    }
+    case(
+        "diagonal".into(),
+        met1(&[[0, 0, 30, 1000], [40, 1010, 70, 2000]]),
+        Vec::new(),
+    );
+    case(
+        "notch_in_one_figure".into(),
+        met1(&[[0, 0, 20, 500], [30, 0, 50, 500], [0, -20, 50, 0]]),
+        Vec::new(),
+    );
+    case(
+        "tip_drawn_as_strips".into(),
+        met1(&[[0, 0, 15, 1000], [15, 0, 30, 1000], [0, 1028, 30, 2028]]),
+        Vec::new(),
+    );
+    case(
+        "three_bars".into(),
+        met1(&[[0, 0, 100, 1000], [110, 0, 210, 1000], [220, 0, 320, 1000]]),
+        vec![
+            Finding::length(10).at(105, 500),
+            Finding::length(10).at(215, 500),
+        ],
+    );
+    // A bar's 1000-long side x = 100 faces a figure stepped 15 away below
+    // y = 400 and 10 away above it: both 400 and 600 long, 18 apart needed;
+    // the nearer step is the finding, over y = 400..1000.
+    case(
+        "nearest_of_two_steps".into(),
+        met1(&[[0, 0, 100, 1000], [115, 0, 215, 400], [110, 400, 210, 1000]]),
+        vec![Finding::length(10).at(105, 700)],
+    );
+    let mut out = every_placement(cases);
+    out.push(vacuous("tip_spacing_table", &["DRC-031"], TIPS, &["t"]));
+    out
+}
+
+// ---------------------------------------------------------- forbidden_spacing
+
+/// `forbidden_space(met1; min: 100nm, max: 150nm, prl: 200nm)`
+/// (`forbidden_spacing`, DRC-033): facing edges of different figures that
+/// run alongside for more than 200 at a gap from 100 to 150, both included,
+/// are forbidden; one finding per pair of figures, its smallest forbidden
+/// gap, at the middle of the stretch the two edges face each other over.
+///
+/// The gap swept around both ends of the range (both are forbidden: 99 and
+/// 151 are legal), the run swept around 200 at a gap of 120 (200 is not
+/// more than 200). Clean: a diagonal pair, a U whose arms are 120 apart
+/// (one figure). Three bars 120 apart, two findings. A figure facing a bar
+/// 90 away along one step and 130 along another: the narrower gap is below
+/// the range and legal, and the finding is the 130.
+fn forbidden_spacing(depth: Depth) -> Vec<Fixture> {
+    const RULE: &str = "rule f forbidden_space(met1; min: 100nm, max: 150nm, prl: 200nm)";
+    let deck = one_layer_deck(RULE);
+    let mut cases = Vec::new();
+    let mut case = |shape: String, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("forbidden_spacing/{shape}"),
+            &["DRC-033"],
+            &deck,
+            layout,
+            vec![("f", findings)],
+        ));
+    };
+    let bars = |g: i64| met1(&[[0, 0, 100, 1000], [100 + g, 0, 200 + g, 1000]]);
+    for (end, limit) in [("min", 100), ("max", 150)] {
+        for g in sweep(depth, limit) {
+            let findings = if (100..=150).contains(&g) {
+                vec![pin(Finding::length(g), 200 + g, 1000)]
+            } else {
+                Vec::new()
+            };
+            case(format!("gap_{end}/{}", side(g, limit)), bars(g), findings);
+        }
+    }
+    for r in sweep(depth, 200) {
+        let findings = if r > 200 {
+            vec![pin(Finding::length(120), 320, 2000 - r)]
+        } else {
+            Vec::new()
+        };
+        case(
+            format!("run/{}", side(r, 200)),
+            met1(&[[0, 0, 100, 1000], [220, 1000 - r, 320, 2000 - r]]),
+            findings,
+        );
+    }
+    case(
+        "diagonal".into(),
+        met1(&[[0, 0, 100, 1000], [220, 1100, 320, 2000]]),
+        Vec::new(),
+    );
+    case(
+        "one_figure".into(),
+        met1(&[[0, 0, 100, 1000], [220, 0, 320, 1000], [0, -100, 320, 0]]),
+        Vec::new(),
+    );
+    case(
+        "three_bars".into(),
+        met1(&[[0, 0, 100, 1000], [220, 0, 320, 1000], [440, 0, 540, 1000]]),
+        vec![
+            Finding::length(120).at(160, 500),
+            Finding::length(120).at(380, 500),
+        ],
+    );
+    // The bar's side x = 100 faces the figure's step x = 190 over
+    // y = 0..400 (90: below the range, legal) and x = 230 over y = 400..1000
+    // (130, run 600: forbidden), marked at (165, 700).
+    case(
+        "narrower_step_is_legal".into(),
+        met1(&[[0, 0, 100, 1000], [190, 0, 290, 400], [230, 400, 330, 1000]]),
+        vec![Finding::length(130).at(165, 700)],
+    );
+    let mut out = every_placement(cases);
+    out.push(vacuous("forbidden_spacing", &["DRC-033"], RULE, &["f"]));
+    out
+}
+
+// ---------------------------------------------------------------- exact_pitch
+
+/// `pitch(met1, vertical) == 27nm` and `pitch(met1, horizontal) == 54nm`
+/// (`exact_pitch`, DRC-035), ASAP7 FIN.S.1 (7 nm fins, 27 nm pitch) and
+/// GATE.S.1 (20 nm gates, 54 nm pitch): each rectangle's nearest neighbours
+/// past it that overlap it across must have their centre lines exactly the
+/// pitch apart; one finding per pair off it, in the middle of their gap.
+///
+/// Three fins and three gates with the pitch swept one step either side
+/// (FR): both neighbouring pairs off the pitch, and none at it. A missing
+/// fin is a pitch of 54. Fins that do not overlap across are no neighbours.
+/// A bent shape refuses the rule. Placed under the symmetries that keep the
+/// axes: a quarter turn swaps a vertical pitch for a horizontal one.
+fn exact_pitch(depth: Depth) -> Vec<Fixture> {
+    let fins = one_layer_deck("rule p pitch(met1, vertical) == 27nm");
+    let gates = one_layer_deck("rule p pitch(met1, horizontal) == 54nm");
+    let mut cases = Vec::new();
+    let mut case = |shape: String, deck: &str, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("exact_pitch/{shape}"),
+            &["DRC-035"],
+            deck,
+            layout,
+            vec![("p", findings)],
+        ));
+    };
+    for p in sweep(depth, 27).into_iter().filter(|&p| p > 7) {
+        let findings = if p == 27 {
+            Vec::new()
+        } else {
+            vec![
+                pin(Finding::length(p), 1000, p + 7),
+                pin(Finding::length(p), 1000, 3 * p + 7),
+            ]
+        };
+        case(
+            format!("fins/{}", side(p, 27)),
+            &fins,
+            met1(&[
+                [0, 0, 1000, 7],
+                [0, p, 1000, p + 7],
+                [0, 2 * p, 1000, 2 * p + 7],
+            ]),
+            findings,
+        );
+    }
+    for p in sweep(depth, 54).into_iter().filter(|&p| p > 20) {
+        let findings = if p == 54 {
+            Vec::new()
+        } else {
+            vec![
+                pin(Finding::length(p), p + 20, 1000),
+                pin(Finding::length(p), 3 * p + 20, 1000),
+            ]
+        };
+        case(
+            format!("gates/{}", side(p, 54)),
+            &gates,
+            met1(&[
+                [0, 0, 20, 1000],
+                [p, 0, p + 20, 1000],
+                [2 * p, 0, 2 * p + 20, 1000],
+            ]),
+            findings,
+        );
+    }
+    case(
+        "missing_fin".into(),
+        &fins,
+        met1(&[[0, 0, 1000, 7], [0, 27, 1000, 34], [0, 81, 1000, 88]]),
+        vec![pin(Finding::length(54), 1000, 115)],
+    );
+    case(
+        "no_overlap_across".into(),
+        &fins,
+        met1(&[[0, 0, 1000, 7], [2000, 30, 3000, 37]]),
+        Vec::new(),
+    );
+    let mut out = every_axis_placement(&cases);
+    out.push(
+        Fixture::new("exact_pitch/bent_is_refused", &["DRC-035"], &fins, DRC)
+            .layout(Layout::default().polygon(
+                "met1",
+                &[(0, 0), (1000, 0), (1000, 7), (7, 7), (7, 500), (0, 500)],
+            ))
+            .expect(Expect::outcome("p", Want::Refused)),
+    );
+    out.push(vacuous(
+        "exact_pitch",
+        &["DRC-035"],
+        "rule p pitch(met1, vertical) == 27nm",
+        &["p"],
+    ));
+    out
+}
+
+// ---------------------------------------------------------------- span_length
+
+/// LEF/DEF 5.8's span tables for its vertical METAL2 (`SPANLENGTHTABLE 0.06
+/// 0.08 0.12 0.16 0.20 ;` and `SPANLENGTHTABLE 0.12 0.16 0.20 WRONGDIRECTION
+/// ;`): horizontal spans, a vertical wire's width, on the first; vertical
+/// spans, parallel to the layer's direction, on the wrong-direction one.
+const SPANS: &str =
+    "rule s span_length(met1; x: [60nm, 80nm, 120nm, 160nm, 200nm], y: [120nm, 160nm, 200nm])";
+
+/// `span_length` (`span_length`, DRC-036): every chord a horizontal or
+/// vertical line cuts from a merged figure is one of its axis's lengths, or
+/// at least the last; one finding per maximal region of an unchanged illegal
+/// chord, at its centre, measuring the chord.
+///
+/// LEF's own lists, each value and one step either side (SE): a vertical
+/// wire's width on `x`, a horizontal piece's height on `y` (the longer
+/// chords, 1000, are legal). A U with a stepped arm: the left arm's 100 is
+/// one region however many vertices the right arm adds beside it, and the
+/// base's 100 one region across the step. A ring's band, four regions. A
+/// 200 long piece drawn as two 100 long halves is one legal span.
+/// Placed under the symmetries that keep the axes: a quarter turn moves a
+/// span from one list to the other.
+fn span_length(_depth: Depth) -> Vec<Fixture> {
+    let deck = one_layer_deck(SPANS);
+    let mut cases = Vec::new();
+    let mut case = |shape: String, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("span_length/{shape}"),
+            &["DRC-036"],
+            &deck,
+            layout,
+            vec![("s", findings)],
+        ));
+    };
+    let around =
+        |values: &[i64]| -> Vec<i64> { values.iter().flat_map(|&v| [v - 1, v, v + 1]).collect() };
+    for w in around(&[60, 80, 120, 160, 200]) {
+        let legal = [60, 80, 120, 160].contains(&w) || w >= 200;
+        let findings = if legal {
+            Vec::new()
+        } else {
+            vec![pin(Finding::length(w), w, 1000)]
+        };
+        case(format!("x/w{w}"), met1(&[[0, 0, w, 1000]]), findings);
+    }
+    for h in around(&[120, 160, 200]) {
+        let legal = [120, 160].contains(&h) || h >= 200;
+        let findings = if legal {
+            Vec::new()
+        } else {
+            vec![pin(Finding::length(h), 1000, h)]
+        };
+        case(format!("y/h{h}"), met1(&[[0, 0, 1000, h]]), findings);
+    }
+    case(
+        "stepped_u".into(),
+        met1(&[
+            [0, 0, 1000, 100],
+            [0, 0, 100, 1000],
+            [900, 0, 1000, 500],
+            [850, 500, 1000, 1000],
+        ]),
+        vec![
+            pin(Finding::length(100), 100, 1100),
+            pin(Finding::length(100), 1900, 600),
+            pin(Finding::length(150), 1850, 1500),
+            pin(Finding::length(100), 1000, 100),
+        ],
+    );
+    case(
+        "ring".into(),
+        Layout::default().polygon("met1", &holed([0, 0, 1000, 1000], [100, 100, 900, 900])),
+        vec![
+            pin(Finding::length(100), 100, 1000),
+            pin(Finding::length(100), 1900, 1000),
+            pin(Finding::length(100), 1000, 100),
+            pin(Finding::length(100), 1000, 1900),
+        ],
+    );
+    case(
+        "drawn_in_halves".into(),
+        met1(&[[0, 0, 100, 120], [100, 0, 200, 120]]),
+        Vec::new(),
+    );
+    let mut out = every_axis_placement(&cases);
+    out.push(vacuous("span_length", &["DRC-036"], SPANS, &["s"]));
     out
 }
 

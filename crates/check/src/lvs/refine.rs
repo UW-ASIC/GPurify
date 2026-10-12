@@ -7,11 +7,11 @@
 //! only the neighbours of nodes that changed class in the pass before. A balanced
 //! stall is broken by pairing the lowest layout node of the stalled class holding
 //! it with the reference node of that class whose parameters are closest (netgen's
-//! "resolving symmetries by property value"), the lowest such on a tie, one class
-//! per stall. A net has no parameters of its own: its closest is the one whose
-//! pairing puts the diffusions of the transistors already paired closest at each
-//! channel end, so symmetric channel nets pair the way the diffusions agree
-//! (testing-plan F98).
+//! "resolving symmetries by property value"), on a tie the net of the layout net's
+//! label (`KLayout`'s `consider_net_names`), then the lowest, one class per stall.
+//! A net has no parameters of its own: its closest is the one whose pairing puts
+//! the diffusions of the transistors already paired closest at each channel end,
+//! so symmetric channel nets pair the way the diffusions agree (testing-plan F98).
 //!
 //! Refinement cannot always split nodes that no relabelling exchanges, so the
 //! closest node can be the wrong one (testing-plan F58). A pairing is a trial
@@ -21,10 +21,11 @@
 //! next closest is tried, up to [`TRIES`]. When none fits, the closest is kept
 //! and no later stall tries again, since a match is then out of reach.
 
+use crate::lvs::controls::bound;
 use crate::lvs::graph::{narrow, Graph};
 use crate::lvs::reduce::ParamNames;
 use crate::topology::TerminalRole;
-use gpurify_ingest::deck::DeviceKind;
+use gpurify_ingest::deck::{DeviceKind, LvsControls};
 use gpurify_ingest::StrId;
 
 #[derive(Debug, Clone, Copy)]
@@ -187,6 +188,13 @@ struct Sides<'a> {
     split: u32,
     /// Which names trade places with source and drain.
     names: ParamNames,
+    /// The deck's per-parameter tolerances.
+    controls: &'a LvsControls,
+    /// Each node's seed, layout nodes first: nodes of one seed start in a
+    /// class of their own; `u32::MAX`, or a node past the end, has none.
+    seeds: &'a [u32],
+    /// Whether devices of one kind start in one class whatever their model.
+    models_aside: bool,
 }
 
 impl Sides<'_> {
@@ -268,6 +276,25 @@ impl Sides<'_> {
         apart(false).min(apart(true))
     }
 
+    /// Whether layout node `layout` and reference node `reference` are other
+    /// than two nets of one name, the layout net's label being the reference
+    /// net's name. A symmetry between nets is broken toward the named one
+    /// first, as `KLayout`'s `consider_net_names` "will employ net names
+    /// to resolve ambiguities" (catalog LVS-032). Devices, and a layout net with
+    /// no label, are always apart.
+    fn named_apart(self, layout: u32, reference: u32) -> bool {
+        let reference = reference - self.split;
+        let (layout_devices, ref_devices) = (
+            narrow(self.layout.device_count()),
+            narrow(self.reference.device_count()),
+        );
+        if layout < layout_devices || reference < ref_devices {
+            return true;
+        }
+        let label = self.layout.net_name[(layout - layout_devices) as usize];
+        label.is_none() || label != self.reference.net_name[(reference - ref_devices) as usize]
+    }
+
     /// The layout name a reference parameter `name` is read under: itself,
     /// or, `crossed`, its other channel end's.
     fn read(self, name: StrId, crossed: bool) -> Option<StrId> {
@@ -280,8 +307,9 @@ impl Sides<'_> {
 
     /// Whether layout node `layout` and reference node `reference` would pass
     /// the verdict's parameter comparison: every name the reference states
-    /// stated by the layout too, each value [agreeing](ParamNames::agree)
-    /// with the other, diffusions either way round. Nets always do.
+    /// stated by the layout too, each value within its bound of the other
+    /// (the deck's row for the name, or `tolerance` relatively, a count
+    /// exactly; `NaN` never is), diffusions either way round. Nets always do.
     fn agrees(self, layout: u32, reference: u32, tolerance: f64) -> bool {
         let reference = reference - self.split;
         if layout >= narrow(self.layout.device_count())
@@ -289,6 +317,7 @@ impl Sides<'_> {
         {
             return true;
         }
+        let model = self.reference.device_model[reference as usize];
         let (mine, theirs) = (
             self.layout.params_of(layout),
             self.reference.params_of(reference),
@@ -296,9 +325,14 @@ impl Sides<'_> {
         let agree = |crossed: bool| {
             theirs.iter().all(|&(name, b)| {
                 let read = self.read(name, crossed);
-                mine.iter().any(|&(other, a)| {
-                    Some(other) == read && self.names.agree(name, (a, b), tolerance)
-                })
+                let within = bound(
+                    self.controls,
+                    self.names.tolerance(name, tolerance),
+                    model,
+                    name,
+                );
+                mine.iter()
+                    .any(|&(other, a)| Some(other) == read && within.agree(a, b))
             })
         };
         agree(false) || agree(true)
@@ -311,13 +345,24 @@ impl Partition {
         let mut key: Vec<(u64, u32)> = Vec::new();
         for (graph, offset) in [(sides.layout, 0), (sides.reference, sides.split)] {
             for device in 0..graph.device_count() {
-                let identity = (kind_code(graph.device_kind[device]) << 32)
-                    | u64::from(graph.device_model[device].0);
+                let model = if sides.models_aside {
+                    0
+                } else {
+                    u64::from(graph.device_model[device].0)
+                };
+                let identity = (kind_code(graph.device_kind[device]) << 32) | model;
                 key.push((identity, offset + narrow(device)));
             }
             let devices = graph.device_count();
             for net in 0..graph.net_count() {
-                key.push((u64::MAX, offset + narrow(devices + net)));
+                let node = offset + narrow(devices + net);
+                // Below every unseeded net and above every device key.
+                let seed = sides.seeds.get(node as usize).copied();
+                let class = match seed {
+                    Some(seed) if seed != u32::MAX => u64::MAX - 1 - u64::from(seed),
+                    _ => u64::MAX,
+                };
+                key.push((class, node));
             }
         }
         key.sort_unstable();
@@ -589,8 +634,9 @@ impl Partition {
         apart
     }
 
-    /// The reference node of `node`'s class that is [closest](Self::apart),
-    /// the lowest on a tie.
+    /// The reference node of `node`'s class that is [closest](Self::apart);
+    /// on a tie, a net of the name `node` carries ([`Sides::named_apart`]),
+    /// then the lowest.
     ///
     /// ponytail: O(class size) per stall; keep members sorted per class if a
     /// huge class of isolated nodes ever shows up in a profile.
@@ -598,23 +644,30 @@ impl Partition {
         self.mates(node, sides.split)
             .min_by(|&a, &b| {
                 let (da, db) = (self.apart(node, a, sides), self.apart(node, b, sides));
-                da.total_cmp(&db).then(a.cmp(&b))
+                let (na, nb) = (sides.named_apart(node, a), sides.named_apart(node, b));
+                da.total_cmp(&db).then(na.cmp(&nb)).then(a.cmp(&b))
             })
             .expect("a stalled class holds reference nodes")
     }
 
     /// The next [`TRIES`] − 1 reference nodes of `node`'s class after
-    /// `closest`, in the same order: closest parameters first, lowest first
-    /// on a tie.
+    /// `closest`, in the same order: closest parameters first, then a net of
+    /// `node`'s name, then the lowest.
     fn ranked(&self, node: u32, sides: Sides, closest: u32) -> Vec<u32> {
-        let mut ranked: Vec<(f64, u32)> = self
+        let mut ranked: Vec<(f64, bool, u32)> = self
             .mates(node, sides.split)
             .filter(|&mate| mate != closest)
-            .map(|mate| (self.apart(node, mate, sides), mate))
+            .map(|mate| {
+                (
+                    self.apart(node, mate, sides),
+                    sides.named_apart(node, mate),
+                    mate,
+                )
+            })
             .collect();
-        ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
         ranked.truncate(TRIES - 1);
-        ranked.into_iter().map(|(_, mate)| mate).collect()
+        ranked.into_iter().map(|(_, _, mate)| mate).collect()
     }
 
     /// Pair `node` with `mate`, a reference node of its class, as a new class
@@ -749,12 +802,15 @@ impl Partition {
 /// when more than `max_rounds` passes in a row split a class without reaching a
 /// stall, which says nothing about whether the graphs match. The count restarts
 /// at each tie-break and each trial of one, so the number of symmetries does
-/// not spend it. `tolerance` is the verdict's, which a trial pairing's devices
-/// must meet.
+/// not spend it. `tolerance` and the deck's `controls` are the verdict's,
+/// which a trial pairing's devices must meet. Nets sharing a `seeds` entry
+/// (indexed by node, layout nodes first) start in a class of their own, and
+/// with `models_aside` devices start one class per kind rather than per
+/// kind and model.
 pub(crate) fn refine_into(
     (layout, reference): (&Graph, &Graph),
     (max_rounds, tolerance): (u32, f64),
-    names: ParamNames,
+    (names, controls, seeds, models_aside): (ParamNames, &LvsControls, &[u32], bool),
     out: &mut Partition,
 ) -> bool {
     let split = narrow(layout.device_count() + layout.net_count());
@@ -763,6 +819,9 @@ pub(crate) fn refine_into(
         reference,
         split,
         names,
+        controls,
+        seeds,
+        models_aside,
     };
     out.seed(sides);
 

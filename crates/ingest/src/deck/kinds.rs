@@ -36,6 +36,8 @@ pub(crate) enum Dim {
     PerKelvin,
     /// 1/K², a second-order temperature coefficient (PEX only).
     PerKelvin2,
+    /// aF (an LVS tolerance on a capacitance).
+    Capacitance,
     /// 0..=1, written bare or as `%`.
     Fraction,
     /// deg, a whole number.
@@ -73,6 +75,9 @@ pub(crate) enum Dim {
     /// rising strictly; per point, the area goes to the param's engine name
     /// and the number to the named one.
     AreaTable(&'static str),
+    /// `[none, a, ..]`, lengths or `none`; one engine param per element, a
+    /// length or, for `none`, the flag `false`.
+    OptLengthList,
 }
 
 /// Units, the dimension each belongs to, and the power of ten to the engine unit.
@@ -110,6 +115,9 @@ pub(crate) const UNITS: &[(&str, Dim, i32)] = &[
     ("fF/um", Dim::CapPerLength, 3),
     ("/K", Dim::PerKelvin, 0),
     ("/K2", Dim::PerKelvin2, 0),
+    ("aF", Dim::Capacitance, 0),
+    ("fF", Dim::Capacitance, 3),
+    ("pF", Dim::Capacitance, 6),
     ("%", Dim::Fraction, -2),
     ("deg", Dim::Angle, 0),
 ];
@@ -244,6 +252,12 @@ const EM_NARROW: &[Param] = &[
     p("width", "narrow_width", Dim::Length),
     p("current", "narrow_current", Dim::Current),
 ];
+/// LEF `PARALLELEDGE parSpace WITHIN parWithin [TWOEDGES]`.
+const EOL_PARALLEL: &[Param] = &[
+    p("space", "par_space", Dim::Length),
+    p("within", "par_within", Dim::Length),
+    p("two_edges", "two_edges", Dim::Bool),
+];
 const CMP_MODEL: &[Param] = &[
     p("target", "cmp_target_density", Dim::Fraction),
     p("sensitivity", "cmp_thickness_sensitivity", Dim::Length),
@@ -308,6 +322,22 @@ pub(crate) const KINDS: &[Kind] = &[
         LIMIT,
         &[p("eol_width", "eol_width", Dim::Length)],
     ),
+    // LEF `SPACING ENDOFLINE`: a keep-out reaching `within` past the end's
+    // sides, optionally only beside parallel edges, with its own space
+    // between two ends (`LEF58_SPACING ENDOFLINE ... ENDTOEND`).
+    drc(
+        "eol_space",
+        Cmp::Ge,
+        "eol_within_spacing",
+        &[0],
+        LIMIT,
+        &[
+            p("eol_width", "eol_width", Dim::Length),
+            p("within", "eol_within", Dim::Length),
+            opt("parallel", "", Dim::Group(EOL_PARALLEL)),
+            opt("end_to_end", "end_to_end", Dim::Length),
+        ],
+    ),
     drc(
         "prl_space",
         Cmp::Ge,
@@ -323,6 +353,20 @@ pub(crate) const KINDS: &[Kind] = &[
         &[0],
         LIMIT,
         &[],
+    ),
+    // `LEF58_CORNERSPACING CONVEXCORNER`: the larger axis gap between facing
+    // convex corners (or Euclidean, `CORNERTOCORNER`), ends of line exempt
+    // with `EXCEPTEOL`.
+    drc(
+        "corner_space",
+        Cmp::Ge,
+        "convex_corner_spacing",
+        &[0],
+        LIMIT,
+        &[
+            p("corner_to_corner", "corner_to_corner", Dim::Bool),
+            opt("except_eol", "except_eol", Dim::Length),
+        ],
     ),
     drc(
         "wide_space",
@@ -584,6 +628,88 @@ pub(crate) const KINDS: &[Kind] = &[
         &[
             p("width", "width_threshold", Dim::Length),
             p("attached", "attached", Dim::Length),
+        ],
+    ),
+    // Space between facing edges by the length class of each (ASAP7 M1.S.1
+    // to M1.S.5): a square, symmetric table of cells, one row and column per
+    // class threshold.
+    drc(
+        "tip_space_table",
+        Cmp::Absent,
+        "tip_spacing_table",
+        &[0],
+        None,
+        &[
+            p("length", "length", Dim::LengthList),
+            p("space", "space", Dim::LengthRows),
+        ],
+    ),
+    // Spacing by the widths of both shapes and, per width, a run: LEF
+    // `SPACINGTABLE TWOWIDTHS {WIDTH width [PRL runLength] {spacing}...}`.
+    drc(
+        "two_width_table",
+        Cmp::Absent,
+        "two_width_spacing_table",
+        &[0],
+        None,
+        &[
+            p("width", "width", Dim::LengthList),
+            p("prl", "prl", Dim::OptLengthList),
+            p("space", "space", Dim::LengthRows),
+        ],
+    ),
+    // Every span (chord) of a shape is a legal length: one of the list, or at
+    // least its last (`LEF58_SPANLENGTHTABLE`).
+    drc(
+        "span_length",
+        Cmp::Absent,
+        "span_length",
+        &[0],
+        None,
+        &[
+            p("x", "x_spans", Dim::LengthList),
+            p("y", "y_spans", Dim::LengthList),
+        ],
+    ),
+    // The exact centre-to-centre pitch of neighbouring rectangles along one
+    // axis (ASAP7 FIN.S.1, GATE.S.1): `pitch(fin, vertical) == 27nm`.
+    Kind {
+        modifier: Some("vertical"),
+        fixed: &[("vertical", true)],
+        ..drc("pitch", Cmp::Eq, "exact_pitch", &[0], LIMIT, &[])
+    },
+    Kind {
+        modifier: Some("horizontal"),
+        fixed: &[("vertical", false)],
+        ..drc("pitch", Cmp::Eq, "exact_pitch", &[0], LIMIT, &[])
+    },
+    // Another shape inside the keep-out box of an end of line
+    // (`LEF58_EOLKEEPOUT eolWidth EXTENSION backward side forward`).
+    drc(
+        "eol_keep_out",
+        Cmp::Absent,
+        "eol_keep_out",
+        &[0],
+        None,
+        &[
+            p("eol_width", "eol_width", Dim::Length),
+            p("backward", "backward", Dim::Length),
+            p("side", "side", Dim::Length),
+            p("forward", "forward", Dim::Length),
+        ],
+    ),
+    // A gap in a forbidden range between facing edges that run alongside
+    // (`LEF58_TWOWIRESFORBIDDENSPACING`).
+    drc(
+        "forbidden_space",
+        Cmp::Absent,
+        "forbidden_spacing",
+        &[0],
+        None,
+        &[
+            p("min", "min", Dim::Length),
+            p("max", "max", Dim::Length),
+            p("prl", "prl", Dim::Length),
         ],
     ),
     // Edge layers.

@@ -426,6 +426,240 @@ fn m1_e_f_pick_the_cell_by_the_wider_line_and_the_run() {
     );
 }
 
+// ---------------------------------------------------------- tip table
+
+/// ASAP7 M1.S.1 to M1.S.5 (DRM r1p7, Table 3.12.1) as one tip table: edges
+/// below 24 nm, from 24 to 36 nm, and above 36 nm.
+const ASAP7_M1: &str = "grid 1nm
+layer met1 = gds(68, 20)
+rule M1.S tip_space_table(met1;
+    length: [0nm, 24nm, 37nm],
+    space:  [[31nm, 31nm, 25nm],
+             [31nm, 27nm, 25nm],
+             [25nm, 25nm, 18nm]])
+";
+
+/// Five pairs, each 26 apart and 2 µm from the next, read off the table by
+/// the lengths of the two edges that face each other:
+/// - two 1000 nm sides: M1.S.1, 18, clean;
+/// - a 20 wide tip under a 1000 wide bar: M1.S.2, 25, clean;
+/// - two 30 wide tips: M1.S.3, 27, flagged;
+/// - two 20 wide tips: M1.S.4, 31, flagged;
+/// - a 30 wide tip facing a 20 wide one: M1.S.5, 31, flagged.
+///
+/// A table keyed on one edge, or on the shapes' widths, gets one of them
+/// wrong: both tips of M1.S.5 are lines, but only the pair of lengths picks
+/// 31 over 27.
+///
+/// Oracle: the ASAP7 M1.S.1 to M1.S.5 values (foundry rule), construct-from-answer for the pairs.
+#[test]
+fn m1_s_1_to_5_pick_the_cell_by_both_facing_edges() {
+    let found = run(
+        ASAP7_M1,
+        &[
+            ("met1", [0, 0, 100, 1_000]),
+            ("met1", [126, 0, 226, 1_000]),
+            ("met1", [2_000, 0, 2_020, 1_000]),
+            ("met1", [1_500, 1_026, 2_500, 1_126]),
+            ("met1", [4_000, 0, 4_030, 1_000]),
+            ("met1", [4_000, 1_026, 4_030, 2_026]),
+            ("met1", [6_000, 0, 6_020, 1_000]),
+            ("met1", [6_000, 1_026, 6_020, 2_026]),
+            ("met1", [8_000, 0, 8_030, 1_000]),
+            ("met1", [8_000, 1_026, 8_020, 2_026]),
+        ],
+    );
+    let got = found.of("M1.S");
+    let count = |want: (Measurement, Measurement)| got.iter().filter(|&&f| f == want).count();
+    assert_eq!(got.len(), 3, "{got:?}");
+    assert_eq!(count((len(26), len(27))), 1, "{got:?}");
+    assert_eq!(count((len(26), len(31))), 2, "{got:?}");
+    assert_eq!(found.outcome("M1.S"), Outcome::Ran);
+}
+
+/// A tip table must be symmetric: which of two facing edges is "first" is
+/// not a property of the layout, so an asymmetric table has no meaning and
+/// the deck is refused when the rules are built.
+///
+/// Oracle: the kind's contract (a tip table is symmetric), construct-from-answer.
+#[test]
+fn an_asymmetric_tip_table_is_refused_at_load() {
+    let mut strings = StrTable::default();
+    let deck = parse_deck(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule t tip_space_table(met1; length: [0nm, 24nm], space: [[31nm, 25nm], [27nm, 18nm]])\n",
+        grid(),
+        &mut strings,
+    )
+    .expect("parses");
+    let built = gpurify_check::drc::RuleSet::from_deck(&deck, &strings);
+    assert!(
+        matches!(&built, Err(gpurify_check::drc::DrcError::BadTable(id)) if id == "t"),
+        "{built:?}"
+    );
+}
+
+// ---------------------------------------------------------- two widths
+
+/// LEF/DEF 5.8 Language Reference, "Two-Width Spacing Tables", written as
+/// the manual prints it, and its four worked cases, each pair 1 nm under the
+/// space the manual gives: width1 0.25 and width2 0.25, prl 0.0, 0.15; 0.25
+/// and 0.26, prl 0.0, 0.15; 0.25 and 0.26, prl 0.1, 0.20; 0.26 and 0.26, prl
+/// 0.1, 0.25. A table keyed on the wider shape alone would ask 0.20 of the
+/// second (its wider shape is 0.26) and 0.25 of the third.
+///
+/// Oracle: LEF/DEF 5.8's own worked example (spec example).
+#[test]
+fn lef_two_width_example_gives_the_manual_s_spacings() {
+    let found = run(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule tw two_width_table(met1;
+             width: [0um, 0.25um, 1.5um, 3um],
+             prl:   [none, 0um, 1.5um, 3um],
+             space: [[0.15um, 0.2um, 0.5um, 1um],
+                     [0.2um, 0.25um, 0.5um, 1um],
+                     [0.5um, 0.5um, 0.6um, 1um],
+                     [1um, 1um, 1um, 1.2um]])\n",
+        &[
+            ("met1", [0, 0, 250, 2_000]),
+            ("met1", [399, 2_000, 649, 4_000]),
+            ("met1", [10_000, 0, 10_250, 2_000]),
+            ("met1", [10_399, 2_000, 10_659, 4_000]),
+            ("met1", [20_000, 0, 20_250, 2_000]),
+            ("met1", [20_449, 1_900, 20_709, 3_900]),
+            ("met1", [30_000, 0, 30_260, 2_000]),
+            ("met1", [30_509, 1_900, 30_769, 3_900]),
+        ],
+    );
+    let got = found.of("tw");
+    let count = |want: (Measurement, Measurement)| got.iter().filter(|&&f| f == want).count();
+    assert_eq!(got.len(), 4, "{got:?}");
+    assert_eq!(count((len(149), len(150))), 2, "{got:?}");
+    assert_eq!(count((len(199), len(200))), 1, "{got:?}");
+    assert_eq!(count((len(249), len(250))), 1, "{got:?}");
+}
+
+// ---------------------------------------------------------- end of line
+
+/// LEF/DEF 5.8 Language Reference, Example 1-18 and Figure 1-23, as the
+/// manual writes it: `SPACING 1.2 ENDOFLINE 1.3 WITHIN 0.6`. Four 1 µm lines
+/// (each end, 1.0, is under 1.3), 10 µm apart, each with one shape above:
+/// a) a bar 1.2 above: no violation ("has 1.2 µm spacing");
+/// b) a bar 1.0 above: violation ("has only 1.0 µm spacing");
+/// c) a block 0.8 above whose side is 0.5 past the end's: violation ("<1.2
+///    µm spacing within 0.6 µm away");
+/// d) the block 0.6 past: no violation (within is "less than" 0.6).
+///
+/// Oracle: LEF/DEF 5.8 Example 1-18 and Figure 1-23 (spec example).
+#[test]
+fn lef_example_1_18_holds_the_end_of_line_within() {
+    let found = run(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule e eol_space(met1; eol_width: 1.3um, within: 0.6um, parallel: none, \
+         end_to_end: none) >= 1.2um\n",
+        &[
+            ("met1", [0, -5_000, 1_000, 0]),
+            ("met1", [-2_000, 1_200, 3_000, 2_200]),
+            ("met1", [10_000, -5_000, 11_000, 0]),
+            ("met1", [8_000, 1_000, 13_000, 2_000]),
+            ("met1", [20_000, -5_000, 21_000, 0]),
+            ("met1", [21_500, 800, 23_500, 2_800]),
+            ("met1", [30_000, -5_000, 31_000, 0]),
+            ("met1", [31_600, 800, 33_600, 2_800]),
+        ],
+    );
+    let got = found.of("e");
+    let count = |want: (Measurement, Measurement)| got.iter().filter(|&&f| f == want).count();
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(count((len(1_000), len(1_200))), 1, "{got:?}");
+    assert_eq!(count((len(800), len(1_200))), 1, "{got:?}");
+}
+
+// ---------------------------------------------------------- forbidden range
+
+/// A forbidden range written as `LEF58_TWOWIRESFORBIDDENSPACING 0.10 0.15
+/// PRL 0.20`, which `TritonRoute` reads closed on both ends with the run
+/// strictly longer than 0.20 (`isForbiddenSpacing`, `isValidPrl`). Three
+/// pairs of 1 µm bars: 99 apart (below the range: legal), 100 (its lower
+/// end: forbidden) and 150 (its upper end: forbidden). The limit reported is
+/// the narrowest legal gap above the range, 151.
+///
+/// Oracle: `TritonRoute`'s `isForbiddenSpacing` and `isValidPrl`, construct-from-answer.
+#[test]
+fn a_forbidden_range_is_closed_at_both_ends() {
+    let found = run(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule fs forbidden_space(met1; min: 100nm, max: 150nm, prl: 200nm)\n",
+        &[
+            ("met1", [0, 0, 100, 1_000]),
+            ("met1", [199, 0, 299, 1_000]),
+            ("met1", [2_000, 0, 2_100, 1_000]),
+            ("met1", [2_200, 0, 2_300, 1_000]),
+            ("met1", [4_000, 0, 4_100, 1_000]),
+            ("met1", [4_250, 0, 4_350, 1_000]),
+        ],
+    );
+    let got = found.of("fs");
+    let count = |want: (Measurement, Measurement)| got.iter().filter(|&&f| f == want).count();
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(count((len(100), len(151))), 1, "{got:?}");
+    assert_eq!(count((len(150), len(151))), 1, "{got:?}");
+}
+
+/// A range that ends before it starts forbids nothing a deck could mean,
+/// and is refused when the rules are built.
+///
+/// Oracle: the kind's contract (min at most max), construct-from-answer.
+#[test]
+fn a_forbidden_range_that_ends_before_it_starts_is_refused_at_load() {
+    let mut strings = StrTable::default();
+    let deck = parse_deck(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule fs forbidden_space(met1; min: 150nm, max: 100nm, prl: 0nm)\n",
+        grid(),
+        &mut strings,
+    )
+    .expect("parses");
+    let built = gpurify_check::drc::RuleSet::from_deck(&deck, &strings);
+    assert!(
+        matches!(&built, Err(gpurify_check::drc::DrcError::BadTable(id)) if id == "fs"),
+        "{built:?}"
+    );
+}
+
+// ---------------------------------------------------------- influence
+
+/// LEF/DEF 5.8 Language Reference, "Using Spacing Rules": `SPACING 0.5 RANGE
+/// 2.01 2000.0 ;` with `SPACING 0.5 RANGE 2.01 2000.0 INFLUENCE 1.000 ;`,
+/// "Stub wires <= 1.0 um from wide wires >= 2.01 require 0.5 um spacing",
+/// written as one row: the wide part where a 2.01 µm square fits, grown by
+/// 1 µm within its own shape. Two 2.01 µm wide wires, each with a 0.2 µm
+/// stub 2 µm long rising from its top, and a line 0.45 µm beside the stub:
+/// - the first line starts 0.5 µm above its wire, beside the stub's first
+///   micron: 0.45 from the influenced stub, flagged against 0.5 (and exactly
+///   0.5 from the wide wire, which is legal);
+/// - the second starts 1.25 µm above, beside only the stub past its first
+///   micron: 0.515 µm from the influenced stub's corner and 1.25 µm from the
+///   wire, clean. Holding the whole stub to 0.5 would flag it.
+///
+/// Oracle: LEF/DEF 5.8's INFLUENCE example rule and its stated meaning (spec example), distances derived by hand.
+#[test]
+fn lef_influence_holds_the_stub_s_first_micron_to_the_wide_spacing() {
+    let found = run(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule inf wide_space(met1; width: 2.01um, attached: 1um) >= 0.5um\n",
+        &[
+            ("met1", [0, 0, 10_000, 2_010]),
+            ("met1", [5_000, 2_010, 5_200, 4_010]),
+            ("met1", [5_650, 2_510, 5_850, 4_000]),
+            ("met1", [20_000, 0, 30_000, 2_010]),
+            ("met1", [25_000, 2_010, 25_200, 4_010]),
+            ("met1", [25_650, 3_260, 25_850, 4_500]),
+        ],
+    );
+    assert_eq!(found.of("inf"), [(len(450), len(500))]);
+}
+
 // ---------------------------------------------------------- huge metal
 
 /// sky130 m1.3a "Min. spacing of features attached to or extending from

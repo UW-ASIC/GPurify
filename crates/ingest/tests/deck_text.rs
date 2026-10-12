@@ -448,6 +448,333 @@ device mos diff model \"nfet\" terminals [poly, diff, diff]
     }
 }
 
+/// Oracle: the language spec (deck.md, "LVS controls"), values converted by
+/// hand. `lvs tolerance` lowers to SI: 1 % is 0.01, 5 nm is 5e-9 m, 0.2 um²
+/// is 2e-13 m², 2 kohm is 2000 ohm, 3 fF is 3e-15 F, and a part left out is
+/// zero. The parameter is lowercased, as the netlist reader stores it. Each
+/// error class is refused: an unknown control or part, a part given twice,
+/// a parameter given a row twice, a row with no part, a relative part past
+/// 100 %, an absolute part in the wrong unit, negative, or on a parameter
+/// with no known unit, and a model no device declares.
+#[test]
+fn lvs_tolerances_lower_to_si_on_a_declared_model() {
+    use gpurify_ingest::deck::LvsTolerance;
+    let devices = "device mos poly model \"nfet\" terminals [poly, diff, diff]
+device resistor met1 model \"rpoly\" terminals [met1, met1]
+device capacitor met2 model \"cmim\" terminals [met2, met1]
+";
+    let (deck, strings) = ok(&format!(
+        "{devices}lvs tolerance \"nfet\" W relative 1%
+lvs tolerance \"nfet\" l relative 0.5% absolute 5nm
+lvs tolerance \"nfet\" as absolute 0.2um2
+lvs tolerance \"rpoly\" r absolute 2kohm
+lvs tolerance \"cmim\" c relative 0.02 absolute 3fF
+lvs tolerance \"nfet\" m absolute 1
+"
+    ));
+    let row = |model: &str, param: &str, relative: f64, absolute: f64| LvsTolerance {
+        model: strings.get(model).expect("interned"),
+        param: strings.get(param).expect("interned"),
+        relative,
+        absolute,
+        stated: 0.0,
+    };
+    let want = [
+        row("nfet", "w", 0.01, 0.0),
+        row("nfet", "l", 0.005, 5e-9),
+        row("nfet", "as", 0.0, 2e-13),
+        row("rpoly", "r", 0.0, 2000.0),
+        row("cmim", "c", 0.02, 3e-15),
+        row("nfet", "m", 0.0, 1.0),
+    ];
+    assert_eq!(deck.lvs.tolerance.len(), want.len());
+    for (got, want) in deck.lvs.tolerance.iter().zip(&want) {
+        assert_eq!((got.model, got.param), (want.model, want.param));
+        for (a, b) in [(got.relative, want.relative), (got.absolute, want.absolute)] {
+            assert!((a - b).abs() <= 1e-12 * b.abs(), "{got:?} against {want:?}");
+        }
+    }
+
+    for (body, needle) in [
+        (
+            "lvs widen \"nfet\" w relative 1%\n",
+            "unknown lvs control `widen`",
+        ),
+        (
+            "lvs tolerance \"nfet\" w by 1%\n",
+            "unknown tolerance part `by`",
+        ),
+        (
+            "lvs tolerance \"nfet\" w relative 1% relative 2%\n",
+            "`relative` is given twice",
+        ),
+        (
+            "lvs tolerance \"nfet\" w relative 1%\nlvs tolerance \"nfet\" W absolute 1nm\n",
+            "`w` of \"nfet\" already has a tolerance",
+        ),
+        (
+            "lvs tolerance \"nfet\" w\n",
+            "needs relative, absolute or both",
+        ),
+        ("lvs tolerance \"nfet\" w relative 150%\n", "0% to 100%"),
+        ("lvs tolerance \"nfet\" w absolute 1ohm\n", "a length"),
+        ("lvs tolerance \"nfet\" w absolute -1nm\n", "zero or more"),
+        (
+            "lvs tolerance \"nfet\" vth0 absolute 1mV\n",
+            "takes a relative tolerance only",
+        ),
+        (
+            "lvs tolerance nfet w relative 1%\n",
+            "a model name in quotes",
+        ),
+    ] {
+        one_error(&format!("{devices}{body}"), needle);
+    }
+    let typo = parse(&format!(
+        "{devices}lvs tolerance \"nfet_typo\" w relative 1%\n"
+    ));
+    assert!(
+        matches!(typo, Err(DeckError::Malformed(ref why)) if why.contains("nfet_typo")),
+        "a tolerance on a model no device declares changes nothing and must be refused"
+    );
+}
+
+/// Oracle: the language spec (deck.md, "LVS controls"). `lvs
+/// ignore_parameter` lowers to `(model, parameter)`, the parameter
+/// lowercased; `m` is refused, and so are a repeat, a tolerance on an
+/// ignored parameter, and a model no device declares.
+#[test]
+fn lvs_ignored_parameters_lower_and_exclude_a_tolerance() {
+    let devices = "device mos poly model \"nfet\" terminals [poly, diff, diff]\n";
+    let (deck, strings) = ok(&format!(
+        "{devices}lvs ignore_parameter \"nfet\" AS\nlvs ignore_parameter \"nfet\" pd\n"
+    ));
+    let id = |name: &str| strings.get(name).expect("interned");
+    assert_eq!(
+        deck.lvs.ignore_parameter,
+        [(id("nfet"), id("as")), (id("nfet"), id("pd"))]
+    );
+    one_error(
+        &format!("{devices}lvs ignore_parameter \"nfet\" m\n"),
+        "cannot be ignored",
+    );
+    one_error(
+        &format!("{devices}lvs ignore_parameter \"nfet\" w\nlvs ignore_parameter \"nfet\" W\n"),
+        "already ignored",
+    );
+    for body in [
+        "lvs ignore_parameter \"nfet\" w\nlvs tolerance \"nfet\" w relative 1%\n",
+        "lvs ignore_parameter \"pfet\" w\n",
+    ] {
+        assert!(
+            matches!(
+                parse(&format!("{devices}{body}")),
+                Err(DeckError::Malformed(_))
+            ),
+            "{body}"
+        );
+    }
+}
+
+/// Oracle: the language spec (deck.md, "LVS controls"). `lvs asymmetric`
+/// lowers to the model; a model declared twice, one that is no `mos`
+/// device, and one no device declares are refused.
+#[test]
+fn lvs_asymmetric_names_a_declared_transistor() {
+    let devices = "device mos poly model \"ldmos\" terminals [poly, diff, diff]
+device resistor met1 model \"rpoly\" terminals [met1, met1]
+";
+    let (deck, strings) = ok(&format!("{devices}lvs asymmetric \"ldmos\"\n"));
+    assert_eq!(
+        deck.lvs.asymmetric,
+        [strings.get("ldmos").expect("interned")]
+    );
+    one_error(
+        &format!("{devices}lvs asymmetric \"ldmos\"\nlvs asymmetric \"ldmos\"\n"),
+        "already asymmetric",
+    );
+    for body in ["lvs asymmetric \"rpoly\"\n", "lvs asymmetric \"nfet\"\n"] {
+        assert!(
+            matches!(
+                parse(&format!("{devices}{body}")),
+                Err(DeckError::Malformed(_))
+            ),
+            "{body}"
+        );
+    }
+}
+
+/// Oracle: the language spec (deck.md, "LVS controls", Netgen's pin names).
+/// `lvs permute` lowers each pin to its position in the device statement's
+/// terminal order: a capacitor's `top` and `bottom` are 0 and 1, a
+/// bipolar's `emitter` and `collector` 1 and 2, a transistor's `gate` and
+/// `bulk` 0 and 3. A pin the kind lacks, a pin with itself, an asymmetric
+/// transistor's source and drain, and an undeclared model are refused.
+#[test]
+fn lvs_permute_names_pins_by_kind() {
+    use gpurify_ingest::deck::pin_names;
+    use gpurify_ingest::deck::DeviceKind;
+    let devices = "device mos poly model \"nfet\" terminals [poly, diff, diff]
+device mos met2 model \"ldmos\" terminals [poly, diff, diff]
+device bjt met3 model \"npn\" terminals [met1, met2, met3]
+device capacitor met2 model \"cmim\" terminals [met2, met1]
+";
+    let (deck, strings) = ok(&format!(
+        "{devices}lvs permute \"cmim\" bottom top
+lvs permute \"npn\" emitter collector
+lvs permute \"nfet\" gate bulk
+"
+    ));
+    let id = |name: &str| strings.get(name).expect("interned");
+    assert_eq!(
+        deck.lvs.permute,
+        [(id("cmim"), 1, 0), (id("npn"), 1, 2), (id("nfet"), 0, 3)]
+    );
+    assert_eq!(pin_names(DeviceKind::Diode), ["anode", "cathode"]);
+    for body in [
+        "lvs permute \"cmim\" top gate\n",
+        "lvs permute \"cmim\" top top\n",
+        "lvs asymmetric \"ldmos\"\nlvs permute \"ldmos\" drain source\n",
+        "lvs permute \"pnp\" emitter collector\n",
+    ] {
+        assert!(
+            matches!(
+                parse(&format!("{devices}{body}")),
+                Err(DeckError::Malformed(_))
+            ),
+            "{body}"
+        );
+    }
+    one_error(
+        &format!("{devices}lvs permute \"cmim\" top\n"),
+        "a pin name",
+    );
+}
+
+/// Oracle: the language spec (deck.md, "LVS controls"). `lvs ignore` and
+/// `lvs ignore_shorted` lower to the model, which no device statement need
+/// declare; a model given twice is refused.
+#[test]
+fn lvs_ignore_names_any_model_once() {
+    let devices = "device mos poly model \"nfet\" terminals [poly, diff, diff]\n";
+    let (deck, strings) = ok(&format!(
+        "{devices}lvs ignore \"nfet\"\nlvs ignore \"decap\"\n"
+    ));
+    let id = |name: &str| strings.get(name).expect("interned");
+    assert_eq!(deck.lvs.ignore, [id("nfet"), id("decap")]);
+    one_error(
+        &format!("{devices}lvs ignore \"decap\"\nlvs ignore \"decap\"\n"),
+        "already ignored",
+    );
+    let (deck, strings) = ok(&format!("{devices}lvs ignore_shorted \"nfet\"\n"));
+    assert_eq!(
+        deck.lvs.ignore_shorted,
+        [strings.get("nfet").expect("interned")]
+    );
+    one_error(
+        &format!("{devices}lvs ignore_shorted \"nfet\"\nlvs ignore_shorted \"nfet\"\n"),
+        "already ignored",
+    );
+}
+
+/// Oracle: the language spec (deck.md, "LVS controls"). `lvs ports_by_name`
+/// sets the flag, which is off without it; stated twice it is refused. `lvs
+/// topology` is strict unless it says relaxed, takes one of the two words,
+/// and is stated once. `lvs connect_implicit` keeps its pattern and `lvs
+/// connect_explicit` its labels, two or more.
+#[test]
+fn lvs_ports_by_name_is_a_flag() {
+    assert!(!ok("").0.lvs.ports_by_name);
+    assert!(ok("lvs ports_by_name\n").0.lvs.ports_by_name);
+    assert!(!ok("").0.lvs.relaxed);
+    assert!(ok("lvs topology relaxed\n").0.lvs.relaxed);
+    assert!(!ok("lvs topology strict\n").0.lvs.relaxed);
+    one_error("lvs topology loose\n", "unknown topology `loose`");
+    let (deck, strings) =
+        ok("lvs connect_implicit \"VDD*\"\nlvs connect_explicit \"VSS\" \"GND\"\n");
+    assert_eq!(deck.lvs.connect_implicit, ["VDD*"]);
+    let id = |name: &str| strings.get(name).expect("interned");
+    assert_eq!(deck.lvs.connect_explicit, [vec![id("VSS"), id("GND")]]);
+    one_error("lvs connect_explicit \"VSS\"\n", "joins two labels or more");
+    one_error("lvs connect_implicit VDD\n", "a label pattern in quotes");
+    one_error(
+        "lvs topology strict\nlvs topology relaxed\n",
+        "the topology is already stated",
+    );
+    one_error(
+        "lvs ports_by_name\nlvs ports_by_name\n",
+        "already compared by name",
+    );
+}
+
+/// Oracle: the language spec (deck.md, "LVS controls"), converted by hand
+/// on the 5 nm deck grid and 1 nm layout grid. `lvs range` lowers each
+/// bound to the parameter's kind: 420 nm and 100 um as lengths, 0.2 um² as
+/// 200 000 square units, an `nf` as a count. A parameter no device has, a
+/// length off the grid, a bound twice, a range that admits nothing, a row
+/// with no bound, a repeat and an undeclared model are refused.
+#[test]
+fn lvs_ranges_lower_to_layout_units() {
+    use gpurify_geom::{Dbu, DbuArea};
+    use gpurify_ingest::deck::{LvsLimit, LvsRange};
+    let devices = "device mos poly model \"nfet\" terminals [poly, diff, diff]\n";
+    let (deck, strings) = ok(&format!(
+        "{devices}lvs range \"nfet\" W >= 420nm <= 100um
+lvs range \"nfet\" as >= 0.2um2
+lvs range \"nfet\" nf <= 4
+"
+    ));
+    let id = |name: &str| strings.get(name).expect("interned");
+    let length = |nm| Some(LvsLimit::Length(Dbu::new_unchecked(nm)));
+    assert_eq!(
+        deck.lvs.range,
+        [
+            LvsRange {
+                model: id("nfet"),
+                param: id("w"),
+                min: length(420),
+                max: length(100_000),
+            },
+            LvsRange {
+                model: id("nfet"),
+                param: id("as"),
+                min: Some(LvsLimit::Area(DbuArea::new(200_000))),
+                max: None,
+            },
+            LvsRange {
+                model: id("nfet"),
+                param: id("nf"),
+                min: None,
+                max: Some(LvsLimit::Count(4)),
+            },
+        ]
+    );
+    for (body, needle) in [
+        ("lvs range \"nfet\" r >= 1ohm\n", "not measured on a device"),
+        (
+            "lvs range \"nfet\" w >= 422nm\n",
+            "not a multiple of the grid",
+        ),
+        ("lvs range \"nfet\" w >= 420nm >= 500nm\n", "already given"),
+        ("lvs range \"nfet\" w >= 1um <= 500nm\n", "admits no value"),
+        ("lvs range \"nfet\" w\n", "needs >=, <= or both"),
+        ("lvs range \"nfet\" w > 1um\n", "expected >= or <="),
+        (
+            "lvs range \"nfet\" w >= 1um\nlvs range \"nfet\" w <= 2um\n",
+            "already has a range",
+        ),
+    ] {
+        one_error(&format!("{devices}{body}"), needle);
+    }
+    assert!(
+        matches!(
+            parse("lvs range \"pfet\" w >= 1um\n"),
+            Err(DeckError::Malformed(_))
+        ),
+        "a range on a model no device declares"
+    );
+}
+
 /// A `mos` row's gate condition, `on_gate_min` (an n-channel switch) or
 /// `on_gate_max` (a p-channel one), lowers to its `DeviceValue` in
 /// millivolts, negative included; it is a transistor's value, and a

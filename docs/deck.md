@@ -78,6 +78,7 @@ Numbers carry units. `140nm`, `0.14um` and `0.00014mm` are the same length.
 | current | `nA`, `uA`, `mA`, `A` |
 | current per width | `uA/um`, `mA/um`, `A/m` |
 | resistance | `mohm`, `ohm`, `kohm`, `Mohm` |
+| capacitance | `aF`, `fF`, `pF` |
 | capacitance per area | `aF/um2`, `fF/um2` |
 | capacitance per length | `aF/um`, `fF/um` |
 | temperature | `K`, or `C` |
@@ -230,14 +231,23 @@ shape is a `notch`. A ring closed only at a corner has a hole for `hole_area`.
 | `space(L) >= len` | Two shapes on one layer closer than the limit. |
 | `space(A, B) >= len` | A shape on `A` closer than the limit to a shape on `B`. |
 | `eol_space(L; eol_width: len) >= len` | Space from an end of line (an edge shorter than `eol_width`) below the limit. |
+| `eol_space(L; eol_width: len, within: len, parallel: none, end_to_end: none) >= len` | LEF's end-of-line rule (`SPACING ENDOFLINE eolWidth WITHIN eolWithin`): an end of line is an edge shorter than `eol_width` with both corners convex, and its keep-out reaches the limit straight out from it and `within` past each of its sides (less than). An edge of another shape facing the end inside the keep-out is measured by its depth from the end's line. |
+| `eol_space(L; eol_width: len, within: len, parallel: (space: len, within: len, two_edges: bool), end_to_end: len \| none) >= len` | The same, applied to an end only where an edge runs beside its line (LEF `PARALLELEDGE`): at a corner, an edge facing the line's side less than `space` from it, overlapping the stretch from `within` behind the end to the end's `within` past it; `two_edges: true` needs one on both sides (`TWOEDGES`). With `end_to_end`, two ends of line facing each other need that space instead of the limit (LEF58 `ENDTOEND`). |
 | `prl_space(L; prl: len) >= len` | Two shapes that run side by side for at least `prl`, closer than the limit. The run is how far their facing edges, at most the limit apart, project onto each other (LEF `PARALLELRUNLENGTH`), with touching shapes merged first: a wire drawn as segments runs its whole length. |
 | `corner_space(L) >= len` | Two shapes whose corners are closer than the limit. |
+| `corner_space(L; corner_to_corner: bool, except_eol: len \| none) >= len` | LEF58 `CORNERSPACING CONVEXCORNER`: two shapes whose facing convex corners are closer than the limit on both axes (the larger axis gap), or Euclidean with `corner_to_corner: true`. With `except_eol`, a corner of a line end shorter than that, on either shape, is exempt. |
 | `wide_space(L; width: len) >= len` | Space below the limit from the part of a shape at least `width` wide (where a `width` square fits), as sky130's huge metal. |
 | `wide_space(L; width: len, attached: len) >= len` | The same, also from the rest of the shape within `attached` of its wide part, as sky130 m1.3a "features attached to or extending from huge_met1 for a distance of up to 0.28 µm". |
 | `space(L; nets: same) >= len` | Two shapes on the same net closer than the limit, as gf180 NW.2a. Nets are the extracted ones, joined through vias and other layers. `L` must be a conductor. |
 | `space(L; nets: different) >= len` | Two shapes on different nets closer than the limit, as gf180 NW.2b. |
 | `space(A, B; nets: different) >= len` | The same between a shape on `A` and one on `B`, overlap included, as sky130 nwell.7 "nwell and deep nwell on separate nets". Both layers must be conductors. `nets: same` is refused here: one net's shapes on two layers overlap wherever a cut joins them. |
 | `space_table(L; prl: [len, ..], width: [len, ..], space: [[len, ..], ..])` | Two shapes closer than their table cell (see below). |
+| `pitch(L, vertical) == len` | Two neighbouring rectangles, one above the other and overlapping across, whose centre lines are not exactly `len` apart, as ASAP7 FIN.S.1 "exact vertical FIN pitch". The neighbours of a rectangle are the nearest ones past it; a missing line between two is a pitch of twice `len`. Every shape on `L` must be a rectangle, or the rule is refused. `pitch(L, horizontal) == len` is the same side by side (GATE.S.1). |
+| `span_length(L; x: [len, ..], y: [len, ..])` | A span of a shape, the length of material a horizontal (`x`) or vertical (`y`) line cuts through it, that is not on its list: every length but the last is legal exactly, the last and longer are legal, as LEF58 `SPANLENGTHTABLE`. For a LEF layer with `DIRECTION HORIZONTAL`, `y` is its `SPANLENGTHTABLE` and `x` its `WRONGDIRECTION` one; the other way round for a vertical layer. Reported once per region of the shape where the span stays the same, with the shortest legal span above it as the limit. |
+| `two_width_table(L; width: [len, ..], prl: [none \| len, ..], space: [[len, ..], ..])` | Two shapes closer than the cell both their widths select, as a LEF `SPACINGTABLE TWOWIDTHS` (see below). |
+| `tip_space_table(L; length: [len, ..], space: [[len, ..], ..])` | Two shapes whose facing edges are closer than the cell the two edges' lengths select: tip to tip, tip to side, side to side (see below). |
+| `eol_keep_out(L; eol_width: len, backward: len, side: len, forward: len)` | Another shape inside the keep-out box of an end of line (an edge shorter than `eol_width` with both corners convex): the end widened by `side` each way, from `backward` behind it to `forward` past it, as LEF58 `EOLKEEPOUT`. Touching the box is not inside it. Reported with the area inside. |
+| `forbidden_space(L; min: len, max: len, prl: len)` | Two shapes whose facing edges run alongside each other for more than `prl` at a gap from `min` to `max`, both included: a forbidden range, as LEF58 two-wire forbidden spacing. A wider gap is legal, and so is a narrower one, which `space` judges. Edges face each other as in a tip table. |
 | `area(L) >= area` | A shape smaller than the limit. |
 | `hole_area(L) >= area` | A hole in a shape smaller than the limit. |
 | `cheesing(L) <= area` | A shape larger than the limit with no slot in it. |
@@ -287,6 +297,52 @@ first row. A row's width is measured on the part of the shape that wide, so a
 thin tab of a wide plate is held to the thin row. `prl` and `width` start at
 0 and rise, there is one row per width and one cell per run length, and no
 cell is smaller than the one before it in its row or column.
+
+A two-width table, as LEF `SPACINGTABLE TWOWIDTHS`, where the space two
+shapes need depends on the widths of both, not only the wider, and a width
+can also ask for a run alongside:
+
+```
+rule M2.S two_width_table(met2;
+    width: [0nm, 250nm, 1500nm, 3000nm],
+    prl:   [none, 0nm, 1500nm, 3000nm],
+    space: [[150nm, 200nm, 500nm, 1000nm],
+            [200nm, 250nm, 500nm, 1000nm],
+            [500nm, 500nm, 600nm, 1000nm],
+            [1000nm, 1000nm, 1000nm, 1200nm]])
+```
+
+The widths head both the rows and the columns. A width applies to a shape
+that is wider than it (exactly 250 nm is not wider than 250 nm) when, if it
+has a run, the two shapes run alongside each other for more than that run,
+measured as for `space_table`; `none` asks for no run, and the first width is
+0 with `none`. A pair needs the cell at the last width that applies to one
+shape and the last that applies to the other. A width is measured on the part
+of the shape that wide, so a thin tab of a wide plate is held as thin. Widths
+and runs never fall, every cell is positive, no cell falls along its row, and
+the table is symmetric.
+
+A tip table, as ASAP7 M1.S.1 to M1.S.5, where the space two shapes need
+depends on the lengths of the two edges that face each other, so a line end
+(a tip) can need more room than a long side:
+
+```
+rule M1.S tip_space_table(met1;
+    length: [0nm, 24nm, 37nm],
+    space:  [[31nm, 31nm, 25nm],
+             [31nm, 27nm, 25nm],
+             [25nm, 25nm, 18nm]])
+```
+
+Two edges of different shapes face each other when they are parallel, each
+faces away from its own shape toward the other, and they overlap along their
+length; the gap is the distance between them. Edges are whole, with touching
+shapes merged first, so a line end drawn as two strips is one end. An edge's
+class is the last `length` it reaches, here below 24 nm, 24 to 36 nm, or
+37 nm and more, and a pair of facing edges needs the cell at its two classes.
+`length` starts at 0 and rises, `space` has one row and one column per class,
+and the table is symmetric; it need not rise. Edges that meet only at a
+diagonal do not face: `corner_space` measures those.
 
 ### Edge checks
 
@@ -395,9 +451,13 @@ connect label met1_label names met1                # text on met1_label names th
 
 Name your nets with text labels in the layout. LVS, SPEF and the intent file
 all refer to nets by those names. One name on two nets the layout does not
-join is an open (`lvs.label_conflict`), and a field solve or netlist export of
+join is an open (`lvs.label_conflict`; a warning for a must-connect name, see
+[LVS controls](#lvs-controls)), and a field solve or netlist export of
 that name is refused. Two names on one net is a short between them
-(`lvs.net_seed_conflict`, reported by every run).
+(`lvs.net_seed_conflict`, reported by every run), and where the short runs
+follows as `lvs.short_path`: the fewest shapes joining the two labelled
+ones, one row per step from shape to shape (a via joins the shapes it
+lands on and is no step itself).
 
 ```
 connect global psub                                # every psub shape is one net: the substrate
@@ -476,6 +536,127 @@ condition at any time. A gate no supply can reach, such as an input to the
 cell, may be anything, so its transistor conducts. A transistor gives one of
 the two, or neither (it always conducts). When on, a channel passes its full
 range: there is no threshold drop.
+
+## LVS controls
+
+```
+lvs tolerance "nfet" w relative 1%
+lvs tolerance "nfet" l relative 0.5% absolute 5nm
+lvs tolerance "rpoly" r absolute 10ohm
+lvs ignore_parameter "nfet" as
+lvs asymmetric "nfet_ldmos"
+lvs permute "cmim" top bottom
+lvs ignore "sky130_fd_pr__decap"
+lvs ignore_shorted "nfet"
+lvs ports_by_name
+lvs range "nfet" w >= 420nm <= 100um
+lvs topology relaxed
+lvs connect_implicit "VDD*"
+lvs connect_explicit "VSS" "GND"
+```
+
+An `lvs` statement changes how LVS compares the devices of one model, which
+a `device` statement must declare.
+
+**`lvs tolerance "model" param relative r absolute a`** sets how far apart
+one parameter may be on the layout and the schematic and still agree:
+`|a - b| <= absolute + relative × max(|a|, |b|)`. Give `relative`,
+`absolute`, or both; the parts add, as in KLayout's `tolerance`. The row
+replaces the default for that parameter of that model, 2 % of the larger
+value, so a part it leaves out is zero: `absolute 10ohm` alone allows 10
+ohms and nothing relative. `relative` is a fraction from 0 to 1, or a
+percentage. `absolute` is written in the parameter's unit: a length for
+`w`, `l`, `ps`, `pd`, `pe` and `perim`, an area for `area`, `as`, `ad` and
+`ae`, a resistance for `r`, a capacitance (`aF`, `fF`, `pF`) for `c`, a
+bare count for `m` and `nf`; any other parameter takes a relative
+tolerance only. A parameter has at most one row per model.
+
+**`lvs ignore_parameter "model" param`** leaves a parameter out of the
+comparison for one model, as KLayout's `ignore_parameter` and Netgen's
+`property ... remove` do: it is dropped from both sides before devices are
+merged, so it is never compared and never stops a merge, whatever the
+schematic cards state. `m` counts devices and cannot be ignored, and an
+ignored parameter cannot also have a tolerance.
+
+**`lvs asymmetric "model"`** declares a transistor whose source and drain
+are not interchangeable, such as an LDMOS (KLayout's DMOS devices): its
+source only ever pairs with a schematic source and its drain with a drain,
+where any other transistor's two ends trade places freely. Such transistors
+merge in parallel only source on source and drain on drain, and never in
+series, so a drawn stack of them does not match one long schematic device.
+The model must be a `mos` device.
+
+**`lvs permute "model" pin pin`** makes two pins of the model's devices
+interchangeable, as Netgen's `permute` and KLayout's `equivalent_pins` do:
+a symmetric capacitor's plates, say, or a bipolar whose emitter and
+collector may be wired either way. Pins are named as Netgen names them:
+
+| Kind | Pins |
+|---|---|
+| `mos` | `gate`, `source`, `drain`, `bulk` |
+| `bjt` | `base`, `emitter`, `collector` |
+| `resistor` | `end_a`, `end_b` |
+| `capacitor` | `top`, `bottom` |
+| `diode` | `anode`, `cathode` |
+
+Pins already interchangeable stay so (a transistor's source and drain, a
+resistor's ends), and permutations chain: permuting `gate` with `source`
+makes all three of gate, source and drain interchangeable. Devices whose
+interchangeable pins are other than a transistor's source and drain merge
+in parallel either way round, and never in series. An asymmetric
+transistor's source and drain cannot be permuted.
+
+**`lvs ignore "model"`** leaves every device of the model out of LVS on
+both sides, as Netgen's `ignore class` and KLayout's `same_device_classes`
+with `nil` do: fill, decap or tap cells that one side draws and the other
+does not state. A net that only those devices touched is then left out
+too, unless it is a schematic port or carries a layout label, which must
+still pair. The model need not be a `device` of the deck, since a
+schematic may hold devices the layout has no recogniser for. The layout's
+own checks (`lvs.floating_net` and the others) still see the devices.
+
+**`lvs ports_by_name`** holds each port of the schematic's top cell to the
+layout net its name labels, as KLayout's `flag_missing_ports` does, so
+swapped pad labels or a missing label are reported (`lvs.unpaired_net`)
+rather than matched by structure. Without it, names only break ties between
+nets nothing else tells apart, and are never compared.
+
+**`lvs range "model" param >= min <= max`** holds every layout device of
+the model to bounds on what is drawn, as a foundry states each device's
+legal sizes: `w`, `l`, `perim`, `ps`, `pd` and `pe` take lengths, `area`,
+`as`, `ad` and `ae` areas, and `nf` a count, measured as the table in
+[Devices](#devices) says. Give `>=`, `<=` or both; a value at a bound is
+legal. A device out of range is reported as `lvs.param_range` on its
+marker; one whose parameter could not be measured (a source drawn in
+pieces) makes the row refused rather than passed. The row exists only in
+a deck that states a range, and runs with LVS.
+
+**`lvs topology relaxed`** lets parallel passives match by value, as
+Netgen's `property topology relaxed` does: a resistor, capacitor, diode or
+bipolar whose schematic states its value (`r`, `c`, `area`, `ae`) merges
+with others of its model on the same nets into one of the combined value,
+resistances harmonically (two of 200 ohm are one of 100) and the rest by
+adding (two of 0.5 fF are one of 1 fF); a resistor's `w`, and `area`,
+`perim` and `pe`, add along. A card's `m` folds into the value first, so
+`c=0.5f m=2` is `c=1f`. One that states no value keeps its count. `lvs
+topology strict`, the default, never combines values: two capacitors are
+one of the same value with `m=2`. Passives never merge in series either
+way.
+
+**`lvs connect_implicit "pattern"`** declares must-connect nets, as
+KLayout's `connect_implicit` does: layout nets whose label matches the
+pattern (`*` any run of characters, `?` one) are one net for the comparison
+with every other net of that label, as rails that are connected only above
+this layout are. **`lvs connect_explicit "a" "b" ...`** joins the nets
+labelled with any of the names. The layout keeps its open, and
+`lvs.label_conflict` still reports it, as a warning rather than an error,
+as KLayout warns for a top cell's must-connect nets.
+
+**`lvs ignore_shorted "model"`** leaves out only the model's dummies: each
+device whose every terminal is on one net, as Netgen's `ignore shorted`
+does. The terminals counted are those LVS compares, so where the deck
+extracts no bulk, a transistor with its gate, source and drain on one net
+is a dummy whatever its schematic bulk is.
 
 ## Parasitic stack
 

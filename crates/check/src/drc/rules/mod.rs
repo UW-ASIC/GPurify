@@ -10,6 +10,7 @@
 
 pub mod area;
 pub mod edge;
+pub mod facing;
 pub mod grid;
 pub mod overlay;
 pub mod patterning;

@@ -117,6 +117,8 @@ pub struct Deck {
     /// written, which [`ProcessStack::sheet_res_ohm_sq`] was computed from;
     /// `None` when the deck states no temperature.
     pub temperature_law: Option<TemperatureLaw>,
+    /// The `lvs` statements: how the comparison treats each device model.
+    pub lvs: LvsControls,
 }
 
 /// A deck's `temperature T nominal T0` and, per `pex` row, its sheet
@@ -617,6 +619,142 @@ pub enum DeviceKind {
     Diode,
 }
 
+/// The `lvs` statements: what the layout-versus-schematic comparison does
+/// with a device model beyond what its `device` statement says. Every column
+/// is empty when the deck has no `lvs` statement, and LVS then compares as
+/// `gpurify_check::lvs` documents.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct LvsControls {
+    /// `lvs tolerance`, one row per statement in deck order, at most one per
+    /// model and parameter (catalog LVS-014).
+    pub tolerance: Vec<LvsTolerance>,
+    /// `lvs ignore_parameter "model" param`: `(model, parameter)`, a
+    /// parameter that is not compared on that model, nor read by its merges,
+    /// as if no card stated it and the layout measured none (catalog
+    /// LVS-014). Never `m`, and never one with a tolerance row.
+    pub ignore_parameter: Vec<(StrId, StrId)>,
+    /// `lvs asymmetric "model"`: MOS models whose source and drain are not
+    /// interchangeable, `KLayout`'s DMOS (catalog LVS-031), each once.
+    pub asymmetric: Vec<StrId>,
+    /// `lvs permute "model" pin pin`: `(model, pin, pin)`, two pins of the
+    /// model's devices that are interchangeable (catalog LVS-030), each a
+    /// position in its `device` statement's terminal order (see
+    /// [`DeviceRecognition`]), the two distinct.
+    pub permute: Vec<(StrId, u8, u8)>,
+    /// `lvs ignore "model"`: models whose devices are left out of the
+    /// comparison on both sides, Netgen's `ignore class` (catalog LVS-034),
+    /// each once. The model need not be a deck device: a schematic may hold
+    /// devices no recogniser draws.
+    pub ignore: Vec<StrId>,
+    /// `lvs ignore_shorted "model"`: models whose devices with every
+    /// terminal on one net are left out on both sides, Netgen's `ignore
+    /// shorted` (catalog LVS-035), each once; any model name, as `ignore`.
+    pub ignore_shorted: Vec<StrId>,
+    /// `lvs ports_by_name`: each port of the reference's top cell pairs
+    /// only with the layout net its label names, `KLayout`'s
+    /// `flag_missing_ports` (catalog LVS-001, LVS-016).
+    pub ports_by_name: bool,
+    /// `lvs range "model" param >= min <= max`, one row per statement, at
+    /// most one per model and parameter (catalog LVS-068).
+    pub range: Vec<LvsRange>,
+    /// `lvs topology relaxed`: a passive or bipolar stating its value merges
+    /// in parallel by the value's law, Netgen's `property topology relaxed`
+    /// (catalog LVS-043, LVS-044, LVS-049); `lvs topology strict`, the
+    /// default, keeps a count instead.
+    pub relaxed: bool,
+    /// `lvs connect_implicit "pattern"`: label globs (`*` any run, `?` one
+    /// character; [`glob_matches`](crate::layout::glob_matches)). Layout nets
+    /// whose label matches one are joined for the comparison with every
+    /// other net of that label, `KLayout`'s `connect_implicit` ("must
+    /// connect" nets; catalog LVS-002).
+    pub connect_implicit: Vec<String>,
+    /// `lvs connect_explicit "a" "b" ...`: groups of labels, two or more
+    /// each, whose layout nets are joined for the comparison, `KLayout`'s
+    /// `connect_explicit` (catalog LVS-002).
+    pub connect_explicit: Vec<Vec<StrId>>,
+}
+
+/// One `lvs range` statement: the bounds a parameter measured on every
+/// layout device of a model must lie within, either or both, a value at a
+/// bound being legal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LvsRange {
+    /// The device model, which a `device` statement declares.
+    pub model: StrId,
+    /// The parameter, lowercase: a length (`w`, `l`, `perim`, `ps`, `pd`,
+    /// `pe`), an area (`area`, `as`, `ad`, `ae`) or the count `nf`.
+    pub param: StrId,
+    /// The least legal value, when stated.
+    pub min: Option<LvsLimit>,
+    /// The greatest legal value, when stated.
+    pub max: Option<LvsLimit>,
+}
+
+/// A bound of an `lvs range` row, on the layout's grid, of the kind its
+/// parameter is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LvsLimit {
+    /// A length, in database units.
+    Length(Dbu),
+    /// An area, in square database units.
+    Area(DbuArea),
+    /// A count.
+    Count(u32),
+}
+
+/// The names `lvs permute` gives the pins of a device of `kind`, in its
+/// `device` statement's terminal order: Netgen's pin names for the SPICE
+/// primitives, `end_a` and `end_b`, `top` and `bottom`, `anode` and
+/// `cathode`, and a transistor's `gate`, `source`, `drain` and `bulk` and a
+/// bipolar's `base`, `emitter` and `collector`.
+#[must_use]
+pub const fn pin_names(kind: DeviceKind) -> &'static [&'static str] {
+    match kind {
+        DeviceKind::Mos => &["gate", "source", "drain", "bulk"],
+        DeviceKind::Bjt => &["base", "emitter", "collector"],
+        DeviceKind::Resistor => &["end_a", "end_b"],
+        DeviceKind::Capacitor => &["top", "bottom"],
+        DeviceKind::Diode => &["anode", "cathode"],
+    }
+}
+
+/// One `lvs tolerance` statement: how far apart one parameter of one model
+/// may be on the two sides and still agree. Two values `a` and `b` agree when
+/// `|a - b| <= absolute + relative * max(|a|, |b|)`, the two parts adding as
+/// `KLayout`'s `tolerance` does. The row replaces the run's tolerance for that
+/// parameter of that model, so a part it leaves out is zero.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LvsTolerance {
+    /// The device model, which a `device` statement declares.
+    pub model: StrId,
+    /// The parameter, lowercase, as LVS compares it (`w`, `l`, `r`, ...).
+    pub param: StrId,
+    /// The relative part, a fraction from 0 to 1 of the larger value.
+    pub relative: f64,
+    /// The absolute part, in the parameter's SI unit (metres, square
+    /// metres, ohms, farads, or a count), zero or more.
+    pub absolute: f64,
+    /// The absolute part as the deck states it, in the deck's unit for the
+    /// parameter ([`absolute_unit`]), so the deck prints back exactly.
+    pub stated: f64,
+}
+
+/// The unit an absolute tolerance on `param` is written in, and the factor
+/// from it to SI: a length in nm, an area in nm², a resistance in ohms, a
+/// capacitance in aF, a count. A parameter not listed has no known unit, so
+/// it takes a relative tolerance only.
+#[must_use]
+pub fn absolute_unit(param: &str) -> Option<(&'static str, f64)> {
+    match param {
+        "w" | "l" | "ps" | "pd" | "pe" | "perim" => Some(("nm", 1e-9)),
+        "area" | "as" | "ad" | "ae" => Some(("nm2", 1e-18)),
+        "r" => Some(("ohm", 1.0)),
+        "c" => Some(("aF", 1e-18)),
+        "m" | "nf" => Some(("", 1.0)),
+        _ => None,
+    }
+}
+
 /// Per-layer process parameters, for parasitic extraction, indexed by [`LayerId`].
 ///
 /// Every column is empty when the deck has no `pex` statement, and
@@ -650,6 +788,209 @@ pub struct ProcessStack {
     /// Relative permittivity of the surrounding dielectric; `0.0` where the
     /// row leaves it out.
     pub dielectric_k: Vec<f64>,
+}
+
+/// The `lvs` statements, models interned. A control on a model no `device`
+/// statement declares is refused: it would change nothing, silently.
+fn build_lvs(
+    declared: &LvsSrc,
+    devices: &[DeviceSource],
+    strings: &mut StrTable,
+) -> Result<LvsControls, DeckError> {
+    let known = |model: &str, control: &str| {
+        if devices.iter().any(|device| device.model == model) {
+            Ok(())
+        } else {
+            Err(DeckError::Malformed(format!(
+                "lvs {control}: model \"{model}\" is not declared by any device statement"
+            )))
+        }
+    };
+    let mut lvs = LvsControls::default();
+    for (model, a, b) in &declared.permute {
+        known(model, "permute")?;
+        let kind = devices
+            .iter()
+            .find(|device| device.model == *model)
+            .map_or(DeviceKind::Mos, |device| device.kind);
+        let names = pin_names(kind);
+        let position = |pin: &str| {
+            names
+                .iter()
+                .position(|&name| name == pin)
+                .and_then(|at| u8::try_from(at).ok())
+                .ok_or_else(|| {
+                    DeckError::Malformed(format!(
+                        "lvs permute: \"{model}\" has no pin `{pin}`; its pins are {}",
+                        names.join(", ")
+                    ))
+                })
+        };
+        let (a, b) = (position(a)?, position(b)?);
+        if a == b {
+            return Err(DeckError::Malformed(format!(
+                "lvs permute: \"{model}\" permutes `{}` with itself",
+                names[usize::from(a)]
+            )));
+        }
+        let channel = kind == DeviceKind::Mos && a.min(b) == 1 && a.max(b) == 2;
+        if channel && declared.asymmetric.contains(model) {
+            return Err(DeckError::Malformed(format!(
+                "lvs permute: \"{model}\" is asymmetric, so its source and drain do not permute"
+            )));
+        }
+        lvs.permute.push((strings.intern(model), a, b));
+    }
+    for model in &declared.ignore {
+        lvs.ignore.push(strings.intern(model));
+    }
+    for model in &declared.ignore_shorted {
+        lvs.ignore_shorted.push(strings.intern(model));
+    }
+    lvs.ports_by_name = declared.ports_by_name;
+    lvs.relaxed = declared.topology == Some(true);
+    lvs.connect_implicit.clone_from(&declared.connect_implicit);
+    for group in &declared.connect_explicit {
+        lvs.connect_explicit
+            .push(group.iter().map(|name| strings.intern(name)).collect());
+    }
+    for (model, param, min, max) in &declared.range {
+        known(model, "range")?;
+        lvs.range.push(LvsRange {
+            model: strings.intern(model),
+            param: strings.intern(param),
+            min: *min,
+            max: *max,
+        });
+    }
+    for model in &declared.asymmetric {
+        known(model, "asymmetric")?;
+        if devices
+            .iter()
+            .any(|device| device.model == *model && device.kind != DeviceKind::Mos)
+        {
+            return Err(DeckError::Malformed(format!(
+                "lvs asymmetric: \"{model}\" is not a mos device; only a transistor has a source and a drain"
+            )));
+        }
+        lvs.asymmetric.push(strings.intern(model));
+    }
+    for (model, param) in &declared.ignore_parameter {
+        known(model, "ignore_parameter")?;
+        if let Some(row) = declared
+            .tolerance
+            .iter()
+            .find(|row| row.model == *model && row.param == *param)
+        {
+            return Err(DeckError::Malformed(format!(
+                "lvs tolerance: `{}` of \"{}\" is ignored, so a tolerance on it means nothing",
+                row.param, row.model
+            )));
+        }
+        lvs.ignore_parameter
+            .push((strings.intern(model), strings.intern(param)));
+    }
+    for row in &declared.tolerance {
+        known(&row.model, "tolerance")?;
+        lvs.tolerance.push(LvsTolerance {
+            model: strings.intern(&row.model),
+            param: strings.intern(&row.param),
+            relative: row.relative,
+            absolute: row.absolute * absolute_unit(&row.param).map_or(1.0, |(_, to_si)| to_si),
+            stated: row.absolute,
+        });
+    }
+    Ok(lvs)
+}
+
+/// The `lvs` statements as written, models unresolved: a deck source's
+/// [`DeckSource::lvs`], which [`lower`] resolves to [`LvsControls`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LvsSrc {
+    pub(crate) tolerance: Vec<ToleranceSrc>,
+    /// `(model, parameter)`, the parameter lowercase.
+    pub(crate) ignore_parameter: Vec<(String, String)>,
+    pub(crate) asymmetric: Vec<String>,
+    /// `(model, pin, pin)`, the pins as written.
+    pub(crate) permute: Vec<(String, String, String)>,
+    pub(crate) ignore: Vec<String>,
+    pub(crate) ignore_shorted: Vec<String>,
+    pub(crate) ports_by_name: bool,
+    /// `(model, parameter, min, max)`, the parameter lowercase.
+    pub(crate) range: Vec<(String, String, Option<LvsLimit>, Option<LvsLimit>)>,
+    /// `lvs topology`, once: `Some(true)` relaxed, `Some(false)` strict.
+    pub(crate) topology: Option<bool>,
+    pub(crate) connect_implicit: Vec<String>,
+    pub(crate) connect_explicit: Vec<Vec<String>>,
+}
+
+/// `lvs tolerance "model" param relative r absolute a`, the absolute part
+/// in the deck's unit ([`absolute_unit`]).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ToleranceSrc {
+    pub(crate) model: String,
+    pub(crate) param: String,
+    pub(crate) relative: f64,
+    pub(crate) absolute: f64,
+}
+
+impl LvsSrc {
+    /// The statements that [`lower`] resolves to `controls`, for a deck
+    /// whose devices are `devices`: what a compiled deck decompiles to.
+    #[must_use]
+    pub fn from_controls(
+        controls: &LvsControls,
+        devices: &[DeviceSource],
+        strings: &StrTable,
+    ) -> Self {
+        let name = |id: StrId| strings.resolve(id).to_owned();
+        Self {
+            tolerance: controls
+                .tolerance
+                .iter()
+                .map(|row| ToleranceSrc {
+                    model: name(row.model),
+                    param: name(row.param),
+                    relative: row.relative,
+                    absolute: row.stated,
+                })
+                .collect(),
+            ignore_parameter: controls
+                .ignore_parameter
+                .iter()
+                .map(|&(model, param)| (name(model), name(param)))
+                .collect(),
+            asymmetric: controls.asymmetric.iter().map(|&id| name(id)).collect(),
+            permute: controls
+                .permute
+                .iter()
+                .map(|&(model, a, b)| {
+                    let model = name(model);
+                    let kind = devices
+                        .iter()
+                        .find(|device| device.model == model)
+                        .map_or(DeviceKind::Mos, |device| device.kind);
+                    let pin = |at: u8| pin_names(kind)[usize::from(at)].to_owned();
+                    (model, pin(a), pin(b))
+                })
+                .collect(),
+            ignore: controls.ignore.iter().map(|&id| name(id)).collect(),
+            ignore_shorted: controls.ignore_shorted.iter().map(|&id| name(id)).collect(),
+            ports_by_name: controls.ports_by_name,
+            range: controls
+                .range
+                .iter()
+                .map(|row| (name(row.model), name(row.param), row.min, row.max))
+                .collect(),
+            topology: controls.relaxed.then_some(true),
+            connect_implicit: controls.connect_implicit.clone(),
+            connect_explicit: controls
+                .connect_explicit
+                .iter()
+                .map(|group| group.iter().map(|&id| name(id)).collect())
+                .collect(),
+        }
+    }
 }
 
 /// Layer-table tests, and the fixture the layout tests borrow.

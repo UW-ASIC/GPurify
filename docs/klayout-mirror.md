@@ -260,8 +260,17 @@ explains (kind 30).
 | 44 | min_interior_angle | `interior_angle([L]) >= deg` | POINT | EXACT | exact (keys) | new in H |
 | 45 | polygon_validity | `valid([L])` | — | NONE | reported as not mirrored | — |
 | 46 | min_step | `min_step(L; ..) >= l` | — | NONE | reported as not mirrored | — |
+| 47 | tip_spacing_table | `tip_space_table(L; length, space)` | PAIR | EXACT | exact | — |
+| 48 | forbidden_spacing | `forbidden_space(L; min, max, prl)` | PAIR | EXACT | exact | — |
+| 49 | eol_within_spacing | `eol_space(L; eol_width, within, parallel, end_to_end)` | — | NONE | reported as not mirrored | — |
+| 50 | eol_keep_out | `eol_keep_out(L; eol_width, backward, side, forward)` | — | NONE | reported as not mirrored | — |
+| 51 | two_width_spacing_table | `two_width_table(L; width, prl, space)` | PAIR | APPROX | exact on R, else KLayout ⊆ GPurify | — |
+| 52 | span_length | `span_length(L; x, y)` | — | NONE | reported as not mirrored | — |
+| 53 | convex_corner_spacing | `corner_space(L; corner_to_corner, except_eol)` | PAIR | APPROX without `except_eol`, else NONE | GPurify ⊆ KLayout | — |
+| 54 | exact_pitch | `pitch(L, vertical \| horizontal) == l` | — | NONE | reported as not mirrored | — |
 
-32 kinds are EXACT, 11 APPROX and three NONE; `net_spacing` is NONE on a deck without
+34 kinds are EXACT, 13 APPROX and seven NONE; `convex_corner_spacing` is NONE on a deck with
+`except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`, and between two layers (`space(A, B; nets: ..)`), which is not mirrored. `examined` is GPurify-only; KLayout has no equivalent.
 
 The counts were measured on 990376b (after B20 and B24), with the translator reconciled to B24.
@@ -1029,6 +1038,148 @@ staircase swept at the limit. OpenROAD's TritonRoute implements base `MINSTEP` r
 typed `INSIDECORNER`/`OUTSIDECORNER` branch never sets its corner flags (read from
 `FlexGC_main.cpp`), so it is not an oracle for them.
 
+### 47. tip_spacing_table — EXACT
+
+**GPurify** (`facing.rs` `tip_spacing_table`, `each_facing`): whole edges of the merged layer, in
+different figures, parallel and facing each other across empty space with a positive overlap of
+their spans; the gap is the distance between their lines. Each edge is classed by its own length
+(the last threshold it reaches) and the pair needs the cell of the two classes. One finding per
+pair of figures, its smallest offending gap.
+
+**KLayout**
+
+```ruby
+tip_table(id, L.isolated(REACH, projection, transparent, whole_edges), CLASSES, SPACE)
+# REACH = 2·(largest cell); CLASSES and SPACE doubled. The prelude's tip_table keeps an edge pair
+# when the distance between its lines is under SPACE[class(e)][class(f)], class(e) the last
+# threshold e.length reaches.
+```
+
+- `isolated` with `projection` pairs edges of different merged polygons that project onto each
+  other with a positive overlap, closer than REACH, which is GPurify's facing pair (d).
+  `whole_edges` returns each edge whole, so its length is the merged edge's, the class GPurify
+  reads.
+- Key PAIR; the smallest distance per pair of figures is compared exactly. The oracles besides
+  the mirror: the ASAP7 M1.S.1 to M1.S.5 values at the limit and one step either side (FR), the
+  hand-derived fixtures under the square's symmetries (SY, MR).
+
+### 48. forbidden_spacing — EXACT
+
+**GPurify** (`facing.rs` `forbidden_spacing`): facing edges as in rule 47 whose run (the overlap
+of their spans) is longer than `prl` and whose gap lies in `[min, max]`. One finding per pair of
+figures, its smallest forbidden gap.
+
+**KLayout**
+
+```ruby
+forbidden_gap(id, L.isolated(MAX + 1, projection, transparent, projection_limits(PRL + 1, nil)), MIN)
+# MAX = 2·max, PRL = 2·prl, MIN = 2·min: isolated keeps gaps under 2·max + 1 (at most max),
+# projection_limits runs of at least 2·prl + 1 (longer than prl), and the prelude's
+# forbidden_gap the pairs whose lines are at least MIN apart.
+```
+
+- (d) `projection_limits` filters an edge pair by its projected length, the overlap of the two
+  edges (rule 9's run, v t11 P3/P4).
+- Key PAIR, the smallest gap per pair of figures, compared exactly. Besides the mirror: both ends
+  of the range and the run swept one step either side (SY, MR); `TritonRoute`'s
+  `isForbiddenSpacing` and `isValidPrl` give the closed range and the strict run.
+
+### 49. eol_within_spacing — NONE: KLayout has no end-of-line keep-out
+
+**GPurify** (`facing.rs` `eol_within_spacing`, `beside`): an end of line is an edge of the merged
+layer shorter than `eol_width` with both corners convex. Its keep-out is the end widened by
+`within` on each side (open) and reaching straight out to the limit (open); a facing edge of
+another figure in it, at depth 0 or more and overlapping the widened span, fails below the limit,
+or below `end_to_end` when it is an end of line too. With `parallel`, an end is checked only where
+an edge faces the line's side less than `space` away, overlapping the stretch from `within` behind
+the end's line to the end's `within` past it (both sides with `two_edges`).
+
+**KLayout.** Not mirrored. KLayout's checks pair edges or polygons by distance and projection; none
+widens a keep-out past an edge's ends, gates a check on a parallel edge beside the line, or swaps
+the space when the facing edge is an end of line too. `TritonRoute` defines the rule
+(`FlexGC_eol.cpp`), but it is not run as a differential. The oracles: the LEF 5.8 worked example
+(Example 1-18, Figures 1-23 and 1-24; SE), the keep-out's depth, sideways reach, parallel space and
+parallel reach each swept one step either side, and both-sides and end-to-end cases, hand-derived
+under the square's symmetries (SY, MR).
+
+### 50. eol_keep_out — NONE: KLayout has no end-of-line keep-out box
+
+**GPurify** (`facing.rs` `eol_keep_out`): each end of line (as rule 49) owns a box, the end widened
+by `side` each way, from `backward` behind its line to `forward` past it; each other figure whose
+material overlaps the box with positive area is a finding, measuring that area.
+
+**KLayout.** Not mirrored: picking the edges whose two corners are convex and testing each one's
+box against the other figures is a loop over polygons, not a KLayout check. `TritonRoute` defines
+the rule (`checkMetalEOLkeepout_main`), but it is not run as a differential. The oracles: the
+box's forward, side and backward reaches each swept one step either side, with the area inside
+derived by hand as a rectangle's, under the square's symmetries (SY, MR).
+
+### 51. two_width_spacing_table — APPROX (exact on R, else KLayout ⊆ GPurify)
+
+**GPurify** (`spacing.rs` `two_width_table`): each cell (r, c) holds a pair whose one shape has a
+part wider than `width[r]` and the other a part wider than `width[c]` (the whole shape for the
+first width), when the figures' run within the cell exceeds both widths' stated runs; it fails
+when those two parts are closer than the cell. One finding per pair, at its highest failing cell.
+
+**KLayout**
+
+```ruby
+# One check per cell, s = 2·space[r][c]; W(i) = L.sized(-width[i]).sized(width[i]), W(0) = L
+# (x2: sizing by the undoubled width removes what is at most that wide); the run is the larger
+# of the two widths' stated runs, as projection_limits(2·run + 1, nil).
+L.isolated(s, euclidian, transparent)                                     # r = c = 0
+W(r).separation(W(c), s, euclidian, transparent[, projection_limits(...)])  # otherwise
+```
+
+- The same-figure filter of rule 11 drops a wide part paired with its own figure.
+- On R a wide part is the whole rectangle and the projection between two rectangles is their
+  facing run, so the two agree. Off R, as rule 31: KLayout's run is between the parts, GPurify's
+  between the whole figures. Besides the mirror: LEF's own worked example (the four width and
+  run cases it prints; SE), the widths and a run swept one step either side, a thin tab of a wide
+  plate, hand-derived under the square's symmetries (SY, MR).
+
+### 52. span_length — NONE: KLayout has no span measure
+
+**GPurify** (`facing.rs` `span_length`, `chords`): the chords horizontal and vertical lines cut
+from each merged figure, read slab by slab between the figure's vertex coordinates; one finding per
+maximal region of an unchanged illegal chord.
+
+**KLayout.** Not mirrored: `width` with `projection` reports edge pairs closer than a limit, not
+the set of chord lengths a span list judges, and a legal set of exact values with an open last one
+has no KLayout check. The oracles: LEF 5.8's own span tables (`SPANLENGTHTABLE 0.06 0.08 0.12 0.16
+0.20` and `WRONGDIRECTION 0.12 0.16 0.20`), every listed value one step either side (SE), an L, a
+ring and a shape drawn in pieces, hand-derived under the square's symmetries (SY, MR).
+
+### 53. convex_corner_spacing — APPROX (GPurify ⊆ KLayout) without `except_eol`, else NONE
+
+**GPurify** (`facing.rs` `convex_corner_spacing`): facing convex corners of different figures, as
+rule 10, measured by the larger axis gap (`TritonRoute`'s `maxXY`) or, with `corner_to_corner`,
+Euclidean; with `except_eol`, the corners of an end of line on either shape are exempt.
+
+**KLayout**
+
+```ruby
+emit(id, L.isolated(LIM, square, transparent, projection_limits(0, 1)))      # the larger axis gap
+emit(id, L.isolated(LIM, euclidian, transparent, projection_limits(0, 1)))   # corner_to_corner
+```
+
+- `square` is the larger of the two axis distances ([L] "metrics"). As rule 10, the harness drops
+  a pair whose edges overlap or touch on an axis, and every GPurify pair is a KLayout pair; KLayout
+  also pairs an edge ending at a concave corner, so the comparison is one-sided, keys only.
+- `except_eol` cannot be stated: NONE. Its oracles are the hand-derived fixtures: a line end's
+  corner exempt on either shape, a wide shape's not (SY, MR).
+
+### 54. exact_pitch — NONE: KLayout has no pitch between neighbours
+
+**GPurify** (`facing.rs` `exact_pitch`): every merged figure a rectangle (else refused); each
+rectangle's neighbours along the axis are the nearest rectangles past it that overlap it across;
+their centre lines must be exactly the pitch apart.
+
+**KLayout.** Not mirrored: KLayout's checks compare distances between edges against a limit, and
+none relates the centre lines of neighbouring shapes or flags a distance that is too large as well
+as too small. The oracles: ASAP7's own values (FIN.S.1 27 nm on 7 nm fins, GATE.S.1 54 nm on 20 nm
+gates) at the pitch and one step either side (FR), a missing line, rows that do not overlap, and a
+bent shape refused, hand-derived under the four symmetries that keep the axes (SY, MR).
 ---
 
 ## (c) Derived layers, connectivity, antenna
@@ -1075,7 +1226,7 @@ Each operation runs on merged operands at the default coherence (a3).
 
 ### Antenna
 
-`antenna` is an ERC kind, not one of the 35, but `antenna_check` mirrors it. Not translated yet.
+`antenna` is an ERC kind, not one of the 54, but `antenna_check` mirrors it. Not translated yet.
 
 **GPurify** (`erc/rules/antenna.rs`)
 - For each rule row, the nets are those standing at that etch step: conductors up to the highest
@@ -1107,6 +1258,13 @@ KLayout, but only by positive overlap in GPurify.
 **NONE**
 - **multi_patterning.** Reported as not mirrored. The oracle stays brute-force colouring of small
   conflict graphs (testing-plan L6 skip list); a KLayout conflict graph could feed it.
+- **eol_within_spacing.** Reported as not mirrored. The oracles are the LEF 5.8 worked example and
+  hand-derived fixtures (rule 49).
+- **eol_keep_out.** Reported as not mirrored. The oracle is hand-derived fixtures (rule 50).
+- **span_length.** Reported as not mirrored. The oracles are LEF's own span tables and hand-derived
+  fixtures (rule 52).
+- **exact_pitch.** Reported as not mirrored. The oracles are ASAP7's pitch values and hand-derived
+  fixtures (rule 54).
 - **net_spacing on a deck without `touch_within_layer`.** The oracle is construct-from-answer
   tests with planted nets.
 

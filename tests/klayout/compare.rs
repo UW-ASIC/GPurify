@@ -412,7 +412,7 @@ impl Ctx<'_> {
                 if *filter_same && i == j && a == b {
                     return None;
                 }
-                if self.m.kind == "corner_to_corner" {
+                if matches!(self.m.kind, "corner_to_corner" | "convex_corner_spacing") {
                     if let Item::Pair(e, f) = item {
                         let (p, q) = (seg_box(*e), seg_box(*f));
                         let apart = |lo: usize, hi: usize| p[hi] < q[lo] || q[hi] < p[lo];

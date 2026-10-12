@@ -103,3 +103,52 @@ pex met2 thickness 360nm height 2006nm sheet 0.125ohm area_cap 17.5aF/um2 fringe
         "{printed}"
     );
 }
+
+/// A deck with every kind of `lvs` statement survives printing: each control
+/// is written back as stated, an absolute tolerance in its parameter's unit,
+/// a permutation by its pin names and a range on the layout's grid.
+/// Oracle: round trip.
+#[test]
+fn a_deck_with_lvs_statements_survives_printing() {
+    let text = "grid 1nm
+layer diff = gds(65, 20)
+layer poly = gds(66, 20)
+layer res = gds(66, 13)
+layer cap = gds(75, 20)
+device mos poly model \"nfet\" terminals [poly, diff, diff, diff]
+device resistor res model \"rpoly\" terminals [poly, poly]
+device capacitor cap model \"cmim\" terminals [poly, diff]
+lvs tolerance \"nfet\" w relative 1%
+lvs tolerance \"nfet\" l relative 0.005 absolute 5nm
+lvs tolerance \"nfet\" as absolute 0.2um2
+lvs tolerance \"rpoly\" r absolute 2kohm
+lvs tolerance \"cmim\" c relative 0.02 absolute 3fF
+lvs tolerance \"nfet\" m absolute 1
+lvs ignore_parameter \"rpoly\" l
+lvs asymmetric \"nfet\"
+lvs permute \"cmim\" top bottom
+lvs ignore \"cmim\"
+lvs ignore_shorted \"nfet\"
+lvs ports_by_name
+lvs range \"nfet\" l >= 150nm <= 20um
+lvs range \"nfet\" ad >= 0.1um2
+lvs range \"nfet\" nf <= 8
+lvs topology relaxed
+lvs connect_implicit \"VDD*\"
+lvs connect_explicit \"VSS\" \"GND\"
+";
+    let mut strings = StrTable::default();
+    let deck = compile(text, grid(), &mut strings).expect("the deck compiles");
+    assert_eq!(deck.lvs.tolerance.len(), 6);
+    assert_round_trip("lvs", &deck, &mut strings);
+    let printed = print(&deck, &strings).expect("the deck prints");
+    for line in [
+        "lvs tolerance \"nfet\" l relative 5e-3 absolute 5e0nm",
+        "lvs tolerance \"rpoly\" r absolute 2e3ohm",
+        "lvs permute \"cmim\" top bottom",
+        "lvs range \"nfet\" l >= 150nm <= 20000nm",
+        "lvs connect_explicit \"VSS\" \"GND\"",
+    ] {
+        assert!(printed.contains(line), "{line} not in\n{printed}");
+    }
+}

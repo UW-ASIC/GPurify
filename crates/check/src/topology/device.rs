@@ -826,7 +826,7 @@ fn terminals_of_recogniser(recognition: &DeviceRecognition, row: usize) -> &[Lay
 }
 
 /// The role of terminal `position` in family `kind`, per [`TerminalRole`].
-fn role_at(kind: DeviceKind, position: u8) -> TerminalRole {
+pub(crate) fn role_at(kind: DeviceKind, position: u8) -> TerminalRole {
     const MOS: [TerminalRole; 4] = [
         TerminalRole::Gate,
         TerminalRole::Source,

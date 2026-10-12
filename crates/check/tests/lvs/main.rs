@@ -3,6 +3,7 @@
 mod checks;
 mod common;
 mod compare;
+mod controls;
 mod digest;
 mod graph;
 mod reduce;

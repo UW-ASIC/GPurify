@@ -72,9 +72,10 @@ pub enum Inconclusive {
 pub enum Discrepancy {
     /// A device that no other-side device could be paired with: after
     /// refinement its class does not hold exactly one device per side. Also
-    /// raised once per side for a pair whose kind or model differ, though
-    /// refinement seeds classes by `(kind, model)`, so a model swap normally
-    /// shows as two plain unpaired devices.
+    /// raised once per side for a pair whose kinds differ, which refinement,
+    /// seeding classes by kind, does not make. A device whose model alone
+    /// differs is reported as one [`Discrepancy::ModelMismatch`] instead,
+    /// where that explains every difference.
     ///
     /// Report id `lvs.unpaired_device`. Catalog: LVS-012, LVS-013, LVS-049.
     /// `KLayout`: `device_mismatch`. Netgen: listed under "DEVICE mismatches".
@@ -88,10 +89,11 @@ pub enum Discrepancy {
     },
     /// A net that carries a terminal or a name and that no other-side net
     /// could be paired with. A reference port with nothing attached shows here
-    /// too; port names themselves are never compared (catalog LVS-016 is
-    /// partial).
+    /// too, and so, under the deck's `lvs ports_by_name`, does a port whose
+    /// name labels no layout net, or labels one wired otherwise (catalog
+    /// LVS-016, LVS-001); without it, port names are not compared.
     ///
-    /// Report id `lvs.unpaired_net`. Catalog: LVS-015, LVS-016. `KLayout`:
+    /// Report id `lvs.unpaired_net`. Catalog: LVS-001, LVS-015, LVS-016. `KLayout`:
     /// `net_mismatch`. Netgen: listed under "NET mismatches".
     UnpairedNet {
         /// Which netlist holds the net.
@@ -106,7 +108,9 @@ pub enum Discrepancy {
     /// net its partner's terminal of the same role lands on.
     ///
     /// Terminals are matched by role, never by position, and interchangeable
-    /// roles count as one: MOS `Source` and `Drain`, and a resistor's ends. A
+    /// roles count as one: MOS `Source` and `Drain`, a resistor's ends, and
+    /// pins the deck's `lvs permute` joins, whose row names the class's first
+    /// pin; an `lvs asymmetric` transistor's source and drain are two. A
     /// terminal on no net, or on a net that did not pair, never matches. One
     /// moved terminal usually gives a row from each side.
     ///
@@ -124,8 +128,11 @@ pub enum Discrepancy {
     },
     /// A parameter both paired devices declare, whose values differ by more
     /// than [`CompareOptions::param_tolerance`](crate::lvs::CompareOptions::param_tolerance)
-    /// `tol`: `|a - b| > tol * max(|a|, |b|)`. A `NaN` on either side always
-    /// differs.
+    /// `tol`: `|a - b| > tol * max(|a|, |b|)`, or, where the deck has an `lvs
+    /// tolerance` row for that parameter of that model, by more than
+    /// `absolute + relative * max(|a|, |b|)` ([`compare_with`](crate::lvs::compare_with)).
+    /// A `NaN` on either side always differs. A parameter the deck ignores
+    /// (`lvs ignore_parameter`) is never compared.
     ///
     /// Values are in SI base units (metres, square metres) and are compared
     /// after reduction, so a merged MOS carries its summed `W`, `nf` or `L`,
@@ -137,9 +144,8 @@ pub enum Discrepancy {
     ///
     /// # Limits
     ///
-    /// One relative tolerance covers every parameter, with no absolute or
-    /// per-parameter tolerance. A resistor's `r` and a capacitor's `c` are
-    /// compared only where the deck gives their coefficients
+    /// A resistor's `r` and a capacitor's `c` are compared only where the
+    /// deck gives their coefficients
     /// ([`from_layout`](crate::lvs::graph::from_layout)).
     ParameterMismatch {
         /// The device's row in the reduced layout graph.
@@ -177,6 +183,26 @@ pub enum Discrepancy {
         ref_device: u32,
         /// The parameter's SPICE name.
         param: StrId,
+    },
+    /// Two devices of one kind that refinement pairs by wiring once models
+    /// are set aside, and whose models differ: a device drawn with the wrong
+    /// flavour, or written with the wrong model. Reported only when the
+    /// comparison by model fails and the one with models aside pairs every
+    /// node, so the models are all that differ; otherwise the devices are
+    /// [`Discrepancy::UnpairedDevice`]s. The pair's parameters are not
+    /// compared, two models' parameters not being one model's.
+    ///
+    /// Report id `lvs.model_mismatch`. Catalog: LVS-013. `KLayout`:
+    /// `match_devices_with_different_device_classes`.
+    ModelMismatch {
+        /// The device's row in the reduced layout graph.
+        layout_device: u32,
+        /// Its partner's row in the reduced reference graph.
+        ref_device: u32,
+        /// The layout device's model.
+        layout_model: StrId,
+        /// The reference device's model.
+        ref_model: StrId,
     },
     /// A refinement class, a set of nodes no structural test could tell
     /// apart, holding at least two nodes on each side but a different number

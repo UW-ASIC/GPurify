@@ -541,6 +541,8 @@ const NAMES: gpurify_check::lvs::ParamNames = gpurify_check::lvs::ParamNames {
     fingers: Some(StrId(90)),
     multiplier: Some(StrId(91)),
     diffusion: [Some(AS), Some(AD), Some(PS), Some(PD)],
+    values: [None; 6],
+    relaxed: false,
 };
 
 /// [`NAMES`]'s `as`, `ad`, `ps` and `pd`.

@@ -421,6 +421,10 @@ rule ee enclosure(edge, met2) >= 30nm
 rule sn space(met1; nets: same) >= 120nm
 rule dn space(met1; nets: different) >= 120nm
 rule tab space_table(met1; prl: [0nm, 200nm], width: [0nm, 200nm], space: [[100nm, 120nm], [140nm, 160nm]])
+rule tw two_width_table(met1; width: [0nm, 200nm], prl: [none, 100nm], space: [[100nm, 120nm], [120nm, 160nm]])
+rule tip tip_space_table(met1; length: [0nm, 60nm, 200nm], space: [[150nm, 150nm, 120nm], [150nm, 130nm, 120nm], [120nm, 120nm, 100nm]])
+rule fs forbidden_space(met1; min: 100nm, max: 150nm, prl: 100nm)
+rule ccs corner_space(met1; corner_to_corner: false, except_eol: none) >= 150nm
 rule tap tap_distance(met1, via1) <= 300nm
 rule og off_grid(; pitch: 20nm)
 rule ang angle(; allowed: [0deg, 90deg])

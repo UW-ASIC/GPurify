@@ -5,11 +5,16 @@
 //! discrepancy order is user-visible: class imbalances, then per-pair joins in
 //! layout order, then unpaired layout nodes, then unpaired reference nodes.
 
+use crate::lvs::controls::{
+    assign_roles, bound, drop_ignored_devices, drop_ignored_params, port_names, port_seeds,
+    report_roles, restore_rows,
+};
 use crate::lvs::graph::{channel_ends, drop_unextracted_bulk, keep_declared_params, narrow, Graph};
 use crate::lvs::reduce::{reduce_with, Merge, ParamNames};
 use crate::lvs::refine::{refine_into, role_code, Partition};
 use crate::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
 use crate::topology::TerminalRole;
+use gpurify_ingest::deck::LvsControls;
 use gpurify_ingest::StrId;
 use std::cmp::Ordering;
 
@@ -94,9 +99,11 @@ pub struct CompareOptions {
     /// `|a - b| <= tol * max(|a|, |b|)`. `NaN` never agrees. A count, the
     /// parameter [`ParamNames`] names `m` or `nf`, is a whole number and
     /// agrees only exactly (testing-plan F99): `m = 50` against `m = 51`,
-    /// 1.96 % apart, is a mismatch. It is the only tolerance: there is no
-    /// absolute or per-parameter one (catalog LVS-014), and it does not apply
-    /// to reduction, whose merges need the other parameters bit-identical.
+    /// 1.96 % apart, is a mismatch. A deck's `lvs tolerance` row replaces it
+    /// for one parameter of one model, with a relative part, an absolute
+    /// one, or both ([`compare_with`], catalog LVS-014), a count's too. It
+    /// does not apply to reduction, whose merges need the other parameters
+    /// bit-identical.
     ///
     /// Netgen's counterpart is `property ... tolerance`, `KLayout`'s `tolerance`.
     /// Netgen measures the difference against the mean of the two values, not
@@ -132,8 +139,9 @@ impl Default for CompareOptions {
 /// whatever other cards of the model state (testing-plan F68), and its count
 /// `m`, 1 where a side states none, once the `m` name is given. A
 /// symmetry pairs its lowest layout node with the reference node whose
-/// parameters are closest, so a stall resolves by property value rather than
-/// by row order, and a pairing that leaves a class short of layout nodes or
+/// parameters are closest, and between nets the one its label names, so a
+/// stall resolves by property value and by name rather than by row order,
+/// and a pairing that leaves a class short of layout nodes or
 /// pairs devices that disagree is taken back for the next closest, so card
 /// order does not decide a match either. Neither input is modified.
 ///
@@ -189,15 +197,102 @@ pub fn compare_logged(
     reference: &Graph,
     options: CompareOptions,
 ) -> (Verdict, Vec<(Side, Merge)>) {
+    compare_with(layout, reference, options, &LvsControls::default())
+}
+
+/// [`compare_logged`] under the deck's `lvs` statements, which the `gpurify`
+/// binary passes from the deck it loaded. With no statement it is
+/// [`compare_logged`].
+///
+/// - **`lvs tolerance`** (catalog LVS-014): a paired device's parameter
+///   named by a row for its model agrees when `|a - b| <= absolute +
+///   relative * max(|a|, |b|)`, the row's parts in place of
+///   [`CompareOptions::param_tolerance`]; a part the row leaves out is zero.
+///   The two parts add, as in `KLayout`'s `tolerance` ("absolute and
+///   relative tolerances add"); Netgen's `property ... tolerance` is a
+///   relative one, measured against the mean of the two values. A
+///   symmetry's trial pairing is held to the same bound.
+/// - **`lvs ignore_parameter`** (catalog LVS-014): the parameter is dropped
+///   from every device of the model on both sides before reduction, so it
+///   is neither compared nor read by a merge, as `KLayout`'s
+///   `ignore_parameter` and Netgen's `property ... remove` leave it out.
+/// - **`lvs asymmetric`** (catalog LVS-031): a transistor of the model has
+///   a source and a drain that do not trade places, `KLayout`'s DMOS: its
+///   source pairs only with a source and its drain with a drain, in
+///   refinement, in the terminal comparison and in a parallel merge, and a
+///   diffusion is compared at the end it is named for. Such transistors
+///   never merge in series (`KLayout` merges no transistor in series, and
+///   Netgen 1.5.323 none at all), so a stack of them does not match one
+///   long card: a false mismatch, never a false match.
+/// - **`lvs permute`** (catalog LVS-030): the two pins of every device of
+///   the model are interchangeable, joined with its default classes (a
+///   transistor's source and drain, unless asymmetric, and a resistor's
+///   ends) as Netgen's `permute` and `KLayout`'s `equivalent_pins` declare
+///   them. The pins of one class compare under one role, in refinement, the
+///   terminal comparison and a parallel merge; a class other than a
+///   transistor's channel is no channel, so no series merge takes it, and a
+///   terminal mismatch on it is reported under its lowest pin's role.
+/// - **`lvs ignore`** (catalog LVS-034): every device of the model is
+///   dropped from both sides before reduction, as Netgen's `ignore class`
+///   and `KLayout`'s `same_device_classes` with `nil` remove it, and so is
+///   a net only those devices reached, unless it is a port of the reference
+///   or a labelled layout net, which must still pair. A [`Merge`] still
+///   lists rows of the graphs given.
+/// - **`lvs ports_by_name`** (catalog LVS-016, LVS-001): each port of the
+///   reference starts refinement in a class of its own with the layout nets
+///   its name labels, so it pairs with no other net, as `KLayout`'s
+///   `flag_missing_ports` holds a top circuit's pins to their labels ("this
+///   prevents swapping of port labels or pads"). A port with no label, or
+///   whose label sits on a net wired otherwise, is then unpaired
+///   ([`Discrepancy::UnpairedNet`]). Seeding only splits classes, so it
+///   never turns a mismatch into a match.
+/// - **`lvs topology relaxed`** (catalog LVS-043, LVS-044, LVS-049):
+///   [`ParamNames::relaxed`], so a passive or bipolar stating its value
+///   merges in parallel by the value's law ([`reduce`](crate::lvs::reduce)),
+///   Netgen's `property topology relaxed`; the strict policy, the default,
+///   counts instead.
+/// - **`lvs ignore_shorted`** (catalog LVS-035): a device of the model with
+///   every terminal it has on one net is dropped the same way, as Netgen's
+///   `ignore shorted` removes dummies. Its terminals are those compared: a
+///   reference bulk the layout does not extract is already gone, so a dummy
+///   with gate, source and drain on one net is shorted on both sides.
+///
+/// # Panics
+///
+/// As [`compare`].
+pub fn compare_with(
+    layout: &Graph,
+    reference: &Graph,
+    options: CompareOptions,
+    controls: &LvsControls,
+) -> (Verdict, Vec<(Side, Merge)>) {
     debug_assert_graph!(layout);
     debug_assert_graph!(reference);
+    let options = CompareOptions {
+        params: ParamNames {
+            relaxed: options.params.relaxed || controls.relaxed,
+            ..options.params
+        },
+        ..options
+    };
+    // The reference's own ports, before a layout label makes another net a
+    // port, are what `lvs ports_by_name` pairs by.
+    let ports = controls.ports_by_name.then(|| port_names(reference));
     let mut declared = reference.clone();
     drop_unextracted_bulk(layout, &mut declared);
+    let reference_rows = drop_ignored_devices(&mut declared, controls);
     protect_labelled(layout, &mut declared);
     let mut measured = layout.clone();
     keep_declared_params(reference, &mut measured);
-    let (mut layout, layout_merges) = reduce_with(&measured, options.params);
-    let (mut reference, reference_merges) = reduce_with(&declared, options.params);
+    let layout_rows = drop_ignored_devices(&mut measured, controls);
+    drop_ignored_params(&mut measured, controls);
+    drop_ignored_params(&mut declared, controls);
+    assign_roles(&mut measured, controls);
+    assign_roles(&mut declared, controls);
+    let (mut layout, mut layout_merges) = reduce_with(&measured, options.params);
+    let (mut reference, mut reference_merges) = reduce_with(&declared, options.params);
+    restore_rows(&mut layout_merges, layout_rows.as_deref());
+    restore_rows(&mut reference_merges, reference_rows.as_deref());
     if let Some(multiplier) = options.params.multiplier {
         state_count(&mut layout, multiplier);
         state_count(&mut reference, multiplier);
@@ -210,20 +305,75 @@ pub fn compare_logged(
         .map(|m| (Side::Layout, m))
         .chain(reference_merges.into_iter().map(|m| (Side::Reference, m)))
         .collect();
+    let seeds = ports.map_or_else(Vec::new, |names| port_seeds((&layout, &reference), &names));
     let mut partition = Partition::default();
     let budget = (options.max_rounds, options.param_tolerance);
     if !refine_into(
         (&layout, &reference),
         budget,
-        options.params,
+        (options.params, controls, &seeds, false),
         &mut partition,
     ) {
         return (Verdict::Inconclusive(Inconclusive::RoundLimit), merges);
     }
-    (
-        interpret((&layout, &reference), &partition, options),
-        merges,
-    )
+    let mut verdict = interpret((&layout, &reference), &partition, (options, controls));
+    if let Verdict::Mismatch(found) = &verdict {
+        if unpaired_on_both_sides(found) {
+            let sides = (&layout, &reference);
+            if let Some(found) = models_aside(sides, budget, (options, controls, &seeds)) {
+                verdict = Verdict::Mismatch(found);
+            }
+        }
+    }
+    if let Verdict::Mismatch(found) = &mut verdict {
+        report_roles(found, &reference, controls);
+    }
+    (verdict, merges)
+}
+
+/// Whether `found` holds an unpaired device on each side: what a device
+/// whose model alone differs leaves, since refinement starts devices of
+/// different models apart.
+fn unpaired_on_both_sides(found: &[Discrepancy]) -> bool {
+    let unpaired = |want: Side| {
+        found
+            .iter()
+            .any(|d| matches!(d, Discrepancy::UnpairedDevice { side, .. } if *side == want))
+    };
+    unpaired(Side::Layout) && unpaired(Side::Reference)
+}
+
+/// The comparison again with every device of one kind starting in one class,
+/// models aside. When that pairs every node and the only differences left
+/// are pairs of different models, those pairs are the report, each a
+/// [`Discrepancy::ModelMismatch`], as `KLayout` reports two devices
+/// "identified but have different device classes" (catalog LVS-013).
+/// Otherwise `None`, and the comparison by model stands. Either way the
+/// verdict is a mismatch.
+fn models_aside(
+    sides: (&Graph, &Graph),
+    budget: (u32, f64),
+    (options, controls, seeds): (CompareOptions, &LvsControls, &[u32]),
+) -> Option<Vec<Discrepancy>> {
+    let mut partition = Partition::default();
+    if !refine_into(
+        sides,
+        budget,
+        (options.params, controls, seeds, true),
+        &mut partition,
+    ) {
+        return None;
+    }
+    match interpret(sides, &partition, (options, controls)) {
+        Verdict::Mismatch(found)
+            if found
+                .iter()
+                .all(|d| matches!(d, Discrepancy::ModelMismatch { .. })) =>
+        {
+            Some(found)
+        }
+        _ => None,
+    }
 }
 
 /// Writes the count every card has, `m = 1`, on each device that states
@@ -254,7 +404,7 @@ const UNPAIRED: u32 = u32::MAX;
 fn interpret(
     (layout, reference): (&Graph, &Graph),
     partition: &Partition,
-    options: CompareOptions,
+    (options, controls): (CompareOptions, &LvsControls),
 ) -> Verdict {
     let layout_devices = narrow(layout.device_count());
     let ref_devices = narrow(reference.device_count());
@@ -299,7 +449,7 @@ fn interpret(
     // A proposed pairing is a candidate until terminals and parameters agree.
     let mut scratch = JoinScratch::default();
     for &(layout_node, ref_node) in pairs.iter().filter(|pair| pair.0 < layout_devices) {
-        compare_identity(layout, reference, (layout_node, ref_node), &mut found);
+        let same_model = compare_identity(layout, reference, (layout_node, ref_node), &mut found);
         compare_terminals(
             layout,
             reference,
@@ -315,13 +465,16 @@ fn interpret(
             (layout_devices, ref_devices),
             &layout_mate,
         );
-        compare_params(
-            (layout, reference),
-            (layout_node, ref_node),
-            (options, crossed),
-            &mut scratch,
-            &mut found,
-        );
+        // Two models' parameters are not one model's to compare.
+        if same_model {
+            compare_params(
+                (layout, reference),
+                (layout_node, ref_node),
+                (options, controls, crossed),
+                &mut scratch,
+                &mut found,
+            );
+        }
     }
 
     report_unpaired(layout, &layout_mate, Side::Layout, &mut found);
@@ -344,17 +497,31 @@ struct JoinScratch {
 }
 
 /// A paired device must also agree on kind and model (a hash agreeing is not a
-/// comparison); if not, both sides are reported unpaired.
+/// comparison). Two of one kind and different models are a
+/// [`Discrepancy::ModelMismatch`], which only a refinement with models aside
+/// pairs; two of different kinds, which no refinement pairs, are both
+/// reported unpaired. Returns whether the models agree, so the parameters
+/// are comparable.
 fn compare_identity(
     layout: &Graph,
     reference: &Graph,
     pair: (u32, u32),
     found: &mut Vec<Discrepancy>,
-) {
+) -> bool {
     let (mine, theirs) = (pair.0 as usize, pair.1 as usize);
     let (layout_model, ref_model) = (layout.device_model[mine], reference.device_model[theirs]);
-    if layout.device_kind[mine] == reference.device_kind[theirs] && layout_model == ref_model {
-        return;
+    let same_kind = layout.device_kind[mine] == reference.device_kind[theirs];
+    if same_kind && layout_model == ref_model {
+        return true;
+    }
+    if same_kind {
+        found.push(Discrepancy::ModelMismatch {
+            layout_device: pair.0,
+            ref_device: pair.1,
+            layout_model,
+            ref_model,
+        });
+        return false;
     }
     found.push(Discrepancy::UnpairedDevice {
         side: Side::Layout,
@@ -366,6 +533,7 @@ fn compare_identity(
         device: pair.1,
         model: ref_model,
     });
+    false
 }
 
 const fn unmatched_terminal(pair: (u32, u32), role: TerminalRole) -> Discrepancy {
@@ -468,20 +636,22 @@ fn crossed(
 }
 
 /// The parameters the reference card states, each joined by name to the
-/// layout's and [agreeing](ParamNames::agree) with it, within the relative
-/// tolerance or, for a count, exactly, the layout's diffusions read the other
-/// way round when the pair is `crossed`. One the layout does
-/// not measure is [`Discrepancy::UndeclaredParam`], never a pass. One only the
-/// layout measures is not compared: presence is per device, and a card that
-/// omits a parameter states nothing about it (testing-plan F68).
+/// layout's within its tolerance (`NaN` fails): the deck's row for the
+/// reference model and that name, or the run's relative one, a count's
+/// exactly ([`ParamNames::tolerance`]). The layout's
+/// diffusions are read the other way round when the pair is `crossed`. One
+/// the layout does not measure is [`Discrepancy::UndeclaredParam`], never a
+/// pass. One only the layout measures is not compared: presence is per
+/// device, and a card that omits a parameter states nothing about it
+/// (testing-plan F68).
 fn compare_params(
     (layout, reference): (&Graph, &Graph),
     pair: (u32, u32),
-    (options, crossed): (CompareOptions, bool),
+    (options, controls, crossed): (CompareOptions, &LvsControls, bool),
     scratch: &mut JoinScratch,
     found: &mut Vec<Discrepancy>,
 ) {
-    let tolerance = options.param_tolerance;
+    let model = reference.device_model[pair.1 as usize];
     let (mine, theirs) = (&mut scratch.layout_params, &mut scratch.ref_params);
     mine.clear();
     mine.extend(
@@ -521,10 +691,13 @@ fn compare_params(
         at_mine += 1;
         at_theirs += 1;
 
-        let agree = options
-            .params
-            .agree(layout_param, (layout_value, ref_value), tolerance);
-        if !agree {
+        let within = bound(
+            controls,
+            options.params.tolerance(ref_param, options.param_tolerance),
+            model,
+            ref_param,
+        );
+        if !within.agree(layout_value, ref_value) {
             found.push(Discrepancy::ParameterMismatch {
                 layout_device: pair.0,
                 ref_device: pair.1,

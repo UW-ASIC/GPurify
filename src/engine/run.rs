@@ -408,6 +408,17 @@ fn run_lvs(
                 devices: &extracted.devices,
             },
             &extracted.ports,
+            (&loaded.strings, &loaded.deck.lvs),
+            violations,
+            runs,
+        );
+        gpurify_check::lvs::check_param_ranges(
+            gpurify_check::Design {
+                store: &loaded.store,
+                nets: &extracted.nets,
+                devices: &extracted.devices,
+            },
+            &loaded.deck.lvs.range,
             &loaded.strings,
             violations,
             runs,
@@ -418,9 +429,10 @@ fn run_lvs(
         // Guessing which subcircuit was meant is the one thing a comparison must never do.
         None => Verdict::Inconclusive(Inconclusive::AmbiguousTop),
         Some(top) => {
-            // The SPICE names of width, length, fingers, multiplier and the
-            // source and drain diffusions, as both netlists intern them, so
-            // sized fingers merge like netgen's.
+            // The SPICE names of width, length, fingers, multiplier, the
+            // source and drain diffusions and the passive values, as both
+            // netlists intern them, so sized fingers merge like netgen's.
+            // `compare_with` reads the deck's topology policy.
             let name = |n: &str| loaded.strings.get(n);
             let lvs = gpurify_check::lvs::CompareOptions {
                 params: gpurify_check::lvs::ParamNames {
@@ -429,13 +441,27 @@ fn run_lvs(
                     fingers: name("nf"),
                     multiplier: name("m"),
                     diffusion: [name("as"), name("ad"), name("ps"), name("pd")],
+                    values: [
+                        name("r"),
+                        name("c"),
+                        name("area"),
+                        name("perim"),
+                        name("ae"),
+                        name("pe"),
+                    ],
+                    relaxed: false,
                 },
                 ..options.lvs
             };
-            let (verdict, merges) = gpurify_check::lvs::compare_logged(
-                &layout,
+            // Must-connect nets are one net to compare, though the layout
+            // keeps the open, which `check_layout` reported.
+            let joined =
+                gpurify_check::lvs::join_must_connect(&layout, &loaded.deck.lvs, &loaded.strings);
+            let (verdict, merges) = gpurify_check::lvs::compare_with(
+                &joined,
                 &gpurify_check::lvs::graph::from_reference(reference, top),
                 lvs,
+                &loaded.deck.lvs,
             );
             out.lvs_merges = merges;
             verdict

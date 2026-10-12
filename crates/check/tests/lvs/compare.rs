@@ -880,3 +880,144 @@ fn two_buffers_sized_apart_match_themselves_reversed() {
     );
     assert_eq!(verdict, Verdict::Match, "{verdict:?}");
 }
+
+/// Oracle: `KLayout`'s `consider_net_names` ("employ net names to resolve
+/// ambiguities"), by hand. One transistor whose source net `a` has a 1 pm²
+/// diffusion and drain net `b` a 2 pm² one, against a card stating 3 pm² at
+/// both ends: either pairing of `a` and `b` puts the diffusions equally far
+/// apart (2 and 1 pm² against 3 pm²), so they tie (testing-plan F98 decides
+/// nothing), and only names tell `a` from `b`. The reference lists `b`
+/// first, so the lowest reference net is `b`: paired by row order, the card's
+/// `as` would be read against the layout's drain, 2 pm². Paired by name it
+/// is read against the source, 1 pm², and the report says so. A card with
+/// the diffusions exchanged at its nets is the same transistor (F98). Breaks
+/// if names do not break the tie.
+#[test]
+fn nets_nothing_else_tells_apart_pair_by_name() {
+    use gpurify_check::lvs::ParamNames;
+    use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Source};
+    let [area_s, area_d, perim_s, perim_d] = [StrId(50), StrId(51), StrId(52), StrId(53)];
+    let [a, b, g, bulk] = [StrId(60), StrId(61), StrId(62), StrId(63)];
+    let options = CompareOptions {
+        params: ParamNames {
+            diffusion: [Some(area_s), Some(area_d), Some(perim_s), Some(perim_d)],
+            ..ParamNames::default()
+        },
+        ..decisive()
+    };
+    // `names[k]` names net `k`; the transistor's source is on `a`.
+    let mos = |names: [StrId; 4], diffusions: [f64; 2]| {
+        let at = |name: StrId| {
+            let net = names.iter().position(|&n| n == name).expect("named");
+            u32::try_from(net).expect("four nets")
+        };
+        let mut builder = GraphBuilder::new(4);
+        for (net, &name) in (0u32..).zip(&names) {
+            builder.name_net(net, name);
+        }
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[
+                (Gate, at(g)),
+                (Source, at(a)),
+                (Drain, at(b)),
+                (Bulk, at(bulk)),
+            ],
+            &[(area_s, diffusions[0]), (area_d, diffusions[1])],
+        );
+        builder.finish()
+    };
+    let layout = mos([a, b, g, bulk], [1e-12, 2e-12]);
+    let reference = mos([b, a, g, bulk], [1e-12, 2e-12]);
+    assert_eq!(compare(&layout, &reference, options), Verdict::Match);
+    let exchanged = mos([b, a, g, bulk], [2e-12, 1e-12]);
+    assert_eq!(compare(&layout, &exchanged, options), Verdict::Match);
+    let level = mos([b, a, g, bulk], [3e-12, 3e-12]);
+    let verdict = compare(&layout, &level, options);
+    let source = discrepancies(&verdict).iter().find_map(|d| match *d {
+        Discrepancy::ParameterMismatch {
+            param,
+            layout_value,
+            ..
+        } if param == area_s => Some(layout_value),
+        _ => None,
+    });
+    assert_eq!(source, Some(1e-12), "{verdict:?}");
+}
+
+/// Two transistors in a chain, the second gated by the first's drain:
+/// gate 0, source 1, drain 2; then gate 2, source 3, drain 4; one bulk on
+/// net 3. Rigid: no two nets or devices trade places. The second is of
+/// model `second`, and `extra` adds a third, gate 0, source 1, drain 4.
+fn chain_of_two(second: StrId, extra: bool) -> Graph {
+    use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Source};
+    let mut builder = GraphBuilder::new(5);
+    builder.device(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+    );
+    builder.device(
+        DeviceKind::Mos,
+        second,
+        &[(Gate, 2), (Source, 3), (Drain, 4), (Bulk, 3)],
+    );
+    if extra {
+        builder.device(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, 1), (Drain, 4), (Bulk, 3)],
+        );
+    }
+    builder.finish()
+}
+
+/// Oracle: construct-from-answer, and `KLayout`'s report of "two devices
+/// that are identified but have different device classes". The reference
+/// writes the second transistor `PCH`, the layout draws it `NCH`, and
+/// nothing else differs, so the report is that one pair with its two
+/// models, and nothing else; both ways round it is the mirror image. With a
+/// device added as well, the models are not all that differs, and the
+/// comparison by model stands: unpaired devices, no model mismatch. Breaks
+/// if a model swap is reported as unpaired devices, or a model mismatch is
+/// claimed where the wiring differs too.
+#[test]
+fn a_device_whose_model_alone_differs_is_one_model_mismatch() {
+    const PCH: StrId = common::PCH;
+    let verdict = compare(
+        &chain_of_two(NCH, false),
+        &chain_of_two(PCH, false),
+        decisive(),
+    );
+    let expected = [Discrepancy::ModelMismatch {
+        layout_device: 1,
+        ref_device: 1,
+        layout_model: NCH,
+        ref_model: PCH,
+    }];
+    assert_same_discrepancies(discrepancies(&verdict), &expected);
+    let backward = compare(
+        &chain_of_two(PCH, false),
+        &chain_of_two(NCH, false),
+        decisive(),
+    );
+    let flipped: Vec<Discrepancy> = expected.iter().map(flip).collect();
+    assert_same_discrepancies(discrepancies(&backward), &flipped);
+
+    let found = compare(
+        &chain_of_two(NCH, false),
+        &chain_of_two(PCH, true),
+        decisive(),
+    );
+    let found = discrepancies(&found);
+    assert!(
+        !found
+            .iter()
+            .any(|d| matches!(d, Discrepancy::ModelMismatch { .. })),
+        "a model mismatch claimed where the wiring differs too: {found:?}"
+    );
+    assert!(found
+        .iter()
+        .any(|d| matches!(d, Discrepancy::UnpairedDevice { .. })));
+}

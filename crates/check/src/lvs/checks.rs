@@ -2,30 +2,40 @@
 //! netlist, and the mapping of a comparison's discrepancies to violations.
 //!
 //! Data in: the extracted tables and the unreduced layout graph. Data out: five
-//! run rows and their violations.
+//! run rows and their violations, and a sixth when the deck states device
+//! parameter ranges.
 
 use crate::erc::first_vertex;
-use crate::lvs::graph::{narrow, Graph};
+use crate::lvs::controls::must_connect;
+use crate::lvs::graph::{narrow, spice_param_name, Graph};
 use crate::lvs::verdict::Discrepancy;
 use crate::report::{record_run, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
-use crate::topology::{NetId, NetTable, PortTable};
+use crate::topology::device::{DeviceMeasure, DeviceParam};
+use crate::topology::{DeviceId, NetId, NetTable, PortTable};
 use crate::Design;
 use gpurify_geom::ops::Point;
 use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
+use gpurify_ingest::deck::{LvsControls, LvsLimit, LvsRange};
 use gpurify_ingest::{StrId, StrTable};
 
 /// Every rule id LVS reports under, in interning order: one per [`Discrepancy`]
-/// variant, then the five check rows. Each is a row of the check catalog
-/// (`docs/check-catalog.tsv`), which a test keeps in step with this list.
+/// variant but the last, then the five check rows, then the parameter-range
+/// row, then the last variant's and the short-path row, each added after the
+/// rows it follows. Each is a
+/// row of the check catalog (`docs/check-catalog.tsv`), which a test keeps in
+/// step with this list.
 ///
-/// The first six are defined on the [`Discrepancy`] variant that raises them
-/// (`lvs.unpaired_device` is [`Discrepancy::UnpairedDevice`], and so on), the
-/// other five under [`check_layout`]. The crate's
+/// The first six and the last are defined on the [`Discrepancy`] variant that
+/// raises them (`lvs.unpaired_device` is [`Discrepancy::UnpairedDevice`],
+/// `lvs.model_mismatch` [`Discrepancy::ModelMismatch`], and so on), the five
+/// after the first six under [`check_layout`], and `lvs.param_range` under
+/// [`check_param_ranges`], and `lvs.short_path` with `lvs.net_seed_conflict`
+/// ([`check_net_seed_conflicts`]). The crate's
 /// [rule reference](crate#layout-against-schematic) maps each to its
 /// [catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv)
 /// rows.
-pub const RULE_IDS: [&str; 11] = [
+pub const RULE_IDS: [&str; 14] = [
     "lvs.unpaired_device",
     "lvs.unpaired_net",
     "lvs.terminal_mismatch",
@@ -37,6 +47,9 @@ pub const RULE_IDS: [&str; 11] = [
     "lvs.net_seed_conflict",
     "lvs.terminal_net",
     "lvs.terminal_count",
+    "lvs.param_range",
+    "lvs.model_mismatch",
+    "lvs.short_path",
 ];
 
 /// Intern every LVS rule id; the report looks them up in a table it only borrows.
@@ -68,8 +81,9 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 /// Run the layout-only checks on the unreduced layout graph.
 ///
 /// `layout` must be [`from_layout`](crate::lvs::graph::from_layout) of the
-/// same `design` and `ports`. Records exactly five [`RuleRun`]s, in the order
-/// below, and appends their violations to `out`. Every violation is an error.
+/// same `design` and `ports`. Records five [`RuleRun`]s, in the order below,
+/// and a sixth, `lvs.short_path`, right after `lvs.net_seed_conflict` when a
+/// net carries two names, and appends their violations to `out`. Every violation is an error.
 /// A row on a shape is located at the shape's first vertex, on its layer;
 /// a row on none (a hand-built graph's structural fault) has no layer and no
 /// location (both are sentinels), and its shape is `PolyId(u32::MAX)`.
@@ -87,16 +101,19 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 ///   `n - 1` rows. Shapes: the lowest polygon carrying the label on each of
 ///   the two nets, so the two labels are found from the row; the location is
 ///   the first vertex of the first, on its layer. Measured 2 against a limit
-///   of 1. Examines every net. Catalog: LVS-001, LVS-002 (`KLayout`'s
-///   `connect_implicit` would join them instead).
+///   of 1. Examines every net. A label `controls` makes must-connect (`lvs
+///   connect_implicit`, `lvs connect_explicit`) is a warning, as `KLayout`
+///   raises one for top cells, "for which it is assumed that this
+///   connection is made later". Catalog: LVS-001, LVS-002.
 /// - `lvs.net_seed_conflict`: several label texts on one net, a short between
 ///   named nets. One row per pair of consecutive names on the net in
 ///   [`StrId`] order, so `n` names give `n - 1` rows. Shapes: the lowest
 ///   polygon carrying each of the two names, so the two labels are found
 ///   from the row; the location is the first vertex of the first, on its
-///   layer. No path between the two labels is traced (catalog LVS-005).
-///   Measured 2 against a limit of 1. Examines every binding of a name to a
-///   net. Catalog: LVS-001.
+///   layer. Measured 2 against a limit of 1. Examines every binding of a
+///   name to a net. Catalog: LVS-001, LVS-005. Where it finds one, the
+///   short's path follows as `lvs.short_path`
+///   ([`check_net_seed_conflicts`]).
 /// - `lvs.terminal_net`: a device marker no recogniser could bind
 ///   ([`DeviceTable::refused`]): a terminal position with no shape of its
 ///   own under it (a terminal missing, or drawn twice with its twin
@@ -117,10 +134,9 @@ const NO_SHAPE: PolyId = PolyId(u32::MAX);
 ///
 /// # Limits
 ///
-/// - Per-model device counts and parameter ranges are not checked: the deck
-///   has no syntax for their limits (catalog LVS-068). No row is recorded for
-///   them, because no deck configures them; a row that could only ever be
-///   `Skipped` would fail every run that selects LVS.
+/// - Parameter ranges are [`check_param_ranges`]'s, a row recorded only when
+///   the deck states one. Per-model device counts are not checked (catalog
+///   LVS-068).
 ///
 /// # Panics
 ///
@@ -132,13 +148,20 @@ pub fn check_layout(
     layout: &Graph,
     design: Design<'_>,
     ports: &PortTable,
-    strings: &StrTable,
+    (strings, controls): (&StrTable, &LvsControls),
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
     let id = |name| rule_id(strings, name);
     check_floating_nets(design, ports, id("lvs.floating_net"), out, runs);
-    check_label_conflicts(design, ports, id("lvs.label_conflict"), out, runs);
+    let joined = |name| must_connect(name, strings, controls);
+    check_label_conflicts(
+        design,
+        ports,
+        (id("lvs.label_conflict"), &joined),
+        out,
+        runs,
+    );
     check_net_seed_conflicts(design, ports, strings, out, runs);
     check_topology(
         layout,
@@ -148,6 +171,154 @@ pub fn check_layout(
         runs,
     );
 }
+
+/// The `lvs.param_range` row: every layout device of a model an `lvs range`
+/// row names, its measured parameter held to the row's bounds (catalog
+/// LVS-068), as a foundry states a device's legal size (GF App. A's
+/// parameter ranges, IHP's per-device rules, Magic's device parameter
+/// limits). A value at a bound is legal. Records nothing when `ranges` is
+/// empty, since then no deck asked; otherwise one [`RuleRun`] that examined
+/// one device per row naming its model.
+///
+/// Each violation is an error on the device's marker, located at its first
+/// vertex on its layer, measured against the bound it breaks: a length or an
+/// area exactly, a count as a count, and a diffusion a transistor shares
+/// with others (its share, a fraction of a database unit) as a ratio of
+/// database units. A device of a ranged model on which the parameter was not
+/// measured (a source drawn in pieces, say) cannot be held to the bound, and
+/// the run is then [`Outcome::Refused`], its other rows kept.
+///
+/// # Panics
+///
+/// Panics if a device's marker is past `design.store`.
+pub fn check_param_ranges(
+    design: Design<'_>,
+    ranges: &[LvsRange],
+    strings: &StrTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if ranges.is_empty() {
+        return;
+    }
+    let rule = rule_id(strings, "lvs.param_range");
+    let before = out.len();
+    let devices = design.devices;
+    let (mut examined, mut unmeasured) = (0u64, false);
+    for device in 0..devices.len() {
+        for range in ranges
+            .iter()
+            .filter(|row| row.model == devices.model[device])
+        {
+            examined += 1;
+            let measure = measured_param(strings, range.param).and_then(|param| {
+                devices
+                    .params_of(DeviceId(narrow(device)))
+                    .iter()
+                    .find(|&&(stated, _)| stated == param)
+                    .map(|&(_, measure)| measure)
+            });
+            let Some(measure) = measure else {
+                unmeasured = true;
+                continue;
+            };
+            for (bound, least) in [(range.min, true), (range.max, false)] {
+                let Some(bound) = bound else { continue };
+                match out_of_bounds(measure, bound, least) {
+                    Ok(Some((measured, limit))) => {
+                        let row = Violation {
+                            measured,
+                            limit,
+                            ..graph_violation(rule, (devices.marker[device], None), 0, 0)
+                        };
+                        out.push(on_first_shape(design.store, row));
+                    }
+                    Ok(None) => {}
+                    Err(Incomparable) => unmeasured = true,
+                }
+            }
+        }
+    }
+    let outcome = if unmeasured {
+        Outcome::Refused
+    } else {
+        Outcome::Ran
+    };
+    record_run(runs, out, before, rule, outcome, examined);
+}
+
+/// The measured parameter an `lvs range` row's name stands for.
+fn measured_param(strings: &StrTable, name: StrId) -> Option<DeviceParam> {
+    const MEASURED: [DeviceParam; 11] = [
+        DeviceParam::Width,
+        DeviceParam::Length,
+        DeviceParam::Area,
+        DeviceParam::Perimeter,
+        DeviceParam::Fingers,
+        DeviceParam::SourceArea,
+        DeviceParam::DrainArea,
+        DeviceParam::SourcePerimeter,
+        DeviceParam::DrainPerimeter,
+        DeviceParam::EmitterArea,
+        DeviceParam::EmitterPerimeter,
+    ];
+    let name = strings.resolve(name);
+    MEASURED
+        .into_iter()
+        .find(|&param| spice_param_name(param) == name)
+}
+
+/// Whether `measure` breaks `bound`, the least legal value when `least`, the
+/// greatest otherwise: `Ok(Some((measured, limit)))` as the row reports
+/// them when it does, `Ok(None)` when it does not, and `Err(Incomparable)`
+/// when the two are of different kinds. A share of `ways` is compared
+/// exactly, its bound scaled by `ways`.
+fn out_of_bounds(
+    measure: DeviceMeasure,
+    bound: LvsLimit,
+    least: bool,
+) -> Result<Option<(Measurement, Measurement)>, Incomparable> {
+    let breaks = |value: i128, limit: i128| if least { value < limit } else { value > limit };
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a shared diffusion is reported, not compared, as a ratio"
+    )]
+    let report = match (measure, bound) {
+        (DeviceMeasure::Length(value), LvsLimit::Length(limit)) => {
+            breaks(i128::from(value.raw()), i128::from(limit.raw()))
+                .then_some((Measurement::Length(value), Measurement::Length(limit)))
+        }
+        (DeviceMeasure::Area(value), LvsLimit::Area(limit)) => breaks(value.raw(), limit.raw())
+            .then_some((Measurement::Area(value), Measurement::Area(limit))),
+        (DeviceMeasure::Count(value), LvsLimit::Count(limit)) => {
+            breaks(i128::from(value), i128::from(limit))
+                .then_some((Measurement::Count(value), Measurement::Count(limit)))
+        }
+        (DeviceMeasure::LengthShare(value, ways), LvsLimit::Length(limit)) => breaks(
+            i128::from(value.raw()),
+            i128::from(limit.raw()) * i128::from(ways),
+        )
+        .then(|| {
+            (
+                Measurement::Ratio(value.raw() as f64 / f64::from(ways)),
+                Measurement::Ratio(limit.raw() as f64),
+            )
+        }),
+        (DeviceMeasure::AreaShare(value, ways), LvsLimit::Area(limit)) => {
+            breaks(value.raw(), limit.raw() * i128::from(ways)).then(|| {
+                (
+                    Measurement::Ratio(value.raw() as f64 / f64::from(ways)),
+                    Measurement::Ratio(limit.raw() as f64),
+                )
+            })
+        }
+        _ => return Err(Incomparable),
+    };
+    Ok(report)
+}
+
+/// A measure and a bound of different kinds, a length against an area.
+struct Incomparable;
 
 /// One error row per discrepancy, which is how a mismatch fails the run.
 ///
@@ -165,6 +336,7 @@ pub fn record_discrepancies(found: &[Discrepancy], strings: &StrTable, out: &mut
             Discrepancy::TerminalMismatch { .. } => ("lvs.terminal_mismatch", 1, 0),
             Discrepancy::ParameterMismatch { .. } => ("lvs.parameter_mismatch", 1, 0),
             Discrepancy::UndeclaredParam { .. } => ("lvs.undeclared_param", 1, 0),
+            Discrepancy::ModelMismatch { .. } => ("lvs.model_mismatch", 1, 0),
             Discrepancy::ClassImbalance {
                 layout_nodes,
                 ref_nodes,
@@ -270,7 +442,7 @@ fn check_floating_nets(
 fn check_label_conflicts(
     design: Design<'_>,
     ports: &PortTable,
-    rule: StrId,
+    (rule, must_connect): (StrId, &dyn Fn(StrId) -> bool),
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
@@ -285,7 +457,10 @@ fn check_label_conflicts(
                 labelled(ports, named[at - 1], names[at]),
                 Some(labelled(ports, named[at], names[at])),
             );
-            let row = graph_violation(rule, shapes, 2, 1);
+            let mut row = graph_violation(rule, shapes, 2, 1);
+            if must_connect(names[at]) {
+                row.severity = Severity::Warning;
+            }
             out.push(on_first_shape(design.store, row));
         }
     }
@@ -294,7 +469,17 @@ fn check_label_conflicts(
 
 /// The `lvs.net_seed_conflict` row of [`check_layout`] alone: one
 /// [`RuleRun`], and a violation per pair of names on one net, as described
-/// there.
+/// there. Where it finds any, an `lvs.short_path` row follows: for each such
+/// pair, the fewest polygons joining the two labelled shapes
+/// ([`NetTable::path`](crate::topology::NetTable::path)), one error per step
+/// between consecutive polygons of the path, its two shapes those polygons,
+/// located at the first's first vertex on its layer, measured the step's
+/// number against the path's step count; two labels on one polygon are one
+/// row on it, measured 1 against 1. This is where the short runs, as
+/// Calibre's `LVS ISOLATE SHORTS` and ICV's `ShortFinder` trace it (catalog
+/// LVS-005). The row examines one pair per conflict, and is refused when a
+/// pair's path cannot be traced. No row is recorded when no net carries two
+/// names, so a run without a short reports nothing more.
 ///
 /// For a run that reports labelled shorts without LVS's other layout rows:
 /// the `gpurify` engine calls it when [`check_layout`] does not run and a
@@ -313,13 +498,37 @@ pub fn check_net_seed_conflicts(
     let rule = rule_id(strings, "lvs.net_seed_conflict");
     let before = out.len();
     let (nets, _, polys) = ports.bindings();
+    let mut shorts = Vec::new();
     for at in 1..nets.len() {
         if nets[at] == nets[at - 1] {
             let row = graph_violation(rule, (polys[at - 1], Some(polys[at])), 2, 1);
             out.push(on_first_shape(design.store, row));
+            shorts.push((polys[at - 1], polys[at]));
         }
     }
     record_run(runs, out, before, rule, Outcome::Ran, ports.len() as u64);
+    if shorts.is_empty() {
+        return;
+    }
+    let rule = rule_id(strings, "lvs.short_path");
+    let before = out.len();
+    let mut outcome = Outcome::Ran;
+    for &(from, to) in &shorts {
+        let Some(path) = design.nets.path(from, to) else {
+            outcome = Outcome::Refused;
+            continue;
+        };
+        let steps = narrow(path.len() - 1);
+        if steps == 0 {
+            let row = graph_violation(rule, (from, None), 1, 1);
+            out.push(on_first_shape(design.store, row));
+        }
+        for (step, pair) in (1u32..).zip(path.windows(2)) {
+            let row = graph_violation(rule, (pair[0], Some(pair[1])), step, steps);
+            out.push(on_first_shape(design.store, row));
+        }
+    }
+    record_run(runs, out, before, rule, outcome, shorts.len() as u64);
 }
 
 /// Structural sanity of the extracted graph: a terminal on no net, a device with

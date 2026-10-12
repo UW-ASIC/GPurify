@@ -53,6 +53,7 @@ pub(crate) fn assert_same(
     assert_eq!(want.devices, have.devices, "{what}: devices");
     assert_eq!(want.pex, have.pex, "{what}: pex rows");
     assert_eq!(want.ignored, have.ignored, "{what}: ignored pairs");
+    assert_eq!(want.lvs, have.lvs, "{what}: lvs statements");
     assert!(
         expected == got,
         "{what}: the compiled decks differ beyond their names"

@@ -11,7 +11,7 @@ use super::{
     ring_segs, seg_bbox, LayerRects, SortedRects, Verdict, REFUSED,
 };
 use crate::drc::rules::width::wide_rects_into;
-use crate::drc::ruleset::{is_end_of_line, prl_holds, SpacingTable};
+use crate::drc::ruleset::{is_end_of_line, prl_holds, ClassTable, SpacingTable};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use crate::topology::{NetId, NetTable};
@@ -40,7 +40,7 @@ use std::cmp::Ordering;
 /// corner, which can put it off the gap); it does not depend on the order of
 /// the rings and maps with the layout under every symmetry of the square.
 /// `None` when `pairs` is empty.
-fn nearest(pairs: impl Iterator<Item = (Seg, Seg)>) -> Option<(DbuArea, Point)> {
+pub(super) fn nearest(pairs: impl Iterator<Item = (Seg, Seg)>) -> Option<(DbuArea, Point)> {
     let mut best: Option<DbuArea> = None;
     // Each nearest pair's stretch, doubled: `(vertical, across, lo, hi)`, the
     // line's doubled middle across it and its extent along it. A pair that
@@ -178,7 +178,7 @@ fn wide_at(
     marker(store, (a, b), d2, found)
 }
 
-fn spacing_violation(
+pub(super) fn spacing_violation(
     rule: StrId,
     layer: LayerId,
     (a, b): (PolyId, PolyId),
@@ -369,9 +369,9 @@ pub(crate) fn eol_spacing(
 /// An axis-parallel edge on its line: whether it is vertical, its fixed
 /// coordinate, whether it travels toward higher coordinates, and its span
 /// `lo < hi`.
-type Line = (bool, i64, bool, i64, i64);
+pub(super) type Line = (bool, i64, bool, i64, i64);
 
-fn line_of(edge: Seg) -> Line {
+pub(super) fn line_of(edge: Seg) -> Line {
     let vertical = edge.a.x == edge.b.x;
     let (pos, from, to) = if vertical {
         (edge.a.x.raw(), edge.a.y.raw(), edge.b.y.raw())
@@ -443,7 +443,7 @@ fn eol_hits(
 }
 
 /// The segment from `from` to `to` along the line `pos`.
-fn on_line(vertical: bool, pos: i64, from: i64, to: i64) -> Seg {
+pub(super) fn on_line(vertical: bool, pos: i64, from: i64, to: i64) -> Seg {
     let point = |along: i64| {
         let (x, y) = if vertical { (pos, along) } else { (along, pos) };
         Point {
@@ -730,6 +730,176 @@ pub(crate) fn spacing_table(
         });
         if let Some((found, need)) = failed {
             out.push(spacing_violation(rule, layer, (a, b), found, need));
+        }
+    }
+    (Outcome::Ran, examined)
+}
+
+/// What a two-width cell measures of a shape: `None` the whole shape (the
+/// first width), `Some` its part wider than the cell's width.
+type Part<'a> = Option<&'a [Bbox]>;
+
+/// Polygon `poly`'s part for width class `class` of a two-width table, from
+/// `parts` (per class above the first, the parts wider than its width, CSR):
+/// `Some(None)` for the first class, `Some(Some(rects))` for a part, `None`
+/// when the polygon has no part that wide.
+fn class_part(parts: &[(Vec<Bbox>, Vec<u32>)], class: usize, poly: usize) -> Option<Part<'_>> {
+    if class == 0 {
+        return Some(None);
+    }
+    let (rects, start) = &parts[class - 1];
+    let mine = &rects[start[poly] as usize..start[poly + 1] as usize];
+    (!mine.is_empty()).then_some(Some(mine))
+}
+
+/// A rectangle's four sides.
+fn rect_sides(r: Bbox) -> [Seg; 4] {
+    let corner = |x, y| Point { x, y };
+    let c = [
+        corner(r.xlo, r.ylo),
+        corner(r.xhi, r.ylo),
+        corner(r.xhi, r.yhi),
+        corner(r.xlo, r.yhi),
+    ];
+    [0, 1, 2, 3].map(|i| Seg {
+        a: c[i],
+        b: c[(i + 1) % 4],
+    })
+}
+
+/// Every side of each of `ra` paired with every side of each of `rb`.
+fn rect_rect_pairs<'a>(ra: &'a [Bbox], rb: &'a [Bbox]) -> impl Iterator<Item = (Seg, Seg)> + 'a {
+    ra.iter().flat_map(move |&p| {
+        rb.iter().flat_map(move |&q| {
+            let theirs = rect_sides(q);
+            rect_sides(p)
+                .into_iter()
+                .flat_map(move |side| theirs.into_iter().map(move |other| (side, other)))
+        })
+    })
+}
+
+/// The distance, squared, between parts `pa` of `a` and `pb` of `b`, and
+/// where it is marked; `whole` is the two rows' own distance.
+fn parts_gap(
+    store: &GeometryStore,
+    (a, b): (PolyId, PolyId),
+    (pa, pb): (Part<'_>, Part<'_>),
+    whole: DbuArea,
+) -> DbuArea {
+    match (pa, pb) {
+        (None, None) => whole,
+        (Some(ra), None) => {
+            let (xs, ys) = store.poly_verts(b);
+            DbuArea::new(rects_ring_dist2(ra, xs, ys))
+        }
+        (None, Some(rb)) => {
+            let (xs, ys) = store.poly_verts(a);
+            DbuArea::new(rects_ring_dist2(rb, xs, ys))
+        }
+        (Some(ra), Some(rb)) => {
+            nearest(rect_rect_pairs(ra, rb)).map_or(DbuArea::new(i128::MAX), |(d2, _)| d2)
+        }
+    }
+}
+
+/// Where a pair measured `d2` apart between parts `pa` of `a` and `pb` of
+/// `b` is marked: the midpoint of the nearest points of those parts.
+fn parts_at(
+    store: &GeometryStore,
+    (a, b): (PolyId, PolyId),
+    (pa, pb): (Part<'_>, Part<'_>),
+    d2: DbuArea,
+) -> Point {
+    let found = match (pa, pb) {
+        (None, None) => return whole_at(store, (a, b), d2),
+        (Some(ra), None) => nearest(rect_ring_pairs(ra, store.poly_verts(b))),
+        (None, Some(rb)) => nearest(rect_ring_pairs(rb, store.poly_verts(a))),
+        (Some(ra), Some(rb)) => nearest(rect_rect_pairs(ra, rb)),
+    };
+    marker(store, (a, b), d2, found)
+}
+
+/// Spacing by a two-width table (LEF `SPACINGTABLE TWOWIDTHS`): each
+/// separate pair is held, for every row `r` whose width one shape has a part
+/// wider than and every column `c` whose width the other has, where the
+/// figures' run within that cell exceeds both widths' runs (those stated),
+/// to that cell, measured between the two parts (a whole shape for the first
+/// width). A pair reports once, at its highest failing cell. `examined`
+/// counts separate pairs.
+pub(crate) fn two_width_table(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    table: &ClassTable,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let widest = *table.space.iter().max().expect("a valid table has a cell");
+    if !prepare_merged(store, layer, widest, s) {
+        return REFUSED;
+    }
+    let drawn = s
+        .validated
+        .get(store, layer)
+        .expect("`prepare` validated it");
+    s.rects_a.build(store, layer, drawn);
+    let first_row = store.polys_on_layer(layer).start;
+    // Per width above the first: each polygon's parts wider than it.
+    let mut parts = Vec::with_capacity(table.class.len() - 1);
+    let mut wide = Vec::new();
+    for &width in &table.class[1..] {
+        if wide_rects_into(drawn, width + Dbu::new_unchecked(1), &mut wide).is_err() {
+            return REFUSED;
+        }
+        parts.push(wide_parts(
+            &s.rects_a,
+            &s.labels,
+            first_row,
+            &wide,
+            Dbu::new_unchecked(0),
+        ));
+    }
+    let runs = facing_runs(store, layer, widest, s);
+    let polys = &s.rects_a;
+    let poly_of = |row: PolyId| polys.poly_of_row[(row.0 - first_row) as usize] as usize;
+    let label = |row: PolyId| s.labels[(row.0 - first_row) as usize];
+    let n = table.class.len();
+
+    let mut examined = 0u64;
+    for (&(a, b), &whole) in s.pairs.iter().zip(&s.dists) {
+        if label(a) == label(b) || poly_of(a) == poly_of(b) {
+            continue;
+        }
+        examined += 1;
+        // The failing cell needing the most space, the nearest of those.
+        let mut worst: Option<(Dbu, DbuArea, Part<'_>, Part<'_>)> = None;
+        for r in 0..n {
+            let Some(pa) = class_part(&parts, r, poly_of(a)) else {
+                continue;
+            };
+            for c in 0..n {
+                let Some(pb) = class_part(&parts, c, poly_of(b)) else {
+                    continue;
+                };
+                let need = table.at(r, c);
+                let run = run_within(&runs, label(a), label(b), need);
+                let runs_past = |class: usize| table.prl[class].is_none_or(|prl| run > prl.raw());
+                if !(runs_past(r) && runs_past(c)) {
+                    continue;
+                }
+                let d2 = parts_gap(store, (a, b), (pa, pb), whole);
+                let worse = worst.is_none_or(|(most, closest, ..)| {
+                    need > most || (need == most && d2 < closest)
+                });
+                if d2 < need.mul_wide(need) && worse {
+                    worst = Some((need, d2, pa, pb));
+                }
+            }
+        }
+        if let Some((need, d2, pa, pb)) = worst {
+            let at = parts_at(store, (a, b), (pa, pb), d2);
+            out.push(spacing_violation(rule, layer, (a, b), (d2, at), need));
         }
     }
     (Outcome::Ran, examined)

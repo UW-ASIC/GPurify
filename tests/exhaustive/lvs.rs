@@ -682,22 +682,41 @@ fn crossed(a: &Reduced, b: &Reduced, map: impl Fn(usize) -> usize) -> bool {
     a.model.is_mos() && a.pins[1] != a.pins[2] && map(a.pins[2]) == b.pins[1]
 }
 
-/// Whether two devices of `model` land on the same nets role for role: a
-/// MOS's source and drain either way round, a resistor's ends either way,
-/// everything else in order; MOS gates and bulks are fixed. `a`'s nets are
-/// read through `map`.
-fn same_pins(model: Model, a: &[usize], b: &[usize], map: impl Fn(usize) -> usize) -> bool {
-    let a = |k: usize| map(a[k]);
-    let fixed = |from: usize| (from..b.len()).all(|k| a(k) == b[k]);
+/// The names deck.md gives `lvs permute` a pin of `model`, in [`Dev::pins`]
+/// order.
+fn pin_names(model: Model) -> &'static [&'static str] {
     match model {
-        Model::N | Model::P | Model::H | Model::B => {
-            a(0) == b[0]
-                && fixed(3)
-                && ((a(1) == b[1] && a(2) == b[2]) || (a(1) == b[2] && a(2) == b[1]))
-        }
-        Model::R => (a(0) == b[0] && a(1) == b[1]) || (a(0) == b[1] && a(1) == b[0]),
-        Model::C | Model::D | Model::Q => fixed(0),
+        Model::N | Model::P | Model::H | Model::B => &["gate", "source", "drain", "bulk"],
+        Model::R => &["end_a", "end_b"],
+        Model::C => &["top", "bottom"],
+        Model::D => &["anode", "cathode"],
+        Model::Q => &["base", "emitter", "collector"],
     }
+}
+
+/// Whether two devices of `model` land on the same nets role for role, up
+/// to exchanging the pins of one [`Controls::classes`] class: by default a
+/// MOS's source and drain either way round and a resistor's ends either way,
+/// everything else in order. `a`'s nets are read through `map`.
+fn same_pins(
+    model: Model,
+    (a, b): (&[usize], &[usize]),
+    map: impl Fn(usize) -> usize,
+    controls: &Controls,
+) -> bool {
+    a.len() == b.len()
+        && controls.classes(model).iter().all(|class| {
+            let on = |pins: &[usize], read: &dyn Fn(usize) -> usize| {
+                let mut nets: Vec<usize> = class
+                    .iter()
+                    .filter(|&&k| k < pins.len())
+                    .map(|&k| read(pins[k]))
+                    .collect();
+                nets.sort_unstable();
+                nets
+            };
+            on(a, &map) == on(b, &|n| n)
+        })
 }
 
 /// The parameter names a reference's cards state, per model: what the
@@ -746,8 +765,10 @@ impl Declared {
 ///   `L` summed; the net is consumed.
 ///
 /// A net no terminal lands on survives only as a port: a floating shape is
-/// not a node, and SPICE cannot even write one.
-fn reduce(c: &Circuit, declared: &Declared, drawn: bool) -> Reduction {
+/// not a node, and SPICE cannot even write one. Under `controls`, the pins a
+/// parallel merge may exchange are [`Controls::classes`], and an asymmetric
+/// transistor never merges in series.
+fn reduce(c: &Circuit, declared: &Declared, drawn: bool, controls: &Controls) -> Reduction {
     #[allow(clippy::cast_precision_loss, reason = "nanometre sizes are small")]
     let mut devs: Vec<Reduced> = c
         .devs
@@ -786,6 +807,33 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool) -> Reduction {
                 }
                 None => (None, m),
             };
+            // Relaxed, a resistor's or capacitor's value is what the layout
+            // measures where a card declares it, or what the card writes, and
+            // `m` folds into it: `r/m`, `m c`.
+            let (value, mult) = match controls.value_law(d.model) {
+                Some((name, harmonic)) => {
+                    let value = if drawn {
+                        declared
+                            .has(d.model, name)
+                            .then(|| measured(d.model, name))
+                            .flatten()
+                    } else {
+                        d.value
+                    };
+                    let folded = |v: f64| {
+                        if harmonic {
+                            v / f64::from(mult)
+                        } else {
+                            v * f64::from(mult)
+                        }
+                    };
+                    match value {
+                        Some(v) => (Some(folded(v)), 1),
+                        None => (None, mult),
+                    }
+                }
+                None => (d.value, mult),
+            };
             Reduced {
                 model: d.model,
                 pins: d.pins.clone(),
@@ -793,7 +841,7 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool) -> Reduction {
                 l,
                 mult,
                 area: d.area,
-                value: d.value,
+                value,
                 params,
                 sd,
             }
@@ -813,18 +861,35 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool) -> Reduction {
                     Some(_) => presence(a) == presence(b) && (stated == 0 || stated == 4),
                     None => a.sd == b.sd,
                 };
+                // Relaxed, two values of one law combine instead of agreeing.
+                let law = controls
+                    .value_law(a.model)
+                    .filter(|_| a.value.is_some() && b.value.is_some());
                 #[allow(clippy::float_cmp, reason = "equal means drawn or written the same")]
                 let params = a.l == b.l
                     && a.w.is_some() == b.w.is_some()
                     && diffusions
                     && a.area == b.area
-                    && a.value == b.value
+                    && (a.value == b.value || law.is_some())
                     && a.params == b.params;
-                if a.model == b.model && params && same_pins(a.model, &a.pins, &b.pins, |n| n) {
+                if a.model == b.model
+                    && params
+                    && same_pins(a.model, (&a.pins, &b.pins), |n| n, controls)
+                {
                     let across = usize::from(crossed(a, b, |n| n));
                     let b = devs.remove(j);
                     let a = &mut devs[i];
                     match (&mut a.w, b.w) {
+                        _ if law.is_some() => {
+                            let harmonic = law.is_some_and(|(_, harmonic)| harmonic);
+                            a.value = a.value.zip(b.value).map(|(x, y)| {
+                                if harmonic {
+                                    1.0 / (1.0 / x + 1.0 / y)
+                                } else {
+                                    x + y
+                                }
+                            });
+                        }
                         (Some(w), Some(more)) => {
                             *w += more;
                             for k in 0..4 {
@@ -849,6 +914,7 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool) -> Reduction {
                 #[allow(clippy::float_cmp, reason = "equal means drawn or written the same")]
                 let mergeable = i != j
                     && a.model.is_mos()
+                    && controls.series(a.model)
                     && a.model == b.model
                     && a.pins[0] == b.pins[0]
                     && a.pins[3..] == b.pins[3..]
@@ -889,16 +955,21 @@ fn reduce(c: &Circuit, declared: &Declared, drawn: bool) -> Reduction {
         live,
         nets: c.nets(),
         models,
+        names: c.names.clone(),
+        ports: c.ports.clone(),
     }
 }
 
 /// A circuit reduced: its devices, the nets that survive, how many nets it
-/// had, and its devices' models sorted, the cheapest test there is.
+/// had, and its devices' models sorted, the cheapest test there is; and its
+/// nets' names and which are ports (labelled, in a layout).
 struct Reduction {
     devs: Vec<Reduced>,
     live: Vec<usize>,
     nets: usize,
     models: Vec<Model>,
+    names: Vec<String>,
+    ports: Vec<bool>,
 }
 
 /// `|a - b| <= tol * max(|a|, |b|)`, the definition in `CompareOptions`.
@@ -906,13 +977,230 @@ fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= TOLERANCE * a.abs().max(b.abs())
 }
 
+/// An absolute tolerance as the deck writes it and in SI, when stated.
+type Absolute = Option<(&'static str, f64)>;
+
+/// The deck's `lvs` statements a fixture states, as the oracle reads them
+/// from deck.md ("LVS controls"), and the deck lines that state them.
+#[derive(Debug, Clone, Default)]
+struct Controls {
+    /// `lvs tolerance`: model, parameter, the relative part, and the
+    /// absolute part as the deck writes it and in SI.
+    tolerance: Vec<(Model, &'static str, f64, Absolute)>,
+    /// `lvs ignore_parameter`: model and parameter.
+    ignored: Vec<(Model, &'static str)>,
+    /// `lvs asymmetric`: MOS models whose source and drain do not swap.
+    asymmetric: Vec<Model>,
+    /// `lvs permute`: model and two pin positions in [`Dev::pins`] order.
+    permuted: Vec<(Model, usize, usize)>,
+    /// `lvs ignore`: models whose devices are left out on both sides.
+    left_out: Vec<Model>,
+    /// `lvs ignore_shorted`: models whose dummies, every pin on one net,
+    /// are left out on both sides.
+    dummies_out: Vec<Model>,
+    /// `lvs ports_by_name`: each reference port pairs only with the layout
+    /// net its name labels.
+    ports_by_name: bool,
+    /// `lvs topology relaxed`: parallel resistors and capacitors stating
+    /// their value combine by its law.
+    relaxed: bool,
+}
+
+impl Controls {
+    /// A tolerance row: `relative` as a fraction, `absolute` as the deck
+    /// writes it and in SI.
+    fn tolerance(
+        mut self,
+        model: Model,
+        param: &'static str,
+        relative: f64,
+        absolute: Option<(&'static str, f64)>,
+    ) -> Self {
+        self.tolerance.push((model, param, relative, absolute));
+        self
+    }
+
+    /// An `lvs ignore_parameter` row.
+    fn ignore(mut self, model: Model, param: &'static str) -> Self {
+        self.ignored.push((model, param));
+        self
+    }
+
+    /// An `lvs asymmetric` row.
+    fn asymmetric(mut self, model: Model) -> Self {
+        self.asymmetric.push(model);
+        self
+    }
+
+    /// The value a relaxed parallel merge combines on `model`, and whether
+    /// harmonically: a resistor's `r` (`1 / Σ 1/r`), a capacitor's `c`
+    /// (added), deck.md's; `None` under the strict policy and for any other
+    /// model.
+    fn value_law(&self, model: Model) -> Option<(&'static str, bool)> {
+        match model {
+            Model::R if self.relaxed => Some(("r", true)),
+            Model::C if self.relaxed => Some(("c", false)),
+            _ => None,
+        }
+    }
+
+    /// An `lvs ignore` row.
+    fn leave_out(mut self, model: Model) -> Self {
+        self.left_out.push(model);
+        self
+    }
+
+    /// An `lvs ignore_shorted` row.
+    fn leave_out_dummies(mut self, model: Model) -> Self {
+        self.dummies_out.push(model);
+        self
+    }
+
+    /// `c` without the devices the controls leave out, as if never drawn
+    /// or written: every one of an ignored model, and each dummy (every pin
+    /// on one net, [`Dev::pins`] holding exactly the pins compared) of a
+    /// model ignored when shorted. Its nets stay, and [`reduce`] keeps only
+    /// those a device or a port holds.
+    fn kept(&self, c: &Circuit) -> Circuit {
+        let mut out = c.clone();
+        out.devs.retain(|d| {
+            let dummy = d.pins.iter().all(|&p| p == d.pins[0]);
+            !(self.left_out.contains(&d.model) || dummy && self.dummies_out.contains(&d.model))
+        });
+        out
+    }
+
+    /// An `lvs permute` row: pins at positions `a` and `b` of [`Dev::pins`].
+    fn permute(mut self, model: Model, a: usize, b: usize) -> Self {
+        self.permuted.push((model, a, b));
+        self
+    }
+
+    /// The pin positions of `model` (in [`Dev::pins`] order) as classes of
+    /// interchangeable pins, deck.md's: a MOS's source and drain (1, 2)
+    /// unless the model is asymmetric, a resistor's ends (0, 1), joined with
+    /// every `lvs permute` pair of the model and closed under chaining.
+    fn classes(&self, model: Model) -> Vec<Vec<usize>> {
+        let mut class: Vec<usize> = (0..4).collect();
+        let mut join = |a: usize, b: usize| {
+            let (keep, gone) = (class[a].min(class[b]), class[a].max(class[b]));
+            for c in &mut class {
+                if *c == gone {
+                    *c = keep;
+                }
+            }
+        };
+        if model.is_mos() && !self.asymmetric.contains(&model) {
+            join(1, 2);
+        }
+        if model == Model::R {
+            join(0, 1);
+        }
+        for &(m, a, b) in &self.permuted {
+            if m == model {
+                join(a, b);
+            }
+        }
+        (0..4)
+            .filter(|&k| class[k] == k)
+            .map(|k| (0..4).filter(|&p| class[p] == k).collect())
+            .collect()
+    }
+
+    /// Whether transistors of `model` merge in series: only while their
+    /// classes are the default ones, the channel the only pair.
+    fn series(&self, model: Model) -> bool {
+        self.classes(model) == [vec![0], vec![1, 2], vec![3]]
+    }
+
+    /// `c` with every parameter `lvs ignore_parameter` names dropped from
+    /// its cards. Dropped from both sides is the same thing: the layout is
+    /// measured only on what the reference's cards declare.
+    fn strip(&self, c: &Circuit) -> Circuit {
+        let mut out = c.clone();
+        for dev in &mut out.devs {
+            let model = dev.model;
+            let ignored = |name: &str| self.ignored.iter().any(|&(m, n)| m == model && n == name);
+            dev.writes.0 &= !ignored("w");
+            dev.writes.1 &= !ignored("l");
+            if ignored("area") {
+                dev.area = None;
+            }
+            if ignored(if model == Model::C { "c" } else { "r" }) {
+                dev.value = None;
+            }
+            dev.params.retain(|&(name, _)| !ignored(name));
+        }
+        out
+    }
+
+    /// The deck lines stating these controls.
+    fn deck(&self) -> String {
+        let mut out = String::new();
+        for &(model, param) in &self.ignored {
+            let _ = writeln!(out, "lvs ignore_parameter \"{}\" {param}", model.name());
+        }
+        for &model in &self.asymmetric {
+            let _ = writeln!(out, "lvs asymmetric \"{}\"", model.name());
+        }
+        for &model in &self.left_out {
+            let _ = writeln!(out, "lvs ignore \"{}\"", model.name());
+        }
+        for &model in &self.dummies_out {
+            let _ = writeln!(out, "lvs ignore_shorted \"{}\"", model.name());
+        }
+        if self.ports_by_name {
+            out.push_str("lvs ports_by_name\n");
+        }
+        if self.relaxed {
+            out.push_str("lvs topology relaxed\n");
+        }
+        for &(model, a, b) in &self.permuted {
+            let names = pin_names(model);
+            let _ = writeln!(
+                out,
+                "lvs permute \"{}\" {} {}",
+                model.name(),
+                names[a],
+                names[b]
+            );
+        }
+        for &(model, param, relative, absolute) in &self.tolerance {
+            let _ = write!(out, "lvs tolerance \"{}\" {param}", model.name());
+            if relative > 0.0 {
+                let _ = write!(out, " relative {relative}");
+            }
+            if let Some((text, _)) = absolute {
+                let _ = write!(out, " absolute {text}");
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Whether `a` and `b`, values of `param` on `model` in a unit `si` times
+    /// SI's, agree: under the model's row, `|a - b| <= absolute + relative *
+    /// max(|a|, |b|)` with the parts adding as deck.md says; with no row,
+    /// [`close`].
+    fn close(&self, model: Model, param: &str, (a, b): (f64, f64), si: f64) -> bool {
+        match self.tolerance.iter().find(|t| t.0 == model && t.1 == param) {
+            None => close(a, b),
+            Some(&(_, _, relative, absolute)) => {
+                let absolute = absolute.map_or(0.0, |(_, value)| value);
+                (a - b).abs() * si <= absolute + relative * a.abs().max(b.abs()) * si
+            }
+        }
+    }
+}
+
 /// Whether layout device `a`, its nets renamed by `map`, is reference device
-/// `b`. An area is compared only where the reference declares one (F22).
-fn pairs(a: &Reduced, b: &Reduced, map: &[usize]) -> bool {
+/// `b` under `controls`. An area is compared only where the reference
+/// declares one (F22).
+fn pairs(a: &Reduced, b: &Reduced, map: &[usize], controls: &Controls) -> bool {
     if a.model != b.model || a.mult != b.mult {
         return false;
     }
-    if !same_pins(a.model, &a.pins, &b.pins, |n| map[n]) {
+    if !same_pins(a.model, (&a.pins, &b.pins), |n| map[n], controls) {
         return false;
     }
     // The layout side always has its marker's area: what was drawn.
@@ -920,9 +1208,15 @@ fn pairs(a: &Reduced, b: &Reduced, map: &[usize]) -> bool {
         Model::Q => BJT_AREA,
         _ => PIN2_AREA,
     };
+    let model = b.model;
     #[allow(clippy::cast_precision_loss, reason = "nanometre areas are small")]
     let area = match b.area {
-        Some(declared) => close(a.area.unwrap_or(drawn) as f64, declared as f64),
+        Some(declared) => controls.close(
+            model,
+            "area",
+            (a.area.unwrap_or(drawn) as f64, declared as f64),
+            1e-18,
+        ),
         None => true,
     };
     // Every other value the card states, against what was drawn; one the
@@ -936,15 +1230,26 @@ fn pairs(a: &Reduced, b: &Reduced, map: &[usize]) -> bool {
         .iter()
         .copied()
         .chain(b.value.map(|v| (primary, v)));
-    let sized = stated
-        .into_iter()
-        .all(|(name, v)| measured(b.model, name).is_some_and(|d| close(d, v)));
+    // Relaxed, the layout's value is the one its merges combined.
+    let law_value = controls
+        .value_law(model)
+        .and_then(|(name, _)| a.value.map(|v| (name, v)));
+    let drawn_value = |name: &str| match law_value {
+        Some((law, v)) if law == name => Some(v),
+        _ => measured(b.model, name),
+    };
+    let sized = stated.into_iter().all(|(name, v)| {
+        drawn_value(name).is_some_and(|d| controls.close(model, name, (d, v), 1.0))
+    });
     // A size the card writes, against the layout's, which measures it since
-    // the card's model declares it; a diffusion at its channel end.
-    let size = |a: Option<f64>, b: Option<f64>| b.is_none_or(|b| a.is_some_and(|a| close(a, b)));
+    // the card's model declares it, in nm (`si` 1e-9); a diffusion at its
+    // channel end, in SI.
+    let size = |name: &str, (a, b): (Option<f64>, Option<f64>), si: f64| {
+        b.is_none_or(|b| a.is_some_and(|a| controls.close(model, name, (a, b), si)))
+    };
     let across = usize::from(crossed(a, b, |n| map[n]));
-    let diffusions = (0..4).all(|k| size(a.sd[k ^ across], b.sd[k]));
-    area && sized && size(a.w, b.w) && size(a.l, b.l) && diffusions
+    let diffusions = (0..4).all(|k| size(DIFFUSIONS[k], (a.sd[k ^ across], b.sd[k]), 1.0));
+    area && sized && size("w", (a.w, b.w), 1e-9) && size("l", (a.l, b.l), 1e-9) && diffusions
 }
 
 /// What the layout measures on a drawn passive or bipolar of `model`, in SI,
@@ -997,14 +1302,19 @@ fn permutations(n: usize) -> &'static [Vec<usize>] {
 
 /// Whether some assignment pairs each of `a[from..]` with a distinct unused
 /// device of `b`.
-fn assign(a: &[Reduced], b: &[Reduced], map: &[usize], used: &mut [bool], from: usize) -> bool {
+fn assign(
+    (a, b): (&[Reduced], &[Reduced]),
+    (map, controls): (&[usize], &Controls),
+    used: &mut [bool],
+    from: usize,
+) -> bool {
     let Some(dev) = a.get(from) else {
         return true;
     };
     for j in 0..b.len() {
-        if !used[j] && pairs(dev, &b[j], map) {
+        if !used[j] && pairs(dev, &b[j], map, controls) {
             used[j] = true;
-            if assign(a, b, map, used, from + 1) {
+            if assign((a, b), (map, controls), used, from + 1) {
                 return true;
             }
             used[j] = false;
@@ -1016,17 +1326,32 @@ fn assign(a: &[Reduced], b: &[Reduced], map: &[usize], used: &mut [bool], from: 
 /// The oracle: whether `layout` and `reference` are one circuit, by brute
 /// force over every bijection of their reduced nets.
 fn equivalent(layout: &Circuit, reference: &Circuit) -> bool {
-    let declared = Declared::of(reference);
+    equivalent_under(layout, reference, &Controls::default())
+}
+
+/// [`equivalent`] under the deck's `lvs` statements.
+fn equivalent_under(layout: &Circuit, reference: &Circuit, controls: &Controls) -> bool {
+    let reference = controls.strip(reference);
+    let declared = Declared::of(&reference);
+    let (layout, reference) = (controls.kept(layout), controls.kept(&reference));
     matches(
-        &reduce(layout, &declared, true),
-        &reduce(reference, &declared, false),
+        &reduce(&layout, &declared, true, controls),
+        &reduce(&reference, &declared, false, controls),
+        controls,
     )
 }
 
 /// Whether some bijection of `a`'s surviving nets onto `b`'s pairs every
 /// device.
-fn matches(a: &Reduction, b: &Reduction) -> bool {
+fn matches(a: &Reduction, b: &Reduction, controls: &Controls) -> bool {
     if a.live.len() != b.live.len() || a.models != b.models {
+        return false;
+    }
+    // Under `lvs ports_by_name`, deck.md's: each reference port pairs with
+    // the layout net its name labels, which must exist.
+    let port_of = |name: &str| (0..b.nets).find(|&r| b.ports[r] && b.names[r] == name);
+    let labelled = |r: usize| (0..a.nets).find(|&k| a.ports[k] && a.names[k] == b.names[r]);
+    if controls.ports_by_name && (0..b.nets).any(|r| b.ports[r] && labelled(r).is_none()) {
         return false;
     }
     let mut map = vec![usize::MAX; a.nets];
@@ -1034,7 +1359,12 @@ fn matches(a: &Reduction, b: &Reduction) -> bool {
         for (i, &k) in a.live.iter().enumerate() {
             map[k] = b.live[perm[i]];
         }
-        assign(&a.devs, &b.devs, &map, &mut vec![false; b.devs.len()], 0)
+        let named = !controls.ports_by_name
+            || a.live
+                .iter()
+                .all(|&k| !a.ports[k] || port_of(&a.names[k]).is_none_or(|r| map[k] == r));
+        let used = &mut vec![false; b.devs.len()];
+        named && assign((&a.devs, &b.devs), (&map, controls), used, 0)
     })
 }
 
@@ -1209,7 +1539,7 @@ fn faults(c: &Circuit) -> Vec<(String, Circuit, &'static [&'static str])> {
 /// matches is kept, since that is where a false mismatch hides, and of those
 /// that must mismatch, one per kind, drawn from `pick`. Without it, all.
 fn enumerated(c: &Circuit, mut pick: Option<Rng>) -> Vec<Fixture> {
-    let reduced = reduce(c, &Declared::of(c), true);
+    let reduced = reduce(c, &Declared::of(c), true, &Controls::default());
     let mut seen = BTreeSet::from([key(c)]);
     // `(label, reference, catalog rows, matches)`; the first two keep `c`.
     let mut kept = vec![(
@@ -1292,6 +1622,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         }
     }
     out.extend(curated());
+    out.extend(controlled());
     out.extend(layout_rows());
     out
 }
@@ -1307,9 +1638,21 @@ fn compared(
     layout: &Circuit,
     reference: &Circuit,
 ) -> Fixture {
-    let mut fixture = Fixture::new(&format!("lvs/{name}"), catalog, &full_deck(), LVS)
+    compared_under(name, catalog, (layout, reference), &Controls::default())
+}
+
+/// [`compared`] with the deck's `controls` stated after the full deck, the
+/// verdict the oracle's under them.
+fn compared_under(
+    name: &str,
+    catalog: &[&'static str],
+    (layout, reference): (&Circuit, &Circuit),
+    controls: &Controls,
+) -> Fixture {
+    let deck = format!("{}{}", full_deck(), controls.deck());
+    let mut fixture = Fixture::new(&format!("lvs/{name}"), catalog, &deck, LVS)
         .layout(draw(layout))
-        .expect(Expect::Lvs(equivalent(layout, reference)));
+        .expect(Expect::Lvs(equivalent_under(layout, reference, controls)));
     fixture.reference = Some(spice(reference));
     fixture
 }
@@ -1977,6 +2320,41 @@ fn curated() -> Vec<Fixture> {
             0,
         );
     }
+    // LVS-032: the fingers alone, their nets labelled. Labels break a tie
+    // only after the diffusions (KLayout's `consider_net_names`): the
+    // channel nets pair the way the diffusions agree (testing-plan F98), so
+    // the card that puts 1 um² at its source n1 matches, and so does the
+    // one that puts it at n2, the same transistor the other way round.
+    let mut fingers = shared.clone();
+    for net in 0..3 {
+        let t = track(net);
+        fingers = fingers.rect("met2", -1000, t, column(1), t + 200).label(
+            "met2_label",
+            -900,
+            t + 100,
+            &format!("n{net}"),
+        );
+    }
+    for (case, ends, matched) in [
+        ("as_labelled", [1e-12, 5e-13, 6e-6, 3e-6], true),
+        ("against_the_labels", [5e-13, 1e-12, 3e-6, 6e-6], true),
+    ] {
+        let card = DIFFUSIONS
+            .into_iter()
+            .zip(ends)
+            .fold(Dev::mos(N, 0, 1, 2).sized(2000, 150), |dev, (name, v)| {
+                dev.param(name, v)
+            });
+        out.push(
+            with_text(
+                &format!("names/shared_diffusion_{case}"),
+                &["LVS-032", "LVS-060"],
+                fingers.clone(),
+                spice(&Circuit::new(3, vec![card])),
+            )
+            .expect(Expect::Lvs(matched)),
+        );
+    }
     let sensor = Dev::mos(N, 1, 0, 0);
     let tracked = |mut layout: Layout| {
         for net in 0..3 {
@@ -2172,12 +2550,492 @@ fn curated() -> Vec<Fixture> {
     out
 }
 
+/// The deck's `lvs` statements (deck.md, "LVS controls"), each verdict the
+/// oracle's under the statements the fixture's deck adds.
+fn controlled() -> Vec<Fixture> {
+    use Model::{B, C, D, N, P, Q, R};
+    let mut out = Vec::new();
+    let row = |model, param, relative, absolute| {
+        Controls::default().tolerance(model, param, relative, absolute)
+    };
+
+    // LVS-014: a row bounds one parameter of one model in place of the 2 %,
+    // its relative and absolute parts adding. `w` 1000 against 1040 nm is
+    // 3.85 % of the larger: past 2 %, within a 5 % row and not a 3 % one,
+    // within 50 nm and not 30 nm, within 2 % plus 20 nm (40.8 nm). 1.5 %
+    // matches by default and not under a 1 % row. A row on `l`, or on
+    // `pmos`, leaves this `w` at 2 %.
+    let w_of = |w| Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(w, 1000)]);
+    let nm = |text, value: f64| Some((text, value * 1e-9));
+    for (name, written, controls) in [
+        ("w+3.85_default", 1040, Controls::default()),
+        ("w+3.85_relative_5pct", 1040, row(N, "w", 0.05, None)),
+        ("w+3.85_relative_3pct", 1040, row(N, "w", 0.03, None)),
+        (
+            "w+3.85_absolute_50nm",
+            1040,
+            row(N, "w", 0.0, nm("50nm", 50.0)),
+        ),
+        (
+            "w+3.85_absolute_30nm",
+            1040,
+            row(N, "w", 0.0, nm("30nm", 30.0)),
+        ),
+        (
+            "w+3.85_2pct_plus_20nm",
+            1040,
+            row(N, "w", 0.02, nm("20nm", 20.0)),
+        ),
+        ("w+1.5_default", 1015, Controls::default()),
+        ("w+1.5_relative_1pct", 1015, row(N, "w", 0.01, None)),
+        ("w+3.85_row_on_l", 1040, row(N, "l", 0.05, None)),
+        ("w+3.85_row_on_pmos", 1040, row(P, "w", 0.05, None)),
+    ] {
+        out.push(compared_under(
+            &format!("tolerance/deck/{name}"),
+            &["LVS-014", "LVS-060"],
+            (&w_of(1000), &w_of(written)),
+            &controls,
+        ));
+    }
+    // An ignored parameter is neither compared nor merged on: `w` 1000
+    // against 1500 nm matches once `nmos` `w` is ignored, and two
+    // transistors of `l` 150 and 200 nm are one of twice the width once `l`
+    // is.
+    let two = Circuit::new(
+        3,
+        vec![Dev::mos(N, 0, 1, 2), Dev::mos(N, 0, 2, 1).sized(1000, 200)],
+    );
+    let wide = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(2000, 150)]);
+    let ignore = |param| Controls::default().ignore(N, param);
+    for (name, layout, reference, controls) in [
+        ("w+50pct", &w_of(1000), &w_of(1500), Controls::default()),
+        ("w+50pct_w_ignored", &w_of(1000), &w_of(1500), ignore("w")),
+        ("w+50pct_l_ignored", &w_of(1000), &w_of(1500), ignore("l")),
+        ("lengths_differ_vs_wide", &two, &wide, Controls::default()),
+        ("lengths_differ_vs_wide_l_ignored", &two, &wide, ignore("l")),
+    ] {
+        out.push(compared_under(
+            &format!("ignore_parameter/{name}"),
+            &["LVS-014", "LVS-040"],
+            (layout, reference),
+            &controls,
+        ));
+    }
+    // LVS-031: an asymmetric `nmos`, whose source pairs only with a source.
+    // A `pmos` gated by n1 tells n1 from n2, so a card with source and drain
+    // swapped is another circuit once `nmos` is asymmetric, and the same one
+    // otherwise. Two in parallel merge source on source and not opposed; a
+    // stack of them stays two.
+    let anchored = |dev: Dev| Circuit::new(3, vec![dev, Dev::mos(P, 1, 0, 0)]);
+    let same = anchored(Dev::mos(N, 0, 1, 2));
+    let swapped = anchored(Dev::mos(N, 0, 2, 1));
+    let aligned = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2), Dev::mos(N, 0, 1, 2)]);
+    let opposed = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2), Dev::mos(N, 0, 2, 1)]);
+    let stack = Circuit::new(4, vec![Dev::mos(N, 0, 1, 3), Dev::mos(N, 0, 3, 2)]).internal(3);
+    let long = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2).sized(1000, 300)]);
+    for (name, layout, reference) in [
+        ("sd_same", &same, &same),
+        ("sd_swapped", &same, &swapped),
+        ("parallel_aligned_vs_wide", &aligned, &wide),
+        ("parallel_opposed_vs_wide", &opposed, &wide),
+        ("stack_vs_long", &stack, &long),
+        ("stack_vs_stack", &stack, &stack),
+    ] {
+        for (label, controls) in [
+            ("symmetric", Controls::default()),
+            ("asymmetric", Controls::default().asymmetric(N)),
+        ] {
+            out.push(compared_under(
+                &format!("asymmetric/{name}/{label}"),
+                &["LVS-031", "LVS-030"],
+                (layout, reference),
+                &controls,
+            ));
+        }
+    }
+    // LVS-030: pins the deck permutes. A capacitor or diode reversed, and a
+    // bipolar with emitter and collector exchanged, are other circuits by
+    // default (F15) and the same once those pins permute; base with emitter
+    // is not emitter with collector. The bipolar's base is on n1 and its
+    // emitter on n0, which the `nmos` gate fixes, since the `nmos` channel
+    // alone would let n1 and n2 trade places. Two capacitors in opposite directions
+    // merge into one of m = 2 once the plates permute. A `pmos` with gate
+    // and source exchanged is the same once gate permutes with source,
+    // which chains with source-drain; a stack of such `nmos` no longer
+    // merges in series.
+    let two_pin = |model, pins: &[usize]| polar(Dev::pins(model, pins));
+    let bjt = |pins: &[usize]| polar(Dev::pins(Q, pins));
+    let mut caps_opposed = polar(Dev::pins(C, &[0, 1]));
+    caps_opposed.devs.push(Dev::pins(C, &[1, 0]));
+    let cap_m2 = polar(Dev::pins(C, &[0, 1]).times(2));
+    let p_of = |g, s| polar(Dev::mos(P, g, s, 2));
+    let permuted: [(&str, Circuit, Circuit, Controls); 10] = [
+        (
+            "C_reversed",
+            two_pin(C, &[0, 1]),
+            two_pin(C, &[1, 0]),
+            Controls::default().permute(C, 0, 1),
+        ),
+        (
+            "D_reversed",
+            two_pin(D, &[0, 1]),
+            two_pin(D, &[1, 0]),
+            Controls::default().permute(D, 0, 1),
+        ),
+        (
+            "Q_emitter_collector_swapped",
+            bjt(&[1, 0, 2]),
+            bjt(&[1, 2, 0]),
+            Controls::default().permute(Q, 1, 2),
+        ),
+        (
+            "Q_emitter_collector_swapped_base_permuted",
+            bjt(&[1, 0, 2]),
+            bjt(&[1, 2, 0]),
+            Controls::default().permute(Q, 0, 1),
+        ),
+        (
+            "C_opposed_vs_m2",
+            caps_opposed.clone(),
+            cap_m2.clone(),
+            Controls::default().permute(C, 0, 1),
+        ),
+        (
+            "C_opposed_vs_m2_unpermuted",
+            caps_opposed,
+            cap_m2,
+            Controls::default(),
+        ),
+        (
+            "P_gate_source_swapped",
+            p_of(0, 1),
+            p_of(1, 0),
+            Controls::default().permute(P, 0, 1),
+        ),
+        (
+            "P_gate_source_swapped_unpermuted",
+            p_of(0, 1),
+            p_of(1, 0),
+            Controls::default(),
+        ),
+        (
+            "stack_vs_long_gate_permuted",
+            stack.clone(),
+            long.clone(),
+            Controls::default().permute(N, 0, 1),
+        ),
+        (
+            "C_same",
+            two_pin(C, &[0, 1]),
+            two_pin(C, &[0, 1]),
+            Controls::default().permute(C, 0, 1),
+        ),
+    ];
+    for (name, layout, reference, controls) in permuted {
+        out.push(compared_under(
+            &format!("permute/{name}"),
+            &["LVS-030"],
+            (&layout, &reference),
+            &controls,
+        ));
+    }
+    // LVS-034: an ignored model's devices are left out on both sides. A
+    // capacitor from n0 to n1 beside the `nmos`, drawn and not written or
+    // written and not drawn, matches once `cmim` is ignored; ignoring
+    // `nmos` instead leaves it unpaired. A capacitor to an internal net
+    // n3 takes that net with it; one to a port n3 leaves the port, which
+    // must still pair.
+    let bare = polar(Dev::mos(P, 1, 0, 2));
+    let mut capped = bare.clone();
+    capped.devs.push(Dev::pins(C, &[0, 1]));
+    let mut to_internal = bare.clone();
+    to_internal.names.push("n3".to_owned());
+    to_internal.ports.push(false);
+    to_internal.devs.push(Dev::pins(C, &[1, 3]));
+    let mut to_port = to_internal.clone();
+    to_port.ports[3] = true;
+    let ignore_c = Controls::default().leave_out(C);
+    let ignored: [(&str, &Circuit, &Circuit, Controls); 7] = [
+        ("drawn_only", &capped, &bare, ignore_c.clone()),
+        ("written_only", &bare, &capped, ignore_c.clone()),
+        ("drawn_only_default", &capped, &bare, Controls::default()),
+        (
+            "drawn_only_nmos_ignored",
+            &capped,
+            &bare,
+            Controls::default().leave_out(N),
+        ),
+        (
+            "internal_net_written_only",
+            &bare,
+            &to_internal,
+            ignore_c.clone(),
+        ),
+        ("port_written_only", &bare, &to_port, ignore_c.clone()),
+        ("both", &capped, &capped, ignore_c),
+    ];
+    for (name, layout, reference, controls) in ignored {
+        out.push(compared_under(
+            &format!("ignore/{name}"),
+            &["LVS-034"],
+            (layout, reference),
+            &controls,
+        ));
+    }
+    // LVS-035: dummies, every pin on one net, are left out once their model
+    // ignores shorted devices: an `nmos` with gate, source and drain on n0
+    // (its bulk, which the deck does not extract, written on its source),
+    // and an `nmosb` with all four on n3. One with its gate elsewhere is no
+    // dummy.
+    let real = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2)]);
+    let with_dummy = |gate| {
+        let mut c = real.clone();
+        c.devs.push(Dev::mos(N, gate, 0, 0));
+        c
+    };
+    let real_b = Circuit::new(4, vec![Dev::mos(B, 0, 1, 2).bulk(3)]);
+    let mut dummy_b = real_b.clone();
+    dummy_b.devs.push(Dev::mos(B, 3, 3, 3).bulk(3));
+    let skip_n = Controls::default().leave_out_dummies(N);
+    let skip_b = Controls::default().leave_out_dummies(B);
+    let shorted: [(&str, Circuit, Circuit, Controls); 7] = [
+        ("N_drawn", with_dummy(0), real.clone(), skip_n.clone()),
+        ("N_written", real.clone(), with_dummy(0), skip_n.clone()),
+        (
+            "N_drawn_default",
+            with_dummy(0),
+            real.clone(),
+            Controls::default(),
+        ),
+        ("N_gate_elsewhere", with_dummy(1), real.clone(), skip_n),
+        ("B_drawn", dummy_b.clone(), real_b.clone(), skip_b.clone()),
+        ("B_written", real_b.clone(), dummy_b.clone(), skip_b),
+        ("B_drawn_default", dummy_b, real_b, Controls::default()),
+    ];
+    for (name, layout, reference, controls) in shorted {
+        out.push(compared_under(
+            &format!("ignore_shorted/{name}"),
+            &["LVS-035"],
+            (&layout, &reference),
+            &controls,
+        ));
+    }
+    // LVS-016, LVS-001: ports by name. Two transistors, each its own gate
+    // and drain port, against a reference that wires gate n0 to the drain
+    // it names n3: the same circuit up to renaming, a mismatch once ports go
+    // by name. The same names match either way, and a layout with no labels
+    // matches only by structure.
+    let pair = Circuit::new(5, vec![Dev::mos(N, 0, 4, 2), Dev::mos(N, 1, 4, 3)]);
+    let mut crossed = pair.clone();
+    crossed.names.swap(2, 3);
+    let mut unlabelled = pair.clone();
+    unlabelled.ports = vec![false; 5];
+    let by_name = Controls {
+        ports_by_name: true,
+        ..Controls::default()
+    };
+    let named: [(&str, &Circuit, &Circuit, Controls); 6] = [
+        ("crossed", &pair, &crossed, Controls::default()),
+        ("crossed_by_name", &pair, &crossed, by_name.clone()),
+        ("same_by_name", &pair, &pair, by_name.clone()),
+        ("reordered_by_name", &pair, &pair, by_name.clone()),
+        ("unlabelled", &unlabelled, &pair, Controls::default()),
+        ("unlabelled_by_name", &unlabelled, &pair, by_name),
+    ];
+    for (name, layout, reference, controls) in named {
+        let mut fixture = compared_under(
+            &format!("ports/{name}"),
+            &["LVS-016", "LVS-001"],
+            (layout, reference),
+            &controls,
+        );
+        if name.starts_with("reordered") {
+            let text = fixture.reference.take().expect("a reference");
+            fixture.reference = Some(edited(
+                &text,
+                ".subckt TOP n0 n1 n2 n3 n4",
+                ".subckt TOP n4 n3 n2 n1 n0",
+            ));
+        }
+        out.push(fixture);
+    }
+    // LVS-043, LVS-044, LVS-049: relaxed topology. Two resistors drawn in
+    // parallel, 200 ohm each ([`measured`]), are one of 100 ohm, and two
+    // capacitors of 0.56 fF one of 1.12 fF, three one of 1.68 fF; a card's
+    // `m` folds in first, so `r=200 m=2` is 100 ohm. Strict, the default,
+    // they are two that match only a count of two. A card with no value
+    // keeps the count either way.
+    let relaxed = Controls {
+        relaxed: true,
+        ..Controls::default()
+    };
+    let parallel =
+        |model, count| Circuit::new(2, (0..count).map(|_| Dev::pins(model, &[0, 1])).collect());
+    let card = |dev: Dev| Circuit::new(2, vec![dev]);
+    let combined: [(&str, Circuit, Circuit); 8] = [
+        (
+            "R_two_vs_half",
+            parallel(R, 2),
+            card(Dev::pins(R, &[0, 1]).value(100.0)),
+        ),
+        (
+            "R_two_vs_m2",
+            parallel(R, 2),
+            card(Dev::pins(R, &[0, 1]).value(200.0).times(2)),
+        ),
+        (
+            "R_two_vs_one",
+            parallel(R, 2),
+            card(Dev::pins(R, &[0, 1]).value(200.0)),
+        ),
+        (
+            "R_two_vs_unvalued_one",
+            parallel(R, 2),
+            card(Dev::pins(R, &[0, 1])),
+        ),
+        (
+            "C_two_vs_double",
+            parallel(C, 2),
+            card(Dev::pins(C, &[0, 1]).value(1.12e-15)),
+        ),
+        (
+            "C_two_vs_m2",
+            parallel(C, 2),
+            card(Dev::pins(C, &[0, 1]).value(5.6e-16).times(2)),
+        ),
+        (
+            "C_three_vs_triple",
+            parallel(C, 3),
+            card(Dev::pins(C, &[0, 1]).value(1.68e-15)),
+        ),
+        (
+            "C_two_vs_one",
+            parallel(C, 2),
+            card(Dev::pins(C, &[0, 1]).value(5.6e-16)),
+        ),
+    ];
+    for (name, layout, reference) in combined {
+        for (label, controls) in [("relaxed", &relaxed), ("strict", &Controls::default())] {
+            out.push(compared_under(
+                &format!("topology/{name}/{label}"),
+                &["LVS-049", "LVS-043", "LVS-044"],
+                (&layout, &reference),
+                controls,
+            ));
+        }
+    }
+    // A diode's value is its area: two drawn in parallel, 0.32 um² each,
+    // are one of 0.64 um² relaxed, and two strict (derived by hand from
+    // [`draw_pins`]).
+    let diodes = Circuit::new(2, vec![Dev::pins(D, &[0, 1]), Dev::pins(D, &[0, 1])]);
+    let written = spice(&Circuit::new(2, vec![Dev::pins(D, &[0, 1]).area(640_000)]));
+    for (label, policy, matched) in [("relaxed", "relaxed", true), ("strict", "strict", false)] {
+        let deck = format!("{}lvs topology {policy}\n", full_deck());
+        let mut fixture = Fixture::new(
+            &format!("lvs/topology/D_two_vs_double_area/{label}"),
+            &["LVS-049", "LVS-044"],
+            &deck,
+            LVS,
+        )
+        .layout(draw(&diodes))
+        .expect(Expect::Lvs(matched));
+        fixture.reference = Some(written.clone());
+        out.push(fixture);
+    }
+    // A passive's value, drawn 200 ohm and 0.56 fF ([`measured`]), against
+    // 210 ohm and 0.6 fF: 10 ohm and 40 aF apart, so within 15 ohm and
+    // 50 aF and not 5 ohm or 30 aF.
+    let one = |dev: Dev| Circuit::new(2, vec![dev]);
+    for (name, model, written, absolute, row_name) in [
+        ("R_r_absolute_15ohm", R, 210.0, ("15ohm", 15.0), "LVS-061"),
+        ("R_r_absolute_5ohm", R, 210.0, ("5ohm", 5.0), "LVS-061"),
+        ("C_c_absolute_50aF", C, 6e-16, ("50aF", 5e-17), "LVS-062"),
+        ("C_c_absolute_30aF", C, 6e-16, ("30aF", 3e-17), "LVS-062"),
+    ] {
+        let param = if model == R { "r" } else { "c" };
+        out.push(compared_under(
+            &format!("tolerance/deck/{name}"),
+            &["LVS-014", row_name],
+            (
+                &one(Dev::pins(model, &[0, 1])),
+                &one(Dev::pins(model, &[0, 1]).value(written)),
+            ),
+            &row(model, param, 0.0, Some(absolute)),
+        ));
+    }
+    out
+}
+
+/// An `lvs.short_path` row measuring step `k` of its path (the harness
+/// compares the measure, not the limit).
+fn step(k: u32) -> Finding {
+    Finding {
+        measured: Some(gpurify::check::report::Measurement::Count(k)),
+        at: None,
+    }
+}
+
 /// The rows `check_layout` records from the layout alone (its rustdoc), and
 /// device recognition's corner cases.
 fn layout_rows() -> Vec<Fixture> {
     use Model::{N, R};
     let mut out = Vec::new();
     let one = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2)]);
+
+    // LVS-068: a deck's `lvs range` holds every device of the model to the
+    // bounds on what is drawn: the `nmos` 1000 by 150 nm, the capacitor's
+    // marker 0.32 um² ([`draw_mos`], [`draw_pins`]). A value at its bound is
+    // legal, a model with no device is examined zero times, and another
+    // model is not held.
+    let cap = Circuit::new(2, vec![Dev::pins(Model::C, &[0, 1])]);
+    let ranged: [(&str, &Circuit, &str, Vec<Finding>); 7] = [
+        (
+            "w_below_min",
+            &one,
+            "\"nmos\" w >= 1100nm",
+            vec![Finding::length(1000)],
+        ),
+        (
+            "w_at_both_bounds",
+            &one,
+            "\"nmos\" w >= 1000nm <= 1000nm",
+            Vec::new(),
+        ),
+        (
+            "l_above_max",
+            &one,
+            "\"nmos\" l <= 100nm",
+            vec![Finding::length(150)],
+        ),
+        (
+            "nf_below_min",
+            &one,
+            "\"nmos\" nf >= 2",
+            vec![Finding::any()],
+        ),
+        ("other_model", &one, "\"pmos\" w >= 1100nm", Vec::new()),
+        (
+            "C_area_below_min",
+            &cap,
+            "\"cmim\" area >= 0.4um2",
+            vec![Finding::area(320_000)],
+        ),
+        (
+            "C_area_within",
+            &cap,
+            "\"cmim\" area <= 0.32um2",
+            Vec::new(),
+        ),
+    ];
+    for (name, c, bounds, findings) in ranged {
+        let deck = format!("{}lvs range {bounds}\n", full_deck());
+        let mut fixture = Fixture::new(&format!("lvs/range/{name}"), &["LVS-068"], &deck, LVS)
+            .layout(draw(c))
+            .expect(Expect::rule("lvs.param_range", findings));
+        fixture.reference = Some(spice(c));
+        out.push(fixture);
+    }
 
     // LVS-006: an unlabelled track no terminal lands on floats; a labelled one
     // is a port and does not.
@@ -2222,6 +3080,24 @@ fn layout_rows() -> Vec<Fixture> {
         .expect(Expect::rule("lvs.label_conflict", vec![Finding::any()])),
     );
 
+    // LVS-002: the same open with n0 a must-connect label (KLayout's
+    // `connect_implicit`): the two nets are one to compare, so the verdict
+    // is a match, and the open is still reported, as a warning, so the run
+    // passes.
+    let deck = format!("{}lvs connect_implicit \"n*\"\n", full_deck());
+    let mut fixture = Fixture::new(
+        "lvs/checks/label_on_two_nets_must_connect",
+        &["LVS-002", "LVS-001"],
+        &deck,
+        LVS,
+    )
+    .layout(draw(&split))
+    .expect(Expect::Lvs(true))
+    .expect(Expect::rule("lvs.label_conflict", vec![Finding::any()]))
+    .expect(Expect::Passes(true));
+    fixture.reference = Some(spice(&joined));
+    out.push(fixture);
+
     // F13, F14, LVS-001, LVS-005: two labels on one net is a short between
     // named nets, which must be reported, not abort the run.
     let shorted = draw(&one).label("met2_label", -800, track(0) + 100, "other");
@@ -2232,7 +3108,28 @@ fn layout_rows() -> Vec<Fixture> {
             shorted,
             spice(&one),
         )
-        .expect(Expect::rule("lvs.net_seed_conflict", vec![Finding::any()])),
+        .expect(Expect::rule("lvs.net_seed_conflict", vec![Finding::any()]))
+        .expect(Expect::rule("lvs.short_path", vec![step(1)])),
+    );
+    // LVS-005: where the short runs. A met1 bridge, a via1 at each end,
+    // joins track n0 to track n1, so labels n0 and n1 are on one net, and
+    // the fewest polygons between their tracks are the track, the bridge
+    // and the other track: two steps, each reported (derived by hand; the
+    // transistor joins n0 to no other track).
+    let x = -600;
+    let bridged = draw(&one)
+        .rect("met1", x, track(0), x + 200, track(1) + 200)
+        .rect("via1", x, track(0), x + 200, track(0) + 200)
+        .rect("via1", x, track(1), x + 200, track(1) + 200);
+    out.push(
+        with_text(
+            "checks/short_path_through_a_bridge",
+            &["LVS-005"],
+            bridged,
+            spice(&one),
+        )
+        .expect(Expect::rule("lvs.net_seed_conflict", vec![Finding::any()]))
+        .expect(Expect::rule("lvs.short_path", vec![step(1), step(2)])),
     );
 
     // LVS-004: a MOS recogniser with two terminals. Its source and drain
@@ -2670,7 +3567,11 @@ mod tests {
         let drawn = every_model().into_iter().map(|(drawn, _)| drawn);
         let mut checked = 0;
         for c in sample().into_iter().chain(drawn) {
-            if reduce(&c, &Declared::of(&c), false).devs.len() < c.devs.len() {
+            if reduce(&c, &Declared::of(&c), false, &Controls::default())
+                .devs
+                .len()
+                < c.devs.len()
+            {
                 continue;
             }
             let layout = draw(&c);

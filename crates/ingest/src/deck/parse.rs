@@ -5,7 +5,8 @@ use super::kinds::{Cmp, Dim, Kind, Param, EDGE_KINDS, KINDS, OPTIONAL_PEX_KEYS, 
 use super::lex::{lex, Tok, Token};
 use super::{
     lower, Deck, DeckError, DeckSource, DerivedOp, DerivedSource, DeviceKind, DeviceSource,
-    DeviceValue, LabelSource, ParamSource, ParamValue, RuleSource, StackSource, ViaSource,
+    DeviceValue, LabelSource, LvsLimit, ParamSource, ParamValue, RuleSource, StackSource,
+    ToleranceSrc, ViaSource,
 };
 use gpurify_geom::{prefix::NANO, Dbu, DbuArea, Grid, Qty, StrTable};
 use std::collections::{HashMap, HashSet};
@@ -466,9 +467,10 @@ impl<'a> Parser<'a> {
             "pex" => self.pex(),
             "temperature" => self.temperature(span),
             "ignore" => self.ignore(),
+            "lvs" => self.lvs(),
             _ => Err(self.err(
                 span,
-                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex or temperature"),
+                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, temperature or lvs"),
             )),
         }
     }
@@ -1024,15 +1026,7 @@ impl<'a> Parser<'a> {
         };
         let marker = self.layer_word()?;
         self.expect("model")?;
-        let t = self.peek();
-        if t.tok != Tok::Str {
-            return Err(self.err_tok(
-                t,
-                &format!("expected a model name in quotes, found {}", self.found(t)),
-            ));
-        }
-        self.bump();
-        let model = self.string(t)?;
+        let model = self.model()?;
         self.expect("terminals")?;
         let terminals = self.layer_list()?;
         let mut value = DeviceValue::default();
@@ -1104,6 +1098,271 @@ impl<'a> Parser<'a> {
             model,
             terminals,
             value,
+        });
+        Ok(())
+    }
+
+    /// `lvs <control> "model" ...`, one comparison control (deck.md, "LVS
+    /// controls").
+    fn lvs(&mut self) -> R<()> {
+        let (control, span) = self.ident("an lvs control")?;
+        match control.as_str() {
+            "tolerance" => self.lvs_tolerance(),
+            "ignore_parameter" => self.lvs_ignore_parameter(),
+            "permute" => {
+                let model = self.model()?;
+                let (a, _) = self.ident("a pin name")?;
+                let (b, _) = self.ident("a pin name")?;
+                self.out.lvs.permute.push((model, a, b));
+                Ok(())
+            }
+            "ignore" => {
+                let model = self.model()?;
+                if self.out.lvs.ignore.contains(&model) {
+                    return Err(self.err(span, &format!("\"{model}\" is already ignored")));
+                }
+                self.out.lvs.ignore.push(model);
+                Ok(())
+            }
+            "range" => self.lvs_range(),
+            "connect_implicit" => {
+                let pattern = self.quoted("a label pattern in quotes")?;
+                self.out.lvs.connect_implicit.push(pattern);
+                Ok(())
+            }
+            "connect_explicit" => {
+                let mut names = Vec::new();
+                while self.peek().tok == Tok::Str {
+                    names.push(self.quoted("a label in quotes")?);
+                }
+                if names.len() < 2 {
+                    let t = self.peek();
+                    return Err(self.err_tok(t, "connect_explicit joins two labels or more, each in quotes"));
+                }
+                self.out.lvs.connect_explicit.push(names);
+                Ok(())
+            }
+            "topology" => {
+                let (policy, at) = self.ident("strict or relaxed")?;
+                let relaxed = match policy.as_str() {
+                    "strict" => false,
+                    "relaxed" => true,
+                    _ => {
+                        return Err(self.err(
+                            at,
+                            &format!("unknown topology `{policy}`; expected strict or relaxed"),
+                        ))
+                    }
+                };
+                if self.out.lvs.topology.replace(relaxed).is_some() {
+                    return Err(self.err(span, "the topology is already stated"));
+                }
+                Ok(())
+            }
+            "ports_by_name" => {
+                if std::mem::replace(&mut self.out.lvs.ports_by_name, true) {
+                    return Err(self.err(span, "ports are already compared by name"));
+                }
+                Ok(())
+            }
+            "ignore_shorted" => {
+                let model = self.model()?;
+                if self.out.lvs.ignore_shorted.contains(&model) {
+                    return Err(self.err(
+                        span,
+                        &format!("shorted \"{model}\" devices are already ignored"),
+                    ));
+                }
+                self.out.lvs.ignore_shorted.push(model);
+                Ok(())
+            }
+            "asymmetric" => {
+                let model = self.model()?;
+                if self.out.lvs.asymmetric.contains(&model) {
+                    return Err(self.err(span, &format!("\"{model}\" is already asymmetric")));
+                }
+                self.out.lvs.asymmetric.push(model);
+                Ok(())
+            }
+            _ => Err(self.err(
+                span,
+                &format!(
+                    "unknown lvs control `{control}`; expected tolerance, ignore_parameter, \
+                     asymmetric, permute, ignore, ignore_shorted, ports_by_name, range, topology, connect_implicit or \
+                     connect_explicit"
+                ),
+            )),
+        }
+    }
+
+    /// A device model name in quotes.
+    fn model(&mut self) -> R<String> {
+        self.quoted("a model name in quotes")
+    }
+
+    /// A string in quotes, `what` naming it in an error.
+    fn quoted(&mut self, what: &str) -> R<String> {
+        let t = self.peek();
+        if t.tok != Tok::Str {
+            return Err(self.err_tok(t, &format!("expected {what}, found {}", self.found(t))));
+        }
+        self.bump();
+        self.string(t)
+    }
+
+    /// `lvs range "model" param >= min <= max`, either bound or both, each
+    /// in the parameter's kind (a length or an area on the deck's grid, or a
+    /// count), converted to the layout's grid.
+    fn lvs_range(&mut self) -> R<()> {
+        let model = self.model()?;
+        let (param, span) = self.ident("a parameter name")?;
+        let param = param.to_ascii_lowercase();
+        let dim = match param.as_str() {
+            "w" | "l" | "perim" | "ps" | "pd" | "pe" => Dim::Length,
+            "area" | "as" | "ad" | "ae" => Dim::Area,
+            "nf" => Dim::Count,
+            _ => {
+                return Err(self.err(
+                    span,
+                    &format!(
+                        "`{param}` is not measured on a device; expected w, l, perim, ps, pd, \
+                         pe, area, as, ad, ae or nf"
+                    ),
+                ))
+            }
+        };
+        if self
+            .out
+            .lvs
+            .range
+            .iter()
+            .any(|row| row.0 == model && row.1 == param)
+        {
+            return Err(self.err(
+                span,
+                &format!("`{param}` of \"{model}\" already has a range"),
+            ));
+        }
+        let (mut min, mut max) = (None, None);
+        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+            let t = self.peek();
+            let slot = if self.eat(">=") {
+                &mut min
+            } else if self.eat("<=") {
+                &mut max
+            } else {
+                return Err(self.err_tok(t, &format!("expected >= or <=, found {}", self.found(t))));
+            };
+            let value = self.value()?;
+            let limit = match dim {
+                Dim::Length => LvsLimit::Length(self.length(&value, &param)?),
+                Dim::Area => LvsLimit::Area(self.area(&value, &param)?),
+                _ => LvsLimit::Count(self.count(&value, &param)?),
+            };
+            if slot.replace(limit).is_some() {
+                return Err(self.err_tok(t, "this bound is already given"));
+            }
+        }
+        match (min, max) {
+            (None, None) => {
+                let t = self.peek();
+                Err(self.err_tok(t, "a range needs >=, <= or both"))
+            }
+            (Some(low), Some(high)) if high < low => {
+                Err(self.err(span, "the range admits no value"))
+            }
+            _ => {
+                self.out.lvs.range.push((model, param, min, max));
+                Ok(())
+            }
+        }
+    }
+
+    /// `lvs ignore_parameter "model" param`. The count `m` is no parameter to
+    /// ignore: it says how many devices a card is.
+    fn lvs_ignore_parameter(&mut self) -> R<()> {
+        let model = self.model()?;
+        let (param, span) = self.ident("a parameter name")?;
+        let param = param.to_ascii_lowercase();
+        if param == "m" {
+            return Err(self.err(span, "`m` counts devices, and cannot be ignored"));
+        }
+        let row = (model, param);
+        if self.out.lvs.ignore_parameter.contains(&row) {
+            return Err(self.err(span, &format!("`{}` is already ignored", row.1)));
+        }
+        self.out.lvs.ignore_parameter.push(row);
+        Ok(())
+    }
+
+    /// `lvs tolerance "model" param relative r absolute a`, either part or
+    /// both, the absolute one in the parameter's unit, converted to SI.
+    fn lvs_tolerance(&mut self) -> R<()> {
+        let model = self.model()?;
+        let (param, param_span) = self.ident("a parameter name")?;
+        let param = param.to_ascii_lowercase();
+        if self
+            .out
+            .lvs
+            .tolerance
+            .iter()
+            .any(|row| row.model == model && row.param == param)
+        {
+            return Err(self.err(
+                param_span,
+                &format!("`{param}` of \"{model}\" already has a tolerance"),
+            ));
+        }
+        let (mut relative, mut absolute) = (None, None);
+        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+            let (key, span) = self.ident("relative or absolute")?;
+            let value = self.value()?;
+            let (slot, number) = match key.as_str() {
+                "relative" => {
+                    let fraction = self.quantity(&value, Dim::Fraction, &key)?.f64();
+                    if !(0.0..=1.0).contains(&fraction) {
+                        return Err(self.err(
+                            value.span(),
+                            "a relative tolerance is a fraction: 0 to 1, or 0% to 100%",
+                        ));
+                    }
+                    (&mut relative, fraction)
+                }
+                "absolute" => {
+                    let Some(dim) = absolute_dim(&param) else {
+                        return Err(self.err(
+                            span,
+                            &format!(
+                                "`{param}` has no known unit, so it takes a relative tolerance only"
+                            ),
+                        ));
+                    };
+                    let amount = self.quantity(&value, dim, &key)?.f64();
+                    if amount < 0.0 {
+                        return Err(self.err(value.span(), "an absolute tolerance is zero or more"));
+                    }
+                    (&mut absolute, amount)
+                }
+                _ => {
+                    return Err(self.err(
+                        span,
+                        &format!("unknown tolerance part `{key}`; expected relative or absolute"),
+                    ))
+                }
+            };
+            if slot.replace(number).is_some() {
+                return Err(self.err(span, &format!("`{key}` is given twice")));
+            }
+        }
+        if relative.is_none() && absolute.is_none() {
+            let t = self.peek();
+            return Err(self.err_tok(t, "a tolerance needs relative, absolute or both"));
+        }
+        self.out.lvs.tolerance.push(ToleranceSrc {
+            model,
+            param,
+            relative: relative.unwrap_or(0.0),
+            absolute: absolute.unwrap_or(0.0),
         });
         Ok(())
     }
@@ -1749,6 +2008,23 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(());
             }
+            Dim::OptLengthList => {
+                let Val::List(items, span) = value else {
+                    return Err(self.wrong(value, "a list of lengths or none", label));
+                };
+                if items.is_empty() {
+                    return Err(self.err(*span, &format!("`{label}` needs at least one entry")));
+                }
+                for item in items {
+                    let stated = if matches!(item, Val::Word { name, .. } if name == "none") {
+                        ParamValue::Flag(false)
+                    } else {
+                        ParamValue::Length(self.length(item, label)?)
+                    };
+                    out.push((engine, ParamSource::Value(stated)));
+                }
+                return Ok(());
+            }
             Dim::LengthRows => {
                 let Val::List(rows, _) = value else {
                     return Err(self.wrong(value, "a list of rows of lengths", label));
@@ -2202,6 +2478,19 @@ fn cmp_text(cmp: Cmp) -> &'static str {
     }
 }
 
+/// The kind an absolute tolerance on `param` is written as, in the unit
+/// [`absolute_unit`](super::absolute_unit) names.
+fn absolute_dim(param: &str) -> Option<Dim> {
+    let (unit, _) = super::absolute_unit(param)?;
+    Some(match unit {
+        "nm" => Dim::Length,
+        "nm2" => Dim::Area,
+        "ohm" => Dim::Resistance,
+        "aF" => Dim::Capacitance,
+        _ => Dim::Count,
+    })
+}
+
 fn pex_keys() -> String {
     PEX.iter()
         .map(|&(name, _)| name)
@@ -2226,6 +2515,7 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::CapPerLength => "a capacitance per length",
         Dim::PerKelvin => "a coefficient per kelvin",
         Dim::PerKelvin2 => "a coefficient per kelvin squared",
+        Dim::Capacitance => "a capacitance",
         Dim::Fraction => "a fraction",
         Dim::Angle => "an angle",
         Dim::Scalar => "a number",
@@ -2243,5 +2533,6 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::Word(_) => "one of the listed words",
         Dim::VoltageList => "a list of voltages",
         Dim::AreaTable(_) => "a list of (area, number) points",
+        Dim::OptLengthList => "a list of lengths or none",
     }
 }
