@@ -205,18 +205,18 @@ pub struct MultipleDriversTable {
 ///
 /// # Limits
 ///
-/// LEF58 must-join-all-ports is not modelled (DRC-084), and neither are the
-/// power-grid checks beyond dangling shapes, such as an instance's supply
-/// terminal left unconnected (ERC-E9).
+/// LEF58 must-join-all-ports is not modelled (DRC-084). A labelled piece of
+/// a supply cut off from its grid is [`FloatingSupplyTable`]'s (ERC-E9).
 ///
-/// Catalog: DRC-084 (partial), ERC-E9 (partial), ERC-G6 in the [check
-/// catalog]. Defined by [SKY130] x.22; LEF58 `MUSTJOINALLPORTS`;
-/// [OpenROAD `check_power_grid`]. Source tags are in [check-sources.md].
+/// Catalog: DRC-084 (partial), ERC-E9, ERC-G6 in the [check catalog].
+/// Defined by [SKY130] x.22; LEF58 `MUSTJOINALLPORTS`; [OpenROAD
+/// `check_power_grid`]. Source tags are in [check-sources.md].
 ///
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
 /// [OpenROAD `check_power_grid`]: https://openroad.readthedocs.io/en/latest/main/src/psm/README.html
+/// [`FloatingSupplyTable`]: crate::erc::rules::supply::FloatingSupplyTable
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct UnconnectedPinTable {
     /// Rule id and severity per row.

@@ -7,10 +7,11 @@
 //! supplies. Data out: violations and one run per row.
 
 use crate::erc::facts::{IntentMap, NetFacts, RoleMask};
+use crate::erc::power::{feed_shape, Process};
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{first_vertex, push_net_violations, record_run, skip_rows, Design, Scratch};
 use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
-use crate::topology::{extract_nets_into, DeviceId, NetId, TerminalRole};
+use crate::topology::{extract_nets_into, DeviceId, NetId, PortTable, TerminalRole};
 use gpurify_geom::ops::{isqrt, point_seg_dist2, winding_of, Point, Seg, Winding};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, RingRef};
@@ -1320,3 +1321,114 @@ fn furthest_from_taps(
 /// "No tap in range": the largest area `ops::isqrt` accepts, so an untapped
 /// region measures `MAX_ABS_DBU` and is reported.
 const NO_TAP_IN_RANGE: DbuArea = DbuArea::new(1i128 << 80);
+
+/// A floating piece of a supply: deck kind `floating_supply`, written
+/// `floating_supply()`.
+///
+/// A declared supply is one logical net, but a layout can leave its shapes in
+/// pieces that carry its name and touch nothing else of it: a stripe not
+/// strapped to the grid, a cell rail cut off from it. The grid is fed where
+/// the supply enters, the centre of its highest, then widest, shape over
+/// every piece ([`extract_into`](crate::erc::power::extract_into)'s feed
+/// point); every other piece is floating. A row flags each, at its lowest
+/// polygon. This is [OpenROAD `check_power_grid`]: it walks the supply's
+/// grid from one top-layer node and reports every shape the walk does not
+/// reach as unconnected (PSM-38), with the instance pins on them (PSM-39);
+/// here a piece is a connected component of the extracted net, and the
+/// device terminals on a floating piece are those pins. The IR-drop and
+/// current rules feed each piece by itself, so without this row a floating
+/// piece reads as a healthy rail. Needs design intent, for which names are
+/// supplies.
+///
+/// # Limits
+///
+/// A piece is found by its label: a stripe that carries no label of the
+/// supply is a net of its own, which [`UnconnectedPinTable`] reports when no
+/// device reaches it.
+///
+/// Catalog: ERC-E9 in the [check catalog]. Defined by
+/// [OpenROAD `check_power_grid`]. Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [OpenROAD `check_power_grid`]: https://openroad.readthedocs.io/en/latest/main/src/psm/README.html
+/// [`UnconnectedPinTable`]: crate::erc::rules::topology::UnconnectedPinTable
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct FloatingSupplyTable {
+    /// Rule id and severity per row. Rows differ only in id and severity.
+    pub head: RuleHead,
+}
+
+/// Runs every [`FloatingSupplyTable`] row.
+///
+/// `examined` counts the pieces of the declared supplies. A violation sits
+/// at the first vertex of a floating piece's lowest-numbered polygon, on its
+/// layer, measuring its connections to the fed piece, 0, against 1. Every
+/// row is skipped when no design intent was given or it declares no supply
+/// this layout has.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_floating_supply(
+    design: Design<'_>,
+    ports: &PortTable,
+    intent: &IntentMap,
+    process: Process<'_>,
+    table: &FloatingSupplyTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if intent.supply_net.is_empty() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
+    let nets = design.nets;
+    // Supply pieces grouped by name: `(name, net)`, ascending.
+    let mut pieces: Vec<(StrId, NetId)> = intent
+        .supply_net
+        .iter()
+        .filter_map(|&net| ports.name_of(net).map(|name| (name, net)))
+        .collect();
+    pieces.sort_unstable();
+    pieces.dedup();
+    let mut floating: Vec<u32> = Vec::new();
+    let mut shapes: Vec<PolyId> = Vec::new();
+    let mut owner: Vec<NetId> = Vec::new();
+    for group in pieces.chunk_by(|a, b| a.0 == b.0) {
+        if group.len() < 2 {
+            continue;
+        }
+        shapes.clear();
+        owner.clear();
+        for &(_, net) in group {
+            for &poly in nets.polys_of(net) {
+                if !nets.holes.is_hole(poly) {
+                    shapes.push(poly);
+                    owner.push(net);
+                }
+            }
+        }
+        if shapes.is_empty() {
+            continue;
+        }
+        let fed = owner[feed_shape(design.store, process, &shapes)];
+        floating.extend(group.iter().filter(|p| p.1 != fed).map(|p| p.1 .0));
+    }
+    floating.sort_unstable();
+    let examined = pieces.len() as u64;
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let rule = table.head.rule[row];
+        push_net_violations(
+            design,
+            &floating,
+            rule,
+            table.head.severity[row],
+            Measurement::Count(0),
+            Measurement::Count(1),
+            out,
+        );
+        record_run(runs, out, before, rule, Outcome::Ran, examined);
+    }
+}

@@ -1,4 +1,4 @@
-//! The forty-nine tables, the deck parser that fills them, and the dispatcher.
+//! The fifty tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
@@ -74,6 +74,8 @@ pub struct RuleSet {
     pub esd_topological: supply::EsdTopologicalTable,
     /// `mixed_tag` rows: [`supply::MixedTagTable`].
     pub mixed_tag: supply::MixedTagTable,
+    /// `floating_supply` rows: [`supply::FloatingSupplyTable`].
+    pub floating_supply: supply::FloatingSupplyTable,
 
     /// `antenna` rows: [`antenna::AntennaTable`].
     pub antenna: antenna::AntennaTable,
@@ -1013,6 +1015,10 @@ impl RuleSet {
                     row.head(&mut table.head)?;
                     table.both.push(both);
                 }
+                "floating_supply" => {
+                    row.layers(0)?;
+                    row.head(&mut set.floating_supply.head)?;
+                }
                 "combinational_loop" => {
                     row.layers(0)?;
                     row.head(&mut set.combinational_loop.head)?;
@@ -1269,6 +1275,7 @@ impl RuleSet {
             "dielectric_field" => &self.dielectric_field.head,
             "hv_tag" => &self.hv_tag.head,
             "mixed_tag" => &self.mixed_tag.head,
+            "floating_supply" => &self.floating_supply.head,
             "fanout" => &self.fanout.head,
             "supply_path" => &self.supply_path.head,
             "gate_path" => &self.gate_path.head,
@@ -1601,6 +1608,7 @@ impl RuleSet {
             &self.tie_high_low.head,
             &self.esd_topological.head,
             &self.mixed_tag.head,
+            &self.floating_supply.head,
             &self.antenna.head,
             &self.antenna_electrical.head,
             &self.density_cmp.head,
@@ -1700,6 +1708,15 @@ impl RuleSet {
         supply::check_missing_tie(design, &self.missing_tie, scratch, out, runs);
         supply::check_tie_high_low(design, facts, intent, &self.tie_high_low, out, runs);
         supply::check_esd_topological(design, intent, &self.esd_topological, out, runs);
+        supply::check_floating_supply(
+            design,
+            ports,
+            intent,
+            process,
+            &self.floating_supply,
+            out,
+            runs,
+        );
         supply::check_mixed_tag(design, &self.mixed_tag, out, runs);
 
         antenna::check_antenna(design, &self.antenna, scratch, out, runs);

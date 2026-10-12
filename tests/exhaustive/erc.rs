@@ -79,6 +79,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(ir_drop(depth));
     out.extend(em_current_density(depth));
     out.extend(em_ac(depth));
+    out.extend(floating_supply());
     out.extend(electromigration());
     out.extend(dynamic_ir_drop());
     out.extend(em_thermal());
@@ -2448,6 +2449,80 @@ fn em_ac(depth: Depth) -> Vec<Fixture> {
             out.push(f);
         }
     }
+    out
+}
+
+/// `floating_supply` (ERC-E9), hand-derived from OpenROAD
+/// `check_power_grid`'s definition: the supply is fed at its highest, then
+/// widest, shape, and every piece of it not joined to that one is floating.
+/// VDD is a 2 µm met2 bar, strapped by a cut to a met1 rail below it in the
+/// joined cases; pieces are met1 rails labelled VDD that nothing joins.
+///
+/// - one piece (the bar strapped to its rail): clean;
+/// - the rail unstrapped: the rail, a lower layer, floats (1);
+/// - two unstrapped rails: both float (2);
+/// - a 0.5 µm met2 stub against a 20 µm met1 rail: the stub is higher, so
+///   it is fed and the larger rail floats (1);
+/// - without intent the row is skipped.
+fn floating_supply() -> Vec<Fixture> {
+    let deck = rail_deck("rule fs floating_supply()");
+    let bar = |l: &mut Layout| {
+        rect(l, "met2", (0, 3000, 20_000, 5000));
+        *l = std::mem::take(l).label("m2txt", 1000, 4000, "VDD");
+    };
+    let strap = |l: &mut Layout| {
+        rect(l, "met1", (900, 0, 1100, 3500));
+        rect(l, "via1", (950, 3100, 1050, 3200));
+    };
+    let one = {
+        let mut l = Layout::default();
+        bar(&mut l);
+        rail(&mut l, "VDD", 20_000, 0, 1000, &[18_000]);
+        strap(&mut l);
+        l
+    };
+    let unstrapped = {
+        let mut l = Layout::default();
+        bar(&mut l);
+        rail(&mut l, "VDD", 20_000, 0, 1000, &[18_000]);
+        l
+    };
+    let two = {
+        let mut l = unstrapped.clone();
+        rail(&mut l, "VDD", 20_000, -3000, 1000, &[2000]);
+        l
+    };
+    let stub = {
+        let mut l = Layout::default();
+        rect(&mut l, "met2", (0, 3000, 500, 3500));
+        l = l.label("m2txt", 250, 3250, "VDD");
+        rail(&mut l, "VDD", 20_000, 0, 1000, &[18_000]);
+        l
+    };
+    let supplies = intent(&[("core", 1800.0)], &[("VDD", "core", "power")], &[]);
+    let mut out = Vec::new();
+    for (name, layout, floating) in [
+        ("one_piece", one.clone(), 0),
+        ("unstrapped", unstrapped, 1),
+        ("two_rails", two, 2),
+        ("higher_stub", stub, 1),
+    ] {
+        let mut f = Fixture::new(
+            &format!("erc/floating_supply/{name}"),
+            &["ERC-E9"],
+            &deck,
+            ERC,
+        )
+        .layout(layout)
+        .expect(Expect::rule("fs", vec![count(0); floating]));
+        f.intent = Some(supplies.clone());
+        out.extend(every_placement(&[f]));
+    }
+    out.push(
+        Fixture::new("erc/floating_supply/no_intent", &["ERC-E9"], &deck, ERC)
+            .layout(one)
+            .expect(Expect::outcome("fs", Want::Skipped)),
+    );
     out
 }
 

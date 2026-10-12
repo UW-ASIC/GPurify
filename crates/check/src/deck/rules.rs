@@ -746,6 +746,9 @@ kinds! {
     floating_gate() [] { labels_are_ports: bool = "labels_are_ports" }
     /// [`FloatingWellTable`](crate::erc::rules::topology::FloatingWellTable): `floating_well(well, tap)`.
     floating_well(well: one, tap: one) [] {}
+    /// [`FloatingSupplyTable`](crate::erc::rules::supply::FloatingSupplyTable):
+    /// `floating_supply()`.
+    floating_supply() [] {}
     /// [`ForwardDiodeTable`](crate::erc::rules::latchup::ForwardDiodeTable):
     /// `forward_diode(marker; models)`.
     forward_diode(marker: one) [] { models: &[&str] = "model" }
