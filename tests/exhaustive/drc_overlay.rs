@@ -81,6 +81,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         anchored_patterning(),
         colour_spacing(),
         density_balance(),
+        cover_density(),
         critical_area(),
         stitch(),
         trim_cut(),
@@ -4685,6 +4686,76 @@ fn critical_area() -> Vec<Fixture> {
             [vec![], vec![], vec![], vec![]],
         ),
     ])
+}
+
+/// Density held to the band a cover layer picks (`cover_density`, DRC-076,
+/// sky130's waffle-drop rule shape with deck-supplied values): one 1000 nm
+/// window over a die `[0, 1000]²`, bands starting at cover 25%, 50% and 100%
+/// asking density 25%, 50% and 75%, read `inclusive` and not.
+///
+/// Oracle: coverage and density by hand from the drawn areas (window area
+/// 10^6): a cover of exactly 50% is the 50% band inclusive (need 0.5) and the
+/// 25% band exclusive (need 0.25); a full cover is the 100% band inclusive
+/// (0.75) and the 50% band exclusive (0.5); 49.9% and 50.1% fall either side
+/// alike; 20% is below every band (not judged, even with nothing drawn on
+/// the held layer). The held layer's area is swept a step either side of
+/// each need (499 000, 500 000, 501 000 for 0.5), one finding below it.
+fn cover_density() -> Vec<Fixture> {
+    let deck = |inclusive: bool| {
+        new_deck(
+            &["m", "c", "die"],
+            &format!(
+                "rule cd cover_density(m, c, die; window: 1000nm, step: 1000nm, \
+                 cover: [25%, 50%, 100%], density: [25%, 50%, 75%], inclusive: {inclusive})\n"
+            ),
+        )
+    };
+    let ratio = |d: f64| Finding {
+        measured: Some(Measurement::Ratio(d)),
+        at: None,
+    };
+    let mut cases = Vec::new();
+    // (cover area, need inclusive, need exclusive), areas of 10^6.
+    for (cover, incl, excl) in [
+        (500_000, Some(500_000), Some(250_000)),
+        (1_000_000, Some(750_000), Some(500_000)),
+        (499_000, Some(250_000), Some(250_000)),
+        (501_000, Some(500_000), Some(500_000)),
+        (200_000, None, None),
+    ] {
+        for (inclusive, need) in [(true, incl), (false, excl)] {
+            let held = match need {
+                Some(need) => vec![need - 1000, need, need + 1000],
+                None => vec![0, 100_000],
+            };
+            for area in held {
+                let mut layout = Layout::default().rect("die", 0, 0, 1000, 1000).rect(
+                    "c",
+                    0,
+                    0,
+                    1000,
+                    cover / 1000,
+                );
+                if area > 0 {
+                    layout = layout.rect("m", 0, 0, area / 1000, 1000);
+                }
+                let found = match need {
+                    Some(need) if area < need => {
+                        vec![ratio(f64::from(i32::try_from(area).expect("small")) / 1e6)]
+                    }
+                    _ => Vec::new(),
+                };
+                cases.push(fixture(
+                    &format!("cover_density/{cover}/{inclusive}/{area}"),
+                    &["DRC-076"],
+                    &deck(inclusive),
+                    layout,
+                    &[("cd", found)],
+                ));
+            }
+        }
+    }
+    every_placement(cases)
 }
 
 /// `density_balance(c1, c2, die; window: 1000nm, step: 1000nm) >= 0.5`

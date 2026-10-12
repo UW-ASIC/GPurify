@@ -1803,6 +1803,48 @@ pub enum Rule {
         /// Index into [`RuleSet::widths`].
         widths: u32,
     },
+    /// A window whose density on `layer` is below what its coverage by
+    /// `cover` asks for.
+    ///
+    /// Deck: `cover_density(L, C[, boundary]; window: len, step: len, cover:
+    /// [frac, ..], density: [frac, ..], inclusive: bool)`, kind
+    /// `cover_density`. Windows are swept as for [`Rule::Density`], over the
+    /// die (the drawn layers' extent, or `boundary`'s), the outside of the die
+    /// counting as empty. In each window the merged `cover`'s coverage picks
+    /// a band of [`CoverBands`]: the last whose `cover` fraction it reaches
+    /// (`inclusive`) or exceeds (not `inclusive`); the merged `layer`'s
+    /// coverage below that band's `density` is a violation, and a window
+    /// below every band is not judged. sky130 m1.- to m4.- ("An entire
+    /// 700x700 window is covered by cmm1 waffleDrop, and metX PD < 70% for
+    /// same window. 80-100% of 700x700 window is covered ..., and metX PD <
+    /// 65% ..." down to 30-40% and 30%) is this rule with a 700 µm window:
+    /// the manual states no window step and does not say which band a
+    /// coverage of exactly 80% is in, so the deck states both. Values
+    /// deck-supplied; no public deck states them, and Cadence's public sky130
+    /// DRM (2025-07-22) lists the rule as obsolete.
+    ///
+    /// One violation per failing window, on `layer`, at the window's centre
+    /// (floored), `measured` the `layer` coverage against the band's
+    /// `density`, naming no shape. Fractions compare in `f64`, as for
+    /// [`Rule::Density`]. `examined` counts windows; an empty die is
+    /// [`Outcome::Skipped`].
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-076. Rules: sky130 m1.- to m4.- (waffle drop, flag RC).
+    CoverDensity {
+        /// The layer whose density is held.
+        layer: LayerId,
+        /// The layer whose coverage picks the band.
+        cover: LayerId,
+        /// The die outline; `None` takes the drawn layers' extent.
+        boundary: Option<LayerId>,
+        /// The window's side, in grid units; positive.
+        window: Dbu,
+        /// The sweep step, in grid units; positive.
+        step: Dbu,
+        /// Index into [`RuleSet::cover_bands`].
+        bands: u32,
+    },
     /// A layer whose drawing does not start at the layout's origin.
     ///
     /// Deck: `origin(L)`, kind `origin`. The lower-left corner of the
@@ -2363,6 +2405,54 @@ pub enum Rule {
     },
 }
 
+/// The bands of [`Rule::CoverDensity`]: per band, the coverage of the
+/// covering layer from which it applies and the density it asks of the
+/// held layer.
+///
+/// Every table in a [`RuleSet`] passed [`CoverBands::is_valid`]; one built
+/// by hand must too.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoverBands {
+    /// The coverage each band starts at, from 0 to 1, rising strictly.
+    pub cover: Vec<f64>,
+    /// The density each band asks, from 0 to 1 (0 asks nothing), one per
+    /// band.
+    pub density: Vec<f64>,
+    /// `true`: a coverage exactly at a band's start is in that band; `false`:
+    /// it is in the band below.
+    pub inclusive: bool,
+}
+
+impl CoverBands {
+    /// Whether there is a band, one density per band, every value a fraction
+    /// in `0..=1`, and the starts rising strictly. [`RuleSet::from_deck`]
+    /// refuses a table that is not ([`DrcError::BadTable`]).
+    pub fn is_valid(&self) -> bool {
+        let fraction = |v: &f64| (0.0..=1.0).contains(v);
+        !self.cover.is_empty()
+            && self.cover.len() == self.density.len()
+            && self.cover.iter().all(fraction)
+            && self.density.iter().all(fraction)
+            && self.cover.windows(2).all(|pair| pair[0] < pair[1])
+    }
+
+    /// The density a window covered to `coverage` asks for, or `None` below
+    /// every band.
+    pub fn need(&self, coverage: f64) -> Option<f64> {
+        let reaches = |start: &f64| {
+            if self.inclusive {
+                coverage >= *start
+            } else {
+                coverage > *start
+            }
+        };
+        self.cover
+            .iter()
+            .rposition(reaches)
+            .map(|band| self.density[band])
+    }
+}
+
 /// The legal spans of [`Rule::SpanLength`], per axis: every listed length but
 /// the last is legal exactly, and the last and anything longer are legal.
 ///
@@ -2714,6 +2804,8 @@ pub struct RuleSet {
     pub class_tables: Vec<ClassTable>,
     /// The tables [`Rule::SpanLength`] names.
     pub span_tables: Vec<SpanTable>,
+    /// The bands each [`Rule::CoverDensity`] names.
+    pub cover_bands: Vec<CoverBands>,
     /// The tables [`Rule::CutClassSpacing`] names.
     pub cut_tables: Vec<CutClassTable>,
     /// The cut layers, bottom to top, of each [`Rule::ViaStack`].
@@ -3000,6 +3092,44 @@ impl RuleSet {
                     radius: length(spec, "radius")?,
                     limit: area_limit(spec, "limit")?,
                 },
+                "cover_density" => {
+                    let boundary = if spec.layer_len == 2 {
+                        None
+                    } else {
+                        layers(spec, 3)?;
+                        Some(layer(spec, 2))
+                    };
+                    let fractions = |param: &'static str| -> Result<Vec<f64>, DrcError> {
+                        let wanted = strings.get(param);
+                        rules
+                            .params_of(spec)
+                            .iter()
+                            .filter(|&&(name, _)| Some(name) == wanted)
+                            .map(|&(_, stated)| match stated {
+                                ParamValue::Ratio(v) => Ok(v),
+                                _ => Err(wrong_type(spec, param)),
+                            })
+                            .collect()
+                    };
+                    let bands = CoverBands {
+                        cover: fractions("cover")?,
+                        density: fractions("density")?,
+                        inclusive: flag(spec, "inclusive")?,
+                    };
+                    if !bands.is_valid() {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    set.cover_bands.push(bands);
+                    Rule::CoverDensity {
+                        layer: layer(spec, 0),
+                        cover: layer(spec, 1),
+                        boundary,
+                        window: length(spec, "window")?,
+                        step: length(spec, "step")?,
+                        bands: u32::try_from(set.cover_bands.len() - 1)
+                            .expect("a deck has few tables"),
+                    }
+                }
                 "density_balance" => {
                     let boundary = if spec.layer_len == 2 {
                         None
@@ -3845,6 +3975,22 @@ impl RuleSet {
                         radius,
                         limit,
                     } => area::critical_area(store, id, layer, radius, limit, s, out),
+                    Rule::CoverDensity {
+                        layer,
+                        cover,
+                        boundary,
+                        window,
+                        step,
+                        bands,
+                    } => area::cover_density(
+                        store,
+                        id,
+                        (layer, cover, boundary, drawn),
+                        (window, step),
+                        &self.cover_bands[bands as usize],
+                        s,
+                        out,
+                    ),
                     Rule::DensityBalance {
                         a,
                         b,
@@ -4271,7 +4417,9 @@ impl Rule {
     fn more_layers(&self) -> [Option<LayerId>; 4] {
         match *self {
             Rule::AnchoredPatterning { anchors, .. } => anchors,
-            Rule::DensityBalance { boundary, .. } => [boundary, None, None, None],
+            Rule::DensityBalance { boundary, .. } | Rule::CoverDensity { boundary, .. } => {
+                [boundary, None, None, None]
+            }
             _ => [None; 4],
         }
     }
@@ -4409,6 +4557,8 @@ impl Rule {
                 limit,
                 ..
             } => length(window).and(length(step)).and(fraction(limit)),
+            // The bands are checked where they are filed.
+            Rule::CoverDensity { window, step, .. } => length(window).and(length(step)),
             Rule::GlobalDensity { limit, .. }
             | Rule::AspectRatio { limit, .. }
             | Rule::RegionDensity { limit, .. }
@@ -4651,6 +4801,7 @@ impl Rule {
             Rule::AnchoredPatterning { .. } => "anchored_patterning",
             Rule::CriticalArea { .. } => "critical_area",
             Rule::DensityBalance { .. } => "density_balance",
+            Rule::CoverDensity { .. } => "cover_density",
             Rule::Forbidden { .. } => "forbidden",
             Rule::MustContain { .. } => "must_contain",
             Rule::MustBeInside { .. } => "must_be_inside",
@@ -4746,6 +4897,9 @@ impl Rule {
             Rule::MinSpacingDiff { a, b, .. }
             | Rule::ProjectionSpacing { a, b, .. }
             | Rule::DensityBalance { a, b, .. }
+            | Rule::CoverDensity {
+                layer: a, cover: b, ..
+            }
             | Rule::Overlap { a, b, .. }
             | Rule::MinEnclosure {
                 outer: a, inner: b, ..

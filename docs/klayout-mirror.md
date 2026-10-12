@@ -317,8 +317,9 @@ explains (kind 30).
 | 68 | keep_out_zone | `keep_out_zone(L; class, to, end_side, end_forward, side_side, side_forward)` | ROW PAIR | EXACT (scripted) | exact | new |
 | 69 | protrusion_width | `protrusion_width(L; wide) >= l` | POINT | EXACT (scripted) | exact | new |
 | 70 | origin | `origin(L)` | POINT | EXACT (scripted) | exact | new |
+| 71 | cover_density | `cover_density(L, C[, d]; window, step, cover, density, inclusive)` | POINT | EXACT (scripted) | exact | new |
 
-46 kinds are EXACT (eight scripted over KLayout's polygons), 16 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
+47 kinds are EXACT (nine scripted over KLayout's polygons), 16 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`, and between two layers (`space(A, B; nets: ..)`), which is not mirrored. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1456,6 +1457,16 @@ keeps area exactly where a `2w` square fits, and growing it back gives their uni
 **GPurify** (`grid.rs` `origin`): the box of every row on the layer; unless its lower-left corner
 is `(0, 0)`, one finding there. **KLayout** (prelude `origin`): `layer.data.bbox`, the same
 corner. **Key**: POINT. **Oracle**: sky130 x.19 and the drawn boxes. Fixtures `origin/*`.
+
+### 71. cover_density — EXACT (scripted)
+
+**GPurify** (`area.rs` `cover_density`): windows as `density`'s over the die; per window, the
+merged cover layer's coverage picks the last band it reaches (or exceeds), and the merged held
+layer's coverage below that band's density is a finding at the window's centre. **KLayout**
+(prelude `cover_density`): the same windows (`positions`, as `density_balance`), the two
+coverages by `Region` areas clipped to each window, the same band choice. **Key**: POINT.
+**Oracle**: sky130 m1.- (the band table's shape) with deck-supplied values; fixtures
+`cover_density/*`.
 
 ### Derived-layer operations
 

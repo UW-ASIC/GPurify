@@ -71,6 +71,9 @@ pub(crate) enum Dim {
     /// `[[a, b, ..], ..]`, rows of current per width; one engine param per
     /// cell, row by row, in A/m.
     CurrentPerWidthRows,
+    /// `[a, b, ..]`, fractions written bare or as `%`; one engine param per
+    /// element, from 0 to 1.
+    FractionList,
     /// `[[a, b, ..], ..]`, rows of lengths; one engine param per cell, row by row.
     LengthRows,
     /// `[a x b, ..]`, pairs of lengths; per pair, the first to the param's
@@ -579,6 +582,26 @@ pub(crate) const KINDS: &[Kind] = &[
             &[0, 1],
             DENSITY_LIMIT,
             DENSITY,
+        )
+    },
+    // A layer's density per window, held to the band its coverage by a second
+    // layer falls in (sky130 m1.- to m4.-, the waffle-drop rule), an optional
+    // third layer the die. Every value is the deck's.
+    Kind {
+        more: true,
+        ..drc(
+            "cover_density",
+            Cmp::Absent,
+            "cover_density",
+            &[0, 1],
+            None,
+            &[
+                p("window", "window", Dim::Length),
+                p("step", "step", Dim::Length),
+                p("cover", "cover", Dim::FractionList),
+                p("density", "density", Dim::FractionList),
+                p("inclusive", "inclusive", Dim::Bool),
+            ],
         )
     },
     // The engine takes the outer layer first; the deck writes `enclosure(inner, outer)`.
