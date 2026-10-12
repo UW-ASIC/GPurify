@@ -148,8 +148,12 @@ impl Place {
 
 /// `layout` drawn so that `place` puts it back where it was: every point
 /// through [`Place::undo`], a reflected outline reversed to stay
-/// counter-clockwise.
+/// counter-clockwise. The drawer draws one flat cell, with no instances.
 fn unplaced(layout: &Layout, place: Place) -> Layout {
+    assert!(
+        layout.cells.is_empty() && layout.instances.is_empty(),
+        "a flat die"
+    );
     Layout {
         shapes: layout
             .shapes
@@ -170,6 +174,7 @@ fn unplaced(layout: &Layout, place: Place) -> Layout {
                 (layer.clone(), x, y, text.clone())
             })
             .collect(),
+        ..Layout::default()
     }
 }
 

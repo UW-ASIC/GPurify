@@ -90,6 +90,7 @@ fn render(cli: &args::Cli, decks: &[(&str, DeckFn)]) -> Result<(Summary, String)
                 &json::Report {
                     header: &header,
                     violations: &run.outputs.violations,
+                    waived: &run.outputs.waived,
                     runs: &run.outputs.runs,
                     strings: &run.strings,
                     grid: run.grid,
