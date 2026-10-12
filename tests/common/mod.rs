@@ -118,7 +118,7 @@ impl Run {
     /// Drop the reference netlist, so LVS has nothing to compare against.
     #[must_use]
     pub fn without_reference(mut self) -> Self {
-        self.inputs.reference = None;
+        self.inputs.reference = Vec::new();
         self
     }
 
@@ -258,7 +258,7 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
         // No reference netlist and no design intent exist yet, so `Inputs`
         // starts without them and `without_reference` / `without_intent` are
         // idempotent.
-        reference: None,
+        reference: Vec::new(),
         intent: None,
     };
 
@@ -590,7 +590,7 @@ fn case_inputs(
     Inputs {
         layout: fixtures().join(domain).join(format!("{id}.gds")),
         deck: fixtures().join("params.deck"),
-        reference,
+        reference: reference.into_iter().collect(),
         intent,
     }
 }

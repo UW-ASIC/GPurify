@@ -67,7 +67,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     let mut deck: Option<&str> = None;
     let mut format = Format::Text;
     let mut intent: Option<&str> = None;
-    let mut reference: Option<&str> = None;
+    let mut reference: Vec<&str> = Vec::new();
     let mut quasistatic: Vec<String> = Vec::new();
     let mut spec: Option<&str> = None;
     let mut accuracy: Option<&str> = None;
@@ -85,7 +85,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         match token {
             "--deck" => deck = Some(value()?),
             "--intent" => intent = Some(value()?),
-            "--reference" => reference = Some(value()?),
+            "--reference" => reference.push(value()?),
             "--quasistatic" => quasistatic.push(value()?.to_string()),
             "--spec" => spec = Some(value()?),
             "--accuracy" => accuracy = Some(value()?),
@@ -194,14 +194,14 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     };
     for (flag, given, allowed) in [
         ("--intent", intent.is_some(), takes_intent),
-        ("--reference", reference.is_some(), takes_reference),
+        ("--reference", !reference.is_empty(), takes_reference),
         ("--quasistatic", !quasistatic.is_empty(), takes_quasistatic),
     ] {
         if given && !allowed {
             return usage(format!("{subcommand} takes no {flag}"));
         }
     }
-    if checks == (Checks { lvs: true, ..none }) && reference.is_none() {
+    if checks == (Checks { lvs: true, ..none }) && reference.is_empty() {
         return usage("lvs requires a reference netlist (--reference)".to_string());
     }
     // A check with no parasitic network would write an empty file that reads as clean.
@@ -259,7 +259,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         inputs: Inputs {
             layout: PathBuf::from(layout),
             deck: PathBuf::from(deck),
-            reference: reference.map(PathBuf::from),
+            reference: reference.into_iter().map(PathBuf::from).collect(),
             intent: intent.map(PathBuf::from),
         },
         options: RunOptions {
@@ -300,7 +300,17 @@ mod tests {
 
         let all = parse_str("all t --deck d --reference r --intent i").expect("legal");
         assert_eq!(all.options.checks, Checks::ALL);
-        assert!(all.inputs.reference.is_some() && all.inputs.intent.is_some());
+        assert!(!all.inputs.reference.is_empty() && all.inputs.intent.is_some());
+        // `docs/usage.md`: a Verilog top is given beside its cell library.
+        let two =
+            parse_str("lvs t --deck d --reference cells.spice --reference top.v").expect("legal");
+        assert_eq!(
+            two.inputs.reference,
+            [
+                std::path::PathBuf::from("cells.spice"),
+                std::path::PathBuf::from("top.v")
+            ]
+        );
     }
 
     /// Oracle: `docs/liberty.md`: `--accuracy all` is the five levels, `2` is

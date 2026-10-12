@@ -1,4 +1,5 @@
-//! Reference-netlist readers: SPICE/CDL and Spectre.
+//! Reference-netlist readers: SPICE/CDL and Spectre, and structural
+//! Verilog read over either as its cell library ([`verilog`]).
 //!
 //! Data in: netlist text and the run's `StrTable`. Data out: [`Netlist`], hierarchy kept.
 //! Anything outside the declared subset is an error with its source line, never a guess.
@@ -126,6 +127,10 @@ pub enum NetlistError {
          {MAX_FLAT_ELEMENTS} a flat comparison holds; LVS flattens every instance"
     )]
     TooLarge(u64),
+    /// Two SPICE or Spectre netlists given for one reference, which takes
+    /// one beside any number of Verilog files: the two paths.
+    #[error("the reference takes one SPICE or Spectre netlist, but {0} and {1} were both given")]
+    Several(String, String),
     /// The netlist file could not be read. The readers never return it; a
     /// caller reading the file does.
     #[error("io: {0}")]
@@ -428,11 +433,19 @@ impl Netlist {
     /// The one subcircuit nothing instantiates. `None` when not unique, or
     /// when there is none: `lvs` refuses, never guesses.
     pub fn top(&self) -> Option<SubcktId> {
+        self.top_in(0..narrow(self.subckt_count()))
+    }
+
+    /// The one subcircuit of `rows` nothing instantiates, as [`Self::top`]
+    /// asks of all: what a Verilog top level read over a cell library is
+    /// ([`verilog::read_into`] returns its modules' rows), the library's
+    /// unused cells aside.
+    pub fn top_in(&self, rows: std::ops::Range<u32>) -> Option<SubcktId> {
         let mut instantiated = vec![false; self.subckt_count()];
         for &callee in &self.instance_of {
             instantiated[callee.0 as usize] = true;
         }
-        let mut free = (0..narrow(instantiated.len())).filter(|&row| !instantiated[row as usize]);
+        let mut free = rows.filter(|&row| !instantiated[row as usize]);
         match (free.next(), free.next()) {
             (Some(top), None) => Some(SubcktId(top)),
             _ => None,
@@ -1232,7 +1245,7 @@ fn read_dialect(
 /// longer than its table, monotone, ending at the column it indexes (the
 /// instance one empty when there are no instances), the parallel columns
 /// equally long, and every net and subcircuit id in range.
-fn tables_hold(netlist: &Netlist) -> bool {
+pub(crate) fn tables_hold(netlist: &Netlist) -> bool {
     let csr = |start: &[u32], rows: usize, len: usize| {
         start.len() == rows + 1
             && start.windows(2).all(|w| w[0] <= w[1])
@@ -1271,6 +1284,8 @@ fn tables_hold(netlist: &Netlist) -> bool {
         && netlist.instance_of.iter().all(subckt_ok)
         && netlist.instance_subckt.iter().all(subckt_ok)
 }
+
+pub mod verilog;
 
 /// SPICE and CDL. The accepted subset is in the [module docs](super).
 pub mod spice {

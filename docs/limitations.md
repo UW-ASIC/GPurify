@@ -275,7 +275,6 @@ says which foundry manual, standard or tool defines each one.
 | LVS-068 | Device-count and parameter-range limits (devices per model, W/L inside the model's valid range) | partial | The deck's `lvs range "model" param >= min <= max` holds every layout device of the model to bounds on a measured parameter (w, l, perim, ps, pd, pe, area, as, ad, ae, nf; a bound is legal), reported as lvs.param_range on the marker; a device whose parameter was not measured refuses the row. Recorded only when the deck states a range, with LVS. Per-model device counts are missing |
 | LVS-073 | 3D / system LVS across dies | partial | gpurify system: dies placed by a system description (origin, quarter turns, mirror), bonded where rectangular bumps of facing faces overlap; system.unbonded_bump, then system.open and system.short pin by pin against the system netlist's die instances and top ports, then the flat device comparison. Bumps must be rectangles and every die on one grid; cross-die bump alignment, size and spacing (DRC-129) and 3D extraction (PEX-015) are not checked |
 | LVS-074 | Layout-dependent-effect parameters (LOD SA/SB/SD, WPE SCA/SCB/SCC) | missing | BSIM4 defines the instance parameters and their geometry; no open PDK deck extracts them |
-| LVS-075 | Structural Verilog reference netlist | missing | Digital top levels arrive as gate-level Verilog |
 
 ### Electrical rules (ERC)
 

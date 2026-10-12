@@ -328,7 +328,7 @@ fn ours(deck: &str, gds: &Path, pairs: &[(u16, u16)], dir: &Path) -> Result<Ours
     let loaded = load(&Inputs {
         layout: gds.to_path_buf(),
         deck: path,
-        reference: None,
+        reference: Vec::new(),
         intent: None,
     })
     .map_err(|e| format!("GPurify refused the layout: {e}"))?;

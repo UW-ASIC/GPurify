@@ -8,7 +8,7 @@ use gpurify_check::deck::{BuildError, CompileError, CompiledDeck, DeckFn};
 use gpurify_check::topology::{DeviceTable, Extraction, NetTable, PortTable};
 use gpurify_geom::{GeometryStore, Grid};
 use gpurify_ingest::layout::UnknownLayers;
-use gpurify_ingest::netlist::Netlist;
+use gpurify_ingest::netlist::{Netlist, SubcktId};
 use gpurify_ingest::{DesignIntent, Provenance, StrTable};
 use std::path::{Path, PathBuf};
 
@@ -23,8 +23,11 @@ pub struct Inputs {
     /// [deck.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/deck.md);
     /// or, for [`load_with`], the name of a deck the binary carries.
     pub deck: PathBuf,
-    /// The reference netlist, SPICE or Spectre. Absent means LVS is skipped.
-    pub reference: Option<PathBuf>,
+    /// The reference netlist files, read together: at most one SPICE or
+    /// Spectre netlist, and any number of structural Verilog files (`.v`)
+    /// whose modules place its cells ([`read_references`]). Empty means
+    /// LVS is skipped.
+    pub reference: Vec<PathBuf>,
     /// The design-intent JSON. Absent means the intent-gated ERC rules are skipped.
     pub intent: Option<PathBuf>,
 }
@@ -141,18 +144,17 @@ pub fn load_with(inputs: &Inputs, decks: &[(&str, DeckFn)]) -> Result<Loaded, Lo
     let (store, mut provenance) = library.flatten(&deck, &strings, UnknownLayers::Reject)?;
     provenance.resolve_labels(&store, &deck.connectivity)?;
 
-    let reference = match &inputs.reference {
-        None => None,
-        Some(path) => {
-            let netlist = read_reference(path, &deck.devices, &mut strings)?;
-            // LVS compares leaf devices, so a block the schematic places by
-            // instance must be in the comparison: flatten below the top. With
-            // no unique top, LVS reports that instead of guessing.
-            Some(match netlist.top() {
-                Some(top) => netlist.flatten_top(top, &mut strings)?,
-                None => netlist,
-            })
-        }
+    let reference = if inputs.reference.is_empty() {
+        None
+    } else {
+        let (netlist, top) = read_reference_files(&inputs.reference, &deck.devices, &mut strings)?;
+        // LVS compares leaf devices, so a block the schematic places by
+        // instance must be in the comparison: flatten below the top. With
+        // no unique top, LVS reports that instead of guessing.
+        Some(match top {
+            Some(top) => netlist.flatten_top(top, &mut strings)?,
+            None => netlist,
+        })
     };
     let intent = match &inputs.intent {
         None => None,
@@ -258,6 +260,86 @@ pub(crate) fn read_reference(
         Some("scs" | "spectre")
     );
     read_reference_text(&source, spectre_by_name, devices, strings)
+}
+
+/// Read the reference netlist files: a `.v` file is structural Verilog,
+/// any other a SPICE or Spectre netlist, whose first subcircuit opener
+/// picks the dialect (`subckt` Spectre, `.subckt` SPICE; the extension
+/// `.scs` or `.spectre` decides only without one). Returns the netlist and
+/// its top ([`read_references`]).
+fn read_reference_files(
+    paths: &[PathBuf],
+    devices: &gpurify_ingest::deck::DeviceRecognition,
+    strings: &mut StrTable,
+) -> Result<(Netlist, Option<SubcktId>), gpurify_ingest::netlist::NetlistError> {
+    let read = |path: &PathBuf| {
+        std::fs::read_to_string(path).map_err(|why| {
+            gpurify_ingest::netlist::NetlistError::Io(format!("{}: {why}", path.display()))
+        })
+    };
+    let extension = |path: &PathBuf| {
+        path.extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .map(str::to_owned)
+    };
+    let mut netlist: Option<(&PathBuf, String, bool)> = None;
+    let mut verilog = Vec::new();
+    for path in paths {
+        let extension = extension(path);
+        if extension.as_deref() == Some("v") {
+            verilog.push(read(path)?);
+            continue;
+        }
+        if let Some((first, _, _)) = netlist {
+            return Err(gpurify_ingest::netlist::NetlistError::Several(
+                first.display().to_string(),
+                path.display().to_string(),
+            ));
+        }
+        let spectre = matches!(extension.as_deref(), Some("scs" | "spectre"));
+        netlist = Some((path, read(path)?, spectre));
+    }
+    let verilog: Vec<&str> = verilog.iter().map(String::as_str).collect();
+    read_references(
+        netlist
+            .as_ref()
+            .map(|(_, text, spectre)| (text.as_str(), *spectre)),
+        &verilog,
+        devices,
+        strings,
+    )
+}
+
+/// Reads a reference given as text: `netlist`, a SPICE or Spectre netlist
+/// read by [`read_reference_text`] (with whether its file was named as
+/// Spectre), and `verilog`, structural Verilog files whose modules place its
+/// subcircuits as cells
+/// ([`verilog::read_into`](gpurify_ingest::netlist::verilog::read_into)),
+/// as Netgen reads a digital top level over its cell library (catalog
+/// LVS-075). Returns the netlist and its top: with Verilog, the one module
+/// no other module places, the library's unused cells aside; without, the
+/// one subcircuit nothing places. `None` when that is not unique.
+///
+/// # Errors
+///
+/// The readers' [`NetlistError`](gpurify_ingest::netlist::NetlistError).
+pub fn read_references(
+    netlist: Option<(&str, bool)>,
+    verilog: &[&str],
+    devices: &gpurify_ingest::deck::DeviceRecognition,
+    strings: &mut StrTable,
+) -> Result<(Netlist, Option<SubcktId>), gpurify_ingest::netlist::NetlistError> {
+    let mut out = match netlist {
+        Some((text, spectre)) => read_reference_text(text, spectre, devices, strings)?,
+        None => Netlist::default(),
+    };
+    if verilog.is_empty() {
+        let top = out.top();
+        return Ok((out, top));
+    }
+    let modules = gpurify_ingest::netlist::verilog::read_into(verilog, strings, &mut out)?;
+    let top = out.top_in(modules);
+    Ok((out, top))
 }
 
 /// Reads reference netlist text in the dialect its first subcircuit opener
