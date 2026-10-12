@@ -395,8 +395,19 @@ def max_cut_spacing(rule, cuts, others, lim)
     put({ rule: rule }.merge(poly(c))) unless ok
   end
 end
-def via_stack(rule, layers, max)
+# With `metals` (the merged metal below and above each cut layer, one more
+# than the cut layers), a cut of a via of two or more cuts (cuts joining the
+# same two metal figures) stacks with nothing.
+def via_stack(rule, layers, max, metals = nil)
   cuts = layers.map { |l| l.data.each.to_a }
+  unless metals.nil?
+    figs = metals.map { |m| m.data.merged.each.to_a }
+    first = lambda { |fs, c| fs.index { |f| !(RBA::Region.new(f) & RBA::Region.new(c.bbox)).is_empty? } }
+    cuts = cuts.each_with_index.map do |cs, i|
+      key = cs.map { |c| [first.(figs[i], c), first.(figs[i + 1], c)] }
+      cs.each_index.select { |k| key.count(key[k]) == 1 }.map { |k| cs[k] }
+    end
+  end
   over = lambda { |a, b| a.left < b.right && b.left < a.right && a.bottom < b.top && b.bottom < a.top }
   chain = lambda do |order, step|
     h = cuts.map { |cs| [1] * cs.size }
@@ -1375,16 +1386,41 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 .expect("a String");
                 exact("max_cut_spacing", Key::Row(None), Value::Ignore)
             }
-            Rule::ViaStack { stack, max_height } => {
-                let cuts: Vec<String> = set.stacks[stack as usize]
-                    .iter()
-                    .map(|&layer| {
-                        layers.reads(layer, &mut reads);
-                        format!("{}.dup.raw", var(layer))
-                    })
-                    .collect();
-                writeln!(body, "via_stack({q}, [{}], {max_height})", cuts.join(", "))
-                    .expect("a String");
+            Rule::ViaStack {
+                stack,
+                single,
+                max_height,
+            } => {
+                let all = &set.stacks[stack as usize];
+                for &layer in all {
+                    layers.reads(layer, &mut reads);
+                }
+                let (cuts, metals): (Vec<String>, Vec<String>) = if single {
+                    (
+                        all.iter()
+                            .skip(1)
+                            .step_by(2)
+                            .map(|&l| format!("{}.dup.raw", var(l)))
+                            .collect(),
+                        all.iter().step_by(2).map(|&l| var(l)).collect(),
+                    )
+                } else {
+                    (
+                        all.iter().map(|&l| format!("{}.dup.raw", var(l))).collect(),
+                        Vec::new(),
+                    )
+                };
+                let metals = if single {
+                    format!(", [{}]", metals.join(", "))
+                } else {
+                    String::new()
+                };
+                writeln!(
+                    body,
+                    "via_stack({q}, [{}], {max_height}{metals})",
+                    cuts.join(", ")
+                )
+                .expect("a String");
                 exact("via_stack", Key::Row(None), Value::Count)
             }
             Rule::CutClassSpacing { layer, table } => {
@@ -1734,6 +1770,14 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
             Rule::MinStep { .. } => (
                 "min_step",
                 Verdict::None("KLayout has no check on runs of short edges"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
+            Rule::StackSpacing { .. } => (
+                "stack_spacing",
+                Verdict::None("the stacked exemption needs each cut's net, which the mirror does not extract"),
                 Compare::Not,
                 Key::Point,
                 Value::Ignore,

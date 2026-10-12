@@ -754,6 +754,19 @@ pub(crate) const KINDS: &[Kind] = &[
             p("distance", "distance", Dim::Length),
         ],
     ),
+    // LEF `SPACING cutSpacing [SAMENET] LAYER second STACK`: cuts on two
+    // layers spaced unless one net's cuts are stacked (one covering the
+    // other): `stack_space(via2, via1) >= 200nm`, `same_net: true` for
+    // `SAMENET`.
+    drc("stack_space", Cmp::Ge, "stack_spacing", &[0, 1], LIMIT, &[]),
+    drc(
+        "stack_space",
+        Cmp::Ge,
+        "stack_spacing",
+        &[0, 1],
+        LIMIT,
+        &[p("same_net", "same_net", Dim::Bool)],
+    ),
     // A cut with no other cut within the limit, centre to centre
     // (`LEF58_MAXSPACING`): `max_space(via1) <= 2um`, or a cut class's cuts
     // against the whole cut layer, `max_space(via1_class, via1) <= 2um`.
@@ -763,6 +776,24 @@ pub(crate) const KINDS: &[Kind] = &[
     // `via_stack(via1, via2, via3) <= 2`.
     Kind {
         more: true,
+        fixed: &[("single", false)],
+        ..drc(
+            "via_stack",
+            Cmp::Le,
+            "via_stack",
+            &[0],
+            Some(p("", "max_height", Dim::Count)),
+            &[],
+        )
+    },
+    // Single-cut vias only, the metals between the cuts named so that a
+    // via of two or more cuts interrupts the stack (LEF: "A double-cut or
+    // larger via interrupts the stack"): `via_stack(m1, via1, m2, via2, m3,
+    // single) <= 2`.
+    Kind {
+        more: true,
+        modifier: Some("single"),
+        fixed: &[("single", true)],
         ..drc(
             "via_stack",
             Cmp::Le,

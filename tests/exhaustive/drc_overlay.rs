@@ -53,6 +53,8 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         minimum_cut(),
         minimum_cut_thin(),
         via_stack(),
+        via_stack_single(),
+        stack_spacing(),
         max_cut_spacing(),
         via_array_spacing(depth),
         center_spacing(),
@@ -2125,6 +2127,163 @@ fn via_stack() -> Vec<Fixture> {
         vec![count(3), count(3)],
     ));
     every_placement(cases)
+}
+
+/// `stack_space(v2, v1; same_net: true) >= 200nm` (`ss`, LEF Spacing Rule
+/// Example 7's `SPACING 0.20 SAMENET LAYER cut12 STACK` on cut23) and
+/// `stack_space(v2, v1) >= 200nm` (`all`) (`stack_spacing`, DRC-065):
+/// "same-net cuts on two different layers can be stacked if they are
+/// aligned. If the cuts are not the same size, the smaller cut must be
+/// completely covered by the larger cut ... If both cuts are the same size,
+/// the centers of the cuts must be aligned ... otherwise, the cuts must have
+/// cutSpacing between them".
+///
+/// Oracle: the LEF text, cuts by construction, one net through an `m2` pad
+/// unless stated: aligned equal cuts and a cut covered by a larger one
+/// (stacked, legal); equal cuts offset by half (overlapping, not aligned: a
+/// gap of 0); a `v1` cut beside the `v2` cut 199, 200 and 201 away; two
+/// cuts 150 apart on different nets, which only `all` holds.
+fn stack_spacing() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["m1", "v1", "m2", "v2", "m3"],
+        "connect conductors [m1, m2, m3]\nconnect touch_within_layer\n\
+         connect via v1 [m1, m2]\nconnect via v2 [m2, m3]\n\
+         rule ss stack_space(v2, v1; same_net: true) >= 200nm\n\
+         rule all stack_space(v2, v1) >= 200nm\n",
+    );
+    let case = |name: &str, layout: Layout, ss: Vec<Finding>, all: Vec<Finding>| {
+        fixture(
+            &format!("stack_spacing/{name}"),
+            &["DRC-065"],
+            &deck,
+            layout,
+            &[("ss", ss), ("all", all)],
+        )
+    };
+    // One net: pads on every metal over both cuts.
+    let pads = |layout: Layout| {
+        ["m1", "m2", "m3"]
+            .iter()
+            .fold(layout, |l, m| l.rect(m, -500, -500, 1000, 600))
+    };
+    let mut cases = vec![
+        case(
+            "aligned",
+            pads(Layout::default())
+                .rect("v1", 0, 0, 100, 100)
+                .rect("v2", 0, 0, 100, 100),
+            vec![],
+            vec![],
+        ),
+        case(
+            "covered",
+            pads(Layout::default())
+                .rect("v1", -20, -20, 120, 120)
+                .rect("v2", 0, 0, 100, 100),
+            vec![],
+            vec![],
+        ),
+        case(
+            "offset",
+            pads(Layout::default())
+                .rect("v1", 50, 0, 150, 100)
+                .rect("v2", 0, 0, 100, 100),
+            vec![Finding::length(0)],
+            vec![Finding::length(0)],
+        ),
+    ];
+    for (g, side) in sweep(200) {
+        let near = below(g, 200);
+        cases.push(case(
+            &format!("apart/{side}"),
+            pads(Layout::default())
+                .rect("v1", 100 + g, 0, 200 + g, 100)
+                .rect("v2", 0, 0, 100, 100),
+            near.clone(),
+            near,
+        ));
+    }
+    // Two nets: separate pads under each cut.
+    let two_nets = ["m1", "m2", "m3"]
+        .iter()
+        .fold(Layout::default(), |l, m| {
+            l.rect(m, -100, -100, 200, 200).rect(m, 250, -100, 550, 200)
+        })
+        .rect("v1", 250, 0, 350, 100)
+        .rect("v2", 0, 0, 100, 100);
+    cases.push(case(
+        "different_nets",
+        two_nets,
+        vec![],
+        vec![Finding::length(150)],
+    ));
+    every_placement(cases)
+}
+
+/// `via_stack(m1, v1, m2, v2, m3, v3, m4, v4, m5, single) <= 2`
+/// (`via_stack`, DRC-065): LEF `MAXVIASTACK 2` over single-cut vias only, "A
+/// double-cut or larger via interrupts the stack".
+///
+/// Oracle: the LEF text's own example, "a via stack consisting of single
+/// via12, single via23, double-cut via34, and single via45 has a single-cut
+/// stack of height 2 for via12 and via23, and a single-cut stack of height 1
+/// for via45" (legal at 2); three single cuts stacked (height 3, the top cut
+/// reported); the same with the middle via doubled (no stack over 1); and a
+/// tower of four single cuts where two of its cuts at one layer sit on
+/// different metal figures, still single (height 4, reported at the third).
+fn via_stack_single() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["m1", "v1", "m2", "v2", "m3", "v3", "m4", "v4", "m5"],
+        "rule stack via_stack(m1, v1, m2, v2, m3, v3, m4, v4, m5, single) <= 2\n",
+    );
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        fixture(
+            &format!("via_stack_single/{name}"),
+            &["DRC-065"],
+            &deck,
+            layout,
+            &[("stack", findings)],
+        )
+    };
+    // Metal pads over every layer, and a cut at x on the listed cut layers;
+    // `double` cut layers get a second cut 300 to the right on the same pads.
+    let tower = |cuts: &[&str], double: &[&str]| {
+        let mut layout = Layout::default();
+        for m in ["m1", "m2", "m3", "m4", "m5"] {
+            layout = layout.rect(m, -100, -100, 500, 200);
+        }
+        for &v in cuts {
+            layout = layout.rect(v, 0, 0, 100, 100);
+        }
+        for &v in double {
+            layout = layout.rect(v, 300, 0, 400, 100);
+        }
+        layout
+    };
+    let top = |n: u32, x: i64, y: i64| Finding {
+        measured: Some(Measurement::Count(n)),
+        at: Some((x, y)),
+    };
+    every_placement(vec![
+        case(
+            "lef_example",
+            tower(&["v1", "v2", "v3", "v4"], &["v3"]),
+            vec![],
+        ),
+        case(
+            "three_single",
+            tower(&["v1", "v2", "v3"], &[]),
+            vec![top(3, 50, 50)],
+        ),
+        case("middle_double", tower(&["v1", "v2", "v3"], &["v2"]), vec![]),
+        case(
+            "split_pads",
+            tower(&["v1", "v2", "v3", "v4"], &[])
+                .rect("m3", 1000, -100, 1500, 200)
+                .rect("v2", 1100, 0, 1200, 100),
+            vec![top(4, 50, 50)],
+        ),
+    ])
 }
 
 /// `max_space(v1) <= 1000nm` and `max_space(big, v1) <= 1000nm` with `big =

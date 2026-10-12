@@ -131,6 +131,25 @@ impl RuleRow {
         self
     }
 
+    /// A [`via_stack`] row over metals and cuts alternating, bottom to top, a
+    /// metal first and last, where only single-cut vias stack (the deck's
+    /// trailing `single`; LEF: "A double-cut or larger via interrupts the
+    /// stack").
+    ///
+    /// # Panics
+    ///
+    /// On a row of any other kind.
+    #[must_use]
+    pub fn single_cut(mut self) -> Self {
+        assert_eq!(
+            self.kind, "via_stack",
+            "{} has no single-cut form",
+            self.kind
+        );
+        true.put("single", &mut self.params);
+        self
+    }
+
     /// A [`minimum_cut`] row that holds the thin wires beside a wide one,
     /// LEF `MINIMUMCUT ... LENGTH length WITHIN distance` (the deck's
     /// `length:` and `distance:`).
@@ -533,6 +552,9 @@ kinds! {
     /// [`Rule::ViaStack`](crate::drc::Rule::ViaStack):
     /// `via_stack(cuts..) <= max_height`, the cut layers bottom to top.
     via_stack(cuts: many) [] { max_height: u32 = "max_height" }
+    /// [`Rule::StackSpacing`](crate::drc::Rule::StackSpacing):
+    /// `stack_space(a, b; same_net) >= limit`.
+    stack_spacing(a: one, b: one) [] { same_net: bool = "same_net", limit: Dbu = "limit" }
     /// [`Rule::MaxCutSpacing`](crate::drc::Rule::MaxCutSpacing):
     /// `max_space(cut[, others]) <= limit`.
     max_cut_spacing(cut: one, others: opt) [] { limit: Dbu = "limit" }

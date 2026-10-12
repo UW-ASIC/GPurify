@@ -332,18 +332,31 @@ impl CompiledDeck {
                 }
                 row.value("min_count", ParamValue::Count(min_count.into()))
             }
+            Rule::StackSpacing {
+                a,
+                b,
+                same_only,
+                limit,
+            } => two(a, b)
+                .value("same_net", ParamValue::Flag(same_only))
+                .length("limit", limit),
             Rule::MaxCutSpacing { cut, others, limit } => {
                 let layers: Vec<LayerId> = std::iter::once(cut).chain(others).collect();
                 Row::new(rule.kind(), &layers).length("limit", limit)
             }
-            Rule::ViaStack { stack, max_height } => Row::new(
+            Rule::ViaStack {
+                stack,
+                single,
+                max_height,
+            } => Row::new(
                 rule.kind(),
                 self.drc
                     .stacks
                     .get(stack as usize)
                     .map_or(&[], Vec::as_slice),
             )
-            .value("max_height", ParamValue::Count(max_height.into())),
+            .value("max_height", ParamValue::Count(max_height.into()))
+            .value("single", ParamValue::Flag(single)),
             Rule::CutSpacing {
                 layer,
                 center,

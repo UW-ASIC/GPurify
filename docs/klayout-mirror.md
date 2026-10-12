@@ -313,8 +313,9 @@ explains (kind 30).
 | 67 | critical_area | `critical_area(L; radius) <= a` | POINT | EXACT | exact | — |
 | 68 | min_step_adjacent | `min_step(L; adjacent \| between_eol ..) >= l` | — | NONE | reported as not mirrored | — |
 | 69 | max_cut_spacing | `max_space(C[, A]) <= l` | ROW | EXACT (scripted) | exact | — |
+| 70 | stack_spacing | `stack_space(A, B[; same_net]) >= l` | — | NONE | reported as not mirrored | — |
 
-44 kinds are EXACT (six scripted over KLayout's polygons), 16 APPROX and nine NONE; `convex_corner_spacing` is NONE on a deck with
+44 kinds are EXACT (six scripted over KLayout's polygons), 16 APPROX and ten NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`, and between two layers (`space(A, B; nets: ..)`), which is not mirrored. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1385,6 +1386,14 @@ max_cut_spacing(id, C.dup.raw, A.dup.raw, LIM)
 - The prelude's `max_cut_spacing` sums each box's sides (twice the centre) and compares squared
   distances against `(2·LIM)²`, exactly. Key ROW, the cut's box; the measurement is not compared.
 
+### 70. stack_spacing — NONE: the exemption needs each cut's net
+
+**GPurify** (`spacing.rs` `stack_spacing`): LEF `SPACING ... LAYER ... STACK`, pairs of cuts on two
+layers closer than the limit except one net's cuts whose boxes cover one another.
+
+The mirror extracts no nets per cut, so the stacked exemption cannot be stated; the oracle is the
+LEF text and its Example 7, drawn as fixtures with the gap swept one step either side.
+
 ### 61. via_stack — EXACT (scripted)
 
 **GPurify** (`via.rs` `via_stack`): LEF `MAXVIASTACK` over the cut layers listed, bottom to top.
@@ -1399,6 +1408,10 @@ via_stack(id, [C1.dup.raw, C2.dup.raw, ..], MAX)   # one polygon per reported cu
 ```
 
 - Key ROW, the cut's box; the count is compared exactly.
+
+- With `single`, the prelude's `via_stack` also takes the metals: a cut whose (metal below,
+  metal above) figures it shares with another cut of its layer is dropped before the chains are
+  built, as GPurify drops the cuts of a via of two or more.
 
 ### 62. full_width — EXACT (scripted)
 

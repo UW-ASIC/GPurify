@@ -1111,14 +1111,62 @@ pub enum Rule {
     /// DRC-065. Rules: LEF `MAXVIASTACK` (LEF/DEF 5.8, "Maximum Via Stack",
     /// Example 1-34).
     ///
-    /// Limits: every cut counts as a single-cut via, so a double-cut via does
-    /// not interrupt a stack (it fails closed: a stack LEF would split is
-    /// read as one).
+    /// `via_stack(m1, cut1, m2, cut2, .., single) <= count` names the metals
+    /// too, bottom to top, alternating with the cuts, and counts single-cut
+    /// vias only, as LEF does: "A double-cut or larger via interrupts the
+    /// stack." A via is the cuts on one layer joining one figure of the
+    /// merged metal below to one figure of the merged metal above (the
+    /// lowest of each a cut overlaps, as for [`Rule::MinimumCut`]); a cut
+    /// of a via with two or more cuts is in no stack, so the stacks through
+    /// it break there. Without `single`, every cut counts as a single-cut
+    /// via (fails closed: a stack LEF would split is read as one).
     ViaStack {
-        /// Index into [`RuleSet::stacks`]: the cut layers, bottom to top.
+        /// Index into [`RuleSet::stacks`]: the cut layers, bottom to top, or
+        /// with `single` the metals and cuts alternating, a metal first and
+        /// last.
         stack: u32,
+        /// Whether only single-cut vias stack (the metals are named).
+        single: bool,
         /// The tallest legal stack; at least 1.
         max_height: u16,
+    },
+    /// Cuts on two layers closer than `limit`, unless they are one net's
+    /// stacked cuts.
+    ///
+    /// Deck: `stack_space(A, B) >= len`, or `stack_space(A, B; same_net:
+    /// true) >= len` for same-net cuts only, kind `stack_spacing`: LEF
+    /// `SPACING cutSpacing [SAMENET] LAYER secondLayer STACK` on cut layer
+    /// `A`, "same-net cuts on two different layers can be stacked if they
+    /// are aligned. If the cuts are not the same size, the smaller cut must
+    /// be completely covered by the larger cut, to be considered legal. If
+    /// both cuts are the same size, the centers of the cuts must be aligned,
+    /// to be legal; otherwise, the cuts must have cutSpacing between them"
+    /// (LEF/DEF 5.8, `SPACING`, and Spacing Rule Example 7). Cuts are the
+    /// rows of each layer, as drawn; a pair of a cut on `A` and one on `B`
+    /// on one net whose boxes cover one another (equal boxes are aligned
+    /// centres) is stacked and legal; every other pair the rule holds needs
+    /// `limit`, boundary to boundary, overlap reading 0. Nets are as
+    /// extracted, so both layers must be conductors or cuts the deck
+    /// connects.
+    ///
+    /// One violation per offending pair, on `A`, at the midpoint of its
+    /// measured points, as [`Rule::NetSpacing`] across two layers.
+    /// `examined` counts the pairs the rule holds, stacked ones included.
+    /// Records [`Outcome::Refused`] without extracted nets, or when a shape
+    /// on either layer carries no net.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-065. Rules: LEF `SPACING ... LAYER ... STACK`.
+    StackSpacing {
+        /// The cut layer the rule is written on; findings are reported on it.
+        a: LayerId,
+        /// The second cut layer.
+        b: LayerId,
+        /// Whether only same-net pairs are held (`SAMENET`).
+        same_only: bool,
+        /// The spacing a pair that is not stacked needs, in grid units;
+        /// positive.
+        limit: Dbu,
     },
     /// A cut with no other cut within `limit` of it, centre to centre: a
     /// maximum spacing between cuts.
@@ -2789,7 +2837,8 @@ pub struct RuleSet {
     pub span_tables: Vec<SpanTable>,
     /// The tables [`Rule::CutClassSpacing`] names.
     pub cut_tables: Vec<CutClassTable>,
-    /// The cut layers, bottom to top, of each [`Rule::ViaStack`].
+    /// The cut layers, bottom to top, of each [`Rule::ViaStack`], or with
+    /// `single` the metals and cuts alternating.
     pub stacks: Vec<Vec<LayerId>>,
     /// The ids of the rules the deck writes `warning` (`rule <id> warning
     /// <check>`): each finding of these is a [`Severity::Warning`], reported
@@ -3248,10 +3297,29 @@ impl RuleSet {
                         });
                     }
                     let max_height = count(spec, "max_height", u16::MAX.into())?;
+                    let single = optional(spec, "single").is_some() && flag(spec, "single")?;
+                    // Metals alternate with the cuts, a metal at each end.
+                    if single && (spec.layer_len < 5 || spec.layer_len % 2 == 0) {
+                        return Err(DrcError::WrongLayerCount {
+                            rule: name_of(spec.id),
+                            expected: 5,
+                            found: spec.layer_len,
+                        });
+                    }
                     set.stacks.push(rules.layers_of(spec).to_vec());
                     Rule::ViaStack {
+                        single,
                         stack: u32::try_from(set.stacks.len() - 1).expect("a deck has few stacks"),
                         max_height: u16::try_from(max_height).expect("checked against the ceiling"),
+                    }
+                }
+                "stack_spacing" => {
+                    let (a, b) = two(spec)?;
+                    Rule::StackSpacing {
+                        a,
+                        b,
+                        same_only: optional(spec, "same_net").is_some() && flag(spec, "same_net")?,
+                        limit: length(spec, "limit")?,
                     }
                 }
                 "max_cut_spacing" => {
@@ -4078,12 +4146,39 @@ impl RuleSet {
                         s,
                         out,
                     ),
+                    Rule::StackSpacing {
+                        a,
+                        b,
+                        same_only,
+                        limit,
+                    } => match nets {
+                        Some(nets) => spacing::stack_spacing(
+                            store,
+                            nets,
+                            id,
+                            (a, b),
+                            same_only,
+                            limit,
+                            s,
+                            out,
+                        ),
+                        None => (Outcome::Refused, 0),
+                    },
                     Rule::MaxCutSpacing { cut, others, limit } => {
                         via::max_cut_spacing(store, id, (cut, others), limit, out)
                     }
-                    Rule::ViaStack { stack, max_height } => {
-                        via::via_stack(store, id, &self.stacks[stack as usize], max_height, out)
-                    }
+                    Rule::ViaStack {
+                        stack,
+                        single,
+                        max_height,
+                    } => via::via_stack(
+                        store,
+                        id,
+                        (&self.stacks[stack as usize], single),
+                        max_height,
+                        s,
+                        out,
+                    ),
                     Rule::CutClassSpacing { layer, table } => via::cut_class_spacing(
                         store,
                         id,
@@ -4460,7 +4555,8 @@ impl Rule {
             | Rule::EdgeEnclosure { limit, .. }
             | Rule::EdgeWidth { limit, .. }
             | Rule::EdgeFacingSpace { limit, .. }
-            | Rule::MaxCutSpacing { limit, .. } => length(limit),
+            | Rule::MaxCutSpacing { limit, .. }
+            | Rule::StackSpacing { limit, .. } => length(limit),
             Rule::MinStep {
                 limit, length_sum, ..
             } => length(limit).and(length_sum.map_or(Ok(()), length)),
@@ -4725,6 +4821,7 @@ impl Rule {
             Rule::MinimumCut { .. } => "minimum_cut",
             Rule::ViaStack { .. } => "via_stack",
             Rule::MaxCutSpacing { .. } => "max_cut_spacing",
+            Rule::StackSpacing { .. } => "stack_spacing",
             Rule::ViaArraySpacing { .. } => "via_array_spacing",
             Rule::CutSpacing { .. } => "cut_spacing",
             Rule::CutClassSpacing { .. } => "cut_class_spacing",
@@ -4821,6 +4918,7 @@ impl Rule {
                 layer, boundary, ..
             } => [Some(layer), boundary, None],
             Rule::MinSpacingDiff { a, b, .. }
+            | Rule::StackSpacing { a, b, .. }
             | Rule::ProjectionSpacing { a, b, .. }
             | Rule::DensityBalance { a, b, .. }
             | Rule::Overlap { a, b, .. }

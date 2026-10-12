@@ -727,6 +727,42 @@ pub(crate) fn net_spacing(
     })
 }
 
+/// LEF `SPACING cutSpacing [SAMENET] LAYER secondLayer STACK` (DRC-065):
+/// every pair of a cut on `a` and a cut on `b` (only same-net pairs with
+/// `same_only`) closer than `limit`, overlap included, except a same-net
+/// pair one of whose boxes covers the other's (stacked). `examined` counts
+/// the pairs judged, the stacked ones included.
+#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
+pub(crate) fn stack_spacing(
+    store: &GeometryStore,
+    nets: &NetTable,
+    rule: StrId,
+    (a, b): (LayerId, LayerId),
+    same_only: bool,
+    limit: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    net_row_spacing(
+        store,
+        nets,
+        rule,
+        (a, Some(b)),
+        limit,
+        s,
+        out,
+        |(p, np), (q, nq)| {
+            let same = np == nq;
+            if same_only && !same {
+                return None;
+            }
+            let (bp, bq) = (store.poly_bbox(p), store.poly_bbox(q));
+            let stacked = same && (bp.contains(bq) || bq.contains(bp));
+            Some((!stacked).then_some(limit))
+        },
+    )
+}
+
 /// Spacing between shapes that their two nets decide. On one layer (`b` is
 /// `None`) the pairs are shapes in different merged figures, as for
 /// [`min_spacing`]; across two layers every pair, overlap included, as for
@@ -741,11 +777,35 @@ pub(crate) fn net_pair_spacing(
     store: &GeometryStore,
     nets: &NetTable,
     rule: StrId,
-    (a, b): (LayerId, Option<LayerId>),
+    layers: (LayerId, Option<LayerId>),
     widest: Dbu,
     s: &mut Scratch,
     out: &mut Violations,
     need: impl Fn(NetId, NetId) -> Option<Option<Dbu>>,
+) -> Verdict {
+    net_row_spacing(
+        store,
+        nets,
+        rule,
+        layers,
+        widest,
+        s,
+        out,
+        |(_, a), (_, b)| need(a, b),
+    )
+}
+
+/// [`net_pair_spacing`] with `need` given each shape's row beside its net.
+#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
+pub(crate) fn net_row_spacing(
+    store: &GeometryStore,
+    nets: &NetTable,
+    rule: StrId,
+    (a, b): (LayerId, Option<LayerId>),
+    widest: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+    need: impl Fn((PolyId, NetId), (PolyId, NetId)) -> Option<Option<Dbu>>,
 ) -> Verdict {
     let unnetted = std::iter::once(a).chain(b).any(|layer| {
         store
@@ -782,7 +842,7 @@ pub(crate) fn net_pair_spacing(
         if one_layer && label(p) == label(q) {
             continue;
         }
-        let Some(limit) = need(nets.net_of(p), nets.net_of(q)) else {
+        let Some(limit) = need((p, nets.net_of(p)), (q, nets.net_of(q))) else {
             continue;
         };
         examined += 1;
