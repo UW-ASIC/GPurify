@@ -645,7 +645,7 @@ fn every_shipped_deck_translates() {
         let script =
             translate(&deck, &strings).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         for m in &script.mirrors {
-            let mirrored = script.ruby.contains(&format!("'{}", m.id));
+            let mirrored = script.ruby.contains(&format!("'{}'", m.id));
             assert_eq!(
                 mirrored,
                 !matches!(m.verdict, Verdict::None(_)),
