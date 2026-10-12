@@ -542,6 +542,7 @@ const NAMES: gpurify_check::lvs::ParamNames = gpurify_check::lvs::ParamNames {
     multiplier: Some(StrId(91)),
     diffusion: [Some(AS), Some(AD), Some(PS), Some(PD)],
     values: [None; 6],
+    inductance: None,
     relaxed: false,
 };
 

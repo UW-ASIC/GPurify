@@ -9,8 +9,8 @@
 //! |---|---|---|---|
 //! | MOS stating `W` | sums `W`, `nf` and the diffusions `as`, `ad`, `ps`, `pd`, each to its channel end; every other parameter, `L` included, agrees | sums `L`, which both state; every other parameter agrees; never with a diffusion stated | folded into `W` and the diffusions |
 //! | MOS stating no `W` | sums the count `m` (1 when the card states none); every other parameter agrees | as above | kept: that many in parallel |
-//! | resistor, capacitor, diode, bipolar | sums the count `m`; every other parameter agrees | never | kept |
-//! | the same, stating its value, under [`ParamNames::relaxed`] | combines the value by its law (a resistor's `r` harmonically, `1 / Σ 1/r`; a capacitor's `c`, a diode's `area`, a bipolar's `ae` by adding) and adds `w` (a resistor's), `area`, `perim` and `pe`; every other parameter agrees | a resistor or capacitor only: the value by the opposite law (`r` adding, `c` harmonically), adding `area`, `perim` and a resistor's `l`; every other parameter, a resistor's `w` included, agrees | folded into the value and what adds |
+//! | resistor, capacitor, diode, bipolar, inductor | sums the count `m`; every other parameter agrees | never | kept |
+//! | the same, stating its value, under [`ParamNames::relaxed`] | combines the value by its law (a resistor's `r` and an inductor's `ind` harmonically, `1 / Σ 1/r`; a capacitor's `c`, a diode's `area`, a bipolar's `ae` by adding) and adds `w` (a resistor's), `area`, `perim` and `pe`; every other parameter agrees | a resistor, capacitor or inductor only: the value by the opposite law (`r` and `ind` adding, `c` harmonically), adding `area`, `perim` and a resistor's `l`; every other parameter, a resistor's `w` included, agrees | folded into the value and what adds |
 //!
 //! "Agrees" means the same parameter names with bit-identical values: the
 //! comparison's tolerance plays no part here. A summed parameter must be
@@ -116,6 +116,10 @@ pub struct ParamNames {
     /// `r`, `c`, `area`, `perim`, `ae` and `pe`, in that order: a passive's
     /// or bipolar's value and what adds with it under [`Self::relaxed`].
     pub values: [Option<StrId>; 6],
+    /// `ind`: an inductor's inductance, which combines under
+    /// [`Self::relaxed`] as a resistance does, `KLayout`'s
+    /// `InductorDeviceCombiner` (catalog LVS-065).
+    pub inductance: Option<StrId>,
     /// Whether a resistor, capacitor, diode or bipolar stating its value
     /// merges in parallel by the value's law, and a resistor or capacitor
     /// in series by the opposite one, rather than keeping a count
@@ -148,6 +152,7 @@ impl Law {
             DeviceKind::Capacitor => (c?, false, [area, perim, None]),
             DeviceKind::Diode => (area?, false, [perim, None, None]),
             DeviceKind::Bjt => (ae?, false, [pe, area, perim]),
+            DeviceKind::Inductor => (names.inductance?, true, [None, None, None]),
             DeviceKind::Mos => return None,
         };
         params
@@ -193,15 +198,19 @@ impl Law {
         match kind {
             DeviceKind::Resistor => Some([Some(self.value), names.length, area, perim, None, None]),
             DeviceKind::Capacitor => Some([Some(self.value), area, perim, None, None, None]),
+            DeviceKind::Inductor => Some([Some(self.value), None, None, None, None, None]),
             _ => None,
         }
     }
 }
 
-/// Whether `kind` is a passive a relaxed series merge takes: a resistor or
-/// a capacitor, two pins each.
+/// Whether `kind` is a passive a relaxed series merge takes: a resistor, a
+/// capacitor or an inductor, two pins each.
 const fn series_passive(kind: DeviceKind) -> bool {
-    matches!(kind, DeviceKind::Resistor | DeviceKind::Capacitor)
+    matches!(
+        kind,
+        DeviceKind::Resistor | DeviceKind::Capacitor | DeviceKind::Inductor
+    )
 }
 
 impl ParamNames {

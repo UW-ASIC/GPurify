@@ -52,7 +52,7 @@ impl Classes {
         };
         match kind {
             DeviceKind::Mos if !asymmetric => classes.join(1, 2),
-            DeviceKind::Resistor => classes.join(0, 1),
+            DeviceKind::Resistor | DeviceKind::Inductor => classes.join(0, 1),
             _ => {}
         }
         for &(_, a, b) in controls.permute.iter().filter(|row| row.0 == model) {
@@ -95,7 +95,7 @@ impl Classes {
         if self.kind == DeviceKind::Mos && class == 0b0110 {
             return role_at(self.kind, position);
         }
-        if self.kind == DeviceKind::Resistor && class == 0b0011 {
+        if matches!(self.kind, DeviceKind::Resistor | DeviceKind::Inductor) && class == 0b0011 {
             return TerminalRole::Pin(0);
         }
         if class.is_power_of_two() {

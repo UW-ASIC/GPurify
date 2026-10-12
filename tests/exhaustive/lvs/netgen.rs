@@ -108,10 +108,12 @@ foreach side {-circuit1 -circuit2} {
         property \"$side $mos\" parallel {w add}
         property \"$side $mos\" tolerance {w TOL} {l TOL}
     }
-    if {[lsearch $present rpoly] >= 0} {
-        permute \"$side rpoly\" end_a end_b
+    foreach ends {rpoly spiral} {
+        if {[lsearch $present $ends] >= 0} {
+            permute \"$side $ends\" end_a end_b
+        }
     }
-    foreach passive {rpoly cmim dpn npn} {
+    foreach passive {rpoly cmim dpn npn spiral} {
         if {[lsearch $present $passive] < 0} continue
         property \"$side $passive\" parallel enable
         property \"$side $passive\" series disable
@@ -186,13 +188,13 @@ fn every_net_is_a_port(text: &str) -> bool {
         .map(|l| l.split_whitespace().skip(2).collect())
         .unwrap_or_default();
     text.lines()
-        .filter(|l| l.starts_with(['M', 'R', 'C', 'D', 'Q']))
+        .filter(|l| l.starts_with(['M', 'R', 'C', 'D', 'Q', 'L']))
         .all(|l| card_nets(l).iter().all(|n| ports.contains(n)))
 }
 
 fn has_device(text: &str) -> bool {
     text.lines()
-        .any(|l| l.starts_with(['M', 'R', 'C', 'D', 'Q']))
+        .any(|l| l.starts_with(['M', 'R', 'C', 'D', 'Q', 'L']))
 }
 
 /// Circuit `c` against its own reference and every single fault of it, as
@@ -454,7 +456,11 @@ fn netgen_controls(controls: &Controls) -> String {
     if controls.relaxed {
         // deck.md's relaxed laws: a resistance combines harmonically in
         // parallel and adds in series, a capacitance the other way round.
-        for (model, parallel, series) in [("rpoly", "par", "add"), ("cmim", "add", "par")] {
+        for (model, parallel, series) in [
+            ("rpoly", "par", "add"),
+            ("cmim", "add", "par"),
+            ("spiral", "par", "add"),
+        ] {
             for line in [
                 format!("property \"$side {model}\" parallel {{value {parallel}}}"),
                 format!("property \"$side {model}\" series enable"),
@@ -514,6 +520,7 @@ fn controlled() -> Vec<Case> {
     out.extend(ignored());
     out.extend(dummies());
     out.extend(relaxed());
+    out.extend(inductors());
     out.extend(verilog());
     let row = |model, param, relative| Controls::default().tolerance(model, param, relative, None);
     // LVS-014: `w` 3000 against 3120 nm, 3.85 % of the larger: within a 5 %
@@ -634,8 +641,7 @@ fn with_drawn_values(layout: &Circuit, reference: &Circuit) -> Circuit {
     let mut out = as_declared(layout, reference);
     for dev in &mut out.devs {
         let name = match dev.model {
-            Model::R => "r",
-            Model::C => "c",
+            Model::R | Model::C | Model::L => dev.model.primary(),
             _ => continue,
         };
         dev.value = declared
@@ -751,6 +757,66 @@ fn verilog() -> Vec<Case> {
             controls: Controls::default(),
             verilog: Some(top.verilog_with_sub),
             fixture: top.fixture,
+        })
+        .collect()
+}
+
+/// LVS-065: an inductor, drawn 2 nH by its deck ([`measured`]), against
+/// cards of 2 nH either way round and of 2.1 nH, under the default setup;
+/// and, relaxed, two in series against 4 nH and two in parallel against
+/// 1 nH, under `parallel {value par}` and `series {value add}`.
+fn inductors() -> Vec<Case> {
+    use Model::L;
+    let one = |dev: Dev| Circuit::new(2, vec![dev]);
+    let chain = Circuit::new(3, vec![Dev::pins(L, &[0, 1]), Dev::pins(L, &[1, 2])]).internal(1);
+    let pair = Circuit::new(2, vec![Dev::pins(L, &[0, 1]), Dev::pins(L, &[1, 0])]);
+    let relaxed = Controls {
+        relaxed: true,
+        ..Controls::default()
+    };
+    let cases = [
+        (
+            "2nH",
+            one(Dev::pins(L, &[0, 1])),
+            one(Dev::pins(L, &[0, 1]).value(2e-9)),
+            Controls::default(),
+        ),
+        (
+            "2nH_reversed",
+            one(Dev::pins(L, &[0, 1])),
+            one(Dev::pins(L, &[1, 0]).value(2e-9)),
+            Controls::default(),
+        ),
+        (
+            "2.1nH",
+            one(Dev::pins(L, &[0, 1])),
+            one(Dev::pins(L, &[0, 1]).value(2.1e-9)),
+            Controls::default(),
+        ),
+        (
+            "series_vs_4nH",
+            chain,
+            one(Dev::pins(L, &[0, 1]).value(4e-9)),
+            relaxed.clone(),
+        ),
+        (
+            "parallel_vs_1nH",
+            pair,
+            one(Dev::pins(L, &[0, 1]).value(1e-9)),
+            relaxed,
+        ),
+    ];
+    cases
+        .into_iter()
+        .map(|(name, layout, reference, controls)| {
+            let mut case = controlled_case(
+                &format!("inductor/{name}"),
+                &["LVS-065"],
+                (&layout, &reference),
+                &controls,
+            );
+            case.layout = for_netgen(&spice(&with_drawn_values(&layout, &reference)));
+            case
         })
         .collect()
 }
@@ -1142,7 +1208,7 @@ fn every_netgen_setup_defines_what_it_reads() {
         );
         for line in [
             "permute \"$side $mos\" source drain",
-            "permute \"$side rpoly\" end_a end_b",
+            "permute \"$side $ends\" end_a end_b",
             "property \"$side $mos\" tolerance {w 0.0202",
             "property \"$side $passive\" parallel enable",
         ] {

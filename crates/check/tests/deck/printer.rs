@@ -118,6 +118,7 @@ layer cap = gds(75, 20)
 device mos poly model \"nfet\" terminals [poly, diff, diff, diff]
 device resistor res model \"rpoly\" terminals [poly, poly]
 device capacitor cap model \"cmim\" terminals [poly, diff]
+device inductor res model \"spiral\" terminals [poly, poly] inductance 2nH
 lvs tolerance \"nfet\" w relative 1%
 lvs tolerance \"nfet\" l relative 0.005 absolute 5nm
 lvs tolerance \"nfet\" as absolute 0.2um2
@@ -156,6 +157,7 @@ lvs count \"nfet\" >= 1 <= 4000
         "lvs min_caps 1e4aF",
         "lvs same_nets \"OUT_PAD\" \"OUT\"",
         "lvs count \"nfet\" >= 1 <= 4000",
+        "device inductor res model \"spiral\" terminals [poly, poly] inductance 2e0nH",
     ] {
         assert!(printed.contains(line), "{line} not in\n{printed}");
     }

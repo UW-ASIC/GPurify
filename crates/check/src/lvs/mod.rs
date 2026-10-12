@@ -62,7 +62,7 @@
 //! | Role | Interchangeable with |
 //! |---|---|
 //! | MOS `Source`, `Drain` | each other: which end is the source is a matter of bias |
-//! | A resistor's two ends | each other: a resistor has no direction |
+//! | A resistor's two ends, an inductor's | each other: neither has a direction (`KLayout`'s `DeviceClassInductor` declares its ends equivalent) |
 //! | A diode's anode and cathode, a capacitor's plates | nothing: a reversed diode is another circuit, and Netgen does not permute capacitor plates either |
 //! | `Gate`, `Bulk`, `Base`, `Emitter`, `Collector` | nothing |
 //!

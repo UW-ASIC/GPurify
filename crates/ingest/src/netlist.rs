@@ -12,7 +12,7 @@
 //! and instance card sits inside a subcircuit.
 //!
 //! - **SPICE/CDL** ([`spice::read`]): `.subckt`/`.ends` (`.end` also closes),
-//!   `M`, `Q`, `R`, `C`, `D` and `X` cards, `+` continuation lines, `*` comment
+//!   `M`, `Q`, `R`, `C`, `D`, `L` and `X` cards, `+` continuation lines, `*` comment
 //!   lines and `$` or `;` trailing comments. Card letters and dot keywords
 //!   are case-insensitive and parameter names are stored lowercase; net and
 //!   cell names keep their case. An `X` card calling a model the deck's
@@ -24,9 +24,11 @@
 //!   model, so the instance is the deck's one recogniser of its kind, as a
 //!   SPICE card naming none is (below).
 //!
-//! An `R` or `C` card may state its value positionally, between its nets and
-//! its model: `R1 a b 1k rpoly` is `R1 a b rpoly r=1k`, and `C1 a b 1p cmim`
-//! is `C1 a b cmim c=1p`. Stating it both ways is refused, as is any
+//! An `R`, `C` or `L` card may state its value positionally, between its
+//! nets and its model: `R1 a b 1k rpoly` is `R1 a b rpoly r=1k`, `C1 a b 1p
+//! cmim` is `C1 a b cmim c=1p`, and `L1 a b 2n spiral` is an inductance,
+//! `ind`, as is an inductor's `l=` (Spectre's `inductor` primitive names it
+//! `l`), so it never reads as a length (catalog LVS-065). Stating it both ways is refused, as is any
 //! parameter stated twice.
 //!
 //! On an `R`, `C` or `D` card, SPICE parameters other tools name differently
@@ -726,7 +728,9 @@ fn split_terminals<'t>(
     let want: u32 = match kind {
         DeviceKind::Mos => 4,
         DeviceKind::Bjt => 3,
-        DeviceKind::Resistor | DeviceKind::Capacitor | DeviceKind::Diode => 2,
+        DeviceKind::Resistor | DeviceKind::Capacitor | DeviceKind::Diode | DeviceKind::Inductor => {
+            2
+        }
     };
     let got = narrow(positional.len().saturating_sub(1));
     // A `Q` card's substrate terminal is optional; nothing else in the subset
@@ -754,6 +758,7 @@ fn spectre_primitive(master: &str) -> Option<DeviceKind> {
         "resistor" | "res" => DeviceKind::Resistor,
         "capacitor" | "cap" => DeviceKind::Capacitor,
         "diode" => DeviceKind::Diode,
+        "inductor" => DeviceKind::Inductor,
         "bjt" | "npn" | "pnp" | "vbic" | "hicum" | "mextram" => DeviceKind::Bjt,
         "mos" | "nmos" | "pmos" | "mos0" | "mos1" | "mos2" | "mos3" | "mos9" | "bsim1"
         | "bsim2" | "bsim3" | "bsim3v3" | "bsim4" | "bsim4v5" | "bsimsoi" | "bsimcmg" | "hisim"
@@ -884,6 +889,11 @@ impl Build<'_> {
                 _ => {}
             }
         }
+        // An inductor's `l` (SPICE, Spectre, `KLayout`'s `L`) is its
+        // inductance, compared as `ind` so it never reads as a length.
+        if kind == DeviceKind::Inductor && key.eq_ignore_ascii_case("l") {
+            "ind".clone_into(&mut key);
+        }
         let bare = text.ends_with(|c: char| c.is_ascii_digit() || c == '.');
         if micron && bare && (key == "w" || key == "l") {
             value *= 1e-6;
@@ -939,10 +949,10 @@ impl Build<'_> {
             Some(tok) => {
                 let number = spice_number(tok.text)
                     .ok_or_else(|| NetlistError::Unexpected(tok.span, tok.text.to_string()))?;
-                let name = if kind == DeviceKind::Capacitor {
-                    "c"
-                } else {
-                    "r"
+                let name = match kind {
+                    DeviceKind::Capacitor => "c",
+                    DeviceKind::Inductor => "ind",
+                    _ => "r",
                 };
                 Some((self.strings.intern(name), number))
             }
@@ -1057,6 +1067,7 @@ fn spice_card(b: &mut Build, card: &[Tok], next: &mut u32) -> Result<(), Netlist
         b'R' => DeviceKind::Resistor,
         b'C' => DeviceKind::Capacitor,
         b'D' => DeviceKind::Diode,
+        b'L' => DeviceKind::Inductor,
         b'X' => {
             let (cell, nets) = positional
                 .split_last()
@@ -1087,7 +1098,10 @@ fn spice_card(b: &mut Build, card: &[Tok], next: &mut u32) -> Result<(), Netlist
     };
     // `R1 a b 1k rpoly`: two nets, the value, the model. A two-pin card may
     // leave its model out, `R1 a b 1k` or `D1 a b` (testing-plan F86).
-    let valued = matches!(kind, DeviceKind::Resistor | DeviceKind::Capacitor);
+    let valued = matches!(
+        kind,
+        DeviceKind::Resistor | DeviceKind::Capacitor | DeviceKind::Inductor
+    );
     let (nets, value, model) = match positional {
         [_, _, value, model] if valued => (&positional[..2], Some(*value), Some(*model)),
         [_, _, value] if valued && spice_number(value.text).is_some() => {
