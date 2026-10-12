@@ -75,6 +75,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(antenna_sidewall());
     out.extend(antenna_variants());
     out.extend(antenna_electrical());
+    out.extend(gf180_mim());
     out.extend(density());
     out.extend(ir_drop(depth));
     out.extend(em_current_density(depth));
@@ -1274,6 +1275,88 @@ fn gf180_ant16() -> Vec<Fixture> {
                 .expect(Expect::rule("ae", ratio_findings(&[(value, at)], limit, true))),
             );
         }
+    }
+    out
+}
+
+/// GF180MCU ANT.14 and ANT.15 (ERC-A11) on the DRM's MIM topology: the
+/// FuseTop top plate is a conductor of its own, reached from above by Via2
+/// to Metal3 (MIM.4), over a Metal2 bottom plate it does not touch (§10.4.1).
+/// "Maximum ratio of each of the metal layer (Metal (n+1) to MetalTop)
+/// perimeter area to related MIM area" is one `antenna` row per layer with
+/// the perimeter area `2 [(t x z) + (t x y)]`, t = 0.54 µm for Metal1-5,
+/// against 400; "Maximum ratio of each of Via (Vian to most top Via) area to
+/// related MIM area" one row per cut layer against 20. Hand-derived, the MIM
+/// 1 µm²:
+///
+/// - a Metal3 line 1 µm wide and `L` long from the plate: perimeter area
+///   `2 (L + 1) x 0.54` µm²: 399.6 at L = 369 µm (clean), 401.76 at 371 µm;
+/// - a Via3 cut `s` square on a Metal3 pad joined to the plate: 19.36 µm² at
+///   s = 4.4 µm (clean), 20.25 at 4.5 µm;
+/// - the Metal2 bottom plate is another net: a Metal2 row sees no MIM.
+fn gf180_mim() -> Vec<Fixture> {
+    let deck = "grid 1nm
+layer metal2 = gds(1, 0)
+layer fusetop = gds(2, 0)
+layer via2 = gds(3, 0)
+layer metal3 = gds(4, 0)
+layer via3 = gds(5, 0)
+layer metal4 = gds(6, 0)
+connect conductors [metal2, fusetop, metal3, metal4]
+connect touch_within_layer
+connect via via2 [metal2, metal3]
+connect via via2 [fusetop, metal3]
+connect via via3 [metal3, metal4]
+rule ant14.m3 antenna(fusetop, metal3; max_ratio: 400, sidewall: 540nm, diode: none)
+rule ant14.m2 antenna(fusetop, metal2; max_ratio: 400, sidewall: 540nm, diode: none)
+rule ant15.v3 antenna(fusetop, via3; max_ratio: 20, sidewall: none, diode: none)
+";
+    let plates = |l: &mut Layout| {
+        rect(l, "metal2", (-500, -500, 1500, 1500));
+        rect(l, "fusetop", (0, 0, 1000, 1000));
+        rect(l, "via2", (400, 400, 600, 600));
+    };
+    let mut out = Vec::new();
+    for length in [369_000, 371_000] {
+        let value = 2.0 * (length as f64 + 1000.0) * 540.0 / 1e6;
+        let mut l = Layout::default();
+        plates(&mut l);
+        rect(&mut l, "metal3", (0, 0, length, 1000));
+        let f = Fixture::new(
+            &format!("erc/antenna/gf180_ant14/{length}"),
+            &["ERC-A11"],
+            deck,
+            ERC,
+        )
+        .layout(l)
+        .expect(Expect::rule(
+            "ant14.m3",
+            ratio_findings(&[(value, (500, 500))], 400.0, true),
+        ))
+        .expect(Expect::clean("ant14.m2"))
+        .expect(Expect::clean("ant15.v3"));
+        out.extend(every_placement(&[f]));
+    }
+    for side_nm in [4400, 4500] {
+        let value = (side_nm * side_nm) as f64 / 1e6;
+        let mut l = Layout::default();
+        plates(&mut l);
+        rect(&mut l, "metal3", (0, 0, 7000, 5000));
+        rect(&mut l, "via3", (2200, 200, 2200 + side_nm, 200 + side_nm));
+        rect(&mut l, "metal4", (2000, 0, 7000, 5000));
+        let f = Fixture::new(
+            &format!("erc/antenna/gf180_ant15/{side_nm}"),
+            &["ERC-A11"],
+            deck,
+            ERC,
+        )
+        .layout(l)
+        .expect(Expect::rule(
+            "ant15.v3",
+            ratio_findings(&[(value, (500, 500))], 20.0, true),
+        ))
+        .expect(Expect::clean("ant14.m2"));
+        out.extend(every_placement(&[f]));
     }
     out
 }
