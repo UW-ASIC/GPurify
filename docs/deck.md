@@ -961,6 +961,22 @@ fill's own nets are gone from the output. The layer must be a conductor
 with a `pex` line, and each layer is stated once. Which treatment a
 foundry signs off with is its own; no open deck states one.
 
+### Device-region capacitance
+
+```
+pex_device "sky130_fd_pr__nfet_01v8" gate_contact_cap 0.3aF/um gate_diffusion_cap 0.2aF/um
+```
+
+`pex_device "<model>" gate_contact_cap <c> gate_diffusion_cap <c>` gives a
+MOS model's capacitance inside the transistor that its SPICE model leaves
+to extraction: from the gate to the source/drain contact, and from the
+gate to the diffusion beside it, each per µm of gate width. PEX adds
+`(gate_contact_cap + gate_diffusion_cap) · W` from the gate's net to the
+source's and again to the drain's (a net the gate is on gets nothing).
+Both values are required; they come from the foundry's device
+cross-section, which no open PDK publishes. The model must be a
+`device mos` model, stated once.
+
 ## Errors
 
 Every problem is reported with its line, column and a marker under the

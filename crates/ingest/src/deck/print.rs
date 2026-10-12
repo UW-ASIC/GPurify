@@ -292,6 +292,15 @@ impl Printer<'_> {
         for (layer, treatment) in &source.pex_models.fill {
             let _ = writeln!(out, "pex_fill {layer} {}", treatment.word());
         }
+        for device in &source.pex_models.device {
+            let _ = writeln!(
+                out,
+                "pex_device {} gate_contact_cap {}aF/um gate_diffusion_cap {}aF/um",
+                quoted(&device.model)?,
+                number(device.gate_contact_af_um)?,
+                number(device.gate_diffusion_af_um)?
+            );
+        }
         if let Some(extraction) = source.extraction {
             let kind = match extraction.kind {
                 ExtractionKind::R => "r",

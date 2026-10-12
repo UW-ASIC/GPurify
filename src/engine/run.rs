@@ -755,6 +755,13 @@ fn pex_network(
         gpurify_extract::quasistatic::overlay(&mut network, &solved);
     }
 
+    gpurify_extract::device_region::add_into(
+        &mut network,
+        &extracted.devices,
+        &loaded.deck.pex_models.device,
+        &loaded.strings,
+        grid,
+    );
     gpurify_extract::fill::treat(&mut network, &fill_nets(loaded, extracted))
         .map_err(|why| why.to_string())?;
     gpurify_extract::reduce::reduce(&mut network, loaded.deck.extraction);

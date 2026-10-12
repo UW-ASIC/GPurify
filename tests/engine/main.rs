@@ -5,6 +5,7 @@ mod gen_fixtures;
 
 mod custom;
 mod def;
+mod device_region;
 
 use gpurify::engine::pipeline::{extract, load, ExtractError, Inputs, LoadError, Loaded};
 use gpurify::engine::run::{

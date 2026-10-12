@@ -469,6 +469,7 @@ impl<'a> Parser<'a> {
             "device" => self.device(),
             "pex" => self.pex(),
             "pex_fill" => self.pex_fill(),
+            "pex_device" => self.pex_device(),
             "temperature" => self.temperature(span),
             "extraction" => self.extraction(span),
             "corner" => self.corner(),
@@ -478,7 +479,7 @@ impl<'a> Parser<'a> {
             "lvs" => self.lvs(),
             _ => Err(self.err(
                 span,
-                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, pex_fill, temperature, lvs, extraction, corner, stage or waive"),
+                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, pex_fill, pex_device, temperature, lvs, extraction, corner, stage or waive"),
             )),
         }
     }
@@ -1662,6 +1663,45 @@ impl<'a> Parser<'a> {
             }
         };
         self.out.pex_models.fill.push((layer, treatment));
+        Ok(())
+    }
+
+    /// `pex_device "<model>" gate_contact_cap <c> gate_diffusion_cap <c>`:
+    /// a MOS model's device-region capacitances per µm of gate width
+    /// ([`super::DeviceParasitics`]), both required, zero or more.
+    fn pex_device(&mut self) -> R<()> {
+        let model = self.model()?;
+        let mut values = [None::<f64>; 2];
+        let keys = ["gate_contact_cap", "gate_diffusion_cap"];
+        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+            let (key, span) = self.ident("gate_contact_cap or gate_diffusion_cap")?;
+            let Some(at) = keys.iter().position(|&k| k == key) else {
+                return Err(self.err(
+                    span,
+                    &format!("unknown pex_device key `{key}`; expected gate_contact_cap or gate_diffusion_cap"),
+                ));
+            };
+            let value = self.value()?;
+            let af = self.quantity(&value, Dim::CapPerLength, &key)?.f64();
+            if !(af >= 0.0 && af.is_finite()) {
+                return Err(self.err(value.span(), &format!("{key} must be zero or more")));
+            }
+            if values[at].replace(af).is_some() {
+                return Err(self.err(span, &format!("`{key}` is given twice")));
+            }
+        }
+        let [Some(gate_contact_af_um), Some(gate_diffusion_af_um)] = values else {
+            let t = self.peek();
+            return Err(self.err_tok(
+                t,
+                "pex_device states both gate_contact_cap and gate_diffusion_cap",
+            ));
+        };
+        self.out.pex_models.device.push(super::DeviceParasitics {
+            model,
+            gate_contact_af_um,
+            gate_diffusion_af_um,
+        });
         Ok(())
     }
 
