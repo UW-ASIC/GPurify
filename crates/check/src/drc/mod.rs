@@ -16,7 +16,7 @@
 pub mod rules;
 pub mod ruleset;
 
-pub use ruleset::{CutClassTable, Rule, RuleSet, SpacingQuery, StepKind, WireBand};
+pub use ruleset::{CutClassTable, Rule, RuleSet, SpacingQuery, StepKind, StepNeighbour, WireBand};
 
 use gpurify_geom::connectivity::ComponentLabel;
 use gpurify_geom::index::SpatialIndex;

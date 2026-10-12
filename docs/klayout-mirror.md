@@ -323,6 +323,7 @@ explains (kind 30).
 | 74 | dfm_score | `dfm_score(L[, outer]; check, required, recommended, rate) >= s` | — | NONE | reported as not mirrored (a score over a mirrored check's findings) | — |
 | 75 | via_redundancy | `via_redundancy(cut, lower, upper; pitch, space) >= r` | POINT | EXACT (scripted) | exact | new |
 | 76 | mean_critical_area | `critical_area(L; radii, weights) <= a` | POINT | EXACT (scripted) | exact (keys) | new |
+| 77 | min_step_adjacent | `min_step(L; adjacent \| between_eol ..) >= l` | — | NONE | reported as not mirrored | — |
 
 51 kinds are EXACT (thirteen scripted over KLayout's polygons), 16 APPROX and nine NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
@@ -1114,6 +1115,17 @@ oracle is LEF 5.8's own Example 1-16 and Figures 1-14 and 1-15, drawn as fixture
 staircase swept at the limit. OpenROAD's TritonRoute implements base `MINSTEP` runs, but its
 typed `INSIDECORNER`/`OUTSIDECORNER` branch never sets its corner flags (read from
 `FlexGC_main.cpp`), so it is not an oracle for them.
+### 68. min_step_adjacent — NONE: KLayout has no ring order
+
+**GPurify** (`width.rs` `min_step_adjacent`): each edge of the merged layer shorter than the limit,
+judged by the edges before and after it along its ring (`LEF58_MINSTEP` `MINADJACENTLENGTH`,
+`NOADJACENTEOL`, `EXCEPTRECTANGLE`), or by the end of line and short edge after it
+(`NOBETWEENEOL`), as OpenROAD's TritonRoute checks them.
+
+KLayout selects edges by length and angle but has no "the edge after this one" along a ring. The
+oracle is TritonRoute's `checkMetalShape_lef58MinStep_minAdjLength` and `_noBetweenEol`, read and
+drawn as fixtures with every length swept one step either side of its limit.
+
 ### 47. tip_spacing_table — EXACT
 
 **GPurify** (`facing.rs` `tip_spacing_table`, `each_facing`): whole edges of the merged layer, in

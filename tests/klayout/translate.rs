@@ -1995,6 +1995,14 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 Value::Ignore,
                 vec![],
             ),
+            Rule::MinStepAdjacent { .. } => (
+                "min_step_adjacent",
+                Verdict::None("KLayout has no check on a short edge's neighbours in ring order"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
             Rule::PolygonValidity { .. } => (
                 "polygon_validity",
                 Verdict::None(

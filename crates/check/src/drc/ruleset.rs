@@ -2228,8 +2228,7 @@ pub enum Rule {
     /// OUTSIDECORNER | STEP] [LENGTHSUM maxLength] | [MAXEDGES maxEdges]` and
     /// its Example 1-16 and Figure 1-15.
     ///
-    /// Limits: `LEF58_MINSTEP`'s `MINADJACENTLENGTH`, `MINBETWEENLENGTH`,
-    /// `NOADJACENTEOL` and `NOBETWEENEOL` are missing.
+    /// Limits: `LEF58_MINSTEP`'s qualifiers are [`Rule::MinStepAdjacent`].
     MinStep {
         /// The layer measured, drawn or derived.
         layer: LayerId,
@@ -2240,6 +2239,54 @@ pub enum Rule {
         /// `LENGTHSUM`: a corner or step run's total length allowed; `None`
         /// for no allowance, and always `None` with [`StepKind::MaxEdges`].
         length_sum: Option<Dbu>,
+    },
+    /// A short edge beside another short edge, or two short edges either
+    /// side of a short end of line, as `LEF58_MINSTEP`'s qualifiers reject
+    /// them.
+    ///
+    /// Deck: `min_step(L; adjacent: len, except_rectangle: bool) >= len`,
+    /// the same with `adjacent_eol: len` after `adjacent`, or
+    /// `min_step(L; between_eol: len) >= len`, kind `min_step_adjacent`. The layer is merged first; every ring, holes
+    /// included, is walked edge by edge, and an edge is short when it is
+    /// shorter than `limit` (`minStepLength`). An end of line is an edge
+    /// whose two corners are both convex. No public LEF text defines these
+    /// qualifiers; this is `OpenROAD` `TritonRoute`'s reading
+    /// (`checkMetalShape_lef58MinStep_minAdjLength` and `_noBetweenEol`,
+    /// `FlexGC_main.cpp`):
+    ///
+    /// - [`StepNeighbour::Adjacent`] (`MINSTEP minStepLength
+    ///   MINADJACENTLENGTH minAdjLength [EXCEPTRECTANGLE]`): a short edge
+    ///   whose edge before or after is shorter than `length`, or, with `eol`
+    ///   (`NOADJACENTEOL eolWidth`), is an end of line shorter than `eol`.
+    ///   With `except_rectangle`, a figure whose outer ring has four corners
+    ///   is not checked.
+    /// - [`StepNeighbour::BetweenEol`] (`NOBETWEENEOL eolWidth`): a short
+    ///   edge, then an end of line shorter than the width, then another short
+    ///   edge, in ring order.
+    ///
+    /// One violation per offending short edge (the first of the three for
+    /// `between_eol`), at the centre of the box of that edge and the edges
+    /// that made it offend, `measured` the short edge's length against
+    /// `limit`. `shapes.0` is the lowest drawn row under the figure.
+    /// `examined` counts the short edges.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-020. Rules: `LEF58_MINSTEP` (`OpenROAD` `lefTechLayerMinStepParser`
+    /// and `TritonRoute`).
+    ///
+    /// Limits: `MINADJACENTLENGTH`'s `CONVEXCORNER`, `CONCAVECORNER` and
+    /// second length, `MINBETWEENLENGTH` and `EXCEPTSAMECORNERS`, and
+    /// `NOADJACENTEOL` without `MINADJACENTLENGTH`, are parsed by `OpenROAD`
+    /// but never checked by `TritonRoute`, and no public text defines them,
+    /// so they are missing; `MAXEDGES` beside these qualifiers is not read
+    /// either, as `TritonRoute` does not.
+    MinStepAdjacent {
+        /// The layer measured, drawn or derived.
+        layer: LayerId,
+        /// The shortest edge that is not short, in grid units; positive.
+        limit: Dbu,
+        /// What a short edge may not have beside it.
+        neighbour: StepNeighbour,
     },
     /// Two shapes whose facing edges are closer than the cell the two edges'
     /// lengths select: tip to tip, tip to side and side to side, each by
@@ -2875,6 +2922,28 @@ pub enum StepKind {
     InsideCorner,
     /// `STEP`: one or more between two long edges running the same way.
     Step,
+}
+
+/// What a short edge may not have beside it, after `LEF58_MINSTEP`'s
+/// qualifiers, read by [`Rule::MinStepAdjacent`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepNeighbour {
+    /// `MINADJACENTLENGTH length [EXCEPTRECTANGLE]`, with `NOADJACENTEOL eol`
+    /// when `eol` is given: an edge before or after shorter than `length`,
+    /// or an end of line shorter than `eol`.
+    Adjacent {
+        /// An edge before or after shorter than this offends, in grid units;
+        /// positive.
+        length: Dbu,
+        /// An end of line before or after shorter than this offends too, in
+        /// grid units; positive.
+        eol: Option<Dbu>,
+        /// Whether a figure whose outer ring is a rectangle is exempt.
+        except_rectangle: bool,
+    },
+    /// `NOBETWEENEOL eolWidth`: an end of line shorter than this between two
+    /// short edges, in grid units; positive.
+    BetweenEol(Dbu),
 }
 
 /// The wire widths at which an enclosure rule holds an inner polygon (LEF
@@ -4117,6 +4186,27 @@ impl RuleSet {
                         _ => Some(one(spec)?),
                     },
                 },
+                "min_step_adjacent" => {
+                    let layer = one(spec)?;
+                    let limit = length(spec, "limit")?;
+                    let neighbour = if optional(spec, "between_eol").is_some() {
+                        StepNeighbour::BetweenEol(length(spec, "between_eol")?)
+                    } else {
+                        StepNeighbour::Adjacent {
+                            length: length(spec, "adjacent")?,
+                            eol: match optional(spec, "adjacent_eol") {
+                                Some(_) => Some(length(spec, "adjacent_eol")?),
+                                None => None,
+                            },
+                            except_rectangle: flag(spec, "except_rectangle")?,
+                        }
+                    };
+                    Rule::MinStepAdjacent {
+                        layer,
+                        limit,
+                        neighbour,
+                    }
+                }
                 "min_step" => {
                     let layer = one(spec)?;
                     let limit = length(spec, "limit")?;
@@ -4932,6 +5022,11 @@ impl RuleSet {
                         kind,
                         length_sum,
                     } => width::min_step(store, id, layer, (limit, kind, length_sum), s, out),
+                    Rule::MinStepAdjacent {
+                        layer,
+                        limit,
+                        neighbour,
+                    } => width::min_step_adjacent(store, id, layer, (limit, neighbour), s, out),
                     Rule::TipSpacingTable { layer, table } => facing::tip_spacing_table(
                         store,
                         id,
@@ -5189,6 +5284,14 @@ impl Rule {
             Rule::MinStep {
                 limit, length_sum, ..
             } => length(limit).and(length_sum.map_or(Ok(()), length)),
+            Rule::MinStepAdjacent {
+                limit, neighbour, ..
+            } => length(limit).and(match neighbour {
+                StepNeighbour::Adjacent { length: adj, eol, .. } => {
+                    length(adj).and(eol.map_or(Ok(()), length))
+                }
+                StepNeighbour::BetweenEol(eol) => length(eol),
+            }),
             Rule::CutSize { width, height, .. } => length(width).and(length(height)),
             Rule::EolSpacing {
                 eol_width: first,
@@ -5523,6 +5626,7 @@ impl Rule {
             Rule::MinInteriorAngle { .. } => "min_interior_angle",
             Rule::PolygonValidity { .. } => "polygon_validity",
             Rule::MinStep { .. } => "min_step",
+            Rule::MinStepAdjacent { .. } => "min_step_adjacent",
             Rule::TipSpacingTable { .. } => "tip_spacing_table",
             Rule::ForbiddenSpacing { .. } => "forbidden_spacing",
             Rule::EolWithinSpacing { .. } => "eol_within_spacing",
@@ -5575,6 +5679,7 @@ impl Rule {
             | Rule::EdgeFacingSpace { layer, .. }
             | Rule::AllowedWidth { layer, .. }
             | Rule::MinStep { layer, .. }
+            | Rule::MinStepAdjacent { layer, .. }
             | Rule::TipSpacingTable { layer, .. }
             | Rule::ForbiddenSpacing { layer, .. }
             | Rule::EolWithinSpacing { layer, .. }

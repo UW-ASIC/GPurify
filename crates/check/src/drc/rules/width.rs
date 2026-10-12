@@ -7,7 +7,7 @@
 //! on the whole input domain.
 
 use super::{centre, mid, owners_by_point, owners_of, Verdict, REFUSED};
-use crate::drc::ruleset::StepKind;
+use crate::drc::ruleset::{StepKind, StepNeighbour};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::boolean::{subtraction_into, union_into, BooleanError};
@@ -571,6 +571,109 @@ pub(crate) fn min_step(
                     },
                     measured,
                     limit,
+                    shapes: (owner, None),
+                });
+            }
+        }
+    }
+    (Outcome::Ran, examined)
+}
+
+/// `LEF58_MINSTEP`'s qualifiers as `TritonRoute` checks them (DRC-020): each
+/// edge of the merged layer shorter than `limit` whose neighbours offend as
+/// `neighbour` states ([`Rule::MinStepAdjacent`](crate::drc::Rule::MinStepAdjacent)).
+/// One violation per offending short edge, at the centre of the box of it
+/// and the edges that made it offend. `examined` counts short edges.
+pub(crate) fn min_step_adjacent(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    (limit, neighbour): (Dbu, StepNeighbour),
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(drawn) = s.validated.get(store, layer) else {
+        return REFUSED;
+    };
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return REFUSED;
+    }
+    s.rects_a.build(store, layer, drawn);
+    let mut examined = 0u64;
+    let mut points = Vec::new();
+    for (idx, owner) in (0u32..).zip(owners_of(&s.layer_out, &s.rects_a)) {
+        let poly = s.layer_out.get(idx);
+        if matches!(
+            neighbour,
+            StepNeighbour::Adjacent {
+                except_rectangle: true,
+                ..
+            }
+        ) && poly.outer().coords().0.len() == 4
+        {
+            continue;
+        }
+        for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+            let (xs, ys) = ring.coords();
+            points.clear();
+            points.extend(xs.iter().zip(ys).map(|(&x, &y)| Point { x, y }));
+            let n = points.len();
+            // Edge `i` runs from vertex `i` to `i + 1`.
+            let length = |i: usize| {
+                let (a, b) = (points[i % n], points[(i + 1) % n]);
+                (b.x - a.x).abs() + (b.y - a.y).abs()
+            };
+            // A left turn at a vertex is a convex corner: the material is on
+            // the left of travel, outer rings and holes alike.
+            let convex = |i: usize| {
+                let d1 = heading(points[(i + n - 1) % n], points[i % n]);
+                let d2 = heading(points[i % n], points[(i + 1) % n]);
+                d1.0 * d2.1 - d1.1 * d2.0 > 0
+            };
+            let eol_under = |i: usize, width: Dbu| convex(i) && convex(i + 1) && length(i) < width;
+            for e in 0..n {
+                if length(e) >= limit {
+                    continue;
+                }
+                examined += 1;
+                let (prev, next) = (e + n - 1, e + 1);
+                // The edges, besides `e`, that make it offend.
+                let blamed: &[usize] = match neighbour {
+                    StepNeighbour::Adjacent {
+                        length: adj, eol, ..
+                    } => {
+                        let offends =
+                            |i: usize| length(i) < adj || eol.is_some_and(|w| eol_under(i, w));
+                        if offends(prev) || offends(next) {
+                            &[prev, next]
+                        } else {
+                            continue;
+                        }
+                    }
+                    StepNeighbour::BetweenEol(width) => {
+                        if eol_under(next, width) && length(next + 1) < limit {
+                            &[next, next + 1]
+                        } else {
+                            continue;
+                        }
+                    }
+                };
+                let mut bbox = Bbox::point(points[e].x, points[e].y);
+                for &i in std::iter::once(&e).chain(blamed) {
+                    for p in [points[i % n], points[(i + 1) % n]] {
+                        bbox = bbox.include(p.x, p.y);
+                    }
+                }
+                out.push(Violation {
+                    rule,
+                    layer,
+                    severity: Severity::Error,
+                    at: Point {
+                        x: mid(bbox.xlo, bbox.xhi),
+                        y: mid(bbox.ylo, bbox.yhi),
+                    },
+                    measured: Measurement::Length(length(e)),
+                    limit: Measurement::Length(limit),
                     shapes: (owner, None),
                 });
             }

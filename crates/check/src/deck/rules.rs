@@ -49,7 +49,7 @@
 
 use super::builder::{LayerExpr, LayerRef};
 use crate::drc::ruleset::{DfmCheck, EolParallel};
-use crate::drc::{StepKind, WireBand};
+use crate::drc::{StepKind, StepNeighbour, WireBand};
 use gpurify_geom::{Dbu, DbuArea};
 use gpurify_ingest::deck::ParamValue;
 
@@ -296,6 +296,27 @@ impl Arg for StepKind {
             StepKind::Step => ("corner", 2),
         };
         value.put(name, params);
+    }
+}
+
+/// `LEF58_MINSTEP`'s neighbour condition: `adjacent`, `adjacent_eol` and
+/// `except_rectangle`, or `between_eol`.
+impl Arg for StepNeighbour {
+    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
+        match self {
+            StepNeighbour::Adjacent {
+                length,
+                eol,
+                except_rectangle,
+            } => {
+                length.put(name, params);
+                if let Some(eol) = eol {
+                    eol.put("adjacent_eol", params);
+                }
+                except_rectangle.put("except_rectangle", params);
+            }
+            StepNeighbour::BetweenEol(eol) => eol.put("between_eol", params),
+        }
     }
 }
 
@@ -641,6 +662,10 @@ kinds! {
     /// `min_step(layer; max_edges: n | corner: .., length_sum) >= limit`;
     /// `length_sum` only with a corner.
     min_step(layer: one) [] { limit: Dbu = "limit", kind: StepKind = "corner", length_sum: Option<Dbu> = "length_sum" }
+    /// [`Rule::MinStepAdjacent`](crate::drc::Rule::MinStepAdjacent):
+    /// `min_step(layer; adjacent, [adjacent_eol,] except_rectangle) >= limit`
+    /// or `min_step(layer; between_eol) >= limit`.
+    min_step_adjacent(layer: one) [] { limit: Dbu = "limit", neighbour: StepNeighbour = "adjacent" }
     /// [`Rule::TipSpacingTable`](crate::drc::Rule::TipSpacingTable):
     /// `tip_space_table(layer; length: [..], space: [[..], ..])`, `space` row
     /// by row.
