@@ -55,8 +55,8 @@
 //! elements"). They are counted, and `GPurify` must call each a mismatch.
 
 use super::{
-    circuits, compared, compared_under, enumerated, pin_names, polar, spice, Circuit, Controls,
-    Dev, Model, TOLERANCE,
+    circuits, compared, compared_under, enumerated, measured, pin_names, polar, spice, Circuit,
+    Controls, Dev, Model, TOLERANCE,
 };
 use crate::harness::{self, Expect, Fixture};
 use gpurify::check::lvs::Verdict;
@@ -428,6 +428,23 @@ fn netgen_setup(setup: &str, controls: &Controls) -> String {
 /// real-valued property, so no case states one.
 fn netgen_controls(controls: &Controls) -> String {
     let mut out = String::new();
+    assert!(
+        controls.max_res.is_none() && controls.min_caps.is_none() && controls.same_nets.is_empty(),
+        "Netgen has no value threshold nor net seed in its setup"
+    );
+    if controls.relaxed {
+        // deck.md's relaxed laws: a resistance combines harmonically in
+        // parallel and adds in series, a capacitance the other way round.
+        for (model, parallel, series) in [("rpoly", "par", "add"), ("cmim", "add", "par")] {
+            for line in [
+                format!("property \"$side {model}\" parallel {{value {parallel}}}"),
+                format!("property \"$side {model}\" series enable"),
+                format!("property \"$side {model}\" series {{value {series}}}"),
+            ] {
+                out.push_str(&on_each_side(model, &line));
+            }
+        }
+    }
     for &model in &controls.dummies_out {
         let model = model.name();
         out.push_str(&on_each_side(
@@ -477,6 +494,7 @@ fn controlled() -> Vec<Case> {
     out.extend(permuted());
     out.extend(ignored());
     out.extend(dummies());
+    out.extend(relaxed());
     let row = |model, param, relative| Controls::default().tolerance(model, param, relative, None);
     // LVS-014: `w` 3000 against 3120 nm, 3.85 % of the larger: within a 5 %
     // row on `nmos` `w`, not a 3 % one, and not a 5 % row on `pmos`.
@@ -584,6 +602,115 @@ fn permuted() -> Vec<Case> {
                 &controls,
             ));
         }
+    }
+    out
+}
+
+/// `layout` as Netgen reads the drawing: each resistor and capacitor
+/// states the value the layout measures ([`measured`]) where a reference
+/// card of its model states one, as `GPurify` keeps a measure only there.
+fn with_drawn_values(layout: &Circuit, reference: &Circuit) -> Circuit {
+    let declared = super::Declared::of(reference);
+    let mut out = as_declared(layout, reference);
+    for dev in &mut out.devs {
+        let name = match dev.model {
+            Model::R => "r",
+            Model::C => "c",
+            _ => continue,
+        };
+        dev.value = declared
+            .has(dev.model, name)
+            .then(|| measured(dev.model, name))
+            .flatten();
+    }
+    out
+}
+
+/// LVS-043, LVS-044, LVS-049: the relaxed topology against Netgen's
+/// `property ... parallel {value par|add}` and `series {value add|par}`,
+/// each case also under the strict default. Resistors drawn 200 ohm and
+/// capacitors 0.56 fF ([`measured`]): two in parallel against half and
+/// double, two chained through an internal net against the sum and the
+/// series capacitance, written chains against one drawn, and capacitors
+/// meeting tail to tail, which do not chain. The strict policy's verdicts
+/// on these are the X5 oracle's alone.
+fn relaxed() -> Vec<Case> {
+    use Model::{C, R};
+    let card = |dev: Dev| Circuit::new(2, vec![dev]);
+    let parallel = |model| {
+        Circuit::new(
+            2,
+            vec![Dev::pins(model, &[0, 1]), Dev::pins(model, &[0, 1])],
+        )
+    };
+    let chain = |model, second: [usize; 2]| {
+        Circuit::new(
+            3,
+            vec![Dev::pins(model, &[0, 1]), Dev::pins(model, &second)],
+        )
+        .internal(1)
+    };
+    let written = |model, value| {
+        Circuit::new(
+            3,
+            vec![
+                Dev::pins(model, &[0, 2]).value(value),
+                Dev::pins(model, &[2, 1]).value(value),
+            ],
+        )
+        .internal(2)
+    };
+    let pairs = [
+        (
+            "R_parallel_vs_half",
+            parallel(R),
+            card(Dev::pins(R, &[0, 1]).value(100.0)),
+        ),
+        (
+            "C_parallel_vs_double",
+            parallel(C),
+            card(Dev::pins(C, &[0, 1]).value(1.12e-15)),
+        ),
+        (
+            "R_chain_vs_sum",
+            chain(R, [1, 2]),
+            card(Dev::pins(R, &[0, 1]).value(400.0)),
+        ),
+        (
+            "C_chain_vs_series",
+            chain(C, [1, 2]),
+            card(Dev::pins(C, &[0, 1]).value(2.8e-16)),
+        ),
+        (
+            "R_one_vs_written_chain",
+            card(Dev::pins(R, &[0, 1])),
+            written(R, 100.0),
+        ),
+        (
+            "C_one_vs_written_chain",
+            card(Dev::pins(C, &[0, 1])),
+            written(C, 1.12e-15),
+        ),
+        (
+            "C_tail_to_tail_vs_series",
+            chain(C, [2, 1]),
+            card(Dev::pins(C, &[0, 1]).value(2.8e-16)),
+        ),
+    ];
+    let relaxed = Controls {
+        relaxed: true,
+        ..Controls::default()
+    };
+    let mut out = Vec::new();
+    for (name, layout, reference) in pairs {
+        let mut case = controlled_case(
+            &format!("topology/{name}/relaxed"),
+            &["LVS-049", "LVS-043", "LVS-044"],
+            (&layout, &reference),
+            &relaxed,
+        );
+        case.layout = for_netgen(&spice(&with_drawn_values(&layout, &reference)));
+        out.push(case);
     }
     out
 }

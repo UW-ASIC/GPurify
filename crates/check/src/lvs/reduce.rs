@@ -10,7 +10,7 @@
 //! | MOS stating `W` | sums `W`, `nf` and the diffusions `as`, `ad`, `ps`, `pd`, each to its channel end; every other parameter, `L` included, agrees | sums `L`, which both state; every other parameter agrees; never with a diffusion stated | folded into `W` and the diffusions |
 //! | MOS stating no `W` | sums the count `m` (1 when the card states none); every other parameter agrees | as above | kept: that many in parallel |
 //! | resistor, capacitor, diode, bipolar | sums the count `m`; every other parameter agrees | never | kept |
-//! | the same, stating its value, under [`ParamNames::relaxed`] | combines the value by its law (a resistor's `r` harmonically, `1 / Σ 1/r`; a capacitor's `c`, a diode's `area`, a bipolar's `ae` by adding) and adds `w` (a resistor's), `area`, `perim` and `pe`; every other parameter agrees | never | folded into the value and what adds |
+//! | the same, stating its value, under [`ParamNames::relaxed`] | combines the value by its law (a resistor's `r` harmonically, `1 / Σ 1/r`; a capacitor's `c`, a diode's `area`, a bipolar's `ae` by adding) and adds `w` (a resistor's), `area`, `perim` and `pe`; every other parameter agrees | a resistor or capacitor only: the value by the opposite law (`r` adding, `c` harmonically), adding `area`, `perim` and a resistor's `l`; every other parameter, a resistor's `w` included, agrees | folded into the value and what adds |
 //!
 //! "Agrees" means the same parameter names with bit-identical values: the
 //! comparison's tolerance plays no part here. A summed parameter must be
@@ -58,8 +58,19 @@
 //!   in parallel by the value's law, so two capacitors of `c` are one of
 //!   `2c` and two resistors of `r` one of `r/2`, as Kirchhoff's laws make
 //!   them; its `m` is folded in first, `r/m` and `m` times the rest. One that
-//!   states no value has nothing to combine and keeps its count. Passives
-//!   still never merge in series.
+//!   states no value has nothing to combine and keeps its count. A
+//!   resistor or capacitor stating its value also merges in series, with
+//!   another of its model whose terminal is the only other one on a net
+//!   that is no port, their far ends on two other nets: `r` and a
+//!   resistor's `l` add, `c` combines harmonically, and `area` and `perim`
+//!   add, as `KLayout`'s `ResistorDeviceCombiner::serial` and
+//!   `CapacitorDeviceCombiner::serial` combine them; a resistor's `w`
+//!   must agree, as Netgen's sky130 setup states `series {w critical}`
+//!   (`KLayout` instead averages it by resistance, which for equal widths
+//!   is the same). A capacitor's ordered plates must chain plate to plate;
+//!   plates `lvs permute` joins may meet either way. A ring of passives,
+//!   or a chain closing on one net, stays as drawn. Diodes and bipolars
+//!   never merge in series, as neither tool merges them.
 //! - **Multiplier** (catalog LVS-046): with both the `W` and `m` names given,
 //!   each MOS's `W` is multiplied by its `m` and the `m` is dropped, before
 //!   any merge. A MOS with no `W`, and every other device, keeps its `m`,
@@ -70,8 +81,8 @@
 //! to the whole graph, parallel first, so every sum within a pass is well
 //! defined. Passes repeat until neither law merges anything, and a later pass
 //! may merge a merged device again: a series stack, then two such stacks in
-//! parallel. Resistors, capacitors and diodes are never merged in series
-//! (catalog LVS-043, LVS-044).
+//! parallel. Resistors and capacitors merge in series only under the
+//! relaxed policy, diodes and bipolars never (catalog LVS-043, LVS-044).
 
 use crate::topology::TerminalRole;
 use gpurify_ingest::StrId;
@@ -106,7 +117,8 @@ pub struct ParamNames {
     /// or bipolar's value and what adds with it under [`Self::relaxed`].
     pub values: [Option<StrId>; 6],
     /// Whether a resistor, capacitor, diode or bipolar stating its value
-    /// merges in parallel by the value's law rather than keeping a count
+    /// merges in parallel by the value's law, and a resistor or capacitor
+    /// in series by the opposite one, rather than keeping a count
     /// (Netgen's `property topology relaxed`; the deck's `lvs topology
     /// relaxed`). Off by default: the strict policy, where two devices are
     /// never one of a combined value.
@@ -168,6 +180,28 @@ impl Law {
         let [a, b, c] = self.adds;
         [Some(self.value), a, b, c, None, None]
     }
+
+    /// The names a series merge of `kind` under this law combines: the
+    /// value, by the law opposite the parallel one (a resistance adds, a
+    /// capacitance combines harmonically), and `area` and `perim` adding,
+    /// with a resistor's `l` (`KLayout`'s `ResistorDeviceCombiner::serial`
+    /// and `CapacitorDeviceCombiner::serial`). A resistor's `w` is not
+    /// among them, so it must agree (Netgen's `series {w critical}` in the
+    /// sky130 setup). `None` for a kind that never merges in series.
+    fn series_sums(self, kind: DeviceKind, names: ParamNames) -> Option<[Option<StrId>; 6]> {
+        let [_, _, area, perim, _, _] = names.values;
+        match kind {
+            DeviceKind::Resistor => Some([Some(self.value), names.length, area, perim, None, None]),
+            DeviceKind::Capacitor => Some([Some(self.value), area, perim, None, None, None]),
+            _ => None,
+        }
+    }
+}
+
+/// Whether `kind` is a passive a relaxed series merge takes: a resistor or
+/// a capacitor, two pins each.
+const fn series_passive(kind: DeviceKind) -> bool {
+    matches!(kind, DeviceKind::Resistor | DeviceKind::Capacitor)
 }
 
 impl ParamNames {
@@ -613,10 +647,16 @@ fn prepare(src: &Graph, names: ParamNames, plan: &mut Plan, devices: usize, nets
         let states_length = names
             .length
             .is_some_and(|length| params.iter().any(|&(name, _)| name == length));
-        plan.series_sig.push(
-            (states_length && bound && diffusions == 0)
+        // A relaxed resistor or capacitor stating its value merges in
+        // series by its law; any other device by its `L`.
+        let passive = law
+            .and_then(|law| law.series_sums(kind, names))
+            .filter(|_| roles.len() == 2);
+        plan.series_sig.push(match passive {
+            Some(sums) => bound.then(|| signature(params, &sums, None)),
+            None => (states_length && bound && diffusions == 0 && !series_passive(kind))
                 .then(|| signature(params, &[names.length], None)),
-        );
+        });
     }
 }
 
@@ -694,6 +734,13 @@ fn join_series(src: &Graph, plan: &mut Plan, nets: usize) {
         if first == second {
             continue;
         }
+        if series_passive(src.device_kind[first as usize]) {
+            if passive_pair(src, plan, net, (first, first_role), (second, second_role)) {
+                join(&mut plan.root, first, second);
+                plan.series.push((net, first, second));
+            }
+            continue;
+        }
         if !(is_channel(first_role) & is_channel(second_role)) {
             continue;
         }
@@ -728,6 +775,40 @@ fn join_series(src: &Graph, plan: &mut Plan, nets: usize) {
         join(&mut plan.root, first, second);
         plan.series.push((net, first, second));
     }
+}
+
+/// Whether two relaxed passives meet in series at `net`, which carries
+/// exactly their two terminals and is no port: one kind and one model, a
+/// series signature each and the same one (the value, and what adds with
+/// it, stated by both or neither; every other parameter bit-identical),
+/// and their far ends on two other nets, not the same one (that would be
+/// a loop). A capacitor's plates are ordered, so its chain must run plate
+/// to plate, one's second plate on the other's first, unless its two pins
+/// compare under one role (a resistor's ends, or plates `lvs permute`
+/// joined); tail to tail never merges.
+fn passive_pair(
+    src: &Graph,
+    plan: &Plan,
+    net: u32,
+    (first, first_role): (u32, TerminalRole),
+    (second, second_role): (u32, TerminalRole),
+) -> bool {
+    let (a, b) = (first as usize, second as usize);
+    if src.device_kind[a] != src.device_kind[b]
+        || src.device_model[a] != src.device_model[b]
+        || plan.series_sig[a].is_none()
+        || plan.series_sig[a] != plan.series_sig[b]
+    {
+        return false;
+    }
+    let far = |device: u32| {
+        let (nets, roles) = src.terminals_of(device);
+        let symmetric = roles[0] == roles[1];
+        let other = if nets[0] == net { nets[1] } else { nets[0] };
+        (other, symmetric)
+    };
+    let ((far_a, symmetric), (far_b, _)) = (far(first), far(second));
+    far_a != net && far_b != net && far_a != far_b && (symmetric || first_role != second_role)
 }
 
 /// The net at the far end of a two-terminal channel from `net`. A device with
@@ -793,6 +874,9 @@ fn dissolve_invalid(src: &Graph, plan: &mut Plan) {
 /// non-channel terminals, and as many surviving channel ends as one member has.
 fn group_is_sound(src: &Graph, plan: &Plan, from: usize, to: usize) -> bool {
     let head = plan.order[from];
+    if series_passive(src.device_kind[head as usize]) {
+        return passive_group_is_sound(src, plan, from, to);
+    }
     let (head_fixed, head_channel) = split_keys(keys(&plan.key_start, &plan.key, head));
     let head_kind = src.device_kind[head as usize];
     let head_model = src.device_model[head as usize];
@@ -831,6 +915,29 @@ fn group_is_sound(src: &Graph, plan: &Plan, from: usize, to: usize) -> bool {
         }
     }
     survivors == head_channel.len()
+}
+
+/// Whether a series group of passives is one passive: every member of the
+/// head's kind and model, and exactly two terminals left on nets the group
+/// did not consume, on two different nets. A ring consumes every net and
+/// leaves none; a chain closing on itself leaves both ends on one net.
+fn passive_group_is_sound(src: &Graph, plan: &Plan, from: usize, to: usize) -> bool {
+    let head = plan.order[from] as usize;
+    let mut ends = Vec::with_capacity(2);
+    for index in from..to {
+        let device = plan.order[index];
+        if src.device_kind[device as usize] != src.device_kind[head]
+            || src.device_model[device as usize] != src.device_model[head]
+        {
+            return false;
+        }
+        for &net in src.terminals_of(device).0 {
+            if !plan.consumed[net as usize] {
+                ends.push(net);
+            }
+        }
+    }
+    ends.len() == 2 && ends[0] != ends[1]
 }
 
 /// Mark every candidate net whose two devices ended up in one group.
@@ -944,11 +1051,21 @@ fn emit_into(src: &Graph, plan: &Plan, names: ParamNames, out: &mut Graph) {
             let law = Law::of(head_kind, src.params_of(head), names)
                 .filter(|_| plan.mode == Some(MergeKind::Parallel));
             let group = &plan.order[at..end];
-            let summed = match (plan.mode, law) {
-                (Some(MergeKind::Series), _) => [names.length, None, None, None, None, None],
-                (_, Some(law)) => law.sums(),
+            // A relaxed passive's series law, where this group is one.
+            let series_law = Law::of(head_kind, src.params_of(head), names)
+                .filter(|_| plan.mode == Some(MergeKind::Series))
+                .and_then(|law| Some((law, law.series_sums(head_kind, names)?)));
+            let summed = match (plan.mode, law, series_law) {
+                (Some(MergeKind::Series), _, Some((_, sums))) => sums,
+                (Some(MergeKind::Series), _, None) => [names.length, None, None, None, None, None],
+                (_, Some(law), _) => law.sums(),
                 _ => parallel_sums(wide, names),
             };
+            // Combined harmonically: a resistance in parallel, a
+            // capacitance in series.
+            let harmonic = law
+                .map(|law| (law.value, law.harmonic))
+                .or_else(|| series_law.map(|(law, _)| (law.value, !law.harmonic)));
             // A member whose source is on the head's drain adds its `as` to
             // the head's `ad`, and so on: a diffusion is its net's.
             let (head_source, head_drain) = channel_ends(src, head);
@@ -977,8 +1094,9 @@ fn emit_into(src: &Graph, plan: &Plan, names: ParamNames, out: &mut Graph) {
                             .filter(move |&&(other, _)| Some(other) == read)
                             .map(|&(_, v)| v)
                     });
-                    // A resistance combines harmonically, `1 / Σ 1/r`.
-                    if law.is_some_and(|law| law.harmonic && law.value == name) {
+                    // A resistance in parallel, a capacitance in series,
+                    // combines harmonically: `1 / Σ 1/x`.
+                    if harmonic == Some((name, true)) {
                         1.0 / members.map(|v| 1.0 / v).sum::<f64>()
                     } else {
                         members.sum()
@@ -1016,6 +1134,19 @@ fn merge_terminals(
 ) {
     out.clear();
     let head = plan.order[from];
+    if series_passive(src.device_kind[head as usize]) {
+        // The chain's two surviving ends, each with the role it had.
+        for &device in &plan.order[from..to] {
+            let (nets, roles) = src.terminals_of(device);
+            for (&net, &role) in nets.iter().zip(roles) {
+                if !plan.consumed[net as usize] {
+                    out.push((role, net));
+                }
+            }
+        }
+        out.sort_unstable_by_key(|&(role, net)| (role_code(role), net));
+        return;
+    }
     let (head_nets, head_roles) = src.terminals_of(head);
     for slot in 0..head_roles.len() {
         if !is_channel(head_roles[slot]) {

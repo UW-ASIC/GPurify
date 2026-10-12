@@ -248,7 +248,8 @@ pub fn compare_logged(
 ///   never turns a mismatch into a match.
 /// - **`lvs topology relaxed`** (catalog LVS-043, LVS-044, LVS-049):
 ///   [`ParamNames::relaxed`], so a passive or bipolar stating its value
-///   merges in parallel by the value's law ([`reduce`](crate::lvs::reduce)),
+///   merges in parallel by the value's law, and a resistor or capacitor in
+///   series by the opposite one ([`reduce`](crate::lvs::reduce)),
 ///   Netgen's `property topology relaxed`; the strict policy, the default,
 ///   counts instead.
 /// - **`lvs ignore_shorted`** (catalog LVS-035): a device of the model with

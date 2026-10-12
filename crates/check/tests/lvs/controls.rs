@@ -735,3 +735,185 @@ fn same_nets_hold_two_named_nets_together() {
         Verdict::Match
     );
 }
+
+/// One device as built by hand: its `(role, net)` ends and its parameters.
+type Card<'a> = (
+    &'a [(gpurify_check::topology::TerminalRole, u32)],
+    &'a [(StrId, f64)],
+);
+
+/// Oracle: closed form, Kirchhoff's laws for elements in series, as
+/// `KLayout`'s `ResistorDeviceCombiner::serial` and
+/// `CapacitorDeviceCombiner::serial` state them (R = R1 + R2, L = L1 + L2;
+/// C = C1 C2 / (C1 + C2); area and perimeter adding), and Netgen's
+/// relaxed topology. Under the relaxed policy three resistors of 100 ohm
+/// chained through two internal nets are one of 300 ohm with `l` 3 um and
+/// `area` 3 um²; two capacitors of 2 fF chained plate to plate are one of
+/// 1 fF whose ends keep their plates. None merges under the strict policy,
+/// through a port, with `w` differing, in a ring, tail to tail for ordered
+/// plates (it does once the plates compare under one role, as `lvs
+/// permute` makes them), or without a value. Breaks if a value combines by
+/// the wrong law, an internal net survives, or a merge is made where its
+/// definition does not hold.
+#[test]
+fn relaxed_series_passives_combine_their_value_by_its_law() {
+    use gpurify_check::lvs::reduce::reduce_with;
+    use gpurify_check::topology::TerminalRole::{self, Pin};
+    let (r, c, area) = (StrId(42), StrId(43), StrId(44));
+    let names = |relaxed| ParamNames {
+        length: Some(LENGTH),
+        width: Some(WIDTH),
+        multiplier: Some(MULT),
+        values: [Some(r), Some(c), Some(area), None, None, None],
+        relaxed,
+        ..ParamNames::default()
+    };
+    // Devices of `kind` on `(role, net)` pairs, over `nets` nets of which
+    // `ports` are ports.
+    let build = |kind, model, nets: u32, ports: &[u32], devices: &[Card]| {
+        let mut builder = GraphBuilder::new(nets);
+        for &port in ports {
+            builder.port(port);
+        }
+        for &(ends, params) in devices {
+            builder.device_with_params(kind, model, ends, params);
+        }
+        builder.finish()
+    };
+    let reduced = |graph: &Graph, relaxed| reduce_with(graph, names(relaxed)).0;
+    let resistor: &[(StrId, f64)] = &[(r, 100.0), (LENGTH, 1e-6), (WIDTH, 2e-7), (area, 1e-12)];
+    let chain = build(
+        DeviceKind::Resistor,
+        common::RES,
+        4,
+        &[0, 3],
+        &[
+            (&[(Pin(0), 0), (Pin(0), 1)], resistor),
+            (&[(Pin(0), 1), (Pin(0), 2)], resistor),
+            (&[(Pin(0), 2), (Pin(0), 3)], resistor),
+        ],
+    );
+    let out = reduced(&chain, true);
+    assert_eq!(out.device_count(), 1, "the chain is one resistor");
+    assert_eq!(out.net_count(), 2, "both internal nets are consumed");
+    let mut params = out.params_of(0).to_vec();
+    params.sort_by_key(|p| p.0);
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-9 * b.abs();
+    let want = [(r, 300.0), (LENGTH, 3e-6), (WIDTH, 2e-7), (area, 3e-12)];
+    for (name, value) in want {
+        let got = params.iter().find(|p| p.0 == name).expect("stated").1;
+        assert!(close(got, value), "{name:?}: {got} against {value}");
+    }
+    assert_eq!(
+        reduced(&chain, false).device_count(),
+        3,
+        "strict keeps them"
+    );
+    let through_port = build(
+        DeviceKind::Resistor,
+        common::RES,
+        4,
+        &[0, 1, 3],
+        &[
+            (&[(Pin(0), 0), (Pin(0), 1)], resistor),
+            (&[(Pin(0), 1), (Pin(0), 2)], resistor),
+            (&[(Pin(0), 2), (Pin(0), 3)], resistor),
+        ],
+    );
+    assert_eq!(
+        reduced(&through_port, true).device_count(),
+        2,
+        "a port stops it"
+    );
+    let narrow: &[(StrId, f64)] = &[(r, 100.0), (LENGTH, 1e-6), (WIDTH, 1e-7), (area, 1e-12)];
+    let mixed = build(
+        DeviceKind::Resistor,
+        common::RES,
+        3,
+        &[0, 2],
+        &[
+            (&[(Pin(0), 0), (Pin(0), 1)], resistor),
+            (&[(Pin(0), 1), (Pin(0), 2)], narrow),
+        ],
+    );
+    assert_eq!(reduced(&mixed, true).device_count(), 2, "w must agree");
+    let ring = build(
+        DeviceKind::Resistor,
+        common::RES,
+        3,
+        &[],
+        &[
+            (&[(Pin(0), 0), (Pin(0), 1)], resistor),
+            (&[(Pin(0), 1), (Pin(0), 2)], resistor),
+            (&[(Pin(0), 2), (Pin(0), 0)], resistor),
+        ],
+    );
+    assert_eq!(
+        reduced(&ring, true).device_count(),
+        3,
+        "a ring is no device"
+    );
+    let bare = build(
+        DeviceKind::Resistor,
+        common::RES,
+        3,
+        &[0, 2],
+        &[
+            (&[(Pin(0), 0), (Pin(0), 1)], &[]),
+            (&[(Pin(0), 1), (Pin(0), 2)], &[]),
+        ],
+    );
+    assert_eq!(reduced(&bare, true).device_count(), 2, "no value, no law");
+
+    let cap: &[(StrId, f64)] = &[(c, 2e-15)];
+    let caps = |second: TerminalRole, first: TerminalRole| {
+        build(
+            DeviceKind::Capacitor,
+            CAP,
+            3,
+            &[0, 2],
+            &[
+                (&[(first, 0), (second, 1)], cap),
+                (&[(first, 1), (second, 2)], cap),
+            ],
+        )
+    };
+    let out = reduced(&caps(Pin(1), Pin(0)), true);
+    assert_eq!(out.device_count(), 1, "plate to plate merges");
+    assert!(
+        close(out.params_of(0)[0].1, 1e-15),
+        "{:?}",
+        out.params_of(0)
+    );
+    assert_eq!(out.terminals_of(0), (&[0, 1][..], &[Pin(0), Pin(1)][..]));
+    let tail_to_tail = build(
+        DeviceKind::Capacitor,
+        CAP,
+        3,
+        &[0, 2],
+        &[
+            (&[(Pin(0), 0), (Pin(1), 1)], cap),
+            (&[(Pin(0), 2), (Pin(1), 1)], cap),
+        ],
+    );
+    assert_eq!(
+        reduced(&tail_to_tail, true).device_count(),
+        2,
+        "ordered plates"
+    );
+    let permuted = build(
+        DeviceKind::Capacitor,
+        CAP,
+        3,
+        &[0, 2],
+        &[
+            (&[(Pin(8), 0), (Pin(8), 1)], cap),
+            (&[(Pin(8), 2), (Pin(8), 1)], cap),
+        ],
+    );
+    assert_eq!(
+        reduced(&permuted, true).device_count(),
+        1,
+        "permuted plates"
+    );
+}
