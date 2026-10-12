@@ -135,8 +135,9 @@ rule WELL.A.1B hole_area(WELL) >= 5832nm2
 # and nowhere wider than 7 nm in every direction.
 rule FIN.W.1 width(FIN) >= 7nm
 rule FIN.W.1.max width(FIN) <= 7nm
-# FIN.S.1 is an exact 27 nm pitch; with FIN.W.1's 7 nm that leaves 20 nm.
-rule FIN.S.1 space(FIN) >= 20nm
+# FIN.S.1 is an exact 27 nm pitch (written below as a pitch); with FIN.W.1's
+# 7 nm it leaves 20 nm, held here also between fins that are not neighbours.
+rule FIN.S.1.space space(FIN) >= 20nm
 
 # 3.4 GATE. GATE.W.1 is an exact 20 nm (horizontal) width.
 rule GATE.W.1 width(GATE) >= 20nm
@@ -365,22 +366,13 @@ pex M8 thickness 80nm height 664nm sheet 0.337906ohm area_cap 0aF/um2 fringe_cap
 pex V8 thickness 80nm height 744nm sheet 6.3ohm area_cap 0aF/um2 fringe_cap 0aF/um
 pex M9 thickness 80nm height 824nm sheet 0.355822ohm area_cap 0aF/um2 fringe_cap 0aF/um
 
-# needs: directional (a limit along x or y only). The stricter halves of the
-# pairs written above at the smaller limit:
-#   WELL.W.1 horizontal width(WELL) >= 108nm; WELL.S.1 vertical space(WELL) >= 108nm
-#   FIN.W.2 horizontal width(FIN) >= 108nm
-#   GATE.W.2 vertical width(GATE) >= 40nm
-#   ACTIVE.W.1 vertical width(ACTIVE) >= 27nm; ACTIVE.S.2B horizontal space(ACTIVE) >= 38nm
-#   {L}.W.1 horizontal width >= 108nm; {L}.ACTIVE.EN.1 horizontal enclosure >= 46nm
-#   SDT.W.2 vertical width(SDT_LOGIC) >= 27nm; SDT.S.1 horizontal space(SDT) >= 30nm
-#   SDT.ACTIVE.OV.1 vertical overlap(SDT, ACTIVE) >= 27nm; SDT.LISD.OV.2 vertical overlap(SDT, LISD) >= 27nm
-#   SRAM.SDT.ACTIVE.OV.3 / SRAM.SDT.LISD.OV.4 vertical overlap >= 17nm
-#   GCUT.S.3 vertical space(GCUT) >= 35nm
+# needs: directional spacing between two layers, or a directional extension:
 #   LIG.GATE.S.9A vertical space(LIG, GATE_UNCUT) >= 14nm; LIG.GATE.S.9B horizontal >= 17nm
 #   LIG.GCUT.S.11 vertical space(LIG, GCUT) >= 5nm
-#   M6-M7 .W.5 along-track width >= 44nm; M4-M7 .S.3/.S.4 and M6-M7 .S.2
-#     along-track space >= 40nm (M4 and M5 .W.5 and .S.2 are written above)
-#   M4-M7 .S.5 parallel run length on adjacent tracks >= 44nm
+#     (LIG.GATE.A.3 makes LIG overlap the gate it contacts, and the DRM does not
+#     say which LIG-to-GATE pairs S.9 measures)
+#   M4-M7 .S.3/.S.4 tip-to-tip on adjacent tracks >= 40nm, .S.5 parallel run
+#     length on adjacent tracks >= 44nm (a track is not a shape the deck has)
 #   WELL.GATE.EX.1 horizontal extension(WELL, GATE_UNCUT) >= 7nm;
 #   WELL.GATE.EX.2 vertical, GATE not interacting SRAMDRC, >= 7nm
 #     (a gate crosses the well edge, so a two-axis extension would flag every cell)
@@ -401,20 +393,11 @@ rule SRAM.ACTIVE.AUX.2 forbidden(ACTIVE.outside(SRAMDRC).interacting(SRAMDRC))
 #   rule LIG.LISD.S.7 corner_space(LIG, LISD; different_net) >= 15nm
 #   rule LIG.SDT.S.8 space(LIG, SDT; different_net) >= 14nm
 #
-# needs: edge checks (spacing classed by the length of both facing edges)
-#   rule LISD.S.3 / LIG.S.3 / M1-M3.S.3 tip-to-tip, both edges 24-36nm: >= 27nm
-#   rule LIG.S.4 / M1-M3.S.4 tip-to-tip, both edges < 24nm: >= 31nm
-#   rule LIG.S.5 / M1-M3.S.5 tip-to-tip, one 24-36nm and one < 24nm: >= 31nm
-#   rule SRAM.LISD.S.4 tip-to-tip inside SRAMDRC, both edges <= 36nm: >= 27nm
-#   rule M8/M9.S.2 tip-to-side >= 43nm; .S.3 tip-to-tip (both < 80nm) >= 46nm
+# needs: a via classed by its metal end-cap
 #   rule V0-V3.S.3 corner, both vias without 5nm end-cap >= 30nm; .S.4 one with, one without >= 27nm
+# needs: an extension on both opposite sides
 #   rule LIG.GATE.EX.1 extension(LIG_LOGIC, GATE_UNCUT) >= 1nm on both opposite sides
 #     (extension measures one box side; a flush side reads as no protrusion)
-#
-# needs: width by length
-#   rule M8/M9.W.2 width >= 60nm when length >= 400nm and < 1200nm
-#   rule M8/M9.W.3 width >= 80nm when length >= 1200nm and < 1800nm
-#   rule M8/M9.W.4 width >= 120nm when length >= 1800nm
 #
 # needs: sourced MOL and gate resistance. GATE, LISD, LIG and V0 have no
 # published sheet or contact resistance, so they cannot be conductors, and a
@@ -429,17 +412,94 @@ rule SRAM.ACTIVE.AUX.2 forbidden(ACTIVE.outside(SRAMDRC).interacting(SRAMDRC))
 # Not written, with the reason:
 #   SRAM.ACTIVE.WELL.S.5, SRAM.ACTIVE.WELL.EN.2, SRAM.NSELECT.ACTIVE.EN.3/4:
 #     13.5 nm, off the 1 nm grid.
-#   FIN.S.1, GATE.S.1, GATE.S.3: exact pitches; only the spacing they imply is
-#     written. ACTIVE.W.2, SDT.W.3: width in multiples of 27 nm.
+#   GATE.S.3 (another GATE within one pitch): a neighbour count, not a pitch.
+#     ACTIVE.W.2, SDT.W.3: width in multiples of 27 nm.
 #   M4-M7 .W.3/.W.4 (odd multiples of track width), .AUX.1/.AUX.2 (track grid),
-#     FIN.AUX.1, GATE.AUX.1/2, M4.AUX.3 (no bends), GATE.ACTIVE.AUX.3,
-#     GCUT.AUX.2, LIG.GATE.AUX.1, SDT.ACTIVE.AUX.2, V0.LIG.AUX.2, M4.AUX.4,
-#     ACTIVE.AUX.3 (no vertical notch), V0.M1.AUX.3, V1.M2.AUX.2, V4.M5.AUX.2,
-#     V6.M7.AUX.2 (via as wide as the metal): edge and alignment conditions.
+#     GATE.AUX.2 (GATE discontinuity drawn with GCUT), V0.LIG.AUX.2, M4.AUX.4,
+#     ACTIVE.AUX.3 (no vertical notch: a notch alone is not selectable):
+#     alignment and track conditions.
+#   V0-V3 .S.1 27 nm across unaligned tracks: needs tracks.
 #   V0.LIG.EN.4 (LIG enclosed by V0): the table's wording is ambiguous.
-#   V0.LISD.EN.3 (V0 partly in LISD, touching LIG): needs "partly inside".
+#   V0.LISD.EN.3 (V0 partly in LISD, touching LIG): an exact (==) 3 nm on two
+#     opposite sides of a via that sticks out of LISD; which sides the DRM
+#     reads is not settled.
 #   Multi-patterning colour spacing for SADP M4-M7 and LELE V4-V7: the DRM
 #     states the patterning (Table 2.3.1) but no same-mask spacing.
 #   Antenna, density, electromigration, reliability, ESD and latch-up limits
 #     other than ACTIVE.LUP.1: not in the DRM. The previous version of this
 #     file carried such rows with invented numbers; they are gone.
+
+# --- Rules the chosen-edge, table, pitch and shape-class kinds express ---
+# [DRM] Tables 3.2 to 3.19. A horizontal width is measured between vertical
+# edges (`width(L.edges().vertical())`), a vertical spacing between facing
+# horizontal edges (`facing_space(L.edges().horizontal())`), and a vertical
+# overlap is the vertical width of the shared area.
+rule WELL.W.1 width(WELL.edges().vertical()) >= 108nm
+rule WELL.S.1 facing_space(WELL.edges().horizontal()) >= 108nm
+rule FIN.W.2 width(FIN.edges().vertical()) >= 108nm
+rule FIN.S.1 pitch(FIN, vertical) == 27nm
+# "may not bend" (FIN.AUX.1, GATE.AUX.1, M4.AUX.3, M6.AUX.3): every shape one
+# rectangle. A shape with a hole or a jog is not one either; FIN.W.1 and
+# GATE.W.1 forbid jogs anyway.
+rule FIN.AUX.1 forbidden(FIN.non_rectangles())
+rule GATE.W.2 width(GATE.edges().horizontal()) >= 40nm
+rule GATE.S.1 pitch(GATE, horizontal) == 54nm
+rule GATE.AUX.1 forbidden(GATE.non_rectangles())
+# "vertical edge may not lie inside, or coincide with, the GATE layer"
+rule GATE.ACTIVE.AUX.3 forbidden(ACTIVE.edges().vertical().inside_part(GATE) or (ACTIVE.edges().vertical() and GATE.edges()))
+rule ACTIVE.W.1 width(ACTIVE.edges().horizontal()) >= 27nm
+rule ACTIVE.S.2B facing_space(ACTIVE.edges().vertical()) >= 38nm
+rule GCUT.S.3 facing_space(GCUT.edges().horizontal()) >= 35nm
+rule GCUT.AUX.2 forbidden(GCUT.edges().vertical().inside_part(GATE) or (GCUT.edges().vertical() and GATE.edges()))
+for (L, a) in implants {
+    rule {L}.W.1 width(L.edges().vertical()) >= 108nm
+    rule {L}.ACTIVE.EN.1 enclosure(a.edges().vertical(), L) >= 46nm
+}
+rule SDT.W.2 width(SDT_LOGIC.edges().horizontal()) >= 27nm
+rule SDT.S.1 facing_space(SDT.edges().vertical()) >= 30nm
+rule SDT.ACTIVE.OV.1 width((SDT_LOGIC and ACTIVE).edges().horizontal()) >= 27nm
+rule SDT.LISD.OV.2 width((SDT_LOGIC and LISD).edges().horizontal()) >= 27nm
+rule SRAM.SDT.ACTIVE.OV.3 width((SDT_SRAM and ACTIVE).edges().horizontal()) >= 17nm
+rule SRAM.SDT.LISD.OV.4 width((SDT_SRAM and LISD).edges().horizontal()) >= 17nm
+rule SDT.ACTIVE.AUX.2 forbidden(SDT_LOGIC.edges().horizontal() not ACTIVE.edges().horizontal())
+# Tip tables: an edge of at most 36 nm is a tip, < 24 nm and 24-36 nm are
+# its two classes, longer is a side; side to side is S.1 (18), tip to side
+# S.2 (25), tip to tip S.3 (27, both 24-36), S.4 (31, both < 24) and S.5
+# (31, one of each). LISD has no S.4 or S.5 (its width is 24): those cells
+# restate S.1. LISD.S.3 and LIG.S.3 to S.5 hold polygons outside SRAMDRC,
+# SRAM.LISD.S.4 those touching it (both edges <= 36 nm: 27).
+rule LISD.S.3 tip_space_table(LISD.outside(SRAMDRC); length: [0nm, 24nm, 37nm], space: [[18nm, 18nm, 25nm], [18nm, 27nm, 25nm], [25nm, 25nm, 18nm]])
+rule SRAM.LISD.S.4 tip_space_table(LISD.interacting(SRAMDRC); length: [0nm, 37nm], space: [[27nm, 25nm], [25nm, 18nm]])
+rule LIG.S.3 tip_space_table(LIG_LOGIC; length: [0nm, 24nm, 37nm], space: [[31nm, 31nm, 25nm], [31nm, 27nm, 25nm], [25nm, 25nm, 18nm]])
+rule LIG.GATE.AUX.1 forbidden(LIG_LOGIC.edges().vertical().inside_part(GATE) or (LIG_LOGIC.edges().vertical() and GATE.edges()))
+# "V0 must exactly be the same width as M1 along the direction perpendicular
+# to the M1 length", and V1.M2.AUX.2 for V1-V3 into the metal above (3.13).
+rule V0.M1.AUX.3 full_width(V0, M1)
+for m in euv_metals {
+    rule {m}.S.3 tip_space_table(m; length: [0nm, 24nm, 37nm], space: [[31nm, 31nm, 25nm], [31nm, 27nm, 25nm], [25nm, 25nm, 18nm]])
+}
+for (v, below, above) in euv_vias {
+    rule {v}.{above}.AUX.2 full_width(v, above)
+}
+let sadp_bends = [M4, M5, M6, M7]
+for m in sadp_bends {
+    rule {m}.AUX.3 forbidden(m.non_rectangles())
+}
+# M6-M7 as M4-M5: M6 is horizontal, M7 vertical.
+rule M6.W.5 width(M6.edges().vertical()) >= 44nm
+rule M6.S.2 facing_space(M6.edges().vertical()) >= 40nm
+rule M7.W.5 width(M7.edges().horizontal()) >= 44nm
+rule M7.S.2 facing_space(M7.edges().horizontal()) >= 40nm
+# V4.M5.AUX.2 for V4-V5 (3.15) and V6.M7.AUX.2 for V6-V7 (3.17).
+for (v, below, above, w, s) in lele_vias {
+    rule {v}.{above}.AUX.2 full_width(v, above)
+}
+# M8-M9: an edge under 80 nm is a tip; S.2 tip to side 43, S.3 tip to tip
+# 46, S.1 side to side 40. W.2 to W.4 by length, the length of a shape being
+# its bounding box's longer side (a bent wire reads its box).
+for m in se_metals {
+    rule {m}.S.2 tip_space_table(m; length: [0nm, 80nm], space: [[46nm, 43nm], [43nm, 40nm]])
+    rule {m}.W.2 width(m.with_bbox_max(>= 400nm, < 1200nm)) >= 60nm
+    rule {m}.W.3 width(m.with_bbox_max(>= 1200nm, < 1800nm)) >= 80nm
+    rule {m}.W.4 width(m.with_bbox_max(>= 1800nm)) >= 120nm
+}

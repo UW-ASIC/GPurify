@@ -8,12 +8,12 @@
 #![allow(clippy::unreadable_literal, reason = "values as the deck writes them")]
 
 use gpurify_check::deck::rules::{
-    angle, asymmetric_enclosure, corner_to_corner, edge_facing_space, edge_width, eol_spacing,
-    forbidden, ir_drop, max_width, min_area, min_edge_length, min_enclosed_area, min_enclosure,
-    min_extension, min_spacing, min_spacing_diff, min_width, missing_tie, must_be_inside, overlap,
-    wide_dependent_spacing,
+    angle, asymmetric_enclosure, corner_to_corner, edge_enclosure, edge_facing_space, edge_width,
+    eol_spacing, exact_pitch, forbidden, full_width, ir_drop, max_width, min_area, min_edge_length,
+    min_enclosed_area, min_enclosure, min_extension, min_spacing, min_spacing_diff, min_width,
+    missing_tie, must_be_inside, overlap, tip_spacing_table, wide_dependent_spacing,
 };
-use gpurify_check::deck::{BuildError, CompiledDeck, DeckBuilder, LayerRef};
+use gpurify_check::deck::{Bound, BuildError, CompiledDeck, DeckBuilder, LayerRef};
 use gpurify_geom::{Dbu, DbuArea, Grid, StrTable};
 use gpurify_ingest::deck::StackSource;
 use std::collections::HashMap;
@@ -240,7 +240,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     d.rule("WELL.A.1B", min_enclosed_area(l["WELL"], nm2(5832)));
     d.rule("FIN.W.1", min_width(l["FIN"], nm(7)));
     d.rule("FIN.W.1.max", max_width(l["FIN"], nm(7)));
-    d.rule("FIN.S.1", min_spacing(l["FIN"], nm(20)));
+    d.rule("FIN.S.1.space", min_spacing(l["FIN"], nm(20)));
     d.rule("GATE.W.1", min_width(l["GATE"], nm(20)));
     d.rule("GATE.W.1.max", max_width(l["GATE"], nm(20)));
     d.rule("GATE.S.2", min_spacing(l["GATE"], nm(34)));
@@ -750,5 +750,116 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
         "SRAM.ACTIVE.AUX.2",
         forbidden(l["ACTIVE"].outside(l["SRAMDRC"]).interacting(l["SRAMDRC"])),
     );
+    // Rules the chosen-edge, table, pitch and shape-class kinds express.
+    let vertical = |n: &str| l[n].edges().vertical();
+    let horizontal = |n: &str| l[n].edges().horizontal();
+    // A vertical edge of `layer` inside, or on the edge of, GATE.
+    let on_gate = |layer: &str| {
+        l[layer]
+            .edges()
+            .vertical()
+            .inside_part(l["GATE"])
+            .or(l[layer].edges().vertical().and(l["GATE"].edges()).group())
+    };
+    d.rule("WELL.W.1", edge_width(vertical("WELL"), nm(108)));
+    d.rule("WELL.S.1", edge_facing_space(horizontal("WELL"), nm(108)));
+    d.rule("FIN.W.2", edge_width(vertical("FIN"), nm(108)));
+    d.rule("FIN.S.1", exact_pitch(l["FIN"], true, nm(27)));
+    d.rule("FIN.AUX.1", forbidden(l["FIN"].non_rectangles()));
+    d.rule("GATE.W.2", edge_width(horizontal("GATE"), nm(40)));
+    d.rule("GATE.S.1", exact_pitch(l["GATE"], false, nm(54)));
+    d.rule("GATE.AUX.1", forbidden(l["GATE"].non_rectangles()));
+    d.rule("GATE.ACTIVE.AUX.3", forbidden(on_gate("ACTIVE")));
+    d.rule("ACTIVE.W.1", edge_width(horizontal("ACTIVE"), nm(27)));
+    d.rule("ACTIVE.S.2B", edge_facing_space(vertical("ACTIVE"), nm(38)));
+    d.rule("GCUT.S.3", edge_facing_space(horizontal("GCUT"), nm(35)));
+    d.rule("GCUT.AUX.2", forbidden(on_gate("GCUT")));
+    for (layer, active) in [
+        ("NSELECT", "ACTIVE_NSELECT"),
+        ("PSELECT", "ACTIVE_PSELECT"),
+        ("SLVT", "ACTIVE_SLVT"),
+        ("LVT", "ACTIVE_LVT"),
+        ("SRAMVT", "ACTIVE_SRAMVT"),
+    ] {
+        d.rule(
+            &format!("{layer}.W.1"),
+            edge_width(vertical(layer), nm(108)),
+        );
+        d.rule(
+            &format!("{layer}.ACTIVE.EN.1"),
+            edge_enclosure(vertical(active), l[layer], nm(46)),
+        );
+    }
+    d.rule("SDT.W.2", edge_width(horizontal("SDT_LOGIC"), nm(27)));
+    d.rule("SDT.S.1", edge_facing_space(vertical("SDT"), nm(30)));
+    for (id, sdt, other, limit) in [
+        ("SDT.ACTIVE.OV.1", "SDT_LOGIC", "ACTIVE", 27),
+        ("SDT.LISD.OV.2", "SDT_LOGIC", "LISD", 27),
+        ("SRAM.SDT.ACTIVE.OV.3", "SDT_SRAM", "ACTIVE", 17),
+        ("SRAM.SDT.LISD.OV.4", "SDT_SRAM", "LISD", 17),
+    ] {
+        let shared = l[sdt].and(l[other]).group();
+        d.rule(id, edge_width(shared.edges().horizontal(), nm(limit)));
+    }
+    d.rule(
+        "SDT.ACTIVE.AUX.2",
+        forbidden(horizontal("SDT_LOGIC").not(horizontal("ACTIVE"))),
+    );
+    let tips = [nm(0), nm(24), nm(37)];
+    let (s18, s25, s27, s31) = (nm(18), nm(25), nm(27), nm(31));
+    d.rule(
+        "LISD.S.3",
+        tip_spacing_table(
+            l["LISD"].outside(l["SRAMDRC"]),
+            &tips,
+            &[s18, s18, s25, s18, s27, s25, s25, s25, s18],
+        ),
+    );
+    d.rule(
+        "SRAM.LISD.S.4",
+        tip_spacing_table(
+            l["LISD"].interacting(l["SRAMDRC"]),
+            &[nm(0), nm(37)],
+            &[s27, s25, s25, s18],
+        ),
+    );
+    let euv = [s31, s31, s25, s31, s27, s25, s25, s25, s18];
+    d.rule("LIG.S.3", tip_spacing_table(l["LIG_LOGIC"], &tips, &euv));
+    d.rule("LIG.GATE.AUX.1", forbidden(on_gate("LIG_LOGIC")));
+    d.rule("V0.M1.AUX.3", full_width(l["V0"], l["M1"]));
+    for m in ["M1", "M2", "M3"] {
+        d.rule(&format!("{m}.S.3"), tip_spacing_table(l[m], &tips, &euv));
+    }
+    for (v, above) in [("V1", "M2"), ("V2", "M3"), ("V3", "M4")] {
+        d.rule(&format!("{v}.{above}.AUX.2"), full_width(l[v], l[above]));
+    }
+    for m in ["M4", "M5", "M6", "M7"] {
+        d.rule(&format!("{m}.AUX.3"), forbidden(l[m].non_rectangles()));
+    }
+    d.rule("M6.W.5", edge_width(vertical("M6"), nm(44)));
+    d.rule("M6.S.2", edge_facing_space(vertical("M6"), nm(40)));
+    d.rule("M7.W.5", edge_width(horizontal("M7"), nm(44)));
+    d.rule("M7.S.2", edge_facing_space(horizontal("M7"), nm(40)));
+    for (v, above) in [("V4", "M5"), ("V5", "M6"), ("V6", "M7"), ("V7", "M8")] {
+        d.rule(&format!("{v}.{above}.AUX.2"), full_width(l[v], l[above]));
+    }
+    for m in ["M8", "M9"] {
+        d.rule(
+            &format!("{m}.S.2"),
+            tip_spacing_table(l[m], &[nm(0), nm(80)], &[nm(46), nm(43), nm(43), nm(40)]),
+        );
+        for (w, from, below, limit) in [
+            ("W.2", 400, Some(1200), 60),
+            ("W.3", 1200, Some(1800), 80),
+            ("W.4", 1800, None, 120),
+        ] {
+            let mut bounds = vec![Bound::AtLeast(nm(from))];
+            bounds.extend(below.map(|b| Bound::Below(nm(b))));
+            d.rule(
+                &format!("{m}.{w}"),
+                min_width(l[m].with_bbox_max(&bounds), nm(limit)),
+            );
+        }
+    }
     d.finish()
 }
