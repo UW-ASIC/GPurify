@@ -446,6 +446,39 @@ rule ox gate_oxide(; models: ["nfet_typo"], max: 1.98V)
     );
 }
 
+/// Catalog DRC-092, rule flags: `if name { .. }` reads its block when `name`
+/// is bound to `true`, `if not name { .. }` when it is `false`, inside a
+/// `for` too; a name bound to anything else, or not bound, is refused at the
+/// name.
+///
+/// Oracle: spec example, `docs/deck.md` (Reuse), expanded by hand: with
+/// `floating = false` only the `not` block's rule is read, once per metal of
+/// the loop, and the `true` block's rule is not.
+#[test]
+fn if_reads_a_block_by_a_switch() {
+    let (deck, strings) = ok("let floating = false
+if floating {
+    rule x.22 width(met1) >= 140nm
+}
+for m in [met1, met2] {
+    if not floating {
+        rule {m}.w width(m) >= 140nm
+    }
+}
+");
+    let ids: Vec<String> = rules(&deck, &strings).into_iter().map(|r| r.0).collect();
+    assert_eq!(ids, ["met1.w", "met2.w"]);
+    one_error("if floating {\n}\n", "`floating` is not bound");
+    one_error(
+        "let w = 140nm\nif w {\n}\n",
+        "`if` takes a name bound to true or false",
+    );
+    one_error(
+        "let on = true\nif on {\nrule a width(met1) >= 140nm\n",
+        "unclosed `{`",
+    );
+}
+
 /// Oracle: spec example. The `let`/`for` example of `docs/deck.md` (Reuse),
 /// expanded by hand: a width and a space rule per metal in list order, then a
 /// `max` rule per metal of the second loop; met3's limit is 300 nm and `wide`

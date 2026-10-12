@@ -465,6 +465,7 @@ impl<'a> Parser<'a> {
             "layer" => self.layer(),
             "rule" => self.rule(),
             "for" => self.for_(),
+            "if" => self.if_(),
             "connect" => self.connect(),
             "device" => self.device(),
             "pex" => self.pex(),
@@ -480,7 +481,7 @@ impl<'a> Parser<'a> {
             "lvs" => self.lvs(),
             _ => Err(self.err(
                 span,
-                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, connect, device, pex, pex_fill, pex_device, pex_tsv, temperature, lvs, extraction, corner, stage or waive"),
+                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, if, connect, device, pex, pex_fill, pex_device, pex_tsv, temperature, lvs, extraction, corner, stage or waive"),
             )),
         }
     }
@@ -1056,6 +1057,42 @@ impl<'a> Parser<'a> {
                 self.statements(close);
             }
             self.env.truncate(mark);
+        }
+        self.pos = end;
+        Ok(())
+    }
+
+    /// `if name { .. }` or `if not name { .. }`: the block's statements are
+    /// read when the bound name is `true` (`false` with `not`), and skipped
+    /// unread otherwise. A deck switch, as a Calibre deck's `#IFDEF` around
+    /// rules or `KLayout`'s `$variables`: `let floating_labels = false` at the
+    /// top of the deck is flipped there.
+    fn if_(&mut self) -> R<()> {
+        let negate = self.eat("not");
+        let (name, span) = self.ident("a switch name")?;
+        let on = match self.env.iter().rev().find(|(bound, _)| *bound == name) {
+            Some((_, Val::Word { name: word, .. })) if word == "true" => true,
+            Some((_, Val::Word { name: word, .. })) if word == "false" => false,
+            Some((_, other)) => {
+                let shown = other.shown();
+                return Err(self.err(
+                    span,
+                    &format!("`if` takes a name bound to true or false; `{name}` is {shown}"),
+                ));
+            }
+            None => return Err(self.err(
+                span,
+                &format!(
+                    "`{name}` is not bound; write `let {name} = true` (or false) before the `if`"
+                ),
+            )),
+        };
+        let open = self.expect("{")?;
+        let body = self.pos;
+        let end = self.block_end(open)?;
+        if on != negate {
+            self.pos = body;
+            self.statements(end - 1);
         }
         self.pos = end;
         Ok(())
