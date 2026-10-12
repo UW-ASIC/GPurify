@@ -207,7 +207,7 @@ budget on a net that no device terminal reaches is refused rather than
 ignored, because zero current would pass every limit.
 
 `temperature_c` is the junction temperature the electromigration and
-reliability rules run at; without it they run at 85 °C. A net's `dynamic`
+reliability rules run at; without it they run at the deck's `temperature`, else 85 °C. A net's `dynamic`
 entry is what `dynamic_ir_drop` simulates: in the net's worst clock cycle
 every load switches at once, each drawing its share of `budget_current_ua`
 over the fraction `toggle_rate` of cycles it switches in, as a triangular
