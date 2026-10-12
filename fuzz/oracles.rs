@@ -786,6 +786,46 @@ pub fn liberty_spec(data: &[u8]) {
     }
 }
 
+// --------------------------------------------------------------- spef ---
+
+/// `foreign::read_spef` and `foreign::read_dspf` on arbitrary text.
+///
+/// Oracle: a typed error, never a panic; an accepted file is a network the
+/// writers and `compare` can take: names ascending and unique, one net per
+/// name, each net's nodes one run in ascending order, every element's nodes
+/// in range, only a capacitance to ground, canonical order, finite values.
+pub fn spef(data: &[u8]) {
+    use gpurify::extract::{compare::compare, foreign, network::Parasitic};
+    let Ok(text) = std::str::from_utf8(data) else {
+        return;
+    };
+    for read in [foreign::read_spef(text), foreign::read_dspf(text)]
+        .into_iter()
+        .flatten()
+    {
+        let n = &read.network;
+        assert!(
+            read.names.windows(2).all(|w| w[0] < w[1]),
+            "names unique, ascending"
+        );
+        assert!(n.node_net.is_sorted(), "nets' nodes one run each");
+        assert!(n
+            .node_net
+            .iter()
+            .all(|net| (net.0 as usize) < read.names.len()));
+        assert_eq!(n.node_layer.len(), n.node_count());
+        for row in 0..n.element_count() {
+            assert!((n.from[row].0 as usize) < n.node_count());
+            match n.to[row] {
+                Some(far) => assert!((far.0 as usize) < n.node_count()),
+                None => assert!(matches!(n.value[row], Parasitic::GroundCap(_))),
+            }
+        }
+        assert!(n.from.is_sorted(), "canonical order");
+        let _ = compare(n, n);
+    }
+}
+
 // ---------------------------------------------------------------- lefdef ---
 
 /// A LEF and a DEF, split at the input's first `END LIBRARY` (the LEF's last
@@ -827,11 +867,16 @@ pub fn lefdef(data: &[u8]) {
     if names.is_empty() || !names.iter().all(|n| named(n)) || names.len() > 1000 {
         return;
     }
-    let source: String = names
+    let source = names
         .iter()
         .enumerate()
-        .map(|(i, name)| format!("layer {name} = gds({}, 0)\n", i + 1))
-        .collect();
+        .fold(String::new(), |mut out, (i, name)| {
+            let _ = std::fmt::Write::write_fmt(
+                &mut out,
+                format_args!("layer {name} = gds({}, 0)\n", i + 1),
+            );
+            out
+        });
     let Ok(grid) = Grid::new(dbu) else { return };
     let mut strings = StrTable::default();
     let Ok(deck) = parse_deck(&source, grid, &mut strings) else {

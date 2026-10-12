@@ -292,6 +292,38 @@ fn the_spef_and_dspf_files_are_exactly_these_bytes() {
     );
 }
 
+/// What the writers write, the foreign reader reads back: the same nets,
+/// and `compare` finds every metric equal.
+///
+/// Oracle: round trip through `gpurify_extract::foreign`: VDD totals
+/// 0.375 fF (0.25 ground and 0.125 coupling) with 12.5 Ω from its first
+/// node, VSS 0.125 fF, in both SPEF and DSPF, and the two reads compare
+/// with no error.
+#[test]
+fn the_spef_and_dspf_files_read_back_as_written() {
+    use gpurify_extract::compare::compare;
+    use gpurify_extract::foreign::{read_dspf, read_spef};
+    let world = World::new(Some("VSS"));
+    let spef = read_spef(&world.spef().expect("written")).expect("reads back");
+    let dspf = read_dspf(&world.dspf().expect("written")).expect("reads back");
+    for read in [&spef, &dspf] {
+        assert_eq!(read.names, ["VDD", "VSS"]);
+        assert_eq!(read.network.capacitance_per_net(), [0.375, 0.125]);
+    }
+    let both = compare(&spef.network, &dspf.network);
+    assert_eq!(both.resistance.reference, [12.5, 0.0]);
+    for metric in [
+        &both.total_cap,
+        &both.ground_cap,
+        &both.resistance,
+        &both.delay,
+    ] {
+        assert_eq!(metric.reference, metric.candidate);
+    }
+    assert_eq!(both.coupling.reference, both.coupling.candidate);
+    assert_eq!(both.coupling.reference, [0.125]);
+}
+
 /// The device card goes out drain, gate, source, bulk whatever order the
 /// recogniser listed the terminals in; with parasitics, terminals and pins
 /// attach at each net's first node. A source diffusion shared two ways is

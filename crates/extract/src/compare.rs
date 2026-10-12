@@ -25,9 +25,11 @@
 //!
 //! A node no resistance reaches from the driver has no defined resistance
 //! or delay and is left out of both; a net of one node (lumped) has 0 of
-//! each. Inductance plays no part. Nets are matched by [`NetId`], not by
-//! name: this compares two extractions of one layout, not two tools'
-//! netlists of two.
+//! each. Inductance plays no part. Nets are matched by [`NetId`]: two
+//! extractions of one layout share their net table, and two tools' netlists
+//! are first put on the union of their net names
+//! ([`foreign::Read::on_names`](crate::foreign::Read::on_names)), PEX
+//! Certify's "PEX Link".
 
 use crate::network::{NodeId, Parasitic, ParasiticNetwork};
 use gpurify_check::topology::NetId;

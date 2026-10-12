@@ -14,6 +14,7 @@ gpurify <command> <layout.gds> --deck <process.deck> [options] > report
 | `lib` | Nothing: writes a macro's Liberty files, see [liberty.md](liberty.md) | `--spec`, `--output-dir` |
 | `xor` | Two layouts against each other: every region where a layer differs, see [below](#comparing-two-layouts) | a second layout: `gpurify xor <layout> <other> --deck <deck>` |
 | `system` | Several dies as one assembly: system LVS and package and system ESD, see [below](#multi-die-systems) | a system file in place of the layout, `--reference <system netlist>`; no `--deck` |
+| `compare` | Two parasitic netlists (SPEF or DSPF) against each other, net by net, see [below](#comparing-two-parasitic-netlists) | `gpurify compare <reference> <candidate>`; no layout or deck |
 
 ## Options
 
@@ -449,3 +450,23 @@ parasitics, not zero ones, so PEX is refused and names the layer. Layers in
 `connect global` (the substrate) carry no parasitics and need no line.
 
 The same inputs always give a byte-identical report.
+
+### Comparing two parasitic netlists
+
+```sh
+gpurify compare <reference.spef> <candidate.spef> [--tolerance 5%]
+```
+
+`compare` qualifies one extraction against another, from any two tools:
+each file is SPEF (`*D_NET` nets) or DSPF, told by its first line. Nets are
+linked by name. For every net in both it compares the total and ground
+capacitance, the coupling to every other net, the resistance from the net's
+driver (its input port or output pin, else its first node) to the farthest
+node, and the Elmore delay to the slowest node; per metric it reports how
+many rows were compared, how many are within the tolerance, and the worst,
+mean and RMS relative error with the net of the worst. Rows under 0.01 (fF,
+Ω, fs) in both files are noise and not compared. It exits 0 only when every
+compared row is within the tolerance (default 5 %) and both files name the
+same nets. A coupling listed in both nets' `*CAP` sections, as most tools
+write it, counts once; a reduced (`*R_NET`) or physical (`*D_PNET`) net is
+refused.
