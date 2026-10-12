@@ -223,11 +223,11 @@ ERC-F13	erc	voltage	Inter-metal dielectric breakdown	ICV; JEP159A	dielectric_fie
 ERC-F14	erc	voltage	Power-intent supply connectivity (power switches, always-on and retention cells on the supplies the UPF declares)	IEEE1801	-	missing	SY	Needs UPF input; IEEE 1801 not read (check-sources.md §5)
 ERC-G1	erc	classic	Floating / undriven gate	CAL:WP 81822; YOSYS:check	floating_gate	implemented	SY; NV; TX:YOSYS; MR	
 ERC-G2	erc	classic	Floating well	SKY:nwell.4	floating_well	implemented	FR; SY; MR	
-ERC-G3	erc	classic	Multiple drivers	YOSYS:check	multiple_drivers	implemented	SY; NV; TX:YOSYS; MR	Needs design intent: channels are oriented by the declared rails; complementary networks sharing gate nets are one driver; a pass gate that reaches no rail is not a driver (F28, fixed)
+ERC-G3	erc	classic	Multiple drivers	YOSYS:check	multiple_drivers	implemented	SY; NV; MR	Needs design intent: channels are oriented by the declared rails; complementary networks sharing gate nets are one driver; a pass gate that reaches no rail is not a driver (F28, fixed); no open tool defines it on a transistor netlist: Yosys check counts cell outputs, and a channel has no direction until the rails orient it (O1)
 ERC-G4	erc	classic	Supply short (n-tie + p-tie, VDD-GND)	CAL	supply_short	implemented	SY; MR	No standards-body definition
 ERC-G5	erc	classic	Soft connection through a high-R layer	KL:soft_connect; CAL:SOFTCHK	soft_connection	implemented	SY; TX:KL; MR	Joins only through the deck's connectivity with the soft layers removed
 ERC-G6	erc	classic	Unconnected pin / dangling conductor	OR:check_power_grid	unconnected_pin	implemented	SY; MR	
-ERC-G7	erc	classic	Gate tied directly to a rail	CAL (weak sourcing)	tie_high_low	implemented	SY; NV; MR	Needs design intent: a declared rail that reaches a gate (F28, fixed)
+ERC-G7	erc	classic	Gate tied directly to a rail	CAL (weak sourcing)	tie_high_low	implemented	SY; NV; MR	Needs design intent: a declared rail that reaches a gate (F28, fixed); no open tool defines it on a transistor netlist (O1)
 ERC-G8	erc	classic	Combinational loops	YOSYS:check	-	missing	TX:YOSYS	Digital only, optional
 ERC-G9	erc	classic	Path check: nets with no path to power or ground	CAL:ERC PATHCHK,LVS PATHCHK	-	missing	SY; NV	
 ERC-H1	erc	perc	Static leakage / HiZ / floating in power-down	IA	missing_isolation	implemented	SY; NV	missing_isolation(; isolation: none): a powered transistor whose gate floats (HiZ) in a declared power state leaks statically; only the declared states are examined; leakage is not quantified
