@@ -3142,13 +3142,36 @@ impl Rule {
             } => count(colors.into()).and(length(color_spacing)),
             Rule::MustContain { min_count, .. } => count(min_count),
             // A shape count of zero is a limit: none allowed, or at least none.
-            // The cut and width lists are checked where they are filed.
+            // The cut and width lists, the class and span tables, the runs
+            // that may be 0 and a forbidden range's order are checked where
+            // they are filed.
             Rule::Forbidden { .. }
             | Rule::MustBeInside { .. }
             | Rule::Count { .. }
             | Rule::CutClass { .. }
             | Rule::AllowedWidth { .. }
-            | Rule::PolygonValidity { .. } => Ok(()),
+            | Rule::PolygonValidity { .. }
+            | Rule::TipSpacingTable { .. }
+            | Rule::TwoWidthSpacingTable { .. }
+            | Rule::SpanLength { .. } => Ok(()),
+            Rule::ForbiddenSpacing { min, max, .. } => length(min).and(length(max)),
+            Rule::EolWithinSpacing {
+                eol_width,
+                parallel,
+                end_to_end,
+                limit,
+                ..
+            } => length(eol_width)
+                .and(parallel.map_or(Ok(()), |parallel| length(parallel.space)))
+                .and(end_to_end.map_or(Ok(()), length))
+                .and(length(limit)),
+            Rule::EolKeepOut {
+                eol_width, forward, ..
+            } => length(eol_width).and(length(forward)),
+            Rule::ConvexCornerSpacing {
+                except_eol, limit, ..
+            } => except_eol.map_or(Ok(()), length).and(length(limit)),
+            Rule::ExactPitch { pitch, .. } => length(pitch),
             Rule::SpacingTable { table, .. } => {
                 if tables
                     .get(table as usize)
@@ -3281,6 +3304,14 @@ impl Rule {
             Rule::MinInteriorAngle { .. } => "min_interior_angle",
             Rule::PolygonValidity { .. } => "polygon_validity",
             Rule::MinStep { .. } => "min_step",
+            Rule::TipSpacingTable { .. } => "tip_spacing_table",
+            Rule::ForbiddenSpacing { .. } => "forbidden_spacing",
+            Rule::EolWithinSpacing { .. } => "eol_within_spacing",
+            Rule::EolKeepOut { .. } => "eol_keep_out",
+            Rule::TwoWidthSpacingTable { .. } => "two_width_spacing_table",
+            Rule::SpanLength { .. } => "span_length",
+            Rule::ConvexCornerSpacing { .. } => "convex_corner_spacing",
+            Rule::ExactPitch { .. } => "exact_pitch",
         }
     }
 

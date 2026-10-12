@@ -1733,7 +1733,7 @@ impl<'a> Parser<'a> {
                     } else {
                         ParamValue::Length(self.length(item, label)?)
                     };
-                    out.push((engine, ParamSrc::Value(stated)));
+                    out.push((engine, ParamSource::Value(stated)));
                 }
                 return Ok(());
             }
