@@ -55,9 +55,9 @@ fn usage<T>(message: String) -> Result<T, ArgError> {
     Err(ArgError(message))
 }
 
-/// A command that writes no violation report.
+/// A command whose report `--cluster` does not list.
 fn is_lib_or_compare(subcommand: &str) -> bool {
-    matches!(subcommand, "lib" | "compare")
+    matches!(subcommand, "lib" | "compare" | "system")
 }
 
 /// Parse `argv` (without the program name). An option a subcommand has no use
@@ -321,6 +321,9 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
             lib: None,
             other: None,
             system: Some(PathBuf::from(system)),
+            p2p: Vec::new(),
+            coupling: Vec::new(),
+            cluster: None,
         });
     }
     let Some(&layout) = layouts.first() else {
