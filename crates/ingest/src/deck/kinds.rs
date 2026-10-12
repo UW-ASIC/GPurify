@@ -64,6 +64,13 @@ pub(crate) enum Dim {
     LengthList,
     /// `[a, b, ..]`, voltages; one engine param per element, in mV.
     VoltageList,
+    /// MHz, a frequency.
+    Frequency,
+    /// `[a, b, ..]`, frequencies; one engine param per element, in MHz.
+    FrequencyList,
+    /// `[[a, b, ..], ..]`, rows of current per width; one engine param per
+    /// cell, row by row, in A/m.
+    CurrentPerWidthRows,
     /// `[[a, b, ..], ..]`, rows of lengths; one engine param per cell, row by row.
     LengthRows,
     /// `[a x b, ..]`, pairs of lengths; per pair, the first to the param's
@@ -98,6 +105,10 @@ pub(crate) const UNITS: &[(&str, Dim, i32)] = &[
     ("uA/um", Dim::CurrentPerWidth, 0),
     ("mA/um", Dim::CurrentPerWidth, 3),
     ("A/m", Dim::CurrentPerWidth, 0),
+    ("Hz", Dim::Frequency, -6),
+    ("kHz", Dim::Frequency, -3),
+    ("MHz", Dim::Frequency, 0),
+    ("GHz", Dim::Frequency, 3),
     ("mohm", Dim::Resistance, -3),
     ("ohm", Dim::Resistance, 0),
     ("kohm", Dim::Resistance, 3),
@@ -254,6 +265,15 @@ const EM_DENSITY: &[Param] = &[
     p("max_density", "max_density", Dim::CurrentPerWidth),
     p("max_current_per_cut", "max_current_per_cut", Dim::Current),
     opt("narrow", "", Dim::Group(EM_NARROW)),
+];
+/// The AC current-density table of `em_rms` and `em_peak`: LEF's
+/// `ACCURRENTDENSITY {PEAK | RMS} FREQUENCY .. WIDTH .. TABLEENTRIES ..`,
+/// one row of densities per frequency, one cell per width.
+const EM_AC: &[Param] = &[
+    p("frequency", "frequency", Dim::FrequencyList),
+    p("width", "width", Dim::LengthList),
+    p("density", "density", Dim::CurrentPerWidthRows),
+    p("max_current_per_cut", "max_current_per_cut", Dim::Current),
 ];
 /// `esd_path`'s parameters, the same with a source layer or without.
 const ESD_PATH: &[Param] = &[
@@ -1050,8 +1070,8 @@ pub(crate) const KINDS: &[Kind] = &[
         ],
     ),
     erc("em_current_density", &[0], true, EM_DENSITY),
-    erc("em_rms", &[0], true, EM_DENSITY),
-    erc("em_peak", &[0], true, EM_DENSITY),
+    erc("em_rms", &[0], true, EM_AC),
+    erc("em_peak", &[0], true, EM_AC),
     erc(
         "esd_latchup",
         &[0, 1],

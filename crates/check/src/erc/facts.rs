@@ -267,7 +267,8 @@ impl IntentMap {
     }
 
     /// This intent with each net's current budget replaced by `pick` of its
-    /// limits (its RMS or its peak current), and no other limit: the loads
+    /// limits (its RMS or its peak current), its frequency kept, and no
+    /// other limit: the loads
     /// [`extract_into`](crate::erc::power::extract_into) spreads for an AC
     /// current rule. A net `pick` gives nothing carries no load.
     #[must_use]
@@ -282,6 +283,7 @@ impl IntentMap {
                         net,
                         NetLimits {
                             budget_current_ua: Some(current),
+                            frequency_mhz: limits.frequency_mhz,
                             ..NetLimits::default()
                         },
                     )

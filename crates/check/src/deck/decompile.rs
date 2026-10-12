@@ -768,24 +768,35 @@ impl CompiledDeck {
                 .number("current_exponent", t.current_exponent[r]);
             file(&t.head, r, row);
         }
-        for (kind, t) in [
-            ("em_current_density", &erc.em_current_density),
-            ("em_rms", &erc.em_rms),
-            ("em_peak", &erc.em_peak),
-        ] {
+        for (kind, t) in [("em_rms", &erc.em_rms), ("em_peak", &erc.em_peak)] {
             for r in 0..t.head.len() {
-                let layers = span(&t.layer_start, r);
-                let first = layers.start;
-                let mut row = Row::new(kind, &t.layer[layers])
-                    .number("max_density", t.max_density[first].raw())
-                    .number("max_current_per_cut", t.max_current_per_cut[first].raw());
-                if let Some((width, current)) = t.narrow[first] {
-                    row = row
-                        .length("narrow_width", width)
-                        .number("narrow_current", current.raw());
+                let mut row = Row::new(kind, &t.layer[span(&t.layer_start, r)])
+                    .number("max_current_per_cut", t.max_current_per_cut[r].raw());
+                for &f in &t.frequency[span(&t.frequency_start, r)] {
+                    row = row.number("frequency", f);
+                }
+                for &w in &t.width[span(&t.width_start, r)] {
+                    row = row.length("width", w);
+                }
+                for d in &t.density[span(&t.density_start, r)] {
+                    row = row.number("density", d.raw());
                 }
                 file(&t.head, r, row);
             }
+        }
+        let t = &erc.em_current_density;
+        for r in 0..t.head.len() {
+            let layers = span(&t.layer_start, r);
+            let first = layers.start;
+            let mut row = Row::new("em_current_density", &t.layer[layers])
+                .number("max_density", t.max_density[first].raw())
+                .number("max_current_per_cut", t.max_current_per_cut[first].raw());
+            if let Some((width, current)) = t.narrow[first] {
+                row = row
+                    .length("narrow_width", width)
+                    .number("narrow_current", current.raw());
+            }
+            file(&t.head, r, row);
         }
         let t = &erc.esd_latchup;
         for r in 0..t.head.len() {

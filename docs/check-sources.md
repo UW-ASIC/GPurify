@@ -348,7 +348,7 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-E4 | Temperature derating (Black / Arrhenius) | implemented | GF:14.2.2; Black1969; JEP122; JESD63 | SE:GF formula vs table (1.6% rounding); MR; SY |
 | ERC-E5 | Lifetime target and percentile | implemented | GF:14.2; IHP:2.15; JESD202 | SE; MR; SY |
 | ERC-E6 | Blech short-length immortality | implemented | Blech1976 | CF; MR; SY |
-| ERC-E7 | RMS / Joule heating / peak limits | partial | LEF:ACCURRENTDENSITY PEAK,AVERAGE,RMS; SKY:tech LEF ACCURRENTDENSITY RMS | CF; SY |
+| ERC-E7 | RMS / Joule heating / peak limits | implemented | LEF:ACCURRENTDENSITY PEAK,AVERAGE,RMS; SKY:tech LEF ACCURRENTDENSITY RMS | CF; SY |
 | ERC-E11 | Dynamic / vectorless IR | partial | RH; VOL; MP; TOT; Najm2003; WH | CF; NV; MR; SY |
 | ERC-E12 | Stress voiding / slotting | partial | JEP139; JESD214; GF:14.6,MSLOT.1-10; IHP:Slt.a-i | FR; MR; SY |
 | ERC-E13 | Thermal-aware / statistical EM, self-heating | implemented | RH; TOT; VOL; Banerjee1999; Black1969; JEP122; JESD63; Kitchin1995 | CF; SE; MR; SY |

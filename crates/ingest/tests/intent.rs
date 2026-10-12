@@ -72,6 +72,7 @@ fn a_bad_limit_names_the_limit_it_is() {
         "budget_current_ua",
         "rms_current_ua",
         "peak_current_ua",
+        "frequency_mhz",
     ] {
         let source = format!(
             r#"{{"domains":{{"core":{{"voltage_mv":1800}}}},

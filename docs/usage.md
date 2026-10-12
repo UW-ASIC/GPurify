@@ -248,7 +248,8 @@ means that net is not checked for it, not that it is unlimited. `rms_current_ua`
 `peak_current_ua` state a net's RMS and peak current, shared among its loads
 as the budget is, for the `em_rms` and `em_peak` rules (LEF's
 `ACCURRENTDENSITY RMS` and `PEAK` limits); each load is taken to draw one
-waveform in phase with the others. A current
+waveform in phase with the others. `frequency_mhz` is the frequency the net
+switches at, which picks the row of a table that states several. A current
 budget on a net that no device terminal reaches is refused rather than
 ignored, because zero current would pass every limit.
 

@@ -80,6 +80,22 @@ const INTENT_GATED: [&str; 33] = [
     "well_bias",
 ];
 
+/// One AC current-density row: a single-entry table on layer 0.
+fn ac_table(kind: &str) -> electrical::EmAcTable {
+    electrical::EmAcTable {
+        head: head(id_of(kind)),
+        layer_start: vec![0, 1],
+        layer: vec![LayerId(0)],
+        frequency_start: vec![0, 1],
+        frequency: vec![100.0],
+        width_start: vec![0, 1],
+        width: vec![dbu(0)],
+        density_start: vec![0, 1],
+        density: vec![density(1e9)],
+        max_current_per_cut: vec![microamps(200.0)],
+    }
+}
+
 fn ohms(value: f64) -> Qty<Resistance, { prefix::BASE }> {
     Qty::new(value)
 }
@@ -235,22 +251,8 @@ fn every_kind() -> RuleSet {
             max_current_per_cut: vec![microamps(200.0)],
             narrow: vec![None],
         },
-        em_rms: electrical::EmCurrentDensityTable {
-            head: head(id_of("em_rms")),
-            layer_start: vec![0, 1],
-            layer: vec![LayerId(0)],
-            max_density: vec![density(1e9)],
-            max_current_per_cut: vec![microamps(200.0)],
-            narrow: vec![None],
-        },
-        em_peak: electrical::EmCurrentDensityTable {
-            head: head(id_of("em_peak")),
-            layer_start: vec![0, 1],
-            layer: vec![LayerId(0)],
-            max_density: vec![density(1e9)],
-            max_current_per_cut: vec![microamps(200.0)],
-            narrow: vec![None],
-        },
+        em_rms: ac_table("em_rms"),
+        em_peak: ac_table("em_peak"),
         electromigration: electrical::ElectromigrationTable {
             head: head(id_of("electromigration")),
             layer_start: vec![0, 1],

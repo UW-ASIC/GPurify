@@ -666,21 +666,23 @@ kinds! {
         narrow_width: Option<Dbu> = "narrow_width",
         narrow_current: Option<f64> = "narrow_current",
     }
-    /// [`check_em_ac`](crate::erc::rules::electrical::check_em_ac) on the
-    /// RMS currents: `em_rms(layers..; ..)`, as `em_current_density`.
+    /// [`EmAcTable`](crate::erc::rules::electrical::EmAcTable) on the RMS
+    /// currents: `em_rms(layers..; frequency, width, density,
+    /// max_current_per_cut)`, frequencies in MHz, densities in A/m row by
+    /// row (one row per frequency), the cut limit in µA.
     em_rms(layers: many) [] {
-        max_density: f64 = "max_density",
+        frequency: &[f64] = "frequency",
+        width: &[Dbu] = "width",
+        density: &[f64] = "density",
         max_current_per_cut: f64 = "max_current_per_cut",
-        narrow_width: Option<Dbu> = "narrow_width",
-        narrow_current: Option<f64> = "narrow_current",
     }
-    /// [`check_em_ac`](crate::erc::rules::electrical::check_em_ac) on the
-    /// peak currents: `em_peak(layers..; ..)`, as `em_current_density`.
+    /// [`EmAcTable`](crate::erc::rules::electrical::EmAcTable) on the peak
+    /// currents: `em_peak(layers..; ..)`, as `em_rms`.
     em_peak(layers: many) [] {
-        max_density: f64 = "max_density",
+        frequency: &[f64] = "frequency",
+        width: &[Dbu] = "width",
+        density: &[f64] = "density",
         max_current_per_cut: f64 = "max_current_per_cut",
-        narrow_width: Option<Dbu> = "narrow_width",
-        narrow_current: Option<f64> = "narrow_current",
     }
     /// [`EmThermalTable`](crate::erc::rules::electrical::EmThermalTable):
     /// `em_thermal(layers..; ..)`, as `electromigration` plus the

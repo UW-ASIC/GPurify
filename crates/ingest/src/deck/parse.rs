@@ -2278,6 +2278,38 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(());
             }
+            Dim::FrequencyList => {
+                let Val::List(items, span) = value else {
+                    return Err(self.wrong(value, "a list of frequencies", label));
+                };
+                if items.is_empty() {
+                    return Err(self.err(*span, &format!("`{label}` needs at least one frequency")));
+                }
+                for item in items {
+                    let megahertz = self.quantity(item, Dim::Frequency, label)?.f64();
+                    out.push((engine, ParamSource::Value(ParamValue::Ratio(megahertz))));
+                }
+                return Ok(());
+            }
+            Dim::CurrentPerWidthRows => {
+                let want = "a list of rows of currents per width";
+                let Val::List(rows, span) = value else {
+                    return Err(self.wrong(value, want, label));
+                };
+                if rows.is_empty() {
+                    return Err(self.err(*span, &format!("`{label}` needs at least one row")));
+                }
+                for row in rows {
+                    let Val::List(items, _) = row else {
+                        return Err(self.wrong(row, want, label));
+                    };
+                    for item in items {
+                        let density = self.quantity(item, Dim::CurrentPerWidth, label)?.f64();
+                        out.push((engine, ParamSource::Value(ParamValue::Ratio(density))));
+                    }
+                }
+                return Ok(());
+            }
             Dim::OptLengthList => {
                 let Val::List(items, span) = value else {
                     return Err(self.wrong(value, "a list of lengths or none", label));
@@ -2804,5 +2836,8 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::VoltageList => "a list of voltages",
         Dim::AreaTable(_) => "a list of (area, number) points",
         Dim::OptLengthList => "a list of lengths or none",
+        Dim::Frequency => "a frequency",
+        Dim::FrequencyList => "a list of frequencies",
+        Dim::CurrentPerWidthRows => "a list of rows of currents per width",
     }
 }

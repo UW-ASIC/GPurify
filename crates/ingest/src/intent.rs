@@ -27,7 +27,7 @@ pub enum IntentError {
     #[error("domain {0} has no supply net")]
     DomainWithoutSupply(String),
     /// A stated limit of a net (drop, drop fraction, overvoltage, current
-    /// budget, RMS or peak current, or a `dynamic` drop, toggle rate, clock
+    /// budget, RMS or peak current, frequency, or a `dynamic` drop, toggle rate, clock
     /// period or rise time) is zero, negative, `NaN` or infinite.
     #[error("net {net}: {limit} is not a positive finite number")]
     BadLimit {
@@ -115,6 +115,9 @@ pub struct NetLimits {
     /// The net's peak current, µA (`peak_current_ua`), for the peak
     /// current-density limits. Shared as the budget is.
     pub peak_current_ua: Option<f64>,
+    /// The frequency the net switches at, MHz (`frequency_mhz`): which row
+    /// of an AC current-density table applies.
+    pub frequency_mhz: Option<f64>,
 }
 
 /// One net's worst switching cycle, for vectorless dynamic IR drop: every load
@@ -248,6 +251,7 @@ struct LimitSpec {
     dynamic: Option<DynamicSpec>,
     rms_current_ua: Option<f64>,
     peak_current_ua: Option<f64>,
+    frequency_mhz: Option<f64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -323,6 +327,7 @@ fn checked_switching(
 ///                  "max_drop_fraction": <f>, "max_overvoltage_mv": <n>,
 ///                  "budget_current_ua": <f>,
 ///                  "rms_current_ua": <f>, "peak_current_ua": <f>,
+///                  "frequency_mhz": <f>,
 ///                  "dynamic": { "max_drop_mv": <n>, "toggle_rate": <f>,
 ///                               "clock_period_ps": <n>, "rise_time_ps": <n>,
 ///                               "decap_pf": <n> } }],
@@ -442,6 +447,7 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
                 },
                 rms_current_ua: checked_limit(spec.rms_current_ua, &spec.net, "rms_current_ua")?,
                 peak_current_ua: checked_limit(spec.peak_current_ua, &spec.net, "peak_current_ua")?,
+                frequency_mhz: checked_limit(spec.frequency_mhz, &spec.net, "frequency_mhz")?,
             },
         ));
     }
