@@ -309,12 +309,9 @@ says which foundry manual, standard or tool defines each one.
 
 | Id | Check | Status | What is missing |
 |---|---|---|---|
-| PEX-003 | Coupling C (same-layer and cross-layer) | partial | No dielectric images: each panel pair sees the mean of their two permittivities and interfaces reflect nothing, so same-layer coupling is under-predicted 14-159% (extract::field). The substrate is a grounded plane at height 0 (testing-plan F24); a shape at height 0 (well, diffusion) is a junction, out of the field and in closed form, so the field reads metal over another net's junction as coupling to ground (F73); a junction layer needs no dielectric (F94) |
-| PEX-004 | Partial self / mutual inductance | partial | Each field-solved net gets its self L and R; mutual inductance between nets is never computed. Current is uniform across each rectangle of the merged conductor, so crowding at corners and width steps is not modelled; a net whose pieces meet only at a corner, or join only through a global layer, is refused (testing-plan F23, F45, F79). Frequency-dependent R and L (skin and proximity effect), which FastHenry computes with filament meshing, are not modelled |
-| PEX-006 | Multi-corner extraction | missing | Simultaneous multi-corner extraction in one run (SRC:datasheet) is the proprietary form; one corner per run is the minimum |
+| PEX-003 | Coupling C (same-layer and cross-layer) | partial | The field solve meshes each horizontal interface of the stratified stack (each pex row's dielectric fills up to the next row's height) over a window around the solved nets, FastCap's multi-dielectric formulation; the polarisation beyond the window is left out, and the collocated interface rows make the matrix reciprocal only to the discretisation (refused past 5 %, reported symmetrised). No conformal dielectrics, no per-layer dielectric beside a wire; the closed forms see one permittivity per layer. The substrate is a grounded plane at height 0 (testing-plan F24); a shape at height 0 (well, diffusion) is a junction, out of the field and in closed form, so the field reads metal over another net's junction as coupling to ground (F73); a junction layer needs no dielectric (F94) |
 | PEX-007 | Process effects (CMP thickness, temp-dependent R, nonlinear via R, colour-aware) | partial | Temperature-dependent R: the deck's temperature T nominal T0 and each pex row's tc1/tc2 give R(T) = R(T0)(1 + tc1(T - T0) + tc2(T - T0)^2), the ngspice resistor law with the coefficients PDKs publish; extraction, the power grid and lib read it. Not modelled: CMP thickness from pattern density, current-dependent via R, colour (mask-shift) effects: their models need foundry calibration data no open PDK publishes; width- and spacing-dependent thickness and sheet R, layer etch, via-coverage R (SRC:datasheet) |
-| PEX-008 | Reduction modes (C-only, RC, RCC, thresholds) | missing | One fixed output (R, ground C, coupling C, via R); --quasistatic <net> field-solves R, C and L for that net; --format spef\|dspf. No C-only or RC modes and no thresholds. Also missing: R-only reduction (CAL:PEX REDUCE RONLY), extraction of selected nets only, and regions excluded from extraction (IHP noqrc layer, datatype 28) |
-| PEX-009 | PEX netlist diff / qualification | missing | Worth building as an internal test tool |
+| PEX-009 | PEX netlist diff / qualification | partial | Library only (gpurify_extract::compare): two extractions of one layout compared net by net in PEX Certify's metrics (total and ground C, net-to-net C, pin-to-pin R, Elmore delay) with the error statistics a qualification reports (worst, mean, RMS, share within a tolerance above a floor). No reader for another tool's SPEF or DSPF, and no linking of nets by name across two layouts (PEX Link); no CLI |
 | PEX-011 | Device-region (MEOL/FEOL) parasitics: gate-to-contact and gate-to-diffusion C, trench contact, via-location gate R | missing | Needs the foundry's device cross-section; no open PDK publishes one |
 | PEX-012 | Metal-fill treatment (floating or grounded fill, virtual fill) | missing | — |
 | PEX-013 | Substrate network extraction (substrate and well resistance and coupling) | missing | — |
@@ -326,8 +323,6 @@ says which foundry manual, standard or tool defines each one.
 
 | Id | Check | Status | What is missing |
 |---|---|---|---|
-| FLOW-001 | Geometric / hierarchy-invariant waivers | missing | — |
-| FLOW-002 | Early / dirty-design staged runs | missing | — |
 | FLOW-003 | SoC integration (macro sync, ports off grid, fill outside boundary, block/pad-ring overlap) | missing | Cheap from LEF/DEF + GDS |
 | FLOW-004 | Interface DRC top vs blocks | missing | — |
 | FLOW-005 | In-design / live DRC | partial | Shared-deck library (Philis) is the first step |
