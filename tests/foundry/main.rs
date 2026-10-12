@@ -613,9 +613,9 @@ fn switches(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Oracle: GF's fd_pv unit structures (pass boxes on 2/222 clean, fail
+/// Oracle: GF's `fd_pv` unit structures (pass boxes on 2/222 clean, fail
 /// boxes on 3/222 flagged) and the mcu7t5v0 cells (clean), against which
-/// `GPurify` and fd_pv's `gf180mcu.drc` are both held, row by row of
+/// `GPurify` and `fd_pv`'s `gf180mcu.drc` are both held, row by row of
 /// `docs/xcheck/gf180mcu.tsv` (a differential against the foundry deck).
 #[test]
 #[ignore = "release tier: needs the foundry PDKs and klayout (nix develop .#oracles)"]
