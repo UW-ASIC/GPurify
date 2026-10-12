@@ -194,16 +194,16 @@ says which foundry manual, standard or tool defines each one.
 | DRC-016 | Wrong-direction width or spacing | partial | width(E) and facing_space(E) on L.edges().horizontal() or .vertical() measure in one direction (ASAP7 M4.W.1, W.5, S.1, S.2); the PRL and NONEOL qualifiers of LEF58 WRONGDIRECTION spacing are missing |
 | DRC-020 | Minimum step / edge length / jog | partial | min_step(L; ..) is LEF 5.8 MINSTEP's MAXEDGES, OUTSIDECORNER, INSIDECORNER, STEP and LENGTHSUM; LEF58_MINSTEP's MINADJACENTLENGTH, MINBETWEENLENGTH, NOADJACENTEOL and NOBETWEENEOL are missing |
 | DRC-021 | Feature length min/max | partial | Edge length is length(E) (ASAP7 type L); a straight feature's length is its box's longer side, forbidden(L.with_bbox_max(< len)) (sky130 mf.2, IHP Rsil.f); a bent feature's length along its path is not measured |
-| DRC-027 | Two-widths spacing table | partial | The table is keyed on the wider shape only; TWOWIDTHS keys on both widths |
-| DRC-028 | Influence / stub spacing near wide metal | partial | Implements the sky130 m1.3a form; equivalence with LEF INFLUENCE is unverified |
-| DRC-029 | End-of-line spacing | partial | Basic EOL only; PARALLELEDGE, TWOEDGES, ENCLOSECUT and ENDTOEND are missing |
-| DRC-030 | EOL extension / keep-out | missing | — |
-| DRC-031 | Tip-to-tip / tip-to-side by width class | partial | One end-of-line width per rule, so each width class is its own rule; tip-to-side is not told apart from tip-to-tip |
-| DRC-032 | Corner spacing (convex/concave, corner-to-corner) | partial | Measures facing convex corners of the merged layer; CONCAVECORNER, EXCEPTEOL and LEF58 CONVEXCORNER variants are missing; sky130 poly.4 over-reports (limitations.md, "Shipped decks") |
-| DRC-033 | Forbidden spacing ranges | missing | — |
+| DRC-027 | Two-widths spacing table | partial | TWOWIDTHS is two_width_spacing_table (both widths, a run per width); a negative PRL and the LEF58_SPACINGTABLE qualifiers (WRONGDIRECTION, SAMEMASK, EXCEPTEOL, EXCEPTWITHIN) are missing |
+| DRC-028 | Influence / stub spacing near wide metal | partial | attached_wide_spacing holds LEF SPACING RANGE INFLUENCE (a stub within influenceLength of the wide wire inherits its spacing; LEF example tested); its stub-width RANGE and SPACINGTABLE INFLUENCE (two stubs near a wide wire) are missing, and the square growth holds a little more near a wide corner (fails closed) |
+| DRC-029 | End-of-line spacing | partial | eol_within_spacing adds LEF WITHIN, PARALLELEDGE, TWOEDGES and LEF58 ENDTOEND; ENCLOSECUT, the LEF58 MINLENGTH/MAXLENGTH, ENDPRLSPACING and WRONGDIRSPACING qualifiers, and the ENDTOEND extensions are missing |
+| DRC-030 | EOL extension / keep-out | partial | eol_keep_out checks the LEF58_EOLKEEPOUT box (backward, side, forward); its EXCEPTWITHIN, CORNERONLY and CLASS qualifiers, and LEF58_EOLEXTENSIONSPACING, are missing |
+| DRC-031 | Tip-to-tip / tip-to-side by width class | partial | tip_spacing_table classes both facing edges by length (A7 M1.S.1-S.5); M4.S.3 and M4.S.4, tip to tip between lines on adjacent tracks, are missing |
+| DRC-032 | Corner spacing (convex/concave, corner-to-corner) | partial | convex_corner_spacing adds LEF58 CONVEXCORNER (the larger axis gap, CORNERTOCORNER Euclidean) and EXCEPTEOL; CONCAVECORNER, the WIDTH table and the SAMEMASK, CORNERONLY, EXCEPTJOGLENGTH and EXCEPTSAMENET/SAMEMETAL qualifiers are missing; sky130 poly.4 over-reports (limitations.md, "Shipped decks") |
+| DRC-033 | Forbidden spacing ranges | partial | forbidden_spacing holds a closed gap range between facing edges running longer than a PRL (LEF58_TWOWIRESFORBIDDENSPACING as drt reads it); its MINSPANLENGTH/MAXSPANLENGTH, LEF58_FORBIDDENSPACING's WIDTH/WITHIN/TWOEDGES, and a preferred direction are missing |
 | DRC-034 | Maximum spacing | missing | — |
-| DRC-035 | Pitch / exact pitch / on-track | missing | Also covers gridded-design rules (Liebmann 2003; Jhaveri 2010) |
-| DRC-036 | Span-length table | missing | — |
+| DRC-035 | Pitch / exact pitch / on-track | partial | exact_pitch holds neighbouring rectangles to an exact centre-to-centre pitch (A7 FIN.S.1, GATE.S.1); track grids (LEF PITCH, LEF58_PITCH, LEF58_RIGHTWAYONGRIDONLY) are missing. Also covers gridded-design rules (Liebmann 2003; Jhaveri 2010) |
+| DRC-036 | Span-length table | partial | span_length checks every chord against the x and y span lists (LEF58_SPANLENGTHTABLE with and without WRONGDIRECTION); ORTHOGONAL and EXCEPTOTHERSPAN are missing |
 | DRC-037 | Bent / 45-degree features | partial | angle checks the edges; spacing and width rules record Refused on a non-rectilinear layer |
 | DRC-038 | Diagonal width / spacing | missing | In scope since 2026-10-11 (was: Needs non-rectilinear geometry) |
 | DRC-041 | Enclosure on two opposite sides | partial | A non-rectangular inner shape is held to the every-side limit (limitations.md, "Rules that can pass a layout signoff would flag") |
