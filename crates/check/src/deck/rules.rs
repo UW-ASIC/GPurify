@@ -666,6 +666,22 @@ kinds! {
         narrow_width: Option<Dbu> = "narrow_width",
         narrow_current: Option<f64> = "narrow_current",
     }
+    /// [`check_em_ac`](crate::erc::rules::electrical::check_em_ac) on the
+    /// RMS currents: `em_rms(layers..; ..)`, as `em_current_density`.
+    em_rms(layers: many) [] {
+        max_density: f64 = "max_density",
+        max_current_per_cut: f64 = "max_current_per_cut",
+        narrow_width: Option<Dbu> = "narrow_width",
+        narrow_current: Option<f64> = "narrow_current",
+    }
+    /// [`check_em_ac`](crate::erc::rules::electrical::check_em_ac) on the
+    /// peak currents: `em_peak(layers..; ..)`, as `em_current_density`.
+    em_peak(layers: many) [] {
+        max_density: f64 = "max_density",
+        max_current_per_cut: f64 = "max_current_per_cut",
+        narrow_width: Option<Dbu> = "narrow_width",
+        narrow_current: Option<f64> = "narrow_current",
+    }
     /// [`EmThermalTable`](crate::erc::rules::electrical::EmThermalTable):
     /// `em_thermal(layers..; ..)`, as `electromigration` plus the
     /// dielectric's thermal conductivity in W/(m·K), the heat-spreading

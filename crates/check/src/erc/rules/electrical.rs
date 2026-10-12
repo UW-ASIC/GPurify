@@ -797,6 +797,60 @@ pub fn check_em_current_density(
     );
 }
 
+/// RMS and peak current density: deck kinds `em_rms` and `em_peak`, written
+/// as [`EmCurrentDensityTable`]'s `em_current_density(layers..; ..)`.
+///
+/// LEF/DEF 5.8 states a layer's AC limits as `ACCURRENTDENSITY RMS` and
+/// `ACCURRENTDENSITY PEAK` (mA per µm of drawn width, or per cut), beside
+/// the DC `DCCURRENTDENSITY AVERAGE` that `em_current_density` checks; the
+/// sky130 tech LEF states RMS limits of 6.1 mA/µm on met1 and met2, 14.9 on
+/// met3 and met4 and 22.34 on met5. A row is [`EmCurrentDensityTable`]'s
+/// check against the RMS (`em_rms`) or the peak (`em_peak`) current of each
+/// wire and cut of the supply grid.
+///
+/// Those currents come from the intent's `rms_current_ua` and
+/// `peak_current_ua` per net, shared among the net's device terminals as its
+/// budget is. Every load is taken to draw one waveform, in phase, scaled by
+/// its share, the model the budget already makes; on the linear resistive
+/// grid a wire's current is then that waveform scaled by its DC solution's
+/// share, so its RMS (peak) is the DC solve with the RMS (peak) loads,
+/// exactly.
+///
+/// # Limits
+///
+/// LEF's tables by frequency and width are not read: a row states one
+/// density per layer (and `narrow`'s one band), as for a single-entry
+/// table. Loads that switch out of phase, or with different waveforms, have
+/// a smaller RMS than this sum, so the check errs strict.
+///
+/// Catalog: ERC-E7 in the [check catalog]. Defined by [LEF/DEF 5.8]
+/// `ACCURRENTDENSITY PEAK | AVERAGE | RMS`; the [sky130] tech LEF's RMS
+/// limits. Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [LEF/DEF 5.8]: https://coriolis.lip6.fr/doc/lefdef/lefdefref/lefdefref.pdf
+/// [sky130]: https://github.com/google/skywater-pdk-libs-sky130_fd_sc_hd/blob/main/tech/sky130_fd_sc_hd__nom.tlef
+///
+/// Runs every row of an `em_rms` or `em_peak` table over the supply grid
+/// loaded with those currents. `examined`, violations and outcomes are
+/// [`check_em_current_density`]'s, with `power` and `intent` the AC grid and
+/// its intent; every row is skipped when no net states the current.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_em_ac(
+    power: Power<'_>,
+    intent: &IntentMap,
+    grid: Grid,
+    table: &EmCurrentDensityTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    check_em_current_density(power, intent, grid, table, out, runs);
+}
+
 /// Black's derating of a limit characterised at `reference` to `operating`:
 /// `exp(Ea / (n k) * (1/T - 1/T_ref))`, below one when hotter. `None` for an
 /// unusable parameter set or an infinite factor.

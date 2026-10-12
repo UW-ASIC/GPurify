@@ -265,6 +265,39 @@ impl IntentMap {
             limit: Vec::new(),
         }
     }
+
+    /// This intent with each net's current budget replaced by `pick` of its
+    /// limits (its RMS or its peak current), and no other limit: the loads
+    /// [`extract_into`](crate::erc::power::extract_into) spreads for an AC
+    /// current rule. A net `pick` gives nothing carries no load.
+    #[must_use]
+    pub fn with_budget(&self, pick: impl Fn(&NetLimits) -> Option<f64>) -> IntentMap {
+        let (limit_net, limit) = self
+            .limit_net
+            .iter()
+            .zip(&self.limit)
+            .filter_map(|(&net, limits)| {
+                pick(limits).map(|current| {
+                    (
+                        net,
+                        NetLimits {
+                            budget_current_ua: Some(current),
+                            ..NetLimits::default()
+                        },
+                    )
+                })
+            })
+            .unzip();
+        IntentMap {
+            declared: self.declared,
+            supply_net: self.supply_net.clone(),
+            supply_role: self.supply_role.clone(),
+            supply_domain: self.supply_domain.clone(),
+            supply_voltage: self.supply_voltage.clone(),
+            limit_net,
+            limit,
+        }
+    }
 }
 
 /// Re-keys design intent onto extracted nets; `out` is cleared and refilled.
@@ -302,6 +335,8 @@ pub fn resolve_intent_into(
             || limits.max_drop_fraction.is_some()
             || limits.max_overvoltage.is_some()
             || limits.budget_current_ua.is_some()
+            || limits.rms_current_ua.is_some()
+            || limits.peak_current_ua.is_some()
         {
             out.limit_net.push(net);
             out.limit.push(limits);

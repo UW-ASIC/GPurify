@@ -244,7 +244,11 @@ that orient each transistor channel. Without `--intent` they report skipped.
 Net names are the text labels in your layout. A ground net sits at 0 V and its
 drop is how far it rises (ground bounce); `max_drop_fraction` is a fraction of
 its domain's voltage for either role. A limit you leave out on a net
-means that net is not checked for it, not that it is unlimited. A current
+means that net is not checked for it, not that it is unlimited. `rms_current_ua` and
+`peak_current_ua` state a net's RMS and peak current, shared among its loads
+as the budget is, for the `em_rms` and `em_peak` rules (LEF's
+`ACCURRENTDENSITY RMS` and `PEAK` limits); each load is taken to draw one
+waveform in phase with the others. A current
 budget on a net that no device terminal reaches is refused rather than
 ignored, because zero current would pass every limit.
 

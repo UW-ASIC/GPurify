@@ -74,6 +74,8 @@ fn supply_intent() -> IntentMap {
             max_overvoltage: Some(millivolts(100.0)),
             budget_current_ua: Some(1_000.0),
             dynamic: None,
+            rms_current_ua: None,
+            peak_current_ua: None,
         },
     );
     map

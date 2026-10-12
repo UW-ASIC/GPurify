@@ -118,6 +118,8 @@
 //! | `conditional_tie(region, tap, well, other; within, spacing, max_distance)` | `conditional_tie` | [`erc::RuleSet::conditional_tie`] | a region too far from a tap for the band its neighbours' well spacing puts it in | ERC-D1a |
 //! | `density_cmp(L; window, step, ..)` | `density_cmp` | [`erc::RuleSet::density_cmp`] | metal density, or CMP thickness, out of range | DRC-071, DRC-113, ERC-B1 |
 //! | `electromigration(layers..; ..)` | `electromigration` | [`erc::RuleSet::electromigration`] | a wire or cut above its rated current at temperature | ERC-E4, ERC-E5, ERC-E6 |
+//! | `em_rms(layers..; ..)` | `em_rms` | [`erc::RuleSet::em_rms`] | a wire or cut above its RMS current limit, under the intent's RMS currents | ERC-E7 |
+//! | `em_peak(layers..; ..)` | `em_peak` | [`erc::RuleSet::em_peak`] | a wire or cut above its peak current limit, under the intent's peak currents | ERC-E7 |
 //! | `em_current_density(layers..; ..)` | `em_current_density` | [`erc::RuleSet::em_current_density`] | a wire or cut above its instantaneous current limit | ERC-C7, ERC-D4, ERC-E1, ERC-E2, ERC-E3, ERC-E10 |
 //! | `ir_drop()` | `ir_drop` | [`erc::RuleSet::ir_drop`] | a node whose drop exceeds its net's limit | ERC-E8 |
 //! | `dynamic_ir_drop()` | `dynamic_ir_drop` | [`erc::RuleSet::dynamic_ir_drop`] | a node whose drop in the worst switching cycle exceeds its net's limit | ERC-E11 |

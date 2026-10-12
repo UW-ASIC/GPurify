@@ -78,6 +78,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(density());
     out.extend(ir_drop(depth));
     out.extend(em_current_density(depth));
+    out.extend(em_ac(depth));
     out.extend(electromigration());
     out.extend(dynamic_ir_drop());
     out.extend(em_thermal());
@@ -2348,6 +2349,102 @@ fn em_current_density(depth: Depth) -> Vec<Fixture> {
                     .collect(),
             ));
             f.intent = Some(vdd_intent(budget));
+            out.push(f);
+        }
+    }
+    out
+}
+
+/// `em_rms` and `em_peak` (ERC-E7): the supply grid loaded with each net's
+/// `rms_current_ua` or `peak_current_ua` in place of its budget, checked as
+/// `em_current_density` checks the budget. The net's budget is 1 µA
+/// throughout, so a check that read it would flag nothing.
+///
+/// - sky130's tech LEF RMS limit for met1, 6.1 mA/µm, on a 1 µm rail whose
+///   one load draws the whole RMS current through the edge from the feed
+///   point: 6093.9, 6100 and 6106.1 µA, flagged only above 6100 µA. The
+///   `em_peak` row beside it is skipped: no net states a peak current.
+/// - random ladders (as `em_current_density`'s), each load drawing its
+///   share of a peak current, every edge's current Ohm's law along the
+///   series ladder (closed form), swept between edges; `em_rms` skipped.
+fn em_ac(depth: Depth) -> Vec<Fixture> {
+    let mut out = Vec::new();
+    let ac_intent = |key: &str, current: f64| {
+        intent(
+            &[("core", 1800.0)],
+            &[("VDD", "core", "power")],
+            &[format!(
+                r#"{{"net":"VDD","budget_current_ua":1,"{key}":{current}}}"#
+            )],
+        )
+    };
+    let rows = |rms: f64, peak: f64| {
+        rail_deck(&format!(
+            "rule rms em_rms(met1; max_density: {rms}uA/um, max_current_per_cut: 1000uA, narrow: none)\n\
+             rule pk em_peak(met1; max_density: {peak}uA/um, max_current_per_cut: 1000uA, narrow: none)"
+        ))
+    };
+    let mut layout = Layout::default();
+    rail(&mut layout, "VDD", 20_000, 0, 1000, &[18_000]);
+    for current in [6093.9, 6100.0, 6106.1] {
+        let mut f = Fixture::new(
+            &format!("erc/em_rms/sky130_met1/{}", side(6100.0, current)),
+            &["ERC-E7"],
+            &rows(6100.0, 1.0),
+            ERC,
+        )
+        .layout(layout.clone())
+        .expect(Expect::rule(
+            "rms",
+            if current > 6100.0 {
+                vec![microamps(current).at(10_000, 500)]
+            } else {
+                Vec::new()
+            },
+        ))
+        .expect(Expect::outcome("pk", Want::Skipped));
+        f.intent = Some(ac_intent("rms_current_ua", current));
+        out.push(f);
+    }
+    let mut rng = Rng::new(0xe_0007);
+    let cases = match depth {
+        Depth::Merge => 10,
+        Depth::Nightly => 100,
+    };
+    for case in 0..cases {
+        let n = 1 + rng.below(4) as usize;
+        let mut loads: Vec<i64> = Vec::new();
+        while loads.len() < n {
+            let x = 500 * (1 + rng.below(31) as i64);
+            if x != 8000 && !loads.contains(&x) {
+                loads.push(x);
+            }
+        }
+        let peak = (100 + rng.below(9900)) as f64;
+        let width = 500 * (1 + rng.below(4) as i64);
+        let (_, edges) = ladder(16_000, width, &loads, peak);
+        let per_um = |current: f64| current / (width as f64 / 1000.0);
+        let values: Vec<f64> = edges.iter().map(|e| per_um(e.2)).collect();
+        let mut layout = Layout::default();
+        rail(&mut layout, "VDD", 16_000, 0, width, &loads);
+        for density in between(&values) {
+            let mut f = Fixture::new(
+                &format!("erc/em_peak/random/{case}/{density}"),
+                &["ERC-E7"],
+                &rows(1.0, density),
+                ERC,
+            )
+            .layout(layout.clone())
+            .expect(Expect::rule(
+                "pk",
+                edges
+                    .iter()
+                    .filter(|e| per_um(e.2) > density)
+                    .map(|&(a, _, current)| microamps(current).at(a, width / 2))
+                    .collect(),
+            ))
+            .expect(Expect::outcome("rms", Want::Skipped));
+            f.intent = Some(ac_intent("peak_current_ua", peak));
             out.push(f);
         }
     }
