@@ -816,7 +816,16 @@ fn foundry_deck_sky130() {
     let kl = checkout("sky130_klayout_pdk");
     let run = Run {
         script: need(&kl, "tech/sky130/drc/sky130A_mr.drc"),
-        switches: switches(&[("feol", "true"), ("beol", "true"), ("offgrid", "true")]),
+        // One thread: the deck runs deep with `threads(4)` unless `$thr` says
+        // otherwise, and KLayout 0.30.8 so once hung in its `li` boolean
+        // (sky130A_mr.drc:1067, killed at the limit) and once aborted writing
+        // the report (`free(): invalid pointer`) on inputs other runs passed.
+        switches: switches(&[
+            ("feol", "true"),
+            ("beol", "true"),
+            ("offgrid", "true"),
+            ("thr", "1"),
+        ]),
     };
     let violators = need(&checkout("open_pdks"), "sky130/klayout/test_violators.gds");
     let hd = checkout("sky130_fd_sc_hd");
