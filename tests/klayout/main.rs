@@ -13,8 +13,12 @@
 //! [`xor`] holds `gpurify xor` to `KLayout`'s XOR the same way.
 
 mod compare;
+mod lefdef;
 mod translate;
 mod xor;
+
+#[path = "../common/lefdef_gen.rs"]
+mod lefdef_gen;
 
 #[path = "../exhaustive/bitmap.rs"]
 mod bitmap;
