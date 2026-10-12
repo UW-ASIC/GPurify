@@ -85,6 +85,10 @@ const PROVED_BY_TEST: &[(&str, &str)] = &[
     ),
     // A system is several dies, which one fixture's single layout cannot hold.
     (
+        "DRC-129",
+        "tests/exhaustive/lvs/system.rs::bumps_off_their_mates_or_near_another_die_s_bumps_are_found",
+    ),
+    (
         "LVS-073",
         "tests/exhaustive/lvs/system.rs::a_two_die_stack_matches_and_a_missing_or_misordered_bump_does_not",
     ),

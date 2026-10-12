@@ -324,7 +324,10 @@ sits, and which layers meet. Paths in it are relative to the file.
   shape on those layers is a bump, and must be a rectangle on a conductor of
   its deck. Two bumps bond where they overlap with some area; touching is not
   bonding. A through-silicon via is a `connect via` of its die's deck between
-  its front and back layers.
+  its front and back layers. A bond may state `"max_offset_nm"`, the
+  largest centre-to-centre offset of two bonded bumps, and `"min_space_nm"`,
+  the least gap from a bump to any bump of the facing die it does not bond:
+  assembly rules a packager or foundry states, so they are yours to give.
 - **The system netlist** (SPICE or Spectre) has one top subcircuit. It places
   one instance per active die, named as the die (`Xcpu`), and its ports are
   the package pins. A die no instance names, such as a passive interposer, is
@@ -335,6 +338,8 @@ Rows of a system run:
 | Row | Flags |
 |---|---|
 | `system.unbonded_bump` | a bump that bonds nothing on the die it faces: missing, or misaligned |
+| `system.bump_offset` | two bonded bumps whose centres are further apart than the bond's `max_offset_nm` |
+| `system.bump_space` | a bump closer than the bond's `min_space_nm` to a bump of the facing die it does not bond |
 | `system.open` | a pin of the netlist (a die instance's port, or a top port, labelled on the package face's die) on no labelled net, or a netlist net whose pins the assembly leaves in pieces |
 | `system.short` | an assembled net carrying pins of two netlist nets |
 | `lvs.*` | the assembled dies, flat, against the flattened system netlist, device by device, as `lvs` compares one die |

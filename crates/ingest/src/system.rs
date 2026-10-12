@@ -40,6 +40,8 @@ pub struct System {
     pub dies: Vec<DieSpec>,
     /// Bonded face pairs: the two faces of each, on two different dies.
     pub bonds: Vec<[Face; 2]>,
+    /// Per bond, in [`System::bonds`]' order, the alignment it is held to.
+    pub bond_limits: Vec<BondLimits>,
     /// The face that meets the package substrate: its bumps are the
     /// component's external pins.
     pub package: Option<Face>,
@@ -78,6 +80,19 @@ pub struct Face {
     pub die: usize,
     /// The deck layer's name.
     pub layer: String,
+}
+
+/// What a bond's bumps are held to across the two dies, each left out when
+/// the file states none: a foundry's or packager's assembly rules, which
+/// no public source states.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BondLimits {
+    /// The largest offset, centre to centre, between two bonded bumps, in
+    /// nanometres; 0 or more.
+    pub max_offset_nm: Option<f64>,
+    /// The least gap between a bump and a bump of the facing die it does
+    /// not bond, in nanometres; 0 or more.
+    pub min_space_nm: Option<f64>,
 }
 
 /// The ESD checks: which device models protect a pin.
@@ -126,6 +141,8 @@ struct DieWire {
 struct BondWire {
     a: FaceWire,
     b: FaceWire,
+    max_offset_nm: Option<f64>,
+    min_space_nm: Option<f64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -160,7 +177,8 @@ fn malformed<T>(why: String) -> Result<T, SystemFileError> {
 ///              "intent": "<json>", "origin_nm": [<x>, <y>],
 ///              "rotate": 0|90|180|270, "mirror": false }],
 ///   "bonds": [{ "a": { "die": "<name>", "layer": "<deck layer>" },
-///               "b": { "die": "<name>", "layer": "<deck layer>" } }],
+///               "b": { "die": "<name>", "layer": "<deck layer>" },
+///               "max_offset_nm": <nm>, "min_space_nm": <nm> }],
 ///   "package": { "die": "<name>", "layer": "<deck layer>" },
 ///   "esd": { "clamps": ["<model>"], "system_clamps": ["<model>"],
 ///            "system_pins": ["<label>"] }
@@ -172,7 +190,8 @@ fn malformed<T>(why: String) -> Result<T, SystemFileError> {
 /// placed by reflecting it in its x axis when `mirror`, then turning it
 /// counter-clockwise by `rotate` degrees, then moving its origin to
 /// `origin_nm`: a GDSII reference's order. `bonds`, `package` and `esd` may be
-/// left out.
+/// left out, and so may a bond's `max_offset_nm` and `min_space_nm`, which
+/// must be numbers of 0 or more.
 ///
 /// # Errors
 ///
@@ -221,7 +240,20 @@ pub fn parse_system(source: &str, base: &Path) -> Result<System, SystemFileError
         )),
     };
     let mut bonds = Vec::with_capacity(wire.bonds.len());
+    let mut bond_limits = Vec::with_capacity(wire.bonds.len());
     for bond in wire.bonds {
+        for (name, value) in [
+            ("max_offset_nm", bond.max_offset_nm),
+            ("min_space_nm", bond.min_space_nm),
+        ] {
+            if value.is_some_and(|v| !(v.is_finite() && v >= 0.0)) {
+                return malformed(format!("a bond's {name} is not a number of 0 or more"));
+            }
+        }
+        bond_limits.push(BondLimits {
+            max_offset_nm: bond.max_offset_nm,
+            min_space_nm: bond.min_space_nm,
+        });
         let pair = [face(bond.a)?, face(bond.b)?];
         if pair[0].die == pair[1].die {
             return malformed(format!(
@@ -258,6 +290,7 @@ pub fn parse_system(source: &str, base: &Path) -> Result<System, SystemFileError
     };
     Ok(System {
         dies,
+        bond_limits,
         bonds,
         package,
         esd,

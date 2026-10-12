@@ -472,6 +472,89 @@ fn a_two_die_stack_matches_and_a_missing_or_misordered_bump_does_not() {
     );
 }
 
+/// Catalog DRC-129: inter-die alignment and cross-die spacing, with the
+/// limits the system file states (`max_offset_nm`, `min_space_nm`; no
+/// public source states them).
+///
+/// Oracle: hand-derived from the drawn bumps (200 nm squares 1000 nm apart):
+/// `XB` placed `e` = 49, 50, 51 nm further along x than its bumps' mates
+/// (still bonded) against a 50 nm offset: three `system.bump_offset` rows of
+/// 51 at e = 51, each at the middle of the two centres (25 past `XA`'s,
+/// floored), none below; aligned, the 800 nm between a bump and its
+/// neighbour's mate against a space of 799, 800, 801: four
+/// `system.bump_space` rows of 800 at 801 (slots 0 and 1, 1 and 2, both
+/// ways), at the middle of the gap, none at or below 800; and no row at all
+/// when the file states neither limit. Metamorphic: `XB` placed unturned
+/// rather than flipped gives the same rows.
+#[test]
+fn bumps_off_their_mates_or_near_another_die_s_bumps_are_found() {
+    let (_, _, reference) = inverters();
+    let ran_at = |place: Place, e: i64, max: &str, space: &str| {
+        let (mut dies, _) = inverter_stack(place, [Some(0), Some(1), Some(2)]);
+        dies[1].place.dx += e;
+        let system = system_json(&dies, &[(("XA", "bump"), ("XB", "bump"))], None, None);
+        let system = system.replace(
+            r#""layer": "bump" } }"#,
+            &format!(r#""layer": "bump" }}, "max_offset_nm": {max}, "min_space_nm": {space} }}"#),
+        );
+        check_dies(&dies, &system, &reference).expect("an assembly")
+    };
+    let ran = |e, max: &str, space: &str| ran_at(FLIP, e, max, space);
+    let none: Vec<((i64, i64), Measurement)> = Vec::new();
+    // Metamorphic: placing XB unturned instead of flipped moves no row.
+    assert_eq!(
+        ran_at(Place::default(), 51, "50", "801").rows(),
+        ran(51, "50", "801").rows()
+    );
+    for e in [49, 50, 51] {
+        let off = ran(e, "50", "0");
+        let want: Vec<_> = if e > 50 {
+            (0..3)
+                .map(|slot| {
+                    let (x, y) = slot_centre(slot);
+                    (
+                        (x + e / 2, y),
+                        Measurement::Length(gpurify::geom::Dbu::new_unchecked(e)),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        assert_eq!(off.of("system.bump_offset"), want, "offset {e}");
+        assert_eq!(
+            off.run_of("system.bump_offset"),
+            (Outcome::Ran, 3, u32::try_from(want.len()).expect("few"))
+        );
+    }
+    for space in [799, 800, 801] {
+        let near = ran(0, "1000", &space.to_string());
+        let want: Vec<_> = if space > 800 {
+            let gap = |left: usize| (slot_centre(left).0 + 500, 100);
+            [gap(0), gap(0), gap(1), gap(1)]
+                .into_iter()
+                .map(|at| {
+                    (
+                        at,
+                        Measurement::Length(gpurify::geom::Dbu::new_unchecked(800)),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        assert_eq!(near.of("system.bump_space"), want, "space {space}");
+        assert_eq!(near.of("system.bump_offset"), none);
+    }
+    let (dies, system) = inverter_stack(FLIP, [Some(0), Some(1), Some(2)]);
+    let plain = check_dies(&dies, &system, &reference).expect("an assembly");
+    assert!(plain
+        .outputs
+        .runs
+        .iter()
+        .all(|run| !plain.strings.resolve(run.rule).starts_with("system.bump_")));
+}
+
 /// The eight symmetries of the square, each with a move.
 fn symmetries() -> Vec<Place> {
     (0..8u8)
