@@ -151,6 +151,7 @@ plus the dialect real PDK netlists use.
 | `Liu-DVCon` | Liu, Hong, Lee, Choi, Won, Choi (Samsung), Vardhan, Kher (Synopsys), "Low Power Verification with UPF: Principle and Practice", DVCon: power-switch, retention and PG-connectivity checks ("Power switch control signal should come from always on path") | — | Open | https://dvcon-proceedings.org/wp-content/uploads/low-power-verification-with-upf-principle-and-practice.pdf |
 | `ISLPED2014` | "Failing to Fail" UPF tutorial, ISLPED 2014: `create_power_switch` with its `-input_supply_port` and `-output_supply_port` | 2014 | Open | https://islped.org/2014/files/Failing%20to%20fail%20UPF%20tutorial%20.pdf |
 | `Etherton2015` | Etherton et al. (Freescale, Silicon Frontline, Apache-ANSYS), "A New Full-Chip Verification Methodology to Prevent CDM Oxide Failures", EOS/ESD Symposium, hosted by Synopsys: the driver/receiver ground resistance check ("The user defines the maximum resistance (Rmax) allowed between D/R ground pins") | 2015 | Open | https://www.synopsys.com/content/dam/synopsys/implementation&signoff/electrical-layout-verification-documents/cdm-esd-paper.pdf |
+| `CVC` | Bailey, "CVC: Circuit Validity Checker", WOSET 2020: an open (GPL-3) voltage-aware transistor-level ERC; forward-biased junctions and overvoltage from propagated minimum and maximum voltages | 2020 | Open | https://woset-workshop.github.io/PDFs/2020/a05.pdf |
 | `JESD78` | JEDEC JESD78F.02, IC latch-up test | Nov 2023 | Free with JEDEC registration. Table 1 was read from a third-party copy, so **obtain the JEDEC original** before citing numbers. | https://www.jedec.org/standards-documents/docs/jesd-78b |
 | `JS001`, `JS002` | ANSI/ESDA/JEDEC JS-001-2024 (HBM), JS-002-2025 (CDM); JTR001-01-12 user guide | 2024 / 2025 | Registration or purchase; bodies not read. JS-001's pin-combination tables set which pin pairs a P2P check must cover. | https://www.jedec.org/sites/default/files/JTR001-01-12%20Final.pdf |
 | `JEP122` | JEDEC JEP122H, failure mechanisms and models (EM, TDDB, HCI, NBTI) | Sep 2016 | Registration; abstract only | https://www.jedec.org/standards-documents/docs/jep-122e |
@@ -349,7 +350,7 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-D2 | Pad-diffusion guard ring (spacing, width) | implemented | GF:IO.1-4; IHP:7.2.1; TR18-02:3.1.2 | FR; MR; SY |
 | ERC-D3 | Guard ring / well tied to the correct rail | implemented | GF:LU.9,LU.10,IO.1,IO.3 | SY; MR; NV |
 | ERC-D4 | Guard-ring resistance / current under injection | implemented | TR18-02:2.3; JESD78:Table 1; CAL | CF; MR; SY |
-| ERC-D5 | Voltage-aware aggressor/victim | partial | TR18-02:2.2.3; GF:IO.1,IO.3; CAL | FR; CF; SY; MR |
+| ERC-D5 | Voltage-aware aggressor/victim | partial | TR18-02:2.2.3; GF:14.3.2,IO.1,IO.3; CAL; CVC | FR; CF; SY; MR |
 | ERC-D6 | HV latch-up between isolated pockets | expressible | TR18-02:3.3; GF:14.3.4 | SY; MR |
 | ERC-D7 | Native-device guard ring | implemented | GF:LU.5 | FR; SY; MR |
 | ERC-D8 | Forward-biased diode marked and ringed | implemented | GF:14.3.2,14.3.3 | SY; MR |

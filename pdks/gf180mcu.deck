@@ -785,10 +785,10 @@ rule LU.5 guard_ring(nat, pcomp_psub; max_space: none, min_width: none, pad: non
 # by a tap without the other COMP in between, except transistors butted to a
 # tap over their full width", is not written.
 rule IO.1 guard_ring(ncomp_psub, ntap; max_space: 15um, min_width: none, pad: pad, near: none, within: none, clear: none)
-rule IO.1b latchup_victim(ncomp_psub, pcomp_in_nw, ntap; within: 15um, max_distance: 2um, pad: pad)
+rule IO.1b latchup_victim(ncomp_psub, pcomp_in_nw, ntap; within: 15um, max_distance: 2um, pad: pad, bias: none, forward: none)
 rule IO.2 warning guard_ring(ncomp_psub, ntap; max_space: none, min_width: 2um, pad: pad, near: none, within: none, clear: none)
 rule IO.3 guard_ring(pcomp_nw, pcomp_psub; max_space: 15um, min_width: none, pad: pad, near: none, within: none, clear: none)
-rule IO.3b latchup_victim(pcomp_nw, ncomp_psub, ptap; within: 10um, max_distance: 5um, pad: pad)
+rule IO.3b latchup_victim(pcomp_nw, ncomp_psub, ptap; within: 10um, max_distance: 5um, pad: pad, bias: none, forward: none)
 rule IO.4 warning guard_ring(pcomp_nw, pcomp_psub; max_space: none, min_width: 2um, pad: pad, near: none, within: none, clear: none)
 
 # --- Rules not written yet ---

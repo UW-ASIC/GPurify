@@ -14,7 +14,7 @@ use crate::erc::rules::supply::{point_in_region, ring_edge, untied_points_by};
 use crate::erc::ruleset::RuleHead;
 use crate::erc::voltage::NetVoltage;
 use crate::erc::{first_vertex, record_run, skip_rows, Design, Scratch};
-use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Violation, Violations};
+use crate::report::{LimitSense, Measurement, Outcome, RuleRun, SkipReason, Violation, Violations};
 use crate::topology::{NetId, TerminalRole};
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::ops::{isqrt, point_seg_dist2, seg_seg_dist2, winding_of, Point, Winding};
@@ -873,7 +873,8 @@ pub(crate) fn pad_nets(design: Design<'_>, pad: LayerId) -> Vec<NetId> {
 
 /// A victim near an injecting junction, held to a tighter tap distance: deck
 /// kind `latchup_victim`, written `latchup_victim(aggressor, region, tap;
-/// within: len, max_distance: len, pad: layer | none)`.
+/// within: len, max_distance: len, pad: layer | none, bias: layer | none,
+/// forward: above | below | none)`.
 ///
 /// An aggressor is a junction that can inject carriers into the substrate: a
 /// polygon of `aggressor`, and with `pad` only one on a net that holds a
@@ -891,21 +892,38 @@ pub(crate) fn pad_nets(design: Design<'_>, pad: LayerId) -> Vec<NetId> {
 /// max_distance: 2um, pad: pad)`; IO.3 (b) is 10 µm and 5 µm the other way
 /// round.
 ///
+/// With `bias` and `forward`, an aggressor is chosen by voltage as well: a
+/// junction can inject only when the voltages the intent propagates can
+/// forward-bias it against the polygon of `bias` it lies in, the well or
+/// substrate tie under it. `forward: above` (a P+ diffusion in an N-well)
+/// takes an aggressor whose net can rise above the lowest voltage the
+/// bias polygon's net sits at, `below` (an N+ diffusion in the substrate)
+/// one whose net can fall below the highest. GF180MCU §14.3.2: "I/O
+/// regions are more susceptible to latch-up because of over voltage (P+
+/// COMP potential exceeding Vdd) and under voltage (N+ COMP potential below
+/// Ground)"; the open CVC checker's "minimum source voltage for an n-mosfet
+/// is less than its maximum bulk voltage". An aggressor on a net no supply
+/// reaches, or in no bias polygon, is not chosen. A row with `bias` needs
+/// design intent and is skipped without it.
+///
 /// # Limits
 ///
 /// The whole victim polygon is held to the limit, not only its part within
-/// `within`. An aggressor is chosen by its pad connection or its layer, not
-/// by the voltage the intent propagates to its net (the voltage-aware
-/// aggressors of TR18-02 §2.2.3).
+/// `within`. Voltages are [`NetVoltage`]'s: the declared supplies'
+/// spans through channels, so an injection from off-chip (a pad driven
+/// past the rails) is the `pad` selection's, not the voltage's.
 ///
 /// Catalog: ERC-D5 in the [check catalog]. Defined by [ESDA TR18.0-02]
-/// §2.2.3; [GF180MCU] IO.1 (b) and IO.3 (b); Calibre PERC (public material
-/// only). Source tags are in [check-sources.md].
+/// §2.2.3 (voltage-aware aggressors and victims; its table of contents);
+/// [GF180MCU] §14.3.2, IO.1 (b) and IO.3 (b); [CVC] (forward-biased
+/// junctions from propagated minimum and maximum voltages); Calibre PERC
+/// (public material only). Source tags are in [check-sources.md].
 ///
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 /// [ESDA TR18.0-02]: https://www.esda.org/store/standards/product/307/esd-tr18-0-02-20/
 /// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
+/// [CVC]: https://woset-workshop.github.io/PDFs/2020/a05.pdf
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct LatchupVictimTable {
     /// Rule id and severity per row.
@@ -923,6 +941,11 @@ pub struct LatchupVictimTable {
     /// Per row: the pad layer whose nets select aggressors; `None` takes
     /// every aggressor polygon.
     pub pad: Vec<Option<LayerId>>,
+    /// Per row: the layer an aggressor's junction sits in (its well or tie),
+    /// and whether the junction injects when its net rises above that
+    /// polygon's (`true`, a P+ in an N-well) or falls below it (an N+ in the
+    /// substrate); `None` takes every aggressor polygon.
+    pub bias: Vec<Option<(LayerId, bool)>>,
 }
 
 /// Runs every [`LatchupVictimTable`] row over every region polygon.
@@ -937,6 +960,8 @@ pub struct LatchupVictimTable {
 /// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_latchup_victim(
     design: Design<'_>,
+    intent: &IntentMap,
+    voltage: &NetVoltage,
     table: &LatchupVictimTable,
     scratch: &mut Scratch,
     out: &mut Violations,
@@ -946,13 +971,44 @@ pub fn check_latchup_victim(
     for row in 0..table.head.len() {
         let before = out.len();
         let (rule, severity) = (table.head.rule[row], table.head.severity[row]);
+        if table.bias[row].is_some() && !intent.is_usable() {
+            let skipped = Outcome::Skipped(SkipReason::NoDesignIntent);
+            record_run(runs, out, before, rule, skipped, 0);
+            continue;
+        }
         let pads = table.pad[row].map(|pad| pad_nets(design, pad));
+        // The bias polygon an aggressor lies in, and whether its net can
+        // forward-bias the junction against that polygon's.
+        let injects = |poly: PolyId| -> bool {
+            let Some((layer, above)) = table.bias[row] else {
+                return true;
+            };
+            let net = nets.net_of(poly);
+            if !voltage.known(net) {
+                return false;
+            }
+            let (px, py) = store.poly_verts(poly);
+            let pb = store.poly_bbox(poly);
+            outers(store, layer).any(|bias| {
+                let (bx, by) = store.poly_verts(bias);
+                let well = nets.net_of(bias);
+                store.poly_bbox(bias).contains(pb)
+                    && surrounds((bx, by), (px, py))
+                    && voltage.known(well)
+                    && if above {
+                        voltage.hi[net.idx()] > voltage.lo[well.idx()]
+                    } else {
+                        voltage.lo[net.idx()] < voltage.hi[well.idx()]
+                    }
+            })
+        };
         let aggressors: Vec<PolyId> = outers(store, table.aggressor[row])
             .filter(|&poly| {
                 pads.as_ref().is_none_or(|pads| {
                     !pads.is_empty() && pads.binary_search(&nets.net_of(poly)).is_ok()
                 })
             })
+            .filter(|&poly| injects(poly))
             .collect();
         let (within, limit) = (table.within[row], table.max_distance[row]);
         let within2 = within.mul_wide(within);

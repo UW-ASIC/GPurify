@@ -1259,6 +1259,8 @@ pub(crate) const KINDS: &[Kind] = &[
             p("within", "within", Dim::Length),
             p("max_distance", "max_distance", Dim::Length),
             opt("pad", "pad", Dim::Layer),
+            opt("bias", "bias", Dim::Layer),
+            opt("forward", "forward", Dim::Word(&["above", "below"])),
         ],
     ),
     erc(

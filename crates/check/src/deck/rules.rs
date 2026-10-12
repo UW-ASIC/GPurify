@@ -820,11 +820,14 @@ kinds! {
     /// [`IrDropTable`](crate::erc::rules::electrical::IrDropTable): `ir_drop()`.
     ir_drop() [] {}
     /// [`LatchupVictimTable`](crate::erc::rules::latchup::LatchupVictimTable):
-    /// `latchup_victim(aggressor, region, tap; within, max_distance, pad)`.
+    /// `latchup_victim(aggressor, region, tap; within, max_distance, pad,
+    /// bias, forward)`, `forward` 0 for `above` and 1 for `below`.
     latchup_victim(aggressor: one, region: one, tap: one) [] {
         within: Dbu = "within",
         max_distance: Dbu = "max_distance",
         pad: Option<LayerRef> = "pad",
+        bias: Option<LayerRef> = "bias",
+        forward: Option<u32> = "forward",
     }
     /// [`MissingIsolationTable`](crate::erc::rules::domain::MissingIsolationTable):
     /// `missing_isolation(; isolation: models | none)`.

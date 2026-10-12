@@ -421,6 +421,8 @@ fn a_victim_of_a_pad_junction_is_held_to_its_tap_distance() {
     let (mut out, mut runs) = report();
     check_latchup_victim(
         cell.design(),
+        &IntentMap::default(),
+        &gpurify_check::erc::voltage::NetVoltage::default(),
         &LatchupVictimTable {
             head: head(rule(5)),
             aggressor: vec![DIFF],
@@ -429,6 +431,7 @@ fn a_victim_of_a_pad_junction_is_held_to_its_tap_distance() {
             within: vec![Dbu::new_unchecked(15_000)],
             max_distance: vec![Dbu::new_unchecked(2000)],
             pad: vec![Some(PAD)],
+            bias: vec![None],
         },
         &mut Scratch::default(),
         &mut out,

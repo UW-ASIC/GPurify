@@ -985,6 +985,11 @@ impl CompiledDeck {
             if let Some(pad) = t.pad[r] {
                 row = row.value("pad", ParamValue::Layer(pad));
             }
+            if let Some((bias, above)) = t.bias[r] {
+                row = row
+                    .value("bias", ParamValue::Layer(bias))
+                    .value("forward", ParamValue::Count(u32::from(!above)));
+            }
             file(&t.head, r, row);
         }
         let t = &erc.tie_area;
