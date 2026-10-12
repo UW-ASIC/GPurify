@@ -128,7 +128,7 @@ fn every_new_kind_survives_printing() {
 /// The queries answer what the deck states.
 /// Oracle: the deck text above: widths 350 and 690 nm; cut sizes 150 x 150
 /// and 150 x 230 nm (short side first, sorted); aspect ratio 3; total area
-/// 10^6 nm^2; the strictest min_step 60 nm.
+/// 10^6 nm^2; the strictest `min_step` 60 nm.
 #[test]
 fn the_new_queries_read_what_the_deck_states() {
     let mut strings = StrTable::default();
