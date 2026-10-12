@@ -67,6 +67,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         exemption(),
         cell_selections(),
         chip_and_device(),
+        device_family(),
         chip_count(),
         chip_area(),
         frame(),
@@ -3547,6 +3548,114 @@ fn chip_and_device() -> Vec<Fixture> {
                 .rect("poly", 0, 0, 330, 2000)
                 .rect("rpm", -m, -1000, 330 + m, 3000),
             &[("rpm.1c", below(m, 200))],
+        ));
+    }
+    every_placement(cases)
+}
+
+/// The device-family rules DRC-090 listed as missing, written with the
+/// generic kinds (SkyWater SKY130 periphery rules, varac and rpm sections):
+///
+/// - varac.2 "Min channel width (tap width) of `Var_channel`" 1.0 µm, the
+///   channel's extent along the poly, between its edges on the tap's edge:
+///   `width(var_channel.edges() and tap.edges()) >= 1um`, as difftap.2 is
+///   written for a MOS channel (DRC-011). `RTimothyEdwards/open_pdks`
+///   `sky130.lydrc` measures the same subject, the varactor channel's edges
+///   that are tap edges;
+/// - varac.6 "Min spacing between `VaracTap` and difftap" 0.27 µm, the tap
+///   holding a channel against every other diffusion or tap figure:
+///   `space(var_tap, difftap.not_interacting(var_tap)) >= 270nm`, so a
+///   diffusion butted to the varactor tap (one figure with it) is not
+///   measured, as `sky130.lydrc` drops its zero-area edge pairs;
+/// - rpm.1g "Only 1 licon is allowed in `xhrpoly_0p35`
+///   `prec_resistor_terminal`" and rpm.1i "Only 2 licons ... `xhrpoly_1p41`":
+///   `contains(term, licon) <= n` on each terminal, the resistor's poly under
+///   its marker off the body (`poly_rs`). The manual does not define
+///   `prec_resistor_terminal`; this derivation is the fixture's, not a
+///   foundry deck's, and no public deck writes rpm.1g-1k.
+///
+/// Oracle: construct-from-answer at the manual's numbers: a 180-wide poly
+/// crossing a tap `W` tall (`W` = 999, 1000, 1001: one finding of `W` below
+/// 1000; `width(var_channel)` would read the 180 channel length); a diffusion
+/// 269, 270 or 271 from the varactor tap, and one butted to it; terminals
+/// holding 1 and 2 licons, each terminal counted alone.
+fn device_family() -> Vec<Fixture> {
+    let deck_var = new_deck(
+        &["poly", "tap", "nwell", "diff"],
+        "layer var_channel = (poly and tap) and nwell\n\
+         layer var_tap = tap.overlapping(var_channel)\n\
+         layer difftap = diff or tap\n\
+         rule varac.2 width(var_channel.edges() and tap.edges()) >= 1um\n\
+         rule varac.6 space(var_tap, difftap.not_interacting(var_tap)) >= 270nm\n",
+    );
+    // A varactor: poly 180 wide crossing a tap `w` tall, all in n-well.
+    let varactor = |w: i64| {
+        Layout::default()
+            .rect("nwell", -2000, -2000, 2180, w + 2000)
+            .rect("tap", -600, 0, 780, w)
+            .rect("poly", 0, -300, 180, w + 300)
+    };
+    let mut cases = Vec::new();
+    for (w, side) in sweep(1000) {
+        cases.push(fixture(
+            &format!("device_family/varac_width/{side}"),
+            &["DRC-090", "DRC-011"],
+            &deck_var,
+            varactor(w),
+            &[("varac.2", below(w, 1000)), ("varac.6", Vec::new())],
+        ));
+    }
+    for (gap, side) in sweep(270) {
+        cases.push(fixture(
+            &format!("device_family/varac_tap_space/{side}"),
+            &["DRC-090"],
+            &deck_var,
+            varactor(1000).rect("diff", 780 + gap, 0, 1780 + gap, 1000),
+            &[("varac.2", Vec::new()), ("varac.6", below(gap, 270))],
+        ));
+    }
+    cases.push(fixture(
+        "device_family/varac_tap_butted",
+        &["DRC-090"],
+        &deck_var,
+        varactor(1000).rect("diff", 780, 0, 1780, 1000),
+        &[("varac.2", Vec::new()), ("varac.6", Vec::new())],
+    ));
+
+    let deck_rpm = new_deck(
+        &["poly", "rpm", "poly_rs", "licon"],
+        "layer term = (poly and rpm) not poly_rs\n\
+         rule rpm.1g contains(term, licon) <= 1\n\
+         rule rpm.1i contains(term, licon) <= 2\n",
+    );
+    // A resistor along y: two terminals either side of its body, each
+    // holding `low` and `high` licons, 100 square and 100 apart.
+    let resistor = |low: i64, high: i64| {
+        let licons = |layout: Layout, n: i64, y: i64| {
+            (0..n).fold(layout, |layout, i| {
+                layout.rect("licon", 50 + 200 * i, y, 150 + 200 * i, y + 100)
+            })
+        };
+        let layout = Layout::default()
+            .rect("rpm", -500, -500, 1100, 5500)
+            .rect("poly", 0, 0, 600, 5000)
+            .rect("poly_rs", -100, 1000, 700, 4000);
+        licons(licons(layout, low, 400), high, 4500)
+    };
+    for (low, high) in [(1, 1), (1, 2), (2, 3), (0, 1)] {
+        let over = |n: i64| -> Vec<Finding> {
+            [low, high]
+                .into_iter()
+                .filter(|&held| held > n)
+                .map(|held| count(u32::try_from(held).expect("a small count")))
+                .collect()
+        };
+        cases.push(fixture(
+            &format!("device_family/rpm_terminal/{low}_{high}"),
+            &["DRC-090", "DRC-049"],
+            &deck_rpm,
+            resistor(low, high),
+            &[("rpm.1g", over(1)), ("rpm.1i", over(2))],
         ));
     }
     every_placement(cases)

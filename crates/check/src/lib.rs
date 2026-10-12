@@ -43,7 +43,7 @@
 //! | `edge_length(L) >= len` | `min_edge_length` | [`drc::Rule::MinEdgeLength`] | an edge shorter than the limit | DRC-020, DRC-038 |
 //! | `notch(L) >= len` | `notch` | [`drc::Rule::Notch`] | a gap inside one shape narrower than the limit | DRC-024, DRC-038 |
 //! | `space(L) >= len` | `min_spacing` | [`drc::Rule::MinSpacing`] | two shapes on one layer closer than the limit | DRC-023, DRC-037, DRC-038, DRC-060 |
-//! | `space(A, B) >= len` | `min_spacing_diff` | [`drc::Rule::MinSpacingDiff`] | a shape on A closer than the limit to one on B | DRC-038, DRC-047, DRC-065, DRC-073, ERC-C11 |
+//! | `space(A, B) >= len` | `min_spacing_diff` | [`drc::Rule::MinSpacingDiff`] | a shape on A closer than the limit to one on B | DRC-038, DRC-047, DRC-065, DRC-073, DRC-090, ERC-C11 |
 //! | `space(A, B, projection) >= len` | `projection_spacing` | [`drc::Rule::ProjectionSpacing`] | facing edges of A and B too close | DRC-055 |
 //! | `eol_space(L; eol_width: len) >= len` | `eol_spacing` | [`drc::Rule::EolSpacing`] | too little space at an end of line | DRC-029, DRC-031 |
 //! | `prl_space(L; prl: len) >= len` | `prl_spacing` | [`drc::Rule::PrlSpacing`] | shapes running side by side for `prl`, too close | DRC-026 |
@@ -80,7 +80,7 @@
 //! | `patterning(L; colors: count) >= len` | `multi_patterning` | [`drc::Rule::MultiPatterning`] | shapes that cannot be split onto that many masks | DRC-100, DRC-101 |
 //! | `patterning(L, A1, ..; colors: count) >= len` | `anchored_patterning` | [`drc::Rule::AnchoredPatterning`] | pre-coloured shapes whose masks no split honours | DRC-101, DRC-102 |
 //! | `forbidden(L)` | `forbidden` | [`drc::Rule::Forbidden`] | every shape on `L` | DRC-005, DRC-006, DRC-018, DRC-050, DRC-074, DRC-090, DRC-095, DRC-097, ERC-A10 |
-//! | `contains(outer, inner) >= count` (or `<=`, `==`) | `must_contain` | [`drc::Rule::MustContain`] | an outer shape holding too few, or too many, inner shapes | DRC-048, DRC-049, DRC-085 |
+//! | `contains(outer, inner) >= count` (or `<=`, `==`) | `must_contain` | [`drc::Rule::MustContain`] | an outer shape holding too few, or too many, inner shapes | DRC-048, DRC-049, DRC-085, DRC-090 |
 //! | `inside(inner, outer)` | `must_be_inside` | [`drc::Rule::MustBeInside`] | an inner shape not entirely inside outer | DRC-007, DRC-048 |
 //! | `length(E) >= len` | `edge_min_length` | [`drc::Rule::EdgeMinLength`] | an edge on an edge layer shorter than the limit | DRC-021, DRC-051 |
 //! | `space(E[, F]) >= len` | `edge_spacing` | [`drc::Rule::EdgeSpacing`] | parallel edges on edge layers too close | DRC-051 |
