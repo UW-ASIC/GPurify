@@ -315,16 +315,8 @@ single oracle is a named gap that ledger P1 closes.
 | LVS-020 | Undeclared parameter | implemented | - | SY; MR |
 | LVS-066 | Device flavour (HVT/LVT) by implant marker | expressible | GF:App.A; IHP LVS decks | SY; MR |
 | LVS-071 | Spectre reader | implemented | - | SY; MR; fuzz |
-| ERC-A2 | Side-area (sidewall) ratio | implemented | LEF:App.C; GF:ANT.1-7; SKY:antenna vertical | CF; FR; MR; SY |
-| ERC-A3 | Cumulative ratio (CAR) | implemented | LEF:App.C; IHP:Ant.b,Ant.d | SE:IHP AreaRatio; CF; MR; SY |
-| ERC-A4 | Cut/via ratio, routing-plus-cut accumulation | implemented | LEF:ANTENNACUMROUTINGPLUSCUT; GF:ANT.8-13; SKY:licon.1,via.1; IHP:Ant.c | SE:LEF Example 1; SE:LEF Example 2; FR; CF; MR; SY |
-| ERC-A6 | Additive diode credit (gate += MF x diode) | implemented | GF:ANT.16; LEF:ANTENNAGATEPLUSDIFF | SE:GF ANT.16; SE:LEF Example 3; MR; SY |
-| ERC-A7 | PWL diffusion-dependent limit | implemented | LEF:ANTENNADIFFAREARATIO PWL,ANTENNAAREADIFFREDUCEPWL; SKY:tech LEF | SE:LEF Example 4; SE:LEF keyword example; SE:SKY tech LEF; MR; SY |
-| ERC-A8 | Separate limits with/without diode | implemented | IHP:Ant.b/e,Ant.d/f; SKY | FR; MR; SY |
 | ERC-A9 | Minimum protection-diode size | expressible | IHP:Ant.g | SE:IHP Ant.g; MR; SY |
 | ERC-A10 | Diode well legality | expressible | IHP:Ant.h,Ant.i | FR; SY |
-| ERC-A11 | MIM capacitor as victim | partial | GF:ANT.14,ANT.15 | FR; MR; SY |
-| ERC-A12 | Oxide-class-specific limits | implemented | LEF:ANTENNAMODEL OXIDE1-4; GF | SE:GF ANT.16; FR; MR; SY |
 | ERC-A13 | Exemption for substrate-shorted nets | implemented | SKY:.ar.1 | SE:SKY .ar.1; MR; SY |
 | ERC-B1 | Windowed density + CMP thickness | implemented | GF:13 | CF; MR; SY |
 | ERC-C1 | Pad ESD path to power and ground | implemented | TR18-01:4.5.2-4.5.4; Khazhinsky2012 | SY; NV; MR |
@@ -333,8 +325,6 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-D2 | Pad-diffusion guard ring (spacing, width) | partial | GF:IO.1-4; IHP:7.2.1; TR18-02:3.1.2 | FR; MR; SY |
 | ERC-D3 | Guard ring / well tied to the correct rail | partial | GF:LU.9,LU.10 | SY; NV |
 | ERC-D4 | Guard-ring resistance / current under injection | partial | TR18-02:2.3; JESD78:Table 1; CAL | CF; MR; SY |
-| ERC-E1 | DC current per width | implemented | GF:Table 14.3; IHP:2.15 | FR; CF; MR; SY |
-| ERC-E2 | Current per cut | implemented | GF:Table 14.4; IHP:2.15 | FR; MR; SY |
 | ERC-E3 | Width-banded absolute current for narrow lines | implemented | IHP:2.15 | SE:IHP 2.15; FR; MR; SY |
 | ERC-E4 | Temperature derating (Black / Arrhenius) | implemented | GF:14.2.2; Black1969; JEP122; JESD63 | SE:GF formula vs table (1.6% rounding); MR; SY |
 | ERC-E5 | Lifetime target and percentile | implemented | GF:14.2; IHP:2.15; JESD202 | SE; MR; SY |
