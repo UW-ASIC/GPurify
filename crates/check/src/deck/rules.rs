@@ -702,8 +702,17 @@ kinds! {
         max_failure: f64 = "max_failure",
     }
     /// [`EsdCrossDomainTable`](crate::erc::rules::esd::EsdCrossDomainTable):
-    /// `esd_cross_domain(; diodes, local: models | none)`.
-    esd_cross_domain() [] { diodes: &[&str] = "diode", local: &[&str] = "local" }
+    /// `esd_cross_domain(; diodes, local: models | none, resistors: models |
+    /// none, min_series, max_ground_resistance, coupling_resistance)`, the
+    /// resistances in ohms, each `None` when the deck writes `none`.
+    esd_cross_domain() [] {
+        diodes: &[&str] = "diode",
+        local: &[&str] = "local",
+        resistors: &[&str] = "resistor",
+        min_series: Option<f64> = "min_series",
+        max_ground_resistance: Option<f64> = "max_ground_resistance",
+        coupling_resistance: Option<f64> = "coupling_resistance",
+    }
     /// [`EsdExposedTable`](crate::erc::rules::esd::EsdExposedTable):
     /// `esd_exposed(pad; clamps, resistors: models | none, rated: models | none,
     /// min_series: resistance | none)`, in ohms.

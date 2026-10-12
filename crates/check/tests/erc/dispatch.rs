@@ -372,6 +372,11 @@ fn every_kind() -> RuleSet {
             diode: vec![rule(900)],
             local_start: vec![0, 0],
             local: Vec::new(),
+            resistor_start: vec![0, 0],
+            resistor: Vec::new(),
+            min_series: vec![None],
+            max_ground_resistance: vec![None],
+            coupling_resistance: vec![None],
         },
         guard_ring_bias: latchup::GuardRingBiasTable {
             head: head(id_of("guard_ring_bias")),

@@ -244,6 +244,7 @@ pub fn check_esd_path(
                     Stress {
                         nets: &path,
                         source,
+                        source_net: None,
                         current,
                         sink: target,
                         pins: &pins,
@@ -589,6 +590,7 @@ pub fn check_esd_clamp_resistance(
                     Stress {
                         nets: &[net],
                         source: pin,
+                        source_net: None,
                         current: unit,
                         sink: net,
                         pins: &[marker],
@@ -772,7 +774,9 @@ pub fn check_esd_ground_coupling(
 
 /// A signal crossing between power domains, protected for ESD: deck kind
 /// `esd_cross_domain`, written `esd_cross_domain(; diodes: models, local:
-/// models | none)`.
+/// models | none, resistors: models | none, min_series: resistance | none,
+/// max_ground_resistance: resistance | none, coupling_resistance:
+/// resistance | none)`.
 ///
 /// A receiver is a transistor whose gate a power domain reaches that reaches
 /// neither end of its channel (as [`MissingLevelShifterTable`] finds a
@@ -788,14 +792,35 @@ pub fn check_esd_ground_coupling(
 /// the clamp at the interface gate oxide that holds a charged-device
 /// discharge off it ("diodes connected to an interface gate oxide",
 /// Khazhinsky 2012). A receiver whose gate or channel no ground reaches is
-/// not examined. Needs design intent.
+/// not examined.
+///
+/// The receiver's input is its gate's net and every net joined to it
+/// through devices of the `resistors` models; its drivers are the
+/// transistors with a source or drain on an input net, the driving nets.
+/// With `min_series`, the receiver needs a series resistor: the effective
+/// resistance from its driving nets, joined, to its gate's net through
+/// those resistors (each `sheet × l / w`), at least that; a gate driven
+/// directly has 0 (the local CDM protection's "series resistor 150
+/// disposed between the output node ... and the input node", US12021077B2;
+/// TSMC's US9035393B2 states 50, 100 or 200 Ω). With
+/// `max_ground_resistance`, the driver/receiver ground resistance of
+/// Etherton et al. ("The user defines the maximum resistance (Rmax) allowed
+/// between D/R ground pins ... computes the effective resistance between
+/// the local ground nodes"): for every driver with its other channel end on
+/// a ground and a receiver with a channel end on a ground, a unit current
+/// from the driver's attach point on its ground to the receiver's on its
+/// own, through both grounds' conductors and every coupling diode joining
+/// them at `coupling_resistance` each; a pair the coupling does not join
+/// is 5.1.3's to report. A row flags a pair above the limit. Needs design
+/// intent.
 ///
 /// # Limits
 ///
-/// The ground coupling of TR18-01 5.1.3 and the local clamp are checked; a
-/// series resistor at the receiver, the resistance between the driver's and
-/// the receiver's grounds, and the bus inductance a CDM discharge sees are
-/// not. A local clamp is any device of a listed model so wired, whichever way
+/// The bus inductance a CDM discharge sees is not checked: no public source
+/// states a static check or a limit for it (TR18-01 Rule 6.4.2 is a title
+/// only). The series and ground limits are deck-supplied: no public deck
+/// states them (Etherton's 2 Ω and the patents' values are examples). A
+/// local clamp is any device of a listed model so wired, whichever way
 /// round. Voltages reach a net as [`NetVoltage`] propagates them, through
 /// every channel whatever its gate.
 ///
@@ -804,8 +829,9 @@ pub fn check_esd_ground_coupling(
 /// §II and its pseudocode ("IF different power domains THEN check for
 /// anti-parallel diodes"), Fig. 1; [Khazhinsky 2012] Fig. 5 and its
 /// "protection measures already implemented at power domain boundaries
-/// (diodes connected to an interface gate oxide, etc.)". Source tags are in
-/// [check-sources.md].
+/// (diodes connected to an interface gate oxide, etc.)"; [Etherton] (the
+/// driver/receiver ground resistance); US12021077B2 and US9035393B2 (the
+/// receiver's series resistor). Source tags are in [check-sources.md].
 ///
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
@@ -813,6 +839,7 @@ pub fn check_esd_ground_coupling(
 /// [Hogan 2012]: https://www.esda.org/assets/News/ESDEDA-InCompliance-part2.pdf
 /// [Khazhinsky 2012]: https://www.esda.org/assets/News/8df611267c/ESDEDA-InCompliance-part1.pdf
 /// [`MissingLevelShifterTable`]: crate::erc::rules::domain::MissingLevelShifterTable
+/// [Etherton]: https://www.synopsys.com/content/dam/synopsys/implementation&signoff/electrical-layout-verification-documents/cdm-esd-paper.pdf
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct EsdCrossDomainTable {
     /// Rule id and severity per row.
@@ -825,6 +852,17 @@ pub struct EsdCrossDomainTable {
     pub local_start: Vec<u32>,
     /// Local clamp models, CSR by `local_start`; none checks no local clamp.
     pub local: Vec<StrId>,
+    /// Series-resistor models per row, CSR.
+    pub resistor_start: Vec<u32>,
+    /// Series-resistor models, CSR by `resistor_start`.
+    pub resistor: Vec<StrId>,
+    /// Per row: the least series resistance into a receiver's gate, Ω.
+    pub min_series: Vec<Option<Qty<Resistance, { prefix::BASE }>>>,
+    /// Per row: the largest driver/receiver ground resistance, Ω.
+    pub max_ground_resistance: Vec<Option<Qty<Resistance, { prefix::BASE }>>>,
+    /// Per row: one coupling diode's on-resistance between two grounds, Ω;
+    /// stated with `max_ground_resistance`.
+    pub coupling_resistance: Vec<Option<Qty<Resistance, { prefix::BASE }>>>,
 }
 
 /// Runs every [`EsdCrossDomainTable`] row over every transistor.
@@ -838,11 +876,17 @@ pub struct EsdCrossDomainTable {
 /// # Panics
 ///
 /// Panics if `table`'s columns break the [table invariants](super#tables).
+#[allow(
+    clippy::too_many_lines,
+    reason = "one receiver's three checks read one walk of its input"
+)]
 pub fn check_esd_cross_domain(
     design: Design<'_>,
     intent: &IntentMap,
     voltage: &NetVoltage,
+    process: Process<'_>,
     table: &EsdCrossDomainTable,
+    scratch: &mut Scratch,
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
@@ -850,15 +894,31 @@ pub fn check_esd_cross_domain(
         skip_rows(&table.head, out, runs);
         return;
     }
-    let devices = design.devices;
+    let (store, devices) = (design.store, design.devices);
     let mut labels = Vec::new();
+    let mut stress = StressGrid::default();
+    let mut solution = PowerSolution::default();
+    let ground = |net: NetId| {
+        intent
+            .supply_net
+            .binary_search(&net)
+            .is_ok_and(|r| intent.supply_role[r] == SupplyRole::Ground)
+    };
+    let supply = |net: NetId| intent.supply_net.binary_search(&net).is_ok();
     for row in 0..table.head.len() {
         let before = out.len();
         let rule = table.head.rule[row];
+        let mut outcome = Outcome::Ran;
         let diodes =
             &table.diode[table.diode_start[row] as usize..table.diode_start[row + 1] as usize];
         let local =
             &table.local[table.local_start[row] as usize..table.local_start[row + 1] as usize];
+        let resistors = &table.resistor
+            [table.resistor_start[row] as usize..table.resistor_start[row + 1] as usize];
+        let coupling: Vec<DeviceId> = (0..devices.len())
+            .filter(|&d| diodes.contains(&devices.model[d]))
+            .map(device_id)
+            .collect();
         coupling_groups(design, intent, diodes, &mut labels);
         // Two ground domains are coupled when a ground of each is in one group.
         let coupled = |a: u32, b: u32| {
@@ -914,8 +974,124 @@ pub fn check_esd_cross_domain(
             if !clamped {
                 push_device(design, index, rule, severity, measured, limit, out);
             }
+            if table.min_series[row].is_none() && table.max_ground_resistance[row].is_none() {
+                continue;
+            }
+            // The receiver's input: its gate's net and every net the series
+            // resistors join to it, never a supply.
+            let mut region = vec![false; design.nets.net_count()];
+            let mut walk = vec![gate];
+            region[gate.idx()] = true;
+            while let Some(net) = walk.pop() {
+                for &d in devices.devices_on(net) {
+                    if devices.kind[d.0 as usize] != DeviceKind::Resistor
+                        || !resistors.contains(&devices.model[d.0 as usize])
+                    {
+                        continue;
+                    }
+                    for &next in devices.terminals_of(d).0 {
+                        if next != NetId::NONE && !region[next.idx()] && !supply(next) {
+                            region[next.idx()] = true;
+                            walk.push(next);
+                        }
+                    }
+                }
+            }
+            // Its drivers: a channel end on an input net.
+            let mut driving: Vec<NetId> = Vec::new();
+            let mut drivers: Vec<(usize, NetId)> = Vec::new();
+            for other in 0..devices.len() {
+                if other == index || devices.kind[other] != DeviceKind::Mos {
+                    continue;
+                }
+                let (on, roles) = devices.terminals_of(device_id(other));
+                let ends = [
+                    terminal(on, roles, TerminalRole::Source),
+                    terminal(on, roles, TerminalRole::Drain),
+                ];
+                for (k, &end) in ends.iter().enumerate() {
+                    if end != NetId::NONE && region[end.idx()] {
+                        driving.push(end);
+                        if ground(ends[1 - k]) {
+                            drivers.push((other, ends[1 - k]));
+                        }
+                    }
+                }
+            }
+            driving.sort_unstable();
+            driving.dedup();
+            if let (Some(min), false) = (table.min_series[row], driving.is_empty()) {
+                let Some(series) = series_resistance(design, &driving, &region, resistors) else {
+                    outcome = Outcome::Refused;
+                    break;
+                };
+                let measured = Measurement::Resistance(Qty::new(series[gate.idx()]));
+                let limit = Measurement::Resistance(min);
+                if measured.violates(limit, LimitSense::Minimum) {
+                    push_device(design, index, rule, severity, measured, limit, out);
+                }
+            }
+            let (Some(max), Some(coupling_ohms)) = (
+                table.max_ground_resistance[row],
+                table.coupling_resistance[row],
+            ) else {
+                continue;
+            };
+            let Some(own) = ends.iter().copied().find(|&n| ground(n)) else {
+                continue;
+            };
+            let receiver_marker = devices.marker[index];
+            for &(driver, theirs) in &drivers {
+                let mut path = vec![theirs, own];
+                path.sort_unstable();
+                path.dedup();
+                // A unit current: the resistance is the rise over it.
+                let unit = Qty::<Current, { prefix::MICRO }>::new(1e6);
+                let built = extract_stress_into(
+                    store,
+                    design.nets,
+                    devices,
+                    process,
+                    Stress {
+                        nets: &path,
+                        source: devices.marker[driver],
+                        source_net: Some(theirs),
+                        current: unit,
+                        sink: own,
+                        pins: &[receiver_marker],
+                        devices: &coupling,
+                        device_resistance: coupling_ohms,
+                    },
+                    &mut stress,
+                );
+                if built.is_err() {
+                    outcome = Outcome::Refused;
+                    break;
+                }
+                // Grounds no coupling joins: 5.1.3's finding, not this one.
+                if solve_into(&stress.grid, &mut scratch.solve, &mut solution).is_err() {
+                    continue;
+                }
+                let volts = solution.node_voltage[stress.entry as usize];
+                let measured = Measurement::Resistance(Qty::new(volts.raw() * 1000.0 / unit.raw()));
+                let limit = Measurement::Resistance(max);
+                if measured.violates(limit, LimitSense::Maximum) {
+                    out.push(Violation {
+                        rule,
+                        layer: store.poly_layer(receiver_marker),
+                        severity,
+                        at: first_vertex(store, receiver_marker),
+                        measured,
+                        limit,
+                        shapes: (receiver_marker, Some(devices.marker[driver])),
+                    });
+                }
+            }
+            if outcome == Outcome::Refused {
+                break;
+            }
         }
-        record_run(runs, out, before, rule, Outcome::Ran, examined);
+        record_run(runs, out, before, rule, outcome, examined);
     }
 }
 
@@ -1108,22 +1284,24 @@ pub struct EsdExposedTable {
     pub min_series: Vec<Option<Qty<Resistance, { prefix::BASE }>>>,
 }
 
-/// The effective resistance from the pad nets, joined into one node, to
-/// every exposed net through the resistor devices `resistors`, Ω: 0 on a
-/// pad net, `None` for the whole when a resistor on the way states no value
-/// (`sheet`, or a measured width or length). Dense: the exposed nets are a
-/// pad's input stages.
+/// The effective resistance from the `sources` nets (ascending), joined
+/// into one node, to every net of `region` through the resistor devices of
+/// the `resistors` models with both ends in it, Ω: 0 on a source net and
+/// off the region, `None` for the whole when such a resistor states no
+/// value (`sheet`, or a measured width or length). Dense: a region is a
+/// pad's input stages or one receiver's input.
 #[allow(
     clippy::cast_precision_loss,
     reason = "a resistor's width and length in database units are far below 2^53"
 )]
 fn series_resistance(
     design: Design<'_>,
-    pads: &[NetId],
-    exposed: &[bool],
+    sources: &[NetId],
+    region: &[bool],
     resistors: &[StrId],
 ) -> Option<Vec<f64>> {
     let (nets, devices) = (design.nets, design.devices);
+    let (pads, exposed) = (sources, region);
     let is_pad = |net: NetId| pads.binary_search(&net).is_ok();
     // Node 0 is the pads; then every exposed net that is not one.
     let mut node = vec![usize::MAX; nets.net_count()];

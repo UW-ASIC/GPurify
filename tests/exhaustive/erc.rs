@@ -6007,7 +6007,8 @@ fn ground_coupling() -> Vec<Fixture> {
 fn cross_domain() -> Vec<Fixture> {
     let (vdd1, vss1, vdd2, vss2, sig, out_net, vss3) = (0, 1, 2, 3, 5, 6, 4);
     let deck = format!(
-        "{}rule xd esd_cross_domain(; diodes: [\"dio\"], local: none)\n",
+        "{}rule xd esd_cross_domain(; diodes: [\"dio\"], local: none, resistors: none, \
+         min_series: none, max_ground_resistance: none, coupling_resistance: none)\n",
         diode_process()
     );
     // The driver's input sits on VSS3, a supply of its own domain, so only
@@ -6056,6 +6057,149 @@ fn cross_domain() -> Vec<Fixture> {
     f.intent = Some(domain_intent());
     out.push(f);
     out.extend(local_clamp());
+    out.extend(cross_domain_resistance());
+    out
+}
+
+/// A crossing drawn as metal strips, for `esd_cross_domain`'s series and
+/// ground resistances: every net a 1 µm met1 strip (0.125 Ω per µm), each
+/// transistor a 200 nm marker in the gap between the two strips it joins,
+/// its gate a poly bar contacted to SIG. Domain 1 (VDD1 at y 4 µm, VSS1 at
+/// 0) drives SIG (2 µm) at x 2 µm; domain 2 (VSS2 at -2 µm, OUT at -4 µm,
+/// VDD2 at -6 µm) receives it, the nfet at x 18 µm and the pfet at 16 µm.
+/// `dio` diodes join VSS1 to VSS2 at the given x. With `resistor`, SIG is
+/// cut at 5 µm and a `rs` resistor (100 Ω/sq, 400 x 200 nm: 200 Ω) joins
+/// the drivers' piece to the receivers'.
+fn strip_crossing(diodes: &[i64], resistor: bool) -> Layout {
+    let mut l = Layout::default();
+    let strip = |l: &mut Layout, name: &str, y: i64, from: i64, to: i64| {
+        rect(l, "m1", (from, y, to, y + 1000));
+        *l = std::mem::take(l).label("txt", from + 100, y + 500, name);
+    };
+    strip(&mut l, "VDD1", 4000, 0, 20_000);
+    strip(&mut l, "VSS1", 0, 0, 20_000);
+    strip(&mut l, "VSS2", -2000, 0, 20_000);
+    strip(&mut l, "OUT", -4000, 0, 20_000);
+    strip(&mut l, "VDD2", -6000, 0, 20_000);
+    if resistor {
+        strip(&mut l, "SIGD", 2000, 0, 5000);
+        strip(&mut l, "SIG", 2000, 5400, 20_000);
+        rect(&mut l, "mkr", (5000, 2400, 5400, 2600));
+    } else {
+        strip(&mut l, "SIG", 2000, 0, 20_000);
+    }
+    // Drivers: the nfet from VSS1 to SIG, the pfet from SIG to VDD1.
+    for (marker, ylo) in [("mkn", 1000), ("mkp", 3000)] {
+        rect(&mut l, marker, (2000, ylo, 2200, ylo + 1000));
+        rect(&mut l, "poly", (2000, ylo, 2200, ylo + 1000));
+    }
+    // Receivers, gated by SIG through a contacted poly bar.
+    for (marker, x, ylo) in [("mkn", 18_000, -3000), ("mkp", 16_000, -5000)] {
+        rect(&mut l, marker, (x, ylo, x + 200, ylo + 1000));
+        rect(&mut l, "poly", (x, ylo, x + 200, 2700));
+        rect(&mut l, "ct", (x + 50, 2400, x + 150, 2600));
+    }
+    for &x in diodes {
+        rect(&mut l, "mkd", (x - 100, -1000, x + 100, 0));
+    }
+    l
+}
+
+/// The strip crossing's process: met1 strips, poly gates contacted by `ct`.
+const STRIP_PROCESS: &str = "grid 1nm
+layer m1 = gds(1, 0)
+layer poly = gds(2, 0)
+layer ct = gds(3, 0)
+layer mkn = gds(4, 0)
+layer mkp = gds(5, 0)
+layer mkd = gds(6, 0)
+layer mkr = gds(7, 0)
+layer txt = gds(1, 1)
+connect conductors [m1, poly]
+connect touch_within_layer
+connect via ct [poly, m1]
+connect label txt names m1
+device mos mkn model \"nfet\" terminals [poly, m1, m1]
+device mos mkp model \"pfet\" terminals [poly, m1, m1]
+device diode mkd model \"dio\" terminals [m1, m1]
+device resistor mkr model \"rs\" terminals [m1, m1] sheet 100ohm
+pex m1 thickness 100nm height 100nm sheet 0.125ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
+pex poly thickness 100nm height 50nm sheet 10ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
+pex ct thickness 100nm height 75nm sheet 1ohm dielectric 3.9 area_cap 1aF/um2 fringe_cap 1aF/um
+";
+
+/// `esd_cross_domain`'s series resistor (ERC-C4) and driver/receiver
+/// ground resistance (ERC-C9), limits deck-supplied, on
+/// [`strip_crossing`], hand-derived. Every case's two `dio` diodes face the
+/// same way, so TR18-01 5.1.3 flags both receivers (0 against 1) whatever
+/// else is checked.
+///
+/// - Ground: the driver nfet attaches to VSS1 at 2.1 µm and the receiver
+///   nfet to VSS2 at 18.1 µm; diodes at 10 and 10.4 µm, 1 Ω each. VSS1 to
+///   10 µm is 0.9875 Ω, VSS2 from 10.4 µm 0.9625 Ω, and between them two
+///   paths of 1 + 0.05 Ω in parallel, 0.525 Ω: 2.475 Ω, swept a part in a
+///   thousand either side. The receiver pfet has no ground end and the
+///   driver pfet's other end is a power: no other pair.
+/// - Series: SIG driven straight reads 0 Ω for both receivers (flagged at
+///   150 Ω); through the 200 Ω resistor both read 200 (flagged at 300,
+///   clean at 150).
+fn cross_domain_resistance() -> Vec<Fixture> {
+    let intent_text = intent(
+        &[("d1", 1800.0), ("d2", 1800.0)],
+        &[
+            ("VDD1", "d1", "power"),
+            ("VSS1", "d1", "ground"),
+            ("VDD2", "d2", "power"),
+            ("VSS2", "d2", "ground"),
+        ],
+        &[],
+    );
+    let deck = |resistors: &str, series: &str, ground: &str, coupling: &str| {
+        format!(
+            "{STRIP_PROCESS}rule xd esd_cross_domain(; diodes: [\"dio\"], local: none, \
+             resistors: {resistors}, min_series: {series}, max_ground_resistance: {ground}, \
+             coupling_resistance: {coupling})\n"
+        )
+    };
+    let unprotected = || vec![count(0), count(0)];
+    let mut out = Vec::new();
+    let ground = 2.475;
+    for limit in [ground * 0.999, ground * 1.001] {
+        let mut findings = unprotected();
+        if ground > limit {
+            findings.push(ohms(ground));
+        }
+        let mut f = Fixture::new(
+            &format!("erc/esd_cross_domain/ground/{}", side(limit, ground)),
+            &["ERC-C9"],
+            &deck("none", "none", &format!("{limit}ohm"), "1ohm"),
+            ERC,
+        )
+        .layout(strip_crossing(&[10_000, 10_400], false))
+        .expect(Expect::rule("xd", findings));
+        f.intent = Some(intent_text.clone());
+        out.extend(every_placement(&[f]));
+    }
+    for (name, resistor, min, series) in [
+        ("direct", false, 150.0, Some(0.0)),
+        ("through/below", true, 300.0, Some(200.0)),
+        ("through/above", true, 150.0, None),
+    ] {
+        let mut findings = unprotected();
+        if let Some(value) = series {
+            findings.extend([ohms(value), ohms(value)]);
+        }
+        let mut f = Fixture::new(
+            &format!("erc/esd_cross_domain/series/{name}"),
+            &["ERC-C4"],
+            &deck("[\"rs\"]", &format!("{min}ohm"), "none", "none"),
+            ERC,
+        )
+        .layout(strip_crossing(&[10_000, 10_400], resistor))
+        .expect(Expect::rule("xd", findings));
+        f.intent = Some(intent_text.clone());
+        out.extend(every_placement(&[f]));
+    }
     out
 }
 
@@ -6066,7 +6210,8 @@ fn cross_domain() -> Vec<Fixture> {
 fn local_clamp() -> Vec<Fixture> {
     let (vdd1, vss1, vdd2, vss2, vss3, sig, out_net) = (0, 1, 2, 3, 4, 5, 6);
     let deck = format!(
-        "{}rule xd esd_cross_domain(; diodes: [\"dio\"], local: [\"dio\"])\n",
+        "{}rule xd esd_cross_domain(; diodes: [\"dio\"], local: [\"dio\"], resistors: none, \
+         min_series: none, max_ground_resistance: none, coupling_resistance: none)\n",
         diode_process()
     );
     let devs = [

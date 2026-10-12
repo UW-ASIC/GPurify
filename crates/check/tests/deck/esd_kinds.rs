@@ -29,8 +29,10 @@ rule ep.ring esd_path(pad, ring; clamps: none, current: 100mA, clamp_resistance:
 max_resistance: 1ohm, clamp_it2: none, max_density: 1mA/um, max_current_per_cut: none, \
 max_voltage: none, min_width: none)
 rule gc esd_ground_coupling(; diodes: [\"dio\"])
-rule xd esd_cross_domain(; diodes: [\"dio\"], local: none)
-rule xd.local esd_cross_domain(; diodes: [\"dio\"], local: [\"dio\"])
+rule xd esd_cross_domain(; diodes: [\"dio\"], local: none, resistors: none, \
+min_series: none, max_ground_resistance: none, coupling_resistance: none)
+rule xd.local esd_cross_domain(; diodes: [\"dio\"], local: [\"dio\"], resistors: [\"dio\"], \
+min_series: 100ohm, max_ground_resistance: 2ohm, coupling_resistance: 1ohm)
 rule par esd_parasitic(pad, diff; min_spacing: 5um)
 rule exp esd_exposed(pad; clamps: [\"dio\"], resistors: none, rated: [\"dio\"], min_series: none)
 rule grb guard_ring_bias(ring; power: false)
@@ -98,8 +100,18 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
         ),
     );
     d.rule("gc", esd_ground_coupling(&["dio"]));
-    d.rule("xd", esd_cross_domain(&["dio"], &[]));
-    d.rule("xd.local", esd_cross_domain(&["dio"], &["dio"]));
+    d.rule("xd", esd_cross_domain(&["dio"], &[], &[], None, None, None));
+    d.rule(
+        "xd.local",
+        esd_cross_domain(
+            &["dio"],
+            &["dio"],
+            &["dio"],
+            Some(100.0),
+            Some(2.0),
+            Some(1.0),
+        ),
+    );
     d.rule("par", esd_parasitic(pad, diff, um(5)));
     d.rule("exp", esd_exposed(pad, &["dio"], &[], &["dio"], None));
     d.rule("grb", guard_ring_bias(ring, false));

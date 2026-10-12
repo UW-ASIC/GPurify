@@ -840,6 +840,18 @@ impl CompiledDeck {
             for &id in &t.local[span(&t.local_start, r)] {
                 row.params.push(("local", model(id)));
             }
+            for &id in &t.resistor[span(&t.resistor_start, r)] {
+                row.params.push(("resistor", model(id)));
+            }
+            for (name, value) in [
+                ("min_series", t.min_series[r]),
+                ("max_ground_resistance", t.max_ground_resistance[r]),
+                ("coupling_resistance", t.coupling_resistance[r]),
+            ] {
+                if let Some(value) = value {
+                    row = row.number(name, value.raw());
+                }
+            }
             file(&t.head, r, row);
         }
         let t = &erc.esd_exposed;

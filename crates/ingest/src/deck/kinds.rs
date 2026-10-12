@@ -1089,6 +1089,18 @@ pub(crate) const KINDS: &[Kind] = &[
         &[
             p("diodes", "diode", Dim::Models),
             opt("local", "local", Dim::Models),
+            opt("resistors", "resistor", Dim::Models),
+            opt("min_series", "min_series", Dim::Resistance),
+            opt(
+                "max_ground_resistance",
+                "max_ground_resistance",
+                Dim::Resistance,
+            ),
+            opt(
+                "coupling_resistance",
+                "coupling_resistance",
+                Dim::Resistance,
+            ),
         ],
     ),
     erc(

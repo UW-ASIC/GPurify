@@ -136,7 +136,7 @@
 //! | `mixed_tag(L, tag)` | `mixed_tag` | [`erc::RuleSet::mixed_tag`] | an untagged figure on a net that also holds a tagged one | ERC-F10 |
 //! | `esd_latchup(pad, guard_ring; ..)` | `esd_latchup` | [`erc::RuleSet::esd_latchup`] | a narrow or untapped guard ring, or an unclamped pad | ERC-C1, ERC-D2 |
 //! | `esd_topological(pad; clamps)` | `esd_topological` | [`erc::RuleSet::esd_topological`] | a pad with no clamp path to both supplies | ERC-C1 |
-//! | `esd_cross_domain(; diodes, local)` | `esd_cross_domain` | [`erc::RuleSet::esd_cross_domain`] | a gate driven from another power domain whose ground is not coupled to its own by anti-parallel diodes, or that has no local clamp to its own ground | ERC-C4, ERC-C9 |
+//! | `esd_cross_domain(; diodes, local, resistors, min_series, max_ground_resistance, coupling_resistance)` | `esd_cross_domain` | [`erc::RuleSet::esd_cross_domain`] | a gate driven from another power domain whose ground is not coupled to its own by anti-parallel diodes, or that has no local clamp to its own ground | ERC-C4, ERC-C9 |
 //! | `esd_exposed(pad; clamps, resistors, rated, min_series)` | `esd_exposed` | [`erc::RuleSet::esd_exposed`] | a gate a pad exposes with no clamp path of its own, or an output driver at a pad that is not ESD-rated | ERC-C3 |
 //! | `esd_ground_coupling(; diodes)` | `esd_ground_coupling` | [`erc::RuleSet::esd_ground_coupling`] | a ground domain no chain of anti-parallel diodes couples to the others | ERC-C5 |
 //! | `esd_parasitic(pad, diffusion; min_spacing)` | `esd_parasitic` | [`erc::RuleSet::esd_parasitic`] | a pad's junction closer to another net's than a parasitic device allows | ERC-C10 |
