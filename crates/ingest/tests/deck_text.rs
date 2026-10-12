@@ -2070,6 +2070,50 @@ fn a_corner_line_varies_the_nominal_pex_rows() {
     }
 }
 
+/// PEX-006, PEX-007: a corner's `sheet`, like a row's, is stated at the
+/// deck's nominal temperature and read at its operating one, by the corner
+/// line's own `tc1` and `tc2` where it gives them, else by the row's.
+///
+/// Oracle: closed form `R(T) = R0 (1 + tc1 ΔT + tc2 ΔT²)` by hand, with
+/// sky130's met1 coefficients at 85 °C over a 30 °C nominal (ΔT = 55 K): the
+/// factor is `1 + 0.174845 + 0.000935935 = 1.175780935`, so a `cmax` sheet
+/// of 0.15 Ω reads `0.17636714025 Ω`, and a `cmin` that states no sheet
+/// reads the nominal row's `0.146972616875 Ω`; a corner that states
+/// `tc1 0/K tc2 0/K2` reads its 0.2 Ω as written. Fails if a corner's sheet
+/// skips the temperature, or takes the row's coefficients over its own.
+#[test]
+fn a_corner_s_sheet_moves_with_the_deck_s_temperature() {
+    let (deck, strings) = ok(&format!(
+        "temperature 85C nominal 30C\n{SKY130_METALS}\
+         corner cmax met1 sheet 0.15ohm\n\
+         corner cmin met1 thickness 324nm\n\
+         corner flat met2 sheet 0.2ohm tc1 0/K tc2 0/K2\n"
+    ));
+    let met1 = deck.layers.id(&strings, "met1").expect("met1").idx();
+    let met2 = deck.layers.id(&strings, "met2").expect("met2").idx();
+    for (corner, row, want) in [
+        (0, met1, 0.176_367_140_25),
+        (1, met1, 0.146_972_616_875),
+        (2, met2, 0.2),
+    ] {
+        let got = deck.corners[corner].stack.sheet_res_ohm_sq[row];
+        assert!(
+            (got / want - 1.0).abs() < 1e-12,
+            "{}: {got} ohm, want {want}",
+            strings.resolve(deck.corners[corner].name)
+        );
+    }
+    match parse(&format!(
+        "temperature 85C nominal 30C\n{SKY130_METALS}corner cmax met1 sheet 0.15ohm tc1 0/K\n"
+    )) {
+        Err(DeckError::Malformed(why)) => {
+            assert!(why.contains("gives one of tc1 and tc2"), "{why}");
+        }
+        Err(other) => panic!("half a resistance law on a corner: {other}"),
+        Ok(_) => panic!("half a resistance law on a corner was accepted"),
+    }
+}
+
 /// FLOW-002: `stage` lines put the rules written after them in stages, in
 /// order, `for` loops included; a deck without one is not staged. A staged
 /// deck puts every rule in a stage and writes each stage once.
