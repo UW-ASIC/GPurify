@@ -13,6 +13,7 @@ pub mod edge;
 pub mod facing;
 pub mod grid;
 pub mod overlay;
+pub mod pattern;
 pub mod patterning;
 pub mod presence;
 pub mod spacing;

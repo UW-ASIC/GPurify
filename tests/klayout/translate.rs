@@ -383,6 +383,41 @@ def via_stack(rule, layers, max)
     end
   end
 end
+# A pattern on one layer (x2): window w x h from the origin, shape and
+# don't-care boxes, anchor; every placement in the eight orientations with
+# the anchor on a corner of the merged layer where the layer clipped to the
+# window equals the shapes outside the don't-care boxes, once per window.
+def pattern(rule, layer, w, h, shapes, ignore, anchor)
+  m = layer.data.merged
+  s = RBA::Region.new
+  shapes.each { |b| s.insert(RBA::Box.new(*b)) }
+  d = RBA::Region.new
+  ignore.each { |b| d.insert(RBA::Box.new(*b)) }
+  win = RBA::Box.new(0, 0, w, h)
+  corners = []
+  m.each do |p|
+    p.each_point_hull { |q| corners << q }
+    p.holes.times { |k| p.each_point_hole(k) { |q| corners << q } }
+  end
+  seen = {}
+  8.times do |o|
+    tr = RBA::Trans.new(o % 4, o >= 4, 0, 0)
+    a = tr.trans(RBA::Point.new(*anchor))
+    so = s.transformed(tr)
+    dob = d.transformed(tr)
+    wo = tr.trans(win)
+    corners.each do |v|
+      dt = RBA::Trans.new(v.x - a.x, v.y - a.y)
+      wt = dt.trans(wo)
+      next if seen[wt.to_s]
+      have = (m & RBA::Region.new(wt)) - dob.transformed(dt)
+      want = so.transformed(dt) - dob.transformed(dt)
+      next unless (have ^ want).is_empty?
+      seen[wt.to_s] = true
+      put({ rule: rule, pt: [wt.center.x, wt.center.y] })
+    end
+  end
+end
 # A connector's cut area between two databases (sky130 irdrop): per pair of
 # merged lower and upper polygons that overlap, the pre cuts overlapping the
 # footprint pick the band, and |pre - post| area inside it above the band's
@@ -1021,6 +1056,32 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 )
                 .expect("a String");
                 exact("critical_area", Key::Point, Value::Area)
+            }
+            Rule::PatternMatch { layer, pattern } => {
+                layers.reads(layer, &mut reads);
+                let pattern = &set.patterns[pattern as usize];
+                let boxes = |boxes: &[gpurify::geom::Bbox]| {
+                    let shown: Vec<String> = boxes
+                        .iter()
+                        .map(|b| format!("[{}, {}, {}, {}]", lim(b.xlo), lim(b.ylo), lim(b.xhi), lim(b.yhi)))
+                        .collect();
+                    format!("[{}]", shown.join(", "))
+                };
+                let (ax, ay) = pattern.anchor()
+                    .expect("a pattern a deck holds has an anchor");
+                writeln!(
+                    body,
+                    "pattern({q}, {}, {}, {}, {}, {}, [{}, {}])",
+                    var(layer),
+                    lim(pattern.window.0),
+                    lim(pattern.window.1),
+                    boxes(&pattern.shapes),
+                    boxes(&pattern.ignore),
+                    2 * ax,
+                    2 * ay
+                )
+                .expect("a String");
+                exact("pattern_match", Key::Point, Value::Ignore)
             }
             Rule::CutAreaChange {
                 pre,

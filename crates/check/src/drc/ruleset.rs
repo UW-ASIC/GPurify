@@ -1,12 +1,12 @@
 //! The rule set: one [`Rule`] per deck row, the deck parser, and the driver.
 
 use crate::drc::rules::{
-    area, edge, facing, grid, overlay, patterning, presence, spacing, via, width,
+    area, edge, facing, grid, overlay, pattern, patterning, presence, spacing, via, width,
 };
 use crate::drc::{DrcError, Scratch};
 use crate::report::{record_run, LimitSense, Outcome, RuleRun, Severity, Violations};
 use crate::topology::NetTable;
-use gpurify_geom::{Dbu, DbuArea, GeometryStore, LayerId};
+use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId};
 use gpurify_ingest::deck::{Deck, ParamValue, RuleSpec};
 use gpurify_ingest::{StrId, StrTable};
 
@@ -1803,6 +1803,42 @@ pub enum Rule {
         /// Index into [`RuleSet::widths`].
         widths: u32,
     },
+    /// A place where the layer matches a deck-supplied pattern.
+    ///
+    /// Deck: `pattern(L; window: w x h, shapes: [x0 x y0, x1 x y1, ..],
+    /// ignore: [x0 x y0, x1 x y1, ..] | none)`, kind `pattern_match`. A
+    /// pattern is a window `[0, w] x [0, h]` and the shapes of `L` inside it,
+    /// rectangles given by two opposite corners each, with optional
+    /// don't-care boxes the same way, as the pattern-matching patents state it
+    /// (US7757190B2: a pattern is the layout inside a window about an anchor,
+    /// matched in its eight orientations; don't-care regions match anything).
+    /// A match is a placement of the window, in any of the eight orientations
+    /// of the square, where `L` clipped to the window equals the shapes
+    /// outside the don't-care boxes, exactly. Placements are tried with the
+    /// pattern's anchor (the least corner of its merged shapes strictly inside
+    /// the window and off every don't-care box) on each corner of the merged
+    /// layer, which every match puts there. Every value, the pattern library
+    /// included, is the deck's: values deck-supplied; no public deck states
+    /// them (foundry hotspot libraries are not public).
+    ///
+    /// One violation per distinct matching window, at its centre (floored),
+    /// `measured` the pattern's shape area against a `limit` of 0, naming no
+    /// shape. `examined` counts the placements tried.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-114. Rules: Calibre Pattern Matching, IC Validator and Pegasus
+    /// pattern DRC, as US7757190B2, US11487930B2 and US9171126B1 describe them.
+    ///
+    /// Limits: one layer per pattern, and edges matched exactly: the patents'
+    /// ranged (fuzzy) edges and multi-layer patterns are not modelled. A
+    /// pattern needs a corner strictly inside its window off every don't-care
+    /// box ([`DrcError::BadTable`] otherwise).
+    PatternMatch {
+        /// The layer searched, drawn or derived.
+        layer: LayerId,
+        /// Index into [`RuleSet::patterns`].
+        pattern: u32,
+    },
     /// A connector whose cut area changed between two databases by more than
     /// its cut count allows.
     ///
@@ -2447,6 +2483,54 @@ pub enum Rule {
     },
 }
 
+/// A pattern of [`Rule::PatternMatch`]: a window from the origin, the
+/// shapes inside it, and don't-care boxes, in grid units.
+///
+/// Every pattern in a [`RuleSet`] passed [`Pattern::is_valid`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pattern {
+    /// The window's width and height; positive.
+    pub window: (Dbu, Dbu),
+    /// The shapes, each a rectangle inside the window with positive sides.
+    pub shapes: Vec<Bbox>,
+    /// Don't-care boxes inside the window: whatever the layout holds there
+    /// matches.
+    pub ignore: Vec<Bbox>,
+}
+
+impl Pattern {
+    /// Whether the window is positive, every shape and don't-care box a
+    /// rectangle with positive sides inside it, and the shapes have a corner
+    /// to anchor on: strictly inside the window and off every don't-care box.
+    /// [`RuleSet::from_deck`] refuses a pattern that is not
+    /// ([`DrcError::BadTable`]).
+    pub fn is_valid(&self) -> bool {
+        let (w, h) = (self.window.0.raw(), self.window.1.raw());
+        let inside = |b: &Bbox| {
+            b.xlo < b.xhi
+                && b.ylo < b.yhi
+                && b.xlo.raw() >= 0
+                && b.ylo.raw() >= 0
+                && b.xhi.raw() <= w
+                && b.yhi.raw() <= h
+        };
+        w > 0
+            && h > 0
+            && !self.shapes.is_empty()
+            && self.shapes.iter().all(inside)
+            && self.ignore.iter().all(inside)
+            && self.anchor().is_some()
+    }
+
+    /// The corner a match puts on a corner of the layout: the least `(x,
+    /// y)` corner of the merged shapes strictly inside the window and off
+    /// every don't-care box (their edges included), in grid units; `None`
+    /// when there is none.
+    pub fn anchor(&self) -> Option<(i64, i64)> {
+        crate::drc::rules::pattern::anchor_of(self)
+    }
+}
+
 /// The bands of [`Rule::CutAreaChange`]: per band, the cut count from which
 /// it applies and the area change it allows.
 ///
@@ -2883,6 +2967,8 @@ pub struct RuleSet {
     pub cover_bands: Vec<CoverBands>,
     /// The bands each [`Rule::CutAreaChange`] names.
     pub cut_area_bands: Vec<CutAreaBands>,
+    /// The patterns each [`Rule::PatternMatch`] names.
+    pub patterns: Vec<Pattern>,
     /// The tables [`Rule::CutClassSpacing`] names.
     pub cut_tables: Vec<CutClassTable>,
     /// The cut layers, bottom to top, of each [`Rule::ViaStack`].
@@ -3169,6 +3255,41 @@ impl RuleSet {
                     radius: length(spec, "radius")?,
                     limit: area_limit(spec, "limit")?,
                 },
+                "pattern_match" => {
+                    let layer = one(spec)?;
+                    // Rectangles by two opposite corners each, in order.
+                    let boxes =
+                        |xs: &'static str, ys: &'static str| -> Result<Vec<Bbox>, DrcError> {
+                            let (xs, ys) = (lengths(spec, xs)?, lengths(spec, ys)?);
+                            if xs.len() != ys.len() || xs.len() % 2 != 0 {
+                                return Err(DrcError::BadTable(name_of(spec.id)));
+                            }
+                            Ok(xs
+                                .chunks(2)
+                                .zip(ys.chunks(2))
+                                .map(|(x, y)| Bbox {
+                                    xlo: x[0].min(x[1]),
+                                    ylo: y[0].min(y[1]),
+                                    xhi: x[0].max(x[1]),
+                                    yhi: y[0].max(y[1]),
+                                })
+                                .collect())
+                        };
+                    let pattern = Pattern {
+                        window: (length(spec, "window_w")?, length(spec, "window_h")?),
+                        shapes: boxes("shape_x", "shape_y")?,
+                        ignore: boxes("ignore_x", "ignore_y")?,
+                    };
+                    if !pattern.is_valid() {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    set.patterns.push(pattern);
+                    Rule::PatternMatch {
+                        layer,
+                        pattern: u32::try_from(set.patterns.len() - 1)
+                            .expect("a deck has few patterns"),
+                    }
+                }
                 "cut_area_change" => {
                     layers(spec, 4)?;
                     let counts = |param: &'static str| -> Result<Vec<u32>, DrcError> {
@@ -4093,6 +4214,17 @@ impl RuleSet {
                         radius,
                         limit,
                     } => area::critical_area(store, id, layer, radius, limit, s, out),
+                    Rule::PatternMatch {
+                        layer,
+                        pattern: index,
+                    } => pattern::pattern_match(
+                        store,
+                        id,
+                        layer,
+                        &self.patterns[index as usize],
+                        s,
+                        out,
+                    ),
                     Rule::CutAreaChange {
                         pre,
                         post,
@@ -4692,7 +4824,7 @@ impl Rule {
             } => length(window).and(length(step)).and(fraction(limit)),
             // The bands are checked where they are filed.
             Rule::CoverDensity { window, step, .. } => length(window).and(length(step)),
-            Rule::CutAreaChange { .. } => Ok(()),
+            Rule::CutAreaChange { .. } | Rule::PatternMatch { .. } => Ok(()),
             Rule::GlobalDensity { limit, .. }
             | Rule::AspectRatio { limit, .. }
             | Rule::RegionDensity { limit, .. }
@@ -4937,6 +5069,7 @@ impl Rule {
             Rule::DensityBalance { .. } => "density_balance",
             Rule::CoverDensity { .. } => "cover_density",
             Rule::CutAreaChange { .. } => "cut_area_change",
+            Rule::PatternMatch { .. } => "pattern_match",
             Rule::Forbidden { .. } => "forbidden",
             Rule::MustContain { .. } => "must_contain",
             Rule::MustBeInside { .. } => "must_be_inside",
@@ -5015,6 +5148,7 @@ impl Rule {
             | Rule::KeepOutZone { layer, .. }
             | Rule::ProtrusionWidth { layer, .. }
             | Rule::Origin { layer }
+            | Rule::PatternMatch { layer, .. }
             | Rule::TwoWidthSpacingTable { layer, .. }
             | Rule::SpanLength { layer, .. }
             | Rule::ConvexCornerSpacing { layer, .. }

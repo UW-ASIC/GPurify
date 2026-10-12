@@ -83,6 +83,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         density_balance(),
         cover_density(),
         cut_area_change(),
+        pattern_match(),
         critical_area(),
         stitch(),
         trim_cut(),
@@ -4687,6 +4688,74 @@ fn critical_area() -> Vec<Fixture> {
             [vec![], vec![], vec![], vec![]],
         ),
     ])
+}
+
+/// Pattern matching (`pattern`, DRC-114): a 300 nm window holding an L of
+/// 100-wide arms, `p` exact and `pd` with the window's upper-right
+/// `[150, 300]²` don't-care; one finding per matching window, measuring the
+/// L's 50000 nm².
+///
+/// Oracle: matches by construction from the patents' definition (the layout
+/// inside the window equals the pattern, in any of the eight orientations,
+/// don't-care regions matching anything): the L drawn exactly (both match),
+/// with arms running on past the window (both: only the window is compared),
+/// its arm 99, 100, 101 wide (only 100), a square in the window's
+/// upper-right (only `pd`) and one beside the inner corner (neither), two Ls
+/// apart (two each), and a solid 300 square (neither). Every case is placed
+/// under the eight symmetries, so a mirrored L is matched too.
+fn pattern_match() -> Vec<Fixture> {
+    const L: &str = "shapes: [0nm x 0nm, 300nm x 100nm, 0nm x 100nm, 100nm x 300nm]";
+    let deck = new_deck(
+        &["m"],
+        &format!(
+            "rule p pattern(m; window: 300nm x 300nm, {L}, ignore: none)\n\
+             rule pd pattern(m; window: 300nm x 300nm, {L}, ignore: [150nm x 150nm, 300nm x 300nm])\n"
+        ),
+    );
+    let ell = |layout: Layout, x: i64, arm: i64, run: i64| {
+        layout
+            .rect("m", x, 0, x + run, arm)
+            .rect("m", x, arm, x + 100, run)
+    };
+    let case = |name: &str, layout: Layout, (p, pd): (usize, usize)| {
+        let found = |n: usize| vec![Finding::area(50_000); n];
+        fixture(
+            &format!("pattern/{name}"),
+            &["DRC-114"],
+            &deck,
+            layout,
+            &[("p", found(p)), ("pd", found(pd))],
+        )
+    };
+    let mut cases = Vec::new();
+    for (arm, side) in sweep(100) {
+        let n = usize::from(arm == 100);
+        cases.push(case(
+            &format!("arm/{side}"),
+            ell(Layout::default(), 0, arm, 300),
+            (n, n),
+        ));
+    }
+    cases.extend([
+        case("long_arms", ell(Layout::default(), 0, 100, 600), (1, 1)),
+        case(
+            "square_in_the_dont_care",
+            ell(Layout::default(), 0, 100, 300).rect("m", 200, 200, 250, 250),
+            (0, 1),
+        ),
+        case(
+            "square_by_the_corner",
+            ell(Layout::default(), 0, 100, 300).rect("m", 120, 120, 140, 140),
+            (0, 0),
+        ),
+        case(
+            "two",
+            ell(ell(Layout::default(), 0, 100, 300), 2000, 100, 300),
+            (2, 2),
+        ),
+        case("solid", Layout::default().rect("m", 0, 0, 300, 300), (0, 0)),
+    ]);
+    every_placement(cases)
 }
 
 /// A connector's cut area between two databases (`cut_area_change`,
