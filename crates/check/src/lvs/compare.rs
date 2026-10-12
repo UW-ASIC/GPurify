@@ -278,6 +278,39 @@ pub fn compare_with(
     options: CompareOptions,
     controls: &LvsControls,
 ) -> (Verdict, Vec<(Side, Merge)>) {
+    let traced = compare_traced(layout, reference, options, controls);
+    (traced.verdict, traced.merges)
+}
+
+/// What [`compare_traced`] returns: the verdict and merges of
+/// [`compare_with`], and the rows of the reference graph each device of the
+/// reduced reference stands for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Traced {
+    /// The verdict, as [`compare_with`] gives it.
+    pub verdict: Verdict,
+    /// Every merge, as [`compare_with`] gives them.
+    pub merges: Vec<(Side, Merge)>,
+    /// `reference_rows[d]`: the rows of the reference graph given that
+    /// reduced reference device `d`, the row a [`Discrepancy`] names, stands
+    /// for, ascending. A row the deck's `lvs ignore` left out is in none.
+    pub reference_rows: Vec<Vec<u32>>,
+}
+
+/// [`compare_with`], and how each reduced reference device traces back to
+/// the rows it was given: what
+/// [`unpaired_instances`](crate::lvs::unpaired_instances) reads to name the
+/// instances a mismatch leaves without a partner.
+///
+/// # Panics
+///
+/// As [`compare`].
+pub fn compare_traced(
+    layout: &Graph,
+    reference: &Graph,
+    options: CompareOptions,
+    controls: &LvsControls,
+) -> Traced {
     debug_assert_graph!(layout);
     debug_assert_graph!(reference);
     let options = CompareOptions {
@@ -290,6 +323,7 @@ pub fn compare_with(
     // The reference's own ports, before a layout label makes another net a
     // port, are what `lvs ports_by_name` pairs by.
     let ports = controls.ports_by_name.then(|| port_names(reference));
+    let given = reference.device_count();
     let mut declared = reference.clone();
     drop_unextracted_bulk(layout, &mut declared);
     let values = (options.params.values[0], options.params.values[1]);
@@ -308,6 +342,12 @@ pub fn compare_with(
     let (mut reference, mut reference_merges) = reduce_with(&declared, options.params);
     restore_rows(&mut layout_merges, layout_rows.as_deref());
     restore_rows(&mut reference_merges, reference_rows.as_deref());
+    let traced_rows = origin(given, reference_rows.as_deref(), &reference_merges);
+    debug_assert_eq!(
+        traced_rows.len(),
+        reference.device_count(),
+        "one group of given rows per reduced reference device"
+    );
     if let Some(multiplier) = options.params.multiplier {
         state_count(&mut layout, multiplier);
         state_count(&mut reference, multiplier);
@@ -337,7 +377,11 @@ pub fn compare_with(
         (options.params, controls, &seeds, false),
         &mut partition,
     ) {
-        return (Verdict::Inconclusive(Inconclusive::RoundLimit), merges);
+        return Traced {
+            verdict: Verdict::Inconclusive(Inconclusive::RoundLimit),
+            merges,
+            reference_rows: traced_rows,
+        };
     }
     let mut verdict = interpret((&layout, &reference), &partition, (options, controls));
     if let Verdict::Mismatch(found) = &verdict {
@@ -351,7 +395,50 @@ pub fn compare_with(
     if let Verdict::Mismatch(found) = &mut verdict {
         report_roles(found, &reference, controls);
     }
-    (verdict, merges)
+    Traced {
+        verdict,
+        merges,
+        reference_rows: traced_rows,
+    }
+}
+
+/// The given rows each reduced device stands for: the `kept` rows (every
+/// one of `devices` when `None`) grouped by the `merges` that joined them,
+/// in the order [`reduce_with`] emits its groups, ascending by each
+/// group's lowest row. A device merged in two passes is in two merges,
+/// which join the same group.
+fn origin(devices: usize, kept: Option<&[u32]>, merges: &[Merge]) -> Vec<Vec<u32>> {
+    let all: Vec<u32> = (0..narrow(devices)).collect();
+    let kept = kept.unwrap_or(&all);
+    let mut root = all.clone();
+    let find = |root: &mut Vec<u32>, mut at: u32| {
+        while root[at as usize] != at {
+            let up = root[root[at as usize] as usize];
+            root[at as usize] = up;
+            at = up;
+        }
+        at
+    };
+    for merge in merges {
+        let Some((&head, rest)) = merge.devices.split_first() else {
+            continue;
+        };
+        for &row in rest {
+            let (a, b) = (find(&mut root, head), find(&mut root, row));
+            root[a.max(b) as usize] = a.min(b);
+        }
+    }
+    let mut group_of = vec![u32::MAX; devices];
+    let mut out: Vec<Vec<u32>> = Vec::new();
+    for &row in kept {
+        let head = find(&mut root, row) as usize;
+        if group_of[head] == u32::MAX {
+            group_of[head] = narrow(out.len());
+            out.push(Vec::new());
+        }
+        out[group_of[head] as usize].push(row);
+    }
+    out
 }
 
 /// Whether `found` holds an unpaired device on each side: what a device

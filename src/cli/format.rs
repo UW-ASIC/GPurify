@@ -80,8 +80,20 @@ fn write_rows(
     }
 }
 
-/// The merges LVS made, one line each.
+/// The merges LVS made, one line each, then the reference instances a
+/// mismatch left unpaired.
 fn write_merges(outputs: &Outputs, strings: &StrTable, out: &mut String) {
+    if !outputs.lvs_unpaired_instances.is_empty() {
+        out.push_str("lvs unpaired instances:\n");
+    }
+    for (placement, devices) in &outputs.lvs_unpaired_instances {
+        let _ = writeln!(
+            out,
+            "  {} ({}): none of its {devices} devices has a partner in the layout",
+            strings.resolve(placement.path),
+            strings.resolve(placement.cell),
+        );
+    }
     if !outputs.lvs_merges.is_empty() {
         out.push_str("lvs merges:\n");
     }

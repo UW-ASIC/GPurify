@@ -97,6 +97,11 @@ pub struct Outputs {
     pub lvs: Option<Verdict>,
     /// Every series or parallel merge LVS made on either side.
     pub lvs_merges: Vec<(gpurify_check::lvs::verdict::Side, gpurify_check::lvs::Merge)>,
+    /// Each instance of the reference a mismatch left with every device
+    /// unpaired, the outermost such, and its device count
+    /// ([`gpurify_check::lvs::unpaired_instances`]); each is also an
+    /// `lvs.unpaired_instance` row.
+    pub lvs_unpaired_instances: Vec<(gpurify_ingest::netlist::Placement, u32)>,
     /// The extracted parasitics, analytical with any field-solved nets laid
     /// over them, reduced to the deck's extraction type
     /// ([`gpurify_extract::reduce`]), in canonical order. `Some` only when
@@ -589,14 +594,37 @@ fn run_lvs(
             // keeps the open, which `check_layout` reported.
             let joined =
                 gpurify_check::lvs::join_must_connect(&layout, &loaded.deck.lvs, &loaded.strings);
-            let (verdict, merges) = gpurify_check::lvs::compare_with(
+            let traced = gpurify_check::lvs::compare_traced(
                 &joined,
                 &gpurify_check::lvs::graph::from_reference(reference, top),
                 lvs,
                 &loaded.deck.lvs,
             );
-            out.lvs_merges = merges;
-            verdict
+            out.lvs_merges = traced.merges;
+            // The instances a mismatch left whole and unpaired, named by
+            // the flattening's placements (catalog LVS-017).
+            if let Verdict::Mismatch(found) = &traced.verdict {
+                let instances = gpurify_check::lvs::unpaired_instances(
+                    found,
+                    &traced.reference_rows,
+                    &reference.placements,
+                );
+                out.lvs_unpaired_instances = instances
+                    .iter()
+                    .map(|i| {
+                        (
+                            reference.placements[i.placement as usize].clone(),
+                            i.devices,
+                        )
+                    })
+                    .collect();
+                gpurify_check::lvs::record_unpaired_instances(
+                    &instances,
+                    &loaded.strings,
+                    &mut out.violations,
+                );
+            }
+            traced.verdict
         }
     };
 

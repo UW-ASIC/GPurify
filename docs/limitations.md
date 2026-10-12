@@ -59,6 +59,40 @@ result from them is weaker than it looks.
   model defines, a density step between neighbouring windows and a
   first-order thickness excursion, are `density_cmp`'s.
 
+## Hierarchical comparison
+
+LVS compares flat (catalog LVS-010, LVS-017): the reference is flattened
+below its top and the layout is flattened when it is read, so a block is
+compared device by device. A mismatch names each reference instance none
+of whose devices paired (`lvs.unpaired_instance`), but no cell is matched
+as a unit, a partly wrong instance is not named, and the layout's own
+instances are gone by then. Where a missing block perturbs its
+neighbours' nets, refinement cannot pair them either, so an instance beside
+the missing one may be named with it.
+
+Cell-by-cell matching, as KLayout and Netgen do it, needs the layout
+extracted per cell: each cell's nets once, a net crossing the cell's
+boundary a pin of it, and each placement's pins joined in its parent
+(KLayout's hierarchical net extraction). The design that keeps the flat
+comparison the oracle:
+
+1. extract each layout cell once, its boundary nets as pins, and pair its
+   cells with the reference's subcircuits by name, or by a deck list where
+   names differ (KLayout `same_circuits`, Netgen `equate classes`);
+2. compare paired cells bottom up, each with its paired children replaced by
+   one device per placement whose pins are the child's (the comparison
+   already handles devices of many pins); a child that does not match, or
+   has no partner, is flattened into its parent instead (KLayout `align`,
+   Netgen's flattening of unmatched cells);
+3. hold every hierarchical verdict to the flat one: a match must equal the
+   flat comparison of both sides flattened, which the X5 harness checks
+   over generated hierarchies (`tests/exhaustive/lvs.rs` already decides
+   hierarchical references through `flatten`).
+
+Step 1 is the whole of the work and is not written: extraction, every
+check that reads nets, and the 2²⁸ flat cap all assume the flattened
+store.
+
 ## Power grid
 
 - Each supply net is fed from one point: the centre of its highest, then
@@ -272,8 +306,8 @@ says which foundry manual, standard or tool defines each one.
 |---|---|---|---|
 | LVS-002 | Implicit joins (same-label disjoint shapes, must-connect) | partial | Same-label disjoint shapes are not joined by default: reported as label_conflict, only with --reference (lvs::check_layout), located on the labelled shapes (F70). The deck's `lvs connect_implicit "pattern"` (glob) and `lvs connect_explicit "a" "b"` declare must-connect nets, joined for the comparison (lvs::join_must_connect, KLayout connect_implicit/connect_explicit), their open still reported as a label_conflict warning, as KLayout warns for a top cell. LEF58_MUSTJOINALLPORTS is not read |
 | LVS-005 | Short isolation / localisation | partial | Reported in every run, DRC-only included, naming both labelled shapes, located at the first; no abort. The short's path follows as lvs.short_path: the fewest polygons joining the two labelled shapes through the extraction's joins (NetTable::path, breadth first, deterministic), one row per step between consecutive polygons (Calibre LVS ISOLATE SHORTS, ICV ShortFinder); a cut is no step, and the path is the shortest, not every route. Opens are not isolated: one reference net split over several layout nets shows only as label_conflict where labelled, never as an open path (CAL:LVS ISOLATE OPENS) |
-| LVS-010 | Circuit without partner / hierarchical compare | partial | The reference is flattened below its top (Netlist::flatten_top) and compared device by device, so a missing block is a mismatch; there is no per-cell matching and no circuit-mismatch report naming the cell; a reference flattening to more than 2²⁸ devices, nets and instances is refused (NetlistError::TooLarge), and one nesting deeper than the layout's 1024 levels (NetlistError::TooDeep, F96); flattening is linear in what it places (F95); no cell-correspondence list naming which layout cell matches which reference subcircuit (KL:same_circuits, NG:equate classes) |
-| LVS-017 | Subcircuit instance unpaired | partial | Instances are flattened, not paired as units: a missing instance shows as its devices unpaired |
+| LVS-010 | Circuit without partner / hierarchical compare | partial | The reference is flattened below its top (Netlist::flatten_top) and compared device by device, so a missing block is a mismatch, and a reference instance none of whose devices paired is named (lvs.unpaired_instance, LVS-017); there is no per-cell matching and no circuit-mismatch report naming a cell; a reference flattening to more than 2²⁸ devices, nets and instances is refused (NetlistError::TooLarge), and one nesting deeper than the layout's 1024 levels (NetlistError::TooDeep, F96); flattening is linear in what it places (F95); no cell-correspondence list naming which layout cell matches which reference subcircuit (KL:same_circuits, NG:equate classes). Cell-by-cell matching needs the layout extracted per cell, its nets crossing cell boundaries as pins (KLayout's hierarchical net extraction), where the layout is flattened on reading; limitations.md, "Hierarchical comparison", gives the design that keeps the flat comparison its oracle |
+| LVS-017 | Subcircuit instance unpaired | partial | The comparison is flat, and decides the verdict. Flattening records each placement it expands (Netlist::placements, its path, cell and the run of flat device rows it holds), the comparison traces each reduced reference device back to its rows (compare_traced), and a mismatch names, as lvs.unpaired_instance with the path and cell in the report, each reference instance none of whose kept devices paired, the outermost such (KLayout's subcircuit with no partner). Instances are not paired as units: a partly unpaired instance is not named, the layout has no instances to name (it is flattened on reading), and where a missing block perturbs its neighbours' nets refinement leaves them unpaired too, so an instance beside the missing one may be named with it |
 | LVS-033 | Black boxes | missing | — |
 | LVS-042 | Semi-series MOS | missing | — |
 | LVS-047 | Logic-gate recognition | missing | — |
