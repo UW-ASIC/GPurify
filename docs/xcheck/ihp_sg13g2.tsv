@@ -388,7 +388,7 @@ tie_high_low	tie_high_low	-	theirs_missing	an electrical (ERC) rule; the foundry
 multiple_drivers	multiple_drivers	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
 ir_drop	ir_drop	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
 unconnected_conductor	unconnected_conductor	-	theirs_missing	an electrical (ERC) rule; the foundry DRC decks have no electrical check
-M1.e	M1.e	M1.e	differs	Finding N-f2-6: GPurify takes the table column from the run of the whole shapes and the row from the wide part, so a narrow line with a short wide stub (sg13g2_buf_2: a 0.305 x 0.33 um tab) is held to 0.22 um along its 1.2 um run; the foundry needs the wide part itself to run over 1 um. 16 sg13g2_stdcell cells, clean under the foundry deck, are flagged.
+M1.e	M1.e	M1.e	agrees	
 M1.f	M1.f	M1.f	agrees	
 M2.e	M2.e	M2.e	agrees	
 M2.f	M2.f	M2.f	agrees	
