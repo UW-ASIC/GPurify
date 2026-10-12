@@ -957,6 +957,20 @@ pub(crate) const KINDS: &[Kind] = &[
             p("y", "y_spans", Dim::LengthList),
         ],
     ),
+    // With `EXCEPTOTHERSPAN` per list, `none` for a list without one.
+    drc(
+        "span_length",
+        Cmp::Absent,
+        "span_length",
+        &[0],
+        None,
+        &[
+            p("x", "x_spans", Dim::LengthList),
+            p("y", "y_spans", Dim::LengthList),
+            opt("x_except", "x_except", Dim::Length),
+            opt("y_except", "y_except", Dim::Length),
+        ],
+    ),
     // The exact centre-to-centre pitch of neighbouring rectangles along one
     // axis (ASAP7 FIN.S.1, GATE.S.1): `pitch(fin, vertical) == 27nm`.
     Kind {

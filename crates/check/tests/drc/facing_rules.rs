@@ -570,6 +570,8 @@ fn run_spans(store: &GeometryStore) -> (Violations, Vec<RuleRun>) {
         span_tables: vec![SpanTable {
             x: [60, 80, 120, 160, 200].into_iter().map(dbu).collect(),
             y: [120, 160, 200].into_iter().map(dbu).collect(),
+            x_except: None,
+            y_except: None,
         }],
         ..RuleSet::default()
     };
@@ -816,6 +818,8 @@ fn the_deck_spells_each_kind_s_parameters() {
         [SpanTable {
             x: vec![dbu(60), dbu(200)],
             y: vec![dbu(120)],
+            x_except: None,
+            y_except: None,
         }]
     );
 }
@@ -870,6 +874,8 @@ fn every_new_kind_refuses_a_layer_that_does_not_validate() {
         span_tables: vec![SpanTable {
             x: vec![dbu(60)],
             y: vec![dbu(60)],
+            x_except: None,
+            y_except: None,
         }],
         ..RuleSet::default()
     };

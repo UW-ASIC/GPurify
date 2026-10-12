@@ -612,6 +612,13 @@ impl CompiledDeck {
                     for &span in &table.y {
                         row = row.length("y_spans", span);
                     }
+                    for (param, except) in
+                        [("x_except", table.x_except), ("y_except", table.y_except)]
+                    {
+                        if let Some(except) = except {
+                            row = row.length(param, except);
+                        }
+                    }
                 }
                 row
             }
