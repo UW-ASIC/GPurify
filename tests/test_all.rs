@@ -1280,3 +1280,20 @@ fn extracting_the_split_corpus_twice_is_bit_identical() {
         "the determinism above would be vacuous if the split were not in force"
     );
 }
+
+/// Every PEX case of the corpus runs through the field solve too
+/// (testing-plan F6), not the closed forms alone.
+///
+/// Oracle: closed form and law (`common::check_pex_case_field_solved`): the
+/// case's stage outcome and drawn nets; a straight bar's resistance is `Rs ·
+/// L / W` in both methods; a field-solved coupling is at least the closed
+/// form's, which has no fringing field.
+#[test]
+fn every_pex_case_in_the_corpus_also_field_solves() {
+    let corpus = common::load_corpus();
+    let mut failed = Vec::new();
+    for case in &corpus.pex.cases {
+        failed.extend(common::check_pex_case_field_solved(case));
+    }
+    common::report_domain("PEX (field solve)", corpus.pex.cases.len(), &failed);
+}

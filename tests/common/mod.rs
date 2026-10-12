@@ -1304,6 +1304,83 @@ fn value_of(kind: &str, totals: &Totals) -> Option<f64> {
     })
 }
 
+/// Every way a PEX case's **field solve** (every labelled net named for
+/// `--quasistatic`) disagreed with what the closed forms and the solve's
+/// own laws say of it (testing-plan F6):
+///
+/// - the stage records the case's `expect_outcome`, and the network holds
+///   at least the nets the cell draws;
+/// - a resistance case whose closed form is derived agrees with it to the
+///   case's tolerance (a straight bar is `Rs · L / W` to both), and a
+///   negative one still disagrees;
+/// - a coupling case's coupling is finite and at least the closed form's,
+///   which leaves out every fringing field (the crate docs' "lateral
+///   coupling is a lower bound", and so is a plate overlap's `ε A / d`);
+/// - a ground-capacitance case's capacitance is finite and positive (the
+///   deck's `area_cap`/`fringe_cap` are not derived from the stack, so no
+///   closed form bounds the field's).
+pub fn check_pex_case_field_solved(case: &PexCase) -> Vec<String> {
+    let mut failed = Vec::new();
+    let run = match run_case_field_solved("pex", &case.id) {
+        Ok(run) => run,
+        Err(why) => return vec![format!("{}: did not field solve — {why}", case.id)],
+    };
+    if stage_outcome(&run.summary.pex) != case.expect_outcome {
+        failed.push(format!(
+            "{}: the field-solved PEX stage recorded {:?}, not {}",
+            case.id, run.summary.pex, case.expect_outcome
+        ));
+    }
+    let nets = run.outputs.parasitics.as_ref().map_or(0, |network| {
+        let mut nets = network.node_net.clone();
+        nets.dedup();
+        nets.len() as u64
+    });
+    if nets < case.examined_min.nets {
+        failed.push(format!(
+            "{}: the field-solved network holds {nets} nets, the cell draws {}",
+            case.id, case.examined_min.nets
+        ));
+    }
+    let scope = match case.kind.rsplit_once('_') {
+        Some((_, conductor @ ("met1" | "met2"))) => {
+            run.loaded.deck.layers.id(&run.loaded.strings, conductor)
+        }
+        _ => None,
+    };
+    let totals = totals_of(&run, scope);
+    let (Some(want), Some(got)) = (case.expect_value, value_of(&case.kind, &totals)) else {
+        return failed;
+    };
+    let resistance = case.kind.contains("resistance");
+    let derived = case.asserts.iter().any(|claim| claim == "value")
+        && case.provenance != "underivable";
+    if resistance && derived {
+        let agrees = (got - want).abs() <= case.tol;
+        if agrees == case.expect_mismatch {
+            failed.push(format!(
+                "{}: field-solved R {got} against the closed form's {want} (tolerance {}, \
+                 mismatch expected: {})",
+                case.id, case.tol, case.expect_mismatch
+            ));
+        }
+    } else if case.kind.contains("coupling") || case.kind == "interlayer_cap" {
+        if !case.expect_mismatch && !(got.is_finite() && got >= want - case.tol) {
+            failed.push(format!(
+                "{}: field-solved coupling {got} aF under the closed form's {want} aF, \
+                 which leaves out every fringing field",
+                case.id
+            ));
+        }
+    } else if !(got.is_finite() && got > 0.0) {
+        failed.push(format!(
+            "{}: field-solved capacitance {got} aF is not finite and positive",
+            case.id
+        ));
+    }
+    failed
+}
+
 /// Every way a PEX case disagreed with its closed form.
 pub fn check_pex_case(case: &PexCase) -> Vec<String> {
     let mut failed = Vec::new();
