@@ -72,6 +72,8 @@ fn run_on(rules: &str, rings: &[(&str, Vec<(i64, i64)>)]) -> Found {
     let (store, provenance) = library
         .flatten(&deck, &strings, UnknownLayers::Reject)
         .expect("reads back");
+    let deck =
+        gpurify::deck::CompiledDeck::from_deck(deck, grid(), &strings).expect("the deck compiles");
     let loaded = Loaded {
         strings,
         grid: grid(),
