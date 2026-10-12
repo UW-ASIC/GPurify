@@ -558,7 +558,13 @@ impl Layers<'_> {
                     let sign = if keep { "+" } else { "-" };
                     filters.push(rb(&format!("{sign}{}", self.deck.layers.text(k))));
                 }
-                format!("src.select({}).polygons({l}, {d})", filters.join(", "))
+                // The selected source does not keep `src`'s magnification (every
+                // shape came back at half size, nightly run 38186321535), so it
+                // is applied again.
+                format!(
+                    "src.select({}).global_transform(magnify(2)).polygons({l}, {d})",
+                    filters.join(", ")
+                )
             }
         }
     }
