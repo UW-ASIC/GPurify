@@ -251,8 +251,10 @@ Ordered by how many independent sources define the check, then by severity.
 All are `missing` or `partial` in the catalog.
 
 1. **Voltage-dependent spacing** (DRC-082 / ERC-F11). Defined by Calibre,
-   ICV, Pegasus, Empyrean, LEF58_VOLTAGESPACING, sky130 hvnwell.8 and gf180
-   DV.9. It needs conditional voltage propagation first (ERC-F1).
+   ICV, Pegasus, Empyrean, LEF58_VOLTAGESPACING and sky130 hvnwell.8.
+   Implemented in H6 as `voltage_space` over gate-conditional voltage
+   propagation (ERC-F1); sky130's well rules wait on wells as conductors
+   (DRC-081).
 2. **LVS hierarchy, polarity and parameters** (LVS-010, 017, 030,
    060–064, 072). Reference `X` instances are dropped (testing-plan F1), a
    reversed diode matches (F15), and passives are compared by marker area only
