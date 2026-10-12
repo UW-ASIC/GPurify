@@ -2447,6 +2447,7 @@ impl RuleSet {
     /// - [`DrcError::BadTable`] when a spacing table fails
     ///   [`SpacingTable::is_valid`], or a cut-class table
     ///   [`CutClassTable::is_valid`].
+    ///   spacing or cut-class table that is not complete and monotone.
     pub fn from_deck(deck: &Deck, strings: &StrTable) -> Result<Self, DrcError> {
         let rules = &deck.rules;
         let name_of = |id: StrId| strings.resolve(id).to_owned();
@@ -2478,11 +2479,6 @@ impl RuleSet {
                 _ => Err(wrong_type(spec, param)),
             }
         };
-        let area_limit = |spec: &RuleSpec, param| -> Result<DbuArea, DrcError> {
-            match value(spec, param)? {
-                ParamValue::Area(area) => Ok(area),
-                _ => Err(wrong_type(spec, param)),
-            }
         // Every length a row states under `param`, in order: a list's elements.
         let lengths = |spec: &RuleSpec, param: &'static str| -> Result<Vec<Dbu>, DrcError> {
             let wanted = strings.get(param);
@@ -2496,13 +2492,11 @@ impl RuleSet {
                 })
                 .collect()
         };
-        let area_limit = |spec: &RuleSpec, param| match value(spec, param)? {
-            ParamValue::Area(area) if area.raw() > 0 => Ok(area),
-            ParamValue::Area(area) => Err(DrcError::NonPositiveLimit {
-                rule: name_of(spec.id),
-                limit: i64::try_from(area.raw()).unwrap_or(i64::MIN),
-            }),
-            _ => Err(wrong_type(spec, param)),
+        let area_limit = |spec: &RuleSpec, param| -> Result<DbuArea, DrcError> {
+            match value(spec, param)? {
+                ParamValue::Area(area) => Ok(area),
+                _ => Err(wrong_type(spec, param)),
+            }
         };
         let ratio = |spec: &RuleSpec, param| -> Result<f64, DrcError> {
             match value(spec, param)? {
@@ -2828,7 +2822,7 @@ impl RuleSet {
                         Some(_) => Some(length(spec, "within")?),
                         None => None,
                     };
-                    let min_count = positive(spec, count(spec, "min_count", u16::MAX.into())?)?;
+                    let min_count = count(spec, "min_count", u16::MAX.into())?;
                     Rule::MinimumCut {
                         cut: layer(spec, 0),
                         wide: layer(spec, 1),
@@ -2846,7 +2840,7 @@ impl RuleSet {
                             found: spec.layer_len,
                         });
                     }
-                    let max_height = positive(spec, count(spec, "max_height", u16::MAX.into())?)?;
+                    let max_height = count(spec, "max_height", u16::MAX.into())?;
                     set.stacks.push(rules.layers_of(spec).to_vec());
                     Rule::ViaStack {
                         stack: u32::try_from(set.stacks.len() - 1).expect("a deck has few stacks"),
@@ -2874,7 +2868,7 @@ impl RuleSet {
                         .and_then(|p| rules.param(spec, p))
                         .is_some();
                     let (adjacent, within) = if stated {
-                        let cuts = positive(spec, count(spec, "adjacent", u16::MAX.into())?)?;
+                        let cuts = count(spec, "adjacent", u16::MAX.into())?;
                         (
                             u16::try_from(cuts).expect("checked against the ceiling"),
                             length(spec, "within")?,
@@ -2907,7 +2901,7 @@ impl RuleSet {
                         .get(param)
                         .and_then(|p| rules.param(spec, p))
                     {
-                        Some(_) => positive(spec, count(spec, param, u32::MAX)?).map(Some),
+                        Some(_) => count(spec, param, u32::MAX).map(Some),
                         None => Ok(None),
                     };
                     let (min_count, max_count) = match bound("count")? {
@@ -2953,11 +2947,7 @@ impl RuleSet {
                         prl: lengths(spec, "prl")?,
                         width: lengths(spec, "width")?,
                         space: lengths(spec, "space")?,
-                    };
-                    if !table.is_valid() {
-                        return Err(DrcError::BadTable(name_of(spec.id)));
-                    }
-                    set.tables.push(table);
+                    });
                     Rule::SpacingTable {
                         layer,
                         table: u32::try_from(set.tables.len() - 1).expect("a deck has few tables"),
@@ -3821,8 +3811,11 @@ impl Rule {
             | Rule::Notch { limit, .. }
             | Rule::MinSpacing { limit, .. }
             | Rule::MinSpacingDiff { limit, .. }
+            | Rule::ProjectionSpacing { limit, .. }
             | Rule::CornerToCorner { limit, .. }
             | Rule::MinEnclosure { limit, .. }
+            | Rule::NoncoincidentEnclosure { limit, .. }
+            | Rule::MaxEnclosure { limit, .. }
             | Rule::AsymmetricEnclosure {
                 min_one_side: limit,
                 ..
@@ -3897,7 +3890,35 @@ impl Rule {
                 color_spacing,
                 ..
             } => count(colors.into()).and(length(color_spacing)),
-            Rule::MustContain { min_count, .. } => count(min_count),
+            Rule::MinimumCut {
+                width,
+                within,
+                min_count,
+                ..
+            } => length(width)
+                .and(within.map_or(Ok(()), length))
+                .and(count(min_count.into())),
+            Rule::ViaStack { max_height, .. } => count(max_height.into()),
+            Rule::CutSpacing {
+                adjacent,
+                within,
+                limit,
+                ..
+            } => length(limit).and(if adjacent == 0 {
+                Ok(())
+            } else {
+                length(within)
+            }),
+            // The bound stated: `max_count` when there is one, else `min_count`.
+            Rule::MustContain {
+                min_count,
+                max_count,
+                ..
+            } => count(if max_count == u32::MAX {
+                min_count
+            } else {
+                max_count
+            }),
             // A shape count of zero is a limit: none allowed, or at least none.
             // The cut and width lists, the class and span tables, the runs
             // that may be 0 and a forbidden range's order are checked where
@@ -3929,6 +3950,10 @@ impl Rule {
                 except_eol, limit, ..
             } => except_eol.map_or(Ok(()), length).and(length(limit)),
             Rule::ExactPitch { pitch, .. } => length(pitch),
+            | Rule::FullWidth { .. }
+            | Rule::GateCorner { .. }
+            // A cut-class table is checked where it is filed.
+            | Rule::CutClassSpacing { .. } => Ok(()),
             Rule::SpacingTable { table, .. } => {
                 if tables
                     .get(table as usize)
@@ -4022,6 +4047,7 @@ impl Rule {
             Rule::Notch { .. } => "notch",
             Rule::MinSpacing { .. } => "min_spacing",
             Rule::MinSpacingDiff { .. } => "min_spacing_diff",
+            Rule::ProjectionSpacing { .. } => "projection_spacing",
             Rule::EolSpacing { .. } => "eol_spacing",
             Rule::PrlSpacing { .. } => "prl_spacing",
             Rule::CornerToCorner { .. } => "corner_to_corner",
@@ -4032,14 +4058,22 @@ impl Rule {
             Rule::Density { .. } => "density",
             Rule::GlobalDensity { .. } => "global_density",
             Rule::MinEnclosure { .. } => "min_enclosure",
+            Rule::NoncoincidentEnclosure { .. } => "noncoincident_enclosure",
+            Rule::FullWidth { .. } => "full_width",
             Rule::AsymmetricEnclosure { .. } => "asymmetric_enclosure",
+            Rule::MaxEnclosure { .. } => "max_enclosure",
             Rule::MinExtension { .. } => "min_extension",
+            Rule::GateCorner { .. } => "gate_corner",
             Rule::Overlap { .. } => "overlap",
             Rule::MaxDistanceToTap { .. } => "max_distance_to_tap",
             Rule::OffGrid { .. } => "off_grid",
             Rule::Angle { .. } => "angle",
             Rule::RedundantVia { .. } => "redundant_via",
+            Rule::MinimumCut { .. } => "minimum_cut",
+            Rule::ViaStack { .. } => "via_stack",
             Rule::ViaArraySpacing { .. } => "via_array_spacing",
+            Rule::CutSpacing { .. } => "cut_spacing",
+            Rule::CutClassSpacing { .. } => "cut_class_spacing",
             Rule::MultiPatterning { .. } => "multi_patterning",
             Rule::Forbidden { .. } => "forbidden",
             Rule::MustContain { .. } => "must_contain",
@@ -4072,12 +4106,10 @@ impl Rule {
         }
     }
 
-    /// Every layer the rule reads: one or two, `None` past them (an
+    /// Every layer the rule reads: one to three, `None` past them (an
     /// [`Rule::OffGrid`] reads none of its own; an [`Rule::Angle`] without a
     /// layer reads every drawn one).
-    pub fn layers(&self) -> [Option<LayerId>; 2] {
-    /// Every layer the rule reads.
-    fn layers(&self) -> [Option<LayerId>; 3] {
+    pub fn layers(&self) -> [Option<LayerId>; 3] {
         match *self {
             Rule::MinWidth { layer, .. }
             | Rule::MaxWidth { layer, .. }

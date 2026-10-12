@@ -138,6 +138,16 @@ impl CompiledDeck {
             layers.extend(boundary);
             Row::new(rule.kind(), &layers)
         };
+        // An enclosure's wire band, `wire_width` only when it bounds.
+        let band = |mut row: Row, wire: crate::drc::WireBand| {
+            if wire.from.raw() > 0 {
+                row = row.length("wire_width", wire.from);
+            }
+            if let Some(below) = wire.below {
+                row = row.length("wire_below", below);
+            }
+            row
+        };
         match rule {
             Rule::MinWidth { layer, limit }
             | Rule::MaxWidth { layer, limit }
@@ -151,9 +161,9 @@ impl CompiledDeck {
                 width,
                 height,
             } => one(layer).length("width", width).length("height", height),
-            Rule::MinSpacingDiff { a, b, limit } | Rule::Overlap { a, b, limit } => {
-                two(a, b).length("limit", limit)
-            }
+            Rule::MinSpacingDiff { a, b, limit }
+            | Rule::ProjectionSpacing { a, b, limit }
+            | Rule::Overlap { a, b, limit } => two(a, b).length("limit", limit),
             Rule::EolSpacing {
                 layer,
                 eol_width,
@@ -210,17 +220,35 @@ impl CompiledDeck {
                 outer,
                 inner,
                 limit,
+                wire,
+            } => band(two(outer, inner).length("limit", limit), wire),
+            Rule::NoncoincidentEnclosure {
+                outer,
+                inner,
+                limit,
+            }
+            | Rule::MaxEnclosure {
+                outer,
+                inner,
+                limit,
             } => two(outer, inner).length("limit", limit),
+            Rule::FullWidth { outer, inner } => two(outer, inner),
             Rule::AsymmetricEnclosure {
                 outer,
                 inner,
                 min_one_side,
-            } => two(outer, inner).length("min_one_side", min_one_side),
+                wire,
+            } => band(two(outer, inner).length("min_one_side", min_one_side), wire),
             Rule::MinExtension {
                 layer,
                 reference,
                 limit,
             } => two(layer, reference).length("limit", limit),
+            Rule::GateCorner {
+                layer,
+                reference,
+                of_reference,
+            } => two(layer, reference).value("of_reference", ParamValue::Flag(of_reference)),
             Rule::MaxDistanceToTap { well, tap, limit } => two(well, tap).length("limit", limit),
             Rule::OffGrid { pitch } => Row::new(rule.kind(), &[]).length("pitch", pitch),
             Rule::Angle { layer, allowed } => {
@@ -240,6 +268,58 @@ impl CompiledDeck {
             } => one(layer)
                 .value("min_count", ParamValue::Count(min_count.into()))
                 .length("within", within),
+            Rule::MinimumCut {
+                cut,
+                wide,
+                other,
+                width,
+                within,
+                min_count,
+            } => {
+                let mut row = Row::new(rule.kind(), &[cut, wide, other]).length("width", width);
+                if let Some(within) = within {
+                    row = row.length("within", within);
+                }
+                row.value("min_count", ParamValue::Count(min_count.into()))
+            }
+            Rule::ViaStack { stack, max_height } => Row::new(
+                rule.kind(),
+                self.drc
+                    .stacks
+                    .get(stack as usize)
+                    .map_or(&[], Vec::as_slice),
+            )
+            .value("max_height", ParamValue::Count(max_height.into())),
+            Rule::CutSpacing {
+                layer,
+                center,
+                adjacent,
+                within,
+                limit,
+            } => {
+                let mut row = one(layer).value("center", ParamValue::Flag(center));
+                if adjacent != 0 {
+                    row = row
+                        .value("adjacent", ParamValue::Count(adjacent.into()))
+                        .length("within", within);
+                }
+                row.length("limit", limit)
+            }
+            Rule::CutClassSpacing { layer, table } => {
+                let mut row = one(layer);
+                if let Some(table) = self.drc.cut_tables.get(table as usize) {
+                    for (param, cells) in [
+                        ("class_short", &table.short),
+                        ("class_long", &table.long),
+                        ("space", &table.space),
+                    ] {
+                        for &cell in cells {
+                            row = row.length(param, cell);
+                        }
+                    }
+                }
+                row
+            }
             Rule::ViaArraySpacing {
                 layer,
                 array_threshold,
@@ -255,11 +335,22 @@ impl CompiledDeck {
                 .value("colors", ParamValue::Count(colors.into()))
                 .length("color_spacing", color_spacing),
             Rule::Forbidden { layer } => one(layer),
+            // `==` as `count`, else the bound stated.
             Rule::MustContain {
                 outer,
                 inner,
                 min_count,
-            } => two(outer, inner).value("min_count", ParamValue::Count(min_count)),
+                max_count,
+            } => match (min_count, max_count) {
+                (min, max) if min == max => {
+                    two(outer, inner).value("count", ParamValue::Count(min))
+                }
+                (min, u32::MAX) => two(outer, inner).value("min_count", ParamValue::Count(min)),
+                (0, max) => two(outer, inner).value("max_count", ParamValue::Count(max)),
+                (min, max) => two(outer, inner)
+                    .value("min_count", ParamValue::Count(min))
+                    .value("max_count", ParamValue::Count(max)),
+            },
             Rule::MustBeInside { inner, outer } => two(inner, outer),
             Rule::NetSpacing {
                 layer,

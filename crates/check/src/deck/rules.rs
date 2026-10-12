@@ -50,6 +50,7 @@
 use super::builder::{LayerExpr, LayerRef};
 use crate::drc::ruleset::EolParallel;
 use crate::drc::StepKind;
+use crate::drc::{StepKind, WireBand};
 use gpurify_geom::{Dbu, DbuArea};
 use gpurify_ingest::deck::ParamValue;
 
@@ -90,6 +91,28 @@ impl RuleRow {
     /// The kind's name, its entry of [`DRC_KINDS`] or [`ERC_KINDS`].
     pub fn kind(&self) -> &'static str {
         self.kind
+    }
+
+    /// An enclosure held only on wires of `band`: the deck's `width:` and
+    /// `below:` on [`min_enclosure`] and [`asymmetric_enclosure`], LEF
+    /// `ENCLOSURE ... WIDTH`. A band from 0 with no `below` holds every wire,
+    /// as no band does.
+    ///
+    /// # Panics
+    ///
+    /// On a row of any other kind, which has no band.
+    #[must_use]
+    pub fn wire(mut self, band: WireBand) -> Self {
+        assert!(
+            matches!(self.kind, "min_enclosure" | "asymmetric_enclosure"),
+            "{} has no wire band",
+            self.kind
+        );
+        if band.from.raw() > 0 {
+            band.from.put("wire_width", &mut self.params);
+        }
+        band.below.put("wire_below", &mut self.params);
+        self
     }
 
     /// An ERC rule reported as a warning, not an error: the deck's
@@ -191,6 +214,12 @@ impl Arg for &[(DbuArea, f64)] {
             at.put(area, params);
             value.put(name, params);
         }
+/// LEF `ADJACENTCUTS count WITHIN distance`: the count under `name`, the
+/// distance under `within`.
+impl Arg for (u32, Dbu) {
+    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
+        self.0.put(name, params);
+        self.1.put("within", params);
     }
 }
 
@@ -310,6 +339,9 @@ kinds! {
     min_spacing(layer: one) [] { limit: Dbu = "limit" }
     /// [`Rule::MinSpacingDiff`](crate::drc::Rule::MinSpacingDiff): `space(a, b) >= limit`.
     min_spacing_diff(a: one, b: one) [] { limit: Dbu = "limit" }
+    /// [`Rule::ProjectionSpacing`](crate::drc::Rule::ProjectionSpacing):
+    /// `space(a, b, projection) >= limit`.
+    projection_spacing(a: one, b: one) [] { limit: Dbu = "limit" }
     /// [`Rule::EolSpacing`](crate::drc::Rule::EolSpacing):
     /// `eol_space(layer; eol_width: eol_width) >= limit`.
     eol_spacing(layer: one) [] { eol_width: Dbu = "eol_width", limit: Dbu = "limit" }
@@ -343,12 +375,24 @@ kinds! {
     /// `global_density(layer[, boundary]) >= limit`, or `<=` when `maximum`.
     global_density(layer: one, boundary: opt) [] { limit: f64 = "limit", maximum: bool = "maximum" }
     /// [`Rule::MinEnclosure`](crate::drc::Rule::MinEnclosure): `enclosure(inner, outer) >= limit`.
+    /// A wire band is [`RuleRow::wire`].
     min_enclosure(inner: one, outer: one) [1, 0] { limit: Dbu = "limit" }
+    /// [`Rule::NoncoincidentEnclosure`](crate::drc::Rule::NoncoincidentEnclosure):
+    /// `enclosure(inner, outer, noncoincident) >= limit`.
+    noncoincident_enclosure(inner: one, outer: one) [1, 0] { limit: Dbu = "limit" }
+    /// [`Rule::FullWidth`](crate::drc::Rule::FullWidth): `full_width(inner, outer)`.
+    full_width(inner: one, outer: one) [1, 0] {}
     /// [`Rule::AsymmetricEnclosure`](crate::drc::Rule::AsymmetricEnclosure):
-    /// `enclosure(inner, outer, opposite) >= min_one_side`.
+    /// `enclosure(inner, outer, opposite) >= min_one_side`. A wire band is
+    /// [`RuleRow::wire`].
     asymmetric_enclosure(inner: one, outer: one) [1, 0] { min_one_side: Dbu = "min_one_side" }
+    /// [`Rule::MaxEnclosure`](crate::drc::Rule::MaxEnclosure): `enclosure(inner, outer) <= limit`.
+    max_enclosure(inner: one, outer: one) [1, 0] { limit: Dbu = "limit" }
     /// [`Rule::MinExtension`](crate::drc::Rule::MinExtension): `extension(layer, reference) >= limit`.
     min_extension(layer: one, reference: one) [] { limit: Dbu = "limit" }
+    /// [`Rule::GateCorner`](crate::drc::Rule::GateCorner): `bend(layer, reference)`,
+    /// or `covers_corner(layer, reference)` when `of_reference`.
+    gate_corner(layer: one, reference: one) [] { of_reference: bool = "of_reference" }
     /// [`Rule::Overlap`](crate::drc::Rule::Overlap): `overlap(a, b) >= limit`.
     overlap(a: one, b: one) [] { limit: Dbu = "limit" }
     /// [`Rule::MaxDistanceToTap`](crate::drc::Rule::MaxDistanceToTap):
@@ -362,16 +406,48 @@ kinds! {
     /// [`Rule::RedundantVia`](crate::drc::Rule::RedundantVia):
     /// `redundant_via(layer; within: within) >= min_count`.
     redundant_via(layer: one) [] { min_count: u32 = "min_count", within: Dbu = "within" }
+    /// [`Rule::MinimumCut`](crate::drc::Rule::MinimumCut):
+    /// `min_cuts(cut, wide, other; width: width[, within: within]) >= min_count`.
+    minimum_cut(cut: one, wide: one, other: one) [] {
+        width: Dbu = "width",
+        within: Option<Dbu> = "within",
+        min_count: u32 = "min_count",
+    }
+    /// [`Rule::ViaStack`](crate::drc::Rule::ViaStack):
+    /// `via_stack(cuts..) <= max_height`, the cut layers bottom to top.
+    via_stack(cuts: many) [] { max_height: u32 = "max_height" }
     /// [`Rule::ViaArraySpacing`](crate::drc::Rule::ViaArraySpacing):
     /// `via_array_space(layer; array: array_threshold) >= limit`.
     via_array_spacing(layer: one) [] { array_threshold: u32 = "array_threshold", limit: Dbu = "limit" }
+    /// [`Rule::CutSpacing`](crate::drc::Rule::CutSpacing):
+    /// `space(layer, center) >= limit` when `center`, and with `adjacent`
+    /// (`count`, `within`)
+    /// `adjacent_space(layer[, center]; cuts: count, within: within) >= limit`.
+    /// Neither, edge to edge, is [`min_spacing`]'s spelling: such a row has no
+    /// deck text of its own, and the printer refuses it.
+    cut_spacing(layer: one) [] {
+        center: bool = "center",
+        adjacent: Option<(u32, Dbu)> = "adjacent",
+        limit: Dbu = "limit",
+    }
+    /// [`Rule::CutClassSpacing`](crate::drc::Rule::CutClassSpacing):
+    /// `cut_class_space(layer; short: [..], long: [..], space: [[..], ..])`,
+    /// `space` row by row.
+    cut_class_spacing(layer: one) [] {
+        short: &[Dbu] = "class_short",
+        long: &[Dbu] = "class_long",
+        space: &[Dbu] = "space",
+    }
     /// [`Rule::MultiPatterning`](crate::drc::Rule::MultiPatterning):
     /// `patterning(layer; colors: colors) >= color_spacing`.
     multi_patterning(layer: one) [] { colors: u32 = "colors", color_spacing: Dbu = "color_spacing" }
     /// [`Rule::Forbidden`](crate::drc::Rule::Forbidden): `forbidden(layer)`.
     forbidden(layer: one) [] {}
-    /// [`Rule::MustContain`](crate::drc::Rule::MustContain): `contains(outer, inner) >= min_count`.
-    must_contain(outer: one, inner: one) [] { min_count: u32 = "min_count" }
+    /// [`Rule::MustContain`](crate::drc::Rule::MustContain): `contains(outer, inner) >= min_count`;
+    /// with `max_count`, `contains(outer, inner) <= max_count` when
+    /// `min_count` is 0 and `== max_count` when it is `max_count`. Any other
+    /// pair has no deck text, and the printer refuses it.
+    must_contain(outer: one, inner: one) [] { min_count: u32 = "min_count", max_count: Option<u32> = "max_count" }
     /// [`Rule::MustBeInside`](crate::drc::Rule::MustBeInside): `inside(inner, outer)`.
     must_be_inside(inner: one, outer: one) [] {}
     /// [`Rule::NetSpacing`](crate::drc::Rule::NetSpacing):
