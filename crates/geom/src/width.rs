@@ -372,7 +372,12 @@ pub fn narrowest_pair2(
                 break;
             }
             let w = (x2 - x, y2 - y);
-            if opposite_empty(w, back, on) && opposite_empty((-w.0, -w.1), back2, on2) {
+            // The two empty sectors point at each other: one is the other turned
+            // 180 degrees (in rectilinear terms, opposite empty quadrants).
+            let dir = |r: (i64, i64)| (r.0.signum(), r.1.signum());
+            let flipped = |r: (i64, i64)| (-r.0.signum(), -r.1.signum());
+            let facing = dir(back2) == flipped(back) && dir(on2) == flipped(on);
+            if facing && opposite_empty(w, back, on) && opposite_empty((-w.0, -w.1), back2, on2) {
                 let d2 =
                     2 * (i128::from(w.0) * i128::from(w.0) + i128::from(w.1) * i128::from(w.1));
                 keep(d2, mid4((2 * x, 2 * y), (2 * x2, 2 * y2)));

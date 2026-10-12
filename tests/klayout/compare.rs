@@ -636,11 +636,30 @@ pub fn compare(m: &Mirror, kl: &Klayout, findings: &[Finding]) -> Outcome {
         };
     }
     let mut found = !g.is_empty();
+    let mut acute = false;
     let result = ctx.mapped(g, "GPurify").and_then(|g| match compare {
         Compare::Not | Compare::OnlyInClass => Ok(()),
         Compare::Exact => {
             let k = ctx.k_side(&m.id)?;
             found |= !k.is_empty();
+            // An acute tip is 0 wide in GPurify; the mirror's width pairs only
+            // antiparallel edges, which never meet at one (klayout-mirror.md
+            // a8). A figure GPurify finds at 0 alone is held to that.
+            let g = if m.kind == "min_width" {
+                let tips: Vec<Vec<i64>> = g
+                    .iter()
+                    .filter(|(key, v)| **v == 0.0 && !k.contains_key(*key))
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                if !tips.is_empty() {
+                    acute = true;
+                }
+                g.into_iter()
+                    .filter(|(key, _)| !tips.contains(key))
+                    .collect()
+            } else {
+                g
+            };
             if g.keys().ne(k.keys()) {
                 Err(format!("GPurify {} / KLayout {}", shown(&g), shown(&k)))
             } else {
@@ -686,6 +705,10 @@ pub fn compare(m: &Mirror, kl: &Klayout, findings: &[Finding]) -> Outcome {
         return Outcome::NotCompared;
     }
     match result {
+        Ok(()) if acute => Outcome::Known(
+            "acute tip (difference)",
+            "GPurify reads an acute tip as 0 wide; the mirror pairs antiparallel edges only".into(),
+        ),
         Ok(()) => Outcome::Agree(found),
         // An implementation difference, not a defect on either side
         // (testing-plan F88): a KLayout cut is a net member and joins every
