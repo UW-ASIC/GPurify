@@ -9,11 +9,11 @@
 
 use gpurify_check::deck::rules::{
     angle, antenna, antenna_electrical, asymmetric_enclosure, cut_size, density, drain_source,
-    edge_spacing, edge_width, em_current_density, esd_topological, floating_gate, floating_well,
-    forbidden, gate_oxide, global_density, ir_drop, max_width, min_area, min_enclosed_area,
-    min_enclosure, min_extension, min_spacing, min_spacing_diff, min_width, missing_tie,
-    multiple_drivers, must_be_inside, must_contain, notch, off_grid, spacing_table, supply_short,
-    tie_high_low, unconnected_pin, via_array_spacing,
+    edge_facing_space, edge_spacing, edge_width, em_current_density, esd_topological,
+    floating_gate, floating_well, forbidden, gate_oxide, global_density, ir_drop, max_enclosure,
+    max_width, min_area, min_enclosed_area, min_enclosure, min_extension, min_spacing,
+    min_spacing_diff, min_width, missing_tie, multiple_drivers, must_be_inside, must_contain,
+    notch, off_grid, spacing_table, supply_short, tie_high_low, unconnected_pin, via_array_spacing,
 };
 use gpurify_check::deck::{Bound, BuildError, CompiledDeck, DeckBuilder, LayerRef};
 use gpurify_geom::{Dbu, DbuArea, Grid, StrTable};
@@ -868,6 +868,10 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
         "Gat.d.2",
         min_spacing_diff(l["gatpoly"], l["activ_no_poly"], nm(70)),
     );
+    d.rule(
+        "Gat.d.3",
+        edge_facing_space(l["gatpoly"].edges().or(l["activ"].edges()), nm(70)),
+    );
     d.rule("Gat.e", min_area(l["gatpoly"], nm2(90000)));
     d.rule("GFil.a", max_width(l["gatpoly_filler"], nm(5000)));
     d.rule("GFil.b", min_width(l["gatpoly_filler"], nm(700)));
@@ -1266,7 +1270,32 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     );
     d.rule("V1.a", cut_size(l["via1"], nm(190), nm(190)));
     d.rule("V1.b", min_spacing(l["via1"], nm(220)));
-    d.rule("V1.b1", via_array_spacing(l["via1"], 15, nm(290)));
+    l.insert(
+        "v1_array",
+        d.derived(
+            "v1_array",
+            l["via1"]
+                .sized(nm(145))
+                .sized(nm(-145))
+                .sized(nm(-685))
+                .sized(nm(685)),
+        ),
+    );
+    l.insert(
+        "v1_arrayed",
+        d.derived("v1_arrayed", l["via1"].inside(l["v1_array"])),
+    );
+    d.rule(
+        "V1.b1",
+        forbidden(
+            l["v1_arrayed"]
+                .sized(nm(140))
+                .sized(nm(-140))
+                .not(l["v1_arrayed"])
+                .group()
+                .non_rectangles(),
+        ),
+    );
     d.rule("V1.c", min_enclosure(l["via1"], l["metal1"], nm(10)));
     d.rule(
         "V1.c1",
@@ -1372,7 +1401,11 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     d.rule("Pas.b.notch", notch(l["passiv"], nm(3500)));
     d.rule(
         "Pas.c",
-        min_enclosure(l["passiv"], l["topmetal2"], nm(2100)),
+        min_enclosure(
+            l["passiv"].and(l["edgeseal"].holes()),
+            l["topmetal2"],
+            nm(2100),
+        ),
     );
     d.rule("Rsil.a", min_width(l["rsil_body"], nm(500)));
     d.rule("Rsil.b", min_spacing_diff(l["res"], l["cont"], nm(120)));

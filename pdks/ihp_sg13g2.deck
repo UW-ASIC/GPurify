@@ -295,9 +295,13 @@ rule Gat.b  space(gatpoly) >= 180nm
 rule Gat.b.notch notch(gatpoly) >= 180nm
 rule Gat.b1 space(gate_hv) >= 250nm
 rule Gat.c  extension(gatpoly, activ) >= 180nm
-# Gat.d, partial: poly that touches no Activ, and Activ that touches no poly.
+# Gat.d ([LR] §5.8, as [DRC] gatpoly.sep(activ)): poly that touches no Activ,
+# Activ that touches no poly, and (Gat.d.3) any GatPoly edge facing an Activ
+# edge across a gap, so a gate crossing one Activ is held to the next. Gat.d.3
+# measures facing edges only, not corner to corner.
 rule Gat.d  space(gatpoly_field_only, activ) >= 70nm
 rule Gat.d.2 space(gatpoly, activ_no_poly) >= 70nm
+rule Gat.d.3 facing_space(gatpoly.edges() or activ.edges()) >= 70nm
 rule Gat.e  area(gatpoly) >= 0.09um2
 
 # 5.9 GatPoly:filler
@@ -409,11 +413,19 @@ for (n, m, fill, den) in fillers {
 }
 
 # 5.19 Via1 and 5.20 Via(n=2-4): Metal(n) below encloses Via(n).
-# "More than 3 rows and more than 3 columns" read as more than 15 cuts in a cluster:
+# V(n).b1 "more than 3 rows and more than 3 columns" read as more than 15 cuts in a cluster:
 # every 4x4 array is held, and so is a 3xN (N >= 6) one, which is stricter than the manual.
 rule V1.a  size(via1) == 190nm x 190nm
 rule V1.b  space(via1) >= 220nm
-rule V1.b1 via_array_space(via1; array: 15) >= 290nm
+# V1.b1 as [LR] §5.19 note 1 states it, "only required in one direction", as
+# [DRC] sg13g2_maximal.drc finds it: an array (Via1 joined across gaps up to
+# 0.29 um, at least 4 x 0.19 + 3 x 0.22 - 0.05 um on both axes) whose cuts,
+# joined across gaps below 0.29 um, leave a gap that is not a rectangle has
+# gaps under 0.29 um both ways. [DRC] joins across 0.143 um; on the 5 nm grid
+# this joins across 0.14 um, so an array whose gaps are 0.285 um both ways passes.
+layer v1_array = via1.sized(145nm).sized(-145nm).sized(-685nm).sized(685nm)
+layer v1_arrayed = via1.inside(v1_array)
+rule V1.b1 forbidden((v1_arrayed.sized(140nm).sized(-140nm) not v1_arrayed).non_rectangles())
 rule V1.c  enclosure(via1, metal1) >= 10nm
 rule V1.c1 enclosure(via1, metal1, opposite) >= 50nm
 let vias = [(2, via2, metal2), (3, via3, metal3), (4, via4, metal4)]
@@ -465,7 +477,9 @@ for (n, m, fill) in top_fillers {
 rule Pas.a width(passiv) >= 2.1um
 rule Pas.b space(passiv) >= 3.5um
 rule Pas.b.notch notch(passiv) >= 3.5um
-rule Pas.c enclosure(passiv, topmetal2) >= 2.1um
+# Pas.c "not checked outside of sealring" ([LR] §5.27 note 1): Passiv inside
+# the EdgeSeal ring's hole, as [DRC] passiv_drw.and(edgeseal_drw.holes).
+rule Pas.c enclosure(passiv and edgeseal.holes(), topmetal2) >= 2.1um
 
 # ======================= 6 Device rules =======================
 
@@ -867,4 +881,4 @@ rule Gat.f forbidden(gate.non_rectangles())
 #   well exactly 3.0 um wide generates none.
 # - Abutted ties (N+ and P+ Activ touching under one silicide) extract as two
 #   nets, since Activ is split by implant; tie them through Cont as LU.c/d expect.
-# - Gat.d is partial: poly crossing one Activ and passing near another is not held.
+# - Gat.d.3 measures facing edges only: a gate corner diagonal to an Activ corner is not held.

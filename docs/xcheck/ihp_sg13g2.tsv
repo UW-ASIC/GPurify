@@ -14,7 +14,7 @@ ours	foundry	check	status	note
 AFil.c.Cont AFil.c.GatPoly	AFil.c	AFil.c	agrees	
 AFil.d.NWell AFil.d.nBuLay	AFil.d	AFil.d	agrees	
 AFil.j.nSDblock AFil.j.SalBlock	AFil.j	AFil.j	agrees	
-Gat.d Gat.d.2	Gat.d	Gat.d	differs	Partial (deck note): poly crossing one Activ and passing near another is not held; the unit cell's FAIL is that case.
+Gat.d Gat.d.2 Gat.d.3	Gat.d	Gat.d	agrees	
 GFil.d.Activ GFil.d.GatPoly GFil.d.Cont GFil.d.pSD GFil.d.nSDblock GFil.d.SalBlock	GFil.d	GFil.d	agrees	
 GFil.e.NWell GFil.e.nBuLay	GFil.e	GFil.e	agrees	
 pSD.g.NWellTie pSD.g.SubstrateTie	pSD.g	pSD.g	agrees	
@@ -225,7 +225,7 @@ M5Fil.h	M5Fil.h MFil.h	M5Fil.h	not_comparable	IHP's density cells stack one top 
 M5Fil.k	M5Fil.k MFil.k	M5Fil.k	not_comparable	IHP's density cells stack one top cell per rule at the origin (a run per cell), and the deck measures over prBoundary
 V1.a	V1.a	V1.a	agrees	
 V1.b	V1.b	V1.b	agrees	
-V1.b1	V1.b1	V1.b1	differs	The deck reads more than 3 x 3 as a cluster of more than 15 cuts (deck note): the PASS cell's cluster is held to 0.29 um.
+V1.b1	V1.b1	V1.b1	agrees	Read as [LR] §5.19 note 1 (PDF p. 39) and the foundry deck: 0.29 um in one direction. On the 5 nm grid the deck joins across 0.14 um where the foundry joins across 0.143 um, so a 0.285 um array both ways passes the deck (deck note).
 V1.c	V1.c	V1.c	agrees	
 V1.c1	V1.c1	V1.c1	agrees	
 V2.a	V2.a	V2.a	agrees	
@@ -271,7 +271,7 @@ TM2Fil.c	TM2Fil.c	TM2Fil.c	agrees
 TM2Fil.d	TM2Fil.d	TM2Fil.d	agrees	
 Pas.a	Pas.a	Pas.a	agrees	
 Pas.b Pas.b.notch	Pas.b	Pas.b	agrees	
-Pas.c	Pas.c	Pas.c	differs	The foundry checks Passiv only inside the seal ring (EdgeSeal holes); the PASS cell has no seal ring, and GPurify holds its stepped TopMetal2 to 2.1 um everywhere.
+Pas.c	Pas.c	Pas.c	agrees	[LR] §5.27 note 1 (PDF p. 47): not checked outside the seal ring, as the foundry deck.
 Rsil.a	Rsil.a	Rsil.a	agrees	
 Rsil.b	Rsil.b	Rsil.b	agrees	
 Rsil.d	Rsil.d	Rsil.d	agrees	
