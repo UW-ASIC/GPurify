@@ -2520,6 +2520,10 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
         "LU.2_MV",
         missing_tie(l["ncomp_lvp_hv"], l["pcomp_lvp"], nm(15000)),
     );
+    l.insert(
+        "lu5_between",
+        d.derived("lu5_between", l["ncomp"].or(l["nwell"])),
+    );
     d.rule(
         "LU.5",
         guard_ring(
@@ -2530,6 +2534,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             None,
             Some(l["nwell"]),
             Some(nm(50000)),
+            Some(l["lu5_between"]),
         ),
     );
     let pad = Some(l["pad"]);
@@ -2541,6 +2546,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             Some(nm(15000)),
             None,
             pad,
+            None,
             None,
             None,
         ),
@@ -2566,6 +2572,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             pad,
             None,
             None,
+            None,
         )
         .warning(),
     );
@@ -2577,6 +2584,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             Some(nm(15000)),
             None,
             pad,
+            None,
             None,
             None,
         ),
@@ -2600,6 +2608,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             None,
             Some(nm(2000)),
             pad,
+            None,
             None,
             None,
         )
