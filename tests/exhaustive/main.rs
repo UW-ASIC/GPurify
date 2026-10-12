@@ -23,6 +23,9 @@ mod erc;
 mod erc_reference;
 mod flow;
 mod harness;
+mod lefdef;
+#[path = "../common/lefdef_gen.rs"]
+mod lefdef_gen;
 mod lvs;
 mod pex;
 mod xor;

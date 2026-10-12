@@ -52,7 +52,7 @@ fn ours(lef_text: &str, def_text: &str) -> Vec<u8> {
 /// Reads each pair and writes `seed layer xor ours theirs` areas to
 /// `rows.txt` (stdout carries the reader's warnings); the first design also
 /// lists the layers `KLayout` made.
-const RUBY: &str = r##"
+const RUBY: &str = r#"
 LAYERS = [["M1", 1], ["V1", 2], ["M2", 3], ["V2", 4], ["M3", 5]]
 OUT = File.open("rows.txt", "w")
 at_exit { OUT.close }
@@ -81,7 +81,7 @@ DESIGNS.each_with_index do |(seed, gds, design), k|
     OUT.puts "ROW #{seed} #{name} #{(ra ^ rb).area} #{ra.area} #{rb.area}"
   end
 end
-"##;
+"#;
 
 /// Every seeded design is one the reader takes, so the differential below
 /// compares drawings rather than refusals.
@@ -93,7 +93,7 @@ end
 fn every_seeded_design_reads_and_draws() {
     let lef_text = lefdef_gen::lef();
     for seed in 0..DESIGNS {
-        let bytes = ours(&lef_text, &lefdef_gen::def(seed));
+        let bytes = ours(&lef_text, &lefdef_gen::def(seed, false));
         let mut strings = StrTable::default();
         let library = gpurify_ingest::layout::gds::Library::parse(&bytes, &mut strings)
             .expect("the stream reads back");
@@ -125,7 +125,7 @@ fn klayout_lefdef_differential_on_seeded_designs() {
     std::fs::write(dir.join("tech.lef"), &lef_text).expect("the scratch dir is writable");
     let mut ruby = String::from("DESIGNS = [\n");
     for seed in 0..DESIGNS {
-        let def_text = lefdef_gen::def(seed);
+        let def_text = lefdef_gen::def(seed, false);
         let (gds, def) = (format!("ours{seed}.gds"), format!("d{seed}.def"));
         std::fs::write(dir.join(&gds), ours(&lef_text, &def_text)).expect("writable");
         std::fs::write(dir.join(&def), &def_text).expect("writable");

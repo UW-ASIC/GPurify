@@ -30,7 +30,11 @@
 //!   (the LEF layer's `WIDTH`, the net's `NONDEFAULTRULE`, or a special
 //!   wire's own width), each end extended past its point by the point's
 //!   `extValue`, or by default half the width for a regular wire and 0 for
-//!   a special wire (5.8 pp. 268, 321).
+//!   a special wire (5.8 pp. 268, 321). A point's extension also starts the
+//!   wire that leaves it on a via's other layer, as `OpenDB` reads it; each
+//!   segment is its own rectangle, so a special wire turning a corner with
+//!   no extension leaves the corner square undrawn (p. 321, and `OpenDB`;
+//!   `KLayout` joins it).
 //! - A component's macro is shifted by its `ORIGIN`, turned to its
 //!   orientation, and placed so that the lower-left corner of its turned
 //!   `SIZE` box lands on the placement point (pp. 244, 122). A pin's shapes,
