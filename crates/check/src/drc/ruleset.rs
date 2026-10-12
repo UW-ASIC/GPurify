@@ -4120,6 +4120,7 @@ impl Rule {
             | Rule::ExactPitch { layer, .. } => [Some(layer), None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b],
             | Rule::EdgeMinLength { layer, .. } => [Some(layer), None, None],
+            | Rule::MinStep { layer, .. } => [Some(layer), None, None],
             Rule::EdgeSpacing { a, b, .. } => [Some(a), b, None],
             Rule::Density {
                 layer, boundary, ..
@@ -4167,16 +4168,13 @@ impl Rule {
             }
             | Rule::EdgeEnclosure {
                 edges: a, outer: b, ..
-            } => [Some(a), Some(b)],
-            Rule::Angle { layer, .. }
-            | Rule::MinInteriorAngle { layer, .. }
-            | Rule::PolygonValidity { layer } => [layer, None],
-            Rule::OffGrid { .. } => [None, None],
             } => [Some(a), Some(b), None],
             Rule::MinimumCut {
                 cut, wide, other, ..
             } => [Some(cut), Some(wide), Some(other)],
-            Rule::Angle { layer, .. } => [layer, None, None],
+            Rule::Angle { layer, .. }
+            | Rule::MinInteriorAngle { layer, .. }
+            | Rule::PolygonValidity { layer } => [layer, None, None],
             // Raw rows, never validated: nothing to forget.
             Rule::OffGrid { .. } | Rule::ViaStack { .. } => [None, None, None],
         }
