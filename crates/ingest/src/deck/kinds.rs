@@ -1169,6 +1169,17 @@ pub(crate) const KINDS: &[Kind] = &[
         &[p("tolerance", "tolerance", Dim::Length)],
     ),
     erc(
+        "esd_pin_pair",
+        &[0],
+        false,
+        &[
+            p("clamps", "clamp", Dim::Models),
+            p("current", "current", Dim::Current),
+            p("clamp_resistance", "clamp_resistance", Dim::Resistance),
+            p("max_resistance", "max_resistance", Dim::Resistance),
+        ],
+    ),
+    erc(
         "esd_clamp_resistance",
         &[0],
         false,

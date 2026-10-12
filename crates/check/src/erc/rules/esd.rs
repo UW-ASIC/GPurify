@@ -1498,3 +1498,195 @@ pub fn check_esd_exposed(
         record_run(runs, out, before, rule, Outcome::Ran, examined);
     }
 }
+
+/// Pin-to-pin ESD path resistance: deck kind `esd_pin_pair`, written
+/// `esd_pin_pair(pad; clamps: models, current: current, clamp_resistance:
+/// resistance, max_resistance: resistance)`.
+///
+/// [`EsdPathTable`] stresses a pin against each supply; a pin pair of two
+/// signal pins is stressed through everything between them: [Bakhali
+/// 2020]'s pin-to-pin check "finds all possible combinations between all
+/// specified 'From' pins and all specified 'To' pins. The check then
+/// calculates a full path resistance calculation for each combination",
+/// and [Khazhinsky 2012] Fig. 4 stresses one I/O pad against another. For
+/// every two signal nets that hold a polygon of `pad` (a pin's net that is
+/// a declared supply is [`EsdPathTable`]'s), `current` is forced in at each
+/// pin polygon of the first and out at the second's pin polygons, held at
+/// 0 V, through every net either pin reaches by clamps (as
+/// [`EsdTopologicalTable`] walks a pad's: its clamps to a supply, then rail
+/// clamps), each clamp `clamp_resistance` between its attach points. The
+/// path resistance is the pin's rise over the current ([US11714117B2]:
+/// "Rpath = VIO / IESD"). A pair whose two pins reach no supply in common
+/// has no discharge path between them and is not examined. A row flags a
+/// pair above `max_resistance`. Needs design intent, for which nets are
+/// the supplies.
+///
+/// # Limits
+///
+/// A clamp is its on-resistance alone, as in [`EsdPathTable`]. The limit is
+/// deck-supplied: no public deck states one (1, 2 and 10 Ω appear only as
+/// examples).
+///
+/// Catalog: ERC-C6 in the [check catalog]. Defined by [Bakhali 2020];
+/// [Khazhinsky 2012] Fig. 4; [ESDA TR18.0-01] Fig. 58 and Rule 6.3.5;
+/// [US11714117B2]. Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [Bakhali 2020]: https://semiengineering.com/esd-p2p-and-cd-verification-doesnt-have-to-be-hard/
+/// [Khazhinsky 2012]: https://www.esda.org/assets/News/8df611267c/ESDEDA-InCompliance-part1.pdf
+/// [ESDA TR18.0-01]: https://www.esda.org/store/standards/product/457/esd-tr18-0-01-25/
+/// [US11714117B2]: https://patents.google.com/patent/US11714117B2/en
+/// [`EsdTopologicalTable`]: crate::erc::rules::supply::EsdTopologicalTable
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct EsdPinPairTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// Per row: the layer whose polygons are pins.
+    pub pad: Vec<LayerId>,
+    /// Clamp device models per row, CSR.
+    pub clamp_start: Vec<u32>,
+    /// Clamp models, CSR by `clamp_start`; at least one per row.
+    pub clamp: Vec<StrId>,
+    /// Per row: the stress current, µA. Positive from a deck.
+    pub current: Vec<Qty<Current, { prefix::MICRO }>>,
+    /// Per row: one clamp's on-resistance between two of its nets, Ω.
+    pub clamp_resistance: Vec<Qty<Resistance, { prefix::BASE }>>,
+    /// Per row: the largest pin-to-pin path resistance, Ω.
+    pub max_resistance: Vec<Qty<Resistance, { prefix::BASE }>>,
+}
+
+/// Runs every [`EsdPinPairTable`] row over every pair of signal pins.
+///
+/// `examined` counts pin pairs solved: each pin polygon of the lower net
+/// against the higher net. A violation sits at the first vertex of the
+/// source pin, on the pad layer, names it and the other net's first pin, and
+/// measures the path resistance in Ω against `max_resistance`. Every row is
+/// skipped without usable intent, and refused at the first pair whose
+/// network cannot be built or solved.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_esd_pin_pair(
+    design: Design<'_>,
+    intent: &IntentMap,
+    process: Process<'_>,
+    table: &EsdPinPairTable,
+    scratch: &mut Scratch,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if !intent.is_usable() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
+    let (store, nets, devices) = (design.store, design.nets, design.devices);
+    let (mut seen, mut stack) = (Vec::new(), Vec::new());
+    let (mut reach_a, mut reach_b) = (Vec::new(), Vec::new());
+    let mut stress = StressGrid::default();
+    let mut solution = PowerSolution::default();
+    let supply = |net: NetId| intent.supply_net.binary_search(&net).is_ok();
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let (rule, severity) = (table.head.rule[row], table.head.severity[row]);
+        let clamps =
+            &table.clamp[table.clamp_start[row] as usize..table.clamp_start[row + 1] as usize];
+        let pad_layer = table.pad[row];
+        let current = table.current[row];
+        let limit = Measurement::Resistance(table.max_resistance[row]);
+        let pins_of = |net: NetId| -> Vec<PolyId> {
+            nets.polys_of(net)
+                .iter()
+                .copied()
+                .filter(|&p| store.poly_layer(p) == pad_layer && !nets.holes.is_hole(p))
+                .collect()
+        };
+        let signals: Vec<NetId> = pad_nets(design, pad_layer)
+            .into_iter()
+            .filter(|&net| !supply(net))
+            .collect();
+        let mut examined = 0u64;
+        let mut outcome = Outcome::Ran;
+        'pairs: for (k, &a) in signals.iter().enumerate() {
+            clamp_reach_into(
+                design,
+                intent,
+                clamps,
+                a,
+                &mut seen,
+                &mut stack,
+                &mut reach_a,
+            );
+            for &b in &signals[k + 1..] {
+                clamp_reach_into(
+                    design,
+                    intent,
+                    clamps,
+                    b,
+                    &mut seen,
+                    &mut stack,
+                    &mut reach_b,
+                );
+                if !reach_a.iter().any(|&n| supply(n) && reach_b.contains(&n)) {
+                    continue;
+                }
+                let mut path: Vec<NetId> = reach_a.iter().chain(&reach_b).copied().collect();
+                path.sort_unstable();
+                path.dedup();
+                let mut clamp_devices: Vec<DeviceId> = Vec::new();
+                for &on in &path {
+                    clamp_devices.extend(devices.devices_on(on).iter().copied().filter(|&d| {
+                        clamps.contains(&devices.model[d.0 as usize])
+                            && reverse_biased(design, intent, d)
+                    }));
+                }
+                clamp_devices.sort_unstable();
+                clamp_devices.dedup();
+                let held = pins_of(b);
+                for source in pins_of(a) {
+                    let built = extract_stress_into(
+                        store,
+                        nets,
+                        devices,
+                        process,
+                        Stress {
+                            nets: &path,
+                            source,
+                            source_net: None,
+                            current,
+                            sink: b,
+                            pins: &held,
+                            devices: &clamp_devices,
+                            device_resistance: table.clamp_resistance[row],
+                        },
+                        &mut stress,
+                    );
+                    if built.is_err()
+                        || solve_into(&stress.grid, &mut scratch.solve, &mut solution).is_err()
+                    {
+                        outcome = Outcome::Refused;
+                        break 'pairs;
+                    }
+                    examined += 1;
+                    // mV * 1000 / µA is Ω.
+                    let volts = solution.node_voltage[stress.entry as usize];
+                    let measured =
+                        Measurement::Resistance(Qty::new(volts.raw() * 1000.0 / current.raw()));
+                    if measured.violates(limit, LimitSense::Maximum) {
+                        out.push(Violation {
+                            rule,
+                            layer: pad_layer,
+                            severity,
+                            at: first_vertex(store, source),
+                            measured,
+                            limit,
+                            shapes: (source, held.first().copied()),
+                        });
+                    }
+                }
+            }
+        }
+        record_run(runs, out, before, rule, outcome, examined);
+    }
+}
