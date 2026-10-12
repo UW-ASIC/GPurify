@@ -82,6 +82,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         colour_spacing(),
         density_balance(),
         cover_density(),
+        cut_area_change(),
         critical_area(),
         stitch(),
         trim_cut(),
@@ -4686,6 +4687,115 @@ fn critical_area() -> Vec<Fixture> {
             [vec![], vec![], vec![], vec![]],
         ),
     ])
+}
+
+/// A connector's cut area between two databases (`cut_area_change`,
+/// DRC-068, sky130 ct.irdrop in shape with deck-supplied values): pre cuts on
+/// `v`, post cuts on `vc`, connectors `m1` x `m2`; bands from 1 cut allow
+/// 10000 nm², from 4 cuts 40000 nm².
+///
+/// Oracle: areas by hand: three 100 nm pre cuts (30000) on one connector
+/// against post 19999, 20000, 20001 (a change of 10001, 10000, 9999: one
+/// finding of 10001); four pre cuts against none (40000, allowed) and five
+/// (50000, a finding); two connectors on one m1 bar of two pre cuts each,
+/// only the one whose cuts went missing found (20000); two pre cuts on m1 off
+/// m2 count for nothing (counted, they would be a 20000 change); a connector
+/// with post cuts and no pre cut is not judged; a post cut half off the
+/// footprint counts its inside half (a change of 10000, allowed; the whole
+/// cut would be 30000).
+fn cut_area_change() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["v", "vc", "m1", "m2"],
+        "rule ir cut_area_change(v, vc, m1, m2; cuts: [1, 4], change: [10000nm2, 40000nm2])\n",
+    );
+    let pad = |layout: Layout, x: i64| {
+        layout
+            .rect("m1", x, 0, x + 1000, 1000)
+            .rect("m2", x, 0, x + 1000, 1000)
+    };
+    let pre = |layout: Layout, x: i64, n: i64| {
+        (0..n).fold(layout, |layout, i| {
+            layout.rect("v", x + 50 + 150 * i, 50, x + 150 + 150 * i, 150)
+        })
+    };
+    let case = |name: &str, layout: Layout, found: Vec<Finding>| {
+        fixture(
+            &format!("cut_area_change/{name}"),
+            &["DRC-068"],
+            &deck,
+            layout,
+            &[("ir", found)],
+        )
+    };
+    let three = || pre(pad(Layout::default(), 0), 0, 3);
+    let cases = vec![
+        case(
+            "post_19999",
+            three()
+                .rect("vc", 0, 500, 100, 699)
+                .rect("vc", 0, 699, 99, 700),
+            areas(&[10_001]),
+        ),
+        case(
+            "post_20000",
+            three().rect("vc", 0, 500, 100, 700),
+            Vec::new(),
+        ),
+        case(
+            "post_20001",
+            three()
+                .rect("vc", 0, 500, 100, 700)
+                .rect("vc", 500, 500, 501, 501),
+            Vec::new(),
+        ),
+        case(
+            "four_lost",
+            pre(pad(Layout::default(), 0), 0, 4),
+            Vec::new(),
+        ),
+        case(
+            "five_lost",
+            pre(pad(Layout::default(), 0), 0, 5),
+            areas(&[50_000]),
+        ),
+        case(
+            "one_lost_of_two",
+            pre(
+                pre(
+                    Layout::default()
+                        .rect("m1", 0, 0, 3000, 1000)
+                        .rect("m2", 0, 0, 1000, 1000)
+                        .rect("m2", 2000, 0, 3000, 1000),
+                    0,
+                    2,
+                ),
+                2000,
+                2,
+            )
+            .rect("vc", 2050, 50, 2150, 150)
+            .rect("vc", 2200, 50, 2300, 150),
+            areas(&[20_000]),
+        ),
+        case(
+            "off_the_upper",
+            pad(Layout::default(), 0)
+                .rect("m1", 1000, 0, 2000, 1000)
+                .rect("v", 1200, 200, 1300, 300)
+                .rect("v", 1400, 200, 1500, 300),
+            Vec::new(),
+        ),
+        case(
+            "post_only",
+            pad(Layout::default(), 0).rect("vc", 100, 100, 600, 600),
+            Vec::new(),
+        ),
+        case(
+            "post_half_off",
+            pre(pad(Layout::default(), 0), 0, 1).rect("vc", 800, 400, 1200, 500),
+            Vec::new(),
+        ),
+    ];
+    every_placement(cases)
 }
 
 /// Density held to the band a cover layer picks (`cover_density`, DRC-076,

@@ -773,8 +773,8 @@ impl Printer<'_> {
                     | Dim::LengthRows,
                     ParamValue::Length(length),
                 ) => self.length(i128::from(length.raw())),
-                (Dim::Area, ParamValue::Area(area)) => self.area(area),
-                (Dim::Count, ParamValue::Count(count)) => Ok(count.to_string()),
+                (Dim::Area | Dim::AreaList, ParamValue::Area(area)) => self.area(area),
+                (Dim::Count | Dim::CountList, ParamValue::Count(count)) => Ok(count.to_string()),
                 (Dim::Word(words), ParamValue::Count(at)) => words
                     .get(at as usize)
                     .map(|&word| word.to_owned())
@@ -841,6 +841,8 @@ impl Printer<'_> {
             | Dim::LengthList
             | Dim::VoltageList
             | Dim::FractionList
+            | Dim::CountList
+            | Dim::AreaList
             | Dim::OptLengthList => Ok(format!("[{}]", list(&values)?.join(", "))),
             Dim::LengthPairList(second) => {
                 let others = stated(second);

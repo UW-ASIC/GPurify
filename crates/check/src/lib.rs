@@ -100,6 +100,7 @@
 //! | `forbidden_space(L; min: len, max: len, prl: len)` | `forbidden_spacing` | [`drc::Rule::ForbiddenSpacing`] | facing edges running alongside at a gap in a forbidden range | DRC-033 |
 //! | `eol_space(L; eol_width: len, within: len, parallel: .., end_to_end: ..) >= len` | `eol_within_spacing` | [`drc::Rule::EolWithinSpacing`] | too little space in a LEF end-of-line keep-out, with parallel-edge and end-to-end qualifiers | DRC-029 |
 //! | `eol_keep_out(L; eol_width: len, backward: len, side: len, forward: len)` | `eol_keep_out` | [`drc::Rule::EolKeepOut`] | another shape inside an end of line's keep-out box | DRC-030 |
+//! | `cut_area_change(pre, post, lower, upper; cuts: [..], change: [..])` | `cut_area_change` | [`drc::Rule::CutAreaChange`] | a connector whose cut area changed between two databases by more than its cut count allows | DRC-068 |
 //! | `cover_density(L, C[, boundary]; window, step, cover: [..], density: [..], inclusive)` | `cover_density` | [`drc::Rule::CoverDensity`] | a window whose density is below the band its coverage by another layer picks | DRC-076 |
 //! | `origin(L)` | `origin` | [`drc::Rule::Origin`] | a layer whose box does not start at the origin | DRC-095, DRC-097 |
 //! | `protrusion_width(L; wide: len) >= len` | `protrusion_width` | [`drc::Rule::ProtrusionWidth`] | a part narrower than the limit attached to a part at least `wide` wide | DRC-125 |

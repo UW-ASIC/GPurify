@@ -1803,6 +1803,48 @@ pub enum Rule {
         /// Index into [`RuleSet::widths`].
         widths: u32,
     },
+    /// A connector whose cut area changed between two databases by more than
+    /// its cut count allows.
+    ///
+    /// Deck: `cut_area_change(pre, post, lower, upper; cuts: [count, ..],
+    /// change: [area, ..])`, kind `cut_area_change`. The two databases are
+    /// two layers of one layout (the first's cuts on `pre`, the second's on
+    /// `post`, as an XOR flow streams both in on separate layers). A
+    /// connector is a merged `lower` figure and a merged `upper` figure that
+    /// overlap; its footprint is where they overlap, its cuts the merged
+    /// `pre` figures overlapping the footprint (a cut over two connectors
+    /// counts in each). Its change is the difference, either way, between
+    /// the `pre` area and the `post` area inside the footprint. The cut count
+    /// picks a band of [`CutAreaBands`], the last whose `cuts` it reaches,
+    /// and a change above that band's `change` is a violation; a connector
+    /// with fewer cuts than the first band is not judged. sky130 ct.irdrop.1-3
+    /// ("For 1 <= n <= 10 contacts on the same connector, mcon area pre- and
+    /// post- Cu conversion must differ by no more than 0.2", 11-100 0.3, over
+    /// 100 0.7) and via.irdrop to via4.irdrop are this rule. Values
+    /// deck-supplied; no public deck states them: the manual names no
+    /// connector, and its unit (µm, for an area) was added by a script
+    /// (skywater-pdk 9039be3); the rule applies to a copper back end sky130
+    /// does not offer (flags CU, IR).
+    ///
+    /// One violation per failing connector, on `pre`, at the centre of its
+    /// footprint's box (floored), `measured` the change against the band's
+    /// limit, naming no shape. `examined` counts connectors.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-068. Rules: sky130 ct.irdrop.1-3, via.irdrop.1-4 to
+    /// via4.irdrop.1-4.
+    CutAreaChange {
+        /// The first database's cuts.
+        pre: LayerId,
+        /// The second database's cuts.
+        post: LayerId,
+        /// The layer under the cuts.
+        lower: LayerId,
+        /// The layer over the cuts.
+        upper: LayerId,
+        /// Index into [`RuleSet::cut_area_bands`].
+        bands: u32,
+    },
     /// A window whose density on `layer` is below what its coverage by
     /// `cover` asks for.
     ///
@@ -2405,6 +2447,39 @@ pub enum Rule {
     },
 }
 
+/// The bands of [`Rule::CutAreaChange`]: per band, the cut count from which
+/// it applies and the area change it allows.
+///
+/// Every table in a [`RuleSet`] passed [`CutAreaBands::is_valid`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CutAreaBands {
+    /// The cut count each band starts at: at least 1, rising strictly.
+    pub cuts: Vec<u32>,
+    /// The largest change each band allows, in square grid units; 0 or more.
+    pub change: Vec<DbuArea>,
+}
+
+impl CutAreaBands {
+    /// Whether there is a band, one change per band, every start at least 1
+    /// and rising strictly, and no change negative. [`RuleSet::from_deck`]
+    /// refuses a table that is not ([`DrcError::BadTable`]).
+    pub fn is_valid(&self) -> bool {
+        self.cuts.first().is_some_and(|&first| first >= 1)
+            && self.cuts.len() == self.change.len()
+            && self.cuts.windows(2).all(|pair| pair[0] < pair[1])
+            && self.change.iter().all(|change| change.raw() >= 0)
+    }
+
+    /// The change a connector of `cuts` cuts may have, or `None` below every
+    /// band.
+    pub fn limit(&self, cuts: u32) -> Option<DbuArea> {
+        self.cuts
+            .iter()
+            .rposition(|&start| cuts >= start)
+            .map(|band| self.change[band])
+    }
+}
+
 /// The bands of [`Rule::CoverDensity`]: per band, the coverage of the
 /// covering layer from which it applies and the density it asks of the
 /// held layer.
@@ -2806,6 +2881,8 @@ pub struct RuleSet {
     pub span_tables: Vec<SpanTable>,
     /// The bands each [`Rule::CoverDensity`] names.
     pub cover_bands: Vec<CoverBands>,
+    /// The bands each [`Rule::CutAreaChange`] names.
+    pub cut_area_bands: Vec<CutAreaBands>,
     /// The tables [`Rule::CutClassSpacing`] names.
     pub cut_tables: Vec<CutClassTable>,
     /// The cut layers, bottom to top, of each [`Rule::ViaStack`].
@@ -3092,6 +3169,47 @@ impl RuleSet {
                     radius: length(spec, "radius")?,
                     limit: area_limit(spec, "limit")?,
                 },
+                "cut_area_change" => {
+                    layers(spec, 4)?;
+                    let counts = |param: &'static str| -> Result<Vec<u32>, DrcError> {
+                        let wanted = strings.get(param);
+                        rules
+                            .params_of(spec)
+                            .iter()
+                            .filter(|&&(name, _)| Some(name) == wanted)
+                            .map(|&(_, stated)| match stated {
+                                ParamValue::Count(n) => Ok(n),
+                                _ => Err(wrong_type(spec, param)),
+                            })
+                            .collect()
+                    };
+                    let wanted = strings.get("change");
+                    let change = rules
+                        .params_of(spec)
+                        .iter()
+                        .filter(|&&(name, _)| Some(name) == wanted)
+                        .map(|&(_, stated)| match stated {
+                            ParamValue::Area(area) => Ok(area),
+                            _ => Err(wrong_type(spec, "change")),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let bands = CutAreaBands {
+                        cuts: counts("cuts")?,
+                        change,
+                    };
+                    if !bands.is_valid() {
+                        return Err(DrcError::BadTable(name_of(spec.id)));
+                    }
+                    set.cut_area_bands.push(bands);
+                    Rule::CutAreaChange {
+                        pre: layer(spec, 0),
+                        post: layer(spec, 1),
+                        lower: layer(spec, 2),
+                        upper: layer(spec, 3),
+                        bands: u32::try_from(set.cut_area_bands.len() - 1)
+                            .expect("a deck has few tables"),
+                    }
+                }
                 "cover_density" => {
                     let boundary = if spec.layer_len == 2 {
                         None
@@ -3975,6 +4093,20 @@ impl RuleSet {
                         radius,
                         limit,
                     } => area::critical_area(store, id, layer, radius, limit, s, out),
+                    Rule::CutAreaChange {
+                        pre,
+                        post,
+                        lower,
+                        upper,
+                        bands,
+                    } => via::cut_area_change(
+                        store,
+                        id,
+                        (pre, post, lower, upper),
+                        &self.cut_area_bands[bands as usize],
+                        s,
+                        out,
+                    ),
                     Rule::CoverDensity {
                         layer,
                         cover,
@@ -4420,6 +4552,7 @@ impl Rule {
             Rule::DensityBalance { boundary, .. } | Rule::CoverDensity { boundary, .. } => {
                 [boundary, None, None, None]
             }
+            Rule::CutAreaChange { upper, .. } => [Some(upper), None, None, None],
             _ => [None; 4],
         }
     }
@@ -4559,6 +4692,7 @@ impl Rule {
             } => length(window).and(length(step)).and(fraction(limit)),
             // The bands are checked where they are filed.
             Rule::CoverDensity { window, step, .. } => length(window).and(length(step)),
+            Rule::CutAreaChange { .. } => Ok(()),
             Rule::GlobalDensity { limit, .. }
             | Rule::AspectRatio { limit, .. }
             | Rule::RegionDensity { limit, .. }
@@ -4802,6 +4936,7 @@ impl Rule {
             Rule::CriticalArea { .. } => "critical_area",
             Rule::DensityBalance { .. } => "density_balance",
             Rule::CoverDensity { .. } => "cover_density",
+            Rule::CutAreaChange { .. } => "cut_area_change",
             Rule::Forbidden { .. } => "forbidden",
             Rule::MustContain { .. } => "must_contain",
             Rule::MustBeInside { .. } => "must_be_inside",
@@ -4945,6 +5080,9 @@ impl Rule {
             Rule::MinimumCut {
                 cut, wide, other, ..
             } => [Some(cut), Some(wide), Some(other)],
+            Rule::CutAreaChange {
+                pre, post, lower, ..
+            } => [Some(pre), Some(post), Some(lower)],
             Rule::Angle { layer, .. }
             | Rule::MinInteriorAngle { layer, .. }
             | Rule::PolygonValidity { layer } => [layer, None, None],

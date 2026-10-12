@@ -315,8 +315,9 @@ explains (kind 30).
 | 69 | protrusion_width | `protrusion_width(L; wide) >= l` | POINT | EXACT (scripted) | exact | new |
 | 70 | origin | `origin(L)` | POINT | EXACT (scripted) | exact | new |
 | 71 | cover_density | `cover_density(L, C[, d]; window, step, cover, density, inclusive)` | POINT | EXACT (scripted) | exact | new |
+| 72 | cut_area_change | `cut_area_change(pre, post, lower, upper; cuts, change)` | POINT | EXACT (scripted) | exact | new |
 
-47 kinds are EXACT (nine scripted over KLayout's polygons), 16 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
+48 kinds are EXACT (ten scripted over KLayout's polygons), 16 APPROX and eight NONE; `convex_corner_spacing` is NONE on a deck with
 `except_eol`, and `net_spacing` on a deck without
 `connect touch_within_layer`, and between two layers (`space(A, B; nets: ..)`), which is not mirrored. `examined` is GPurify-only; KLayout has no equivalent.
 
@@ -1464,6 +1465,16 @@ layer's coverage below that band's density is a finding at the window's centre. 
 coverages by `Region` areas clipped to each window, the same band choice. **Key**: POINT.
 **Oracle**: sky130 m1.- (the band table's shape) with deck-supplied values; fixtures
 `cover_density/*`.
+
+### 72. cut_area_change — EXACT (scripted)
+
+**GPurify** (`via.rs` `cut_area_change`): the merged `lower` and `upper` layers' overlap, each piece
+assigned to the pair of figures it lies in (a connector); per connector, the merged `pre` cuts
+overlapping its footprint pick the band, and the difference between the `pre` and `post` area inside
+the footprint above the band's limit is a finding at the footprint box's centre. **KLayout** (prelude
+`cut_area_change`): every pair of merged `lower` and `upper` polygons that overlap, the same count
+(`overlapping`) and areas. **Key**: POINT. **Oracle**: sky130 ct.irdrop in shape with deck-supplied
+values; fixtures `cut_area_change/*`.
 
 ### Derived-layer operations
 

@@ -7,12 +7,12 @@ use super::grid;
 use super::printer::assert_round_trip;
 use gpurify_check::deck::rules::{
     allowed_width, aspect_ratio, asymmetric_enclosure, convex_corner_spacing, count, cover_density,
-    cut_class, cut_class_spacing, cut_spacing, edge_facing_space, edge_width, eol_keep_out,
-    eol_within_spacing, exact_pitch, forbidden, forbidden_spacing, full_width, gate_corner,
-    keep_out_zone, max_enclosure, min_enclosure, min_interior_angle, min_step, minimum_cut,
-    must_contain, noncoincident_enclosure, origin, polygon_validity, projection_spacing,
-    protrusion_width, region_density, span_length, tip_spacing_table, total_area,
-    two_width_spacing_table, via_stack,
+    cut_area_change, cut_class, cut_class_spacing, cut_spacing, edge_facing_space, edge_width,
+    eol_keep_out, eol_within_spacing, exact_pitch, forbidden, forbidden_spacing, full_width,
+    gate_corner, keep_out_zone, max_enclosure, min_enclosure, min_interior_angle, min_step,
+    minimum_cut, must_contain, noncoincident_enclosure, origin, polygon_validity,
+    projection_spacing, protrusion_width, region_density, span_length, tip_spacing_table,
+    total_area, two_width_spacing_table, via_stack,
 };
 use gpurify_check::deck::{compile, Bound, CompiledDeck, DeckBuilder};
 use gpurify_check::drc::ruleset::EolParallel;
@@ -59,6 +59,7 @@ rule eol.w eol_space(m; eol_width: 60nm, within: 20nm, parallel: none, end_to_en
 rule eol.p eol_space(m; eol_width: 60nm, within: 20nm, parallel: (space: 120nm, within: 50nm, two_edges: true), end_to_end: 70nm) >= 80nm
 rule ko eol_keep_out(m; eol_width: 60nm, backward: 0nm, side: 30nm, forward: 90nm)
 rule or origin(r)
+rule ir cut_area_change(v, v2, m, m2; cuts: [1, 11, 101], change: [200000nm2, 300000nm2, 700000nm2])
 rule cvd cover_density(m, r; window: 700um, step: 70um, cover: [30%, 40%, 100%], density: [30%, 40%, 70%], inclusive: true)
 rule pw protrusion_width(m; wide: 1200nm) >= 280nm
 rule koz keep_out_zone(v; class: 100nm x 300nm, to: none, end_side: 10nm, end_forward: 80nm, side_side: 50nm, side_forward: 20nm)
@@ -171,6 +172,21 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     );
     d.rule("ko", eol_keep_out(m, nm(60), nm(0), nm(30), nm(90)));
     d.rule("or", origin(r));
+    d.rule(
+        "ir",
+        cut_area_change(
+            v,
+            v2,
+            m,
+            m2,
+            &[1, 11, 101],
+            &[
+                DbuArea::new(200_000),
+                DbuArea::new(300_000),
+                DbuArea::new(700_000),
+            ],
+        ),
+    );
     d.rule(
         "cvd",
         cover_density(
