@@ -8,6 +8,7 @@
 //! built on [`main_with`] has the same flags, report and exit codes.
 
 mod args;
+mod compare;
 mod format;
 
 use crate::deck::DeckFn;
@@ -46,6 +47,10 @@ use std::process::ExitCode;
 /// ```
 pub fn main_with(decks: &[(&str, DeckFn)]) -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    // Two netlists and no layout or deck: its own command line.
+    if argv.first().map(String::as_str) == Some("compare") {
+        return compare::main(&argv[1..]);
+    }
     let cli = match args::parse(&argv) {
         Ok(cli) => cli,
         Err(error) => return fail(&error),

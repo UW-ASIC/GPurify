@@ -149,6 +149,8 @@ jobs:
             seeds: ""
           - target: lefdef
             seeds: fuzz/seeds/lefdef
+          - target: spef
+            seeds: fuzz/seeds/spef tests/golden/pex
     steps:
       - uses: actions/checkout@v4
       # Nightly in this job only: cargo-fuzz needs it, and rebuilds std with

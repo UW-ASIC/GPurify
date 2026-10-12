@@ -59,7 +59,8 @@ fn usage<T>(message: String) -> Result<T, ArgError> {
 pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     let Some((subcommand, rest)) = argv.split_first() else {
         return usage(
-            "expected a subcommand: drc, erc, lvs, pex, all, lib, xor or system".to_string(),
+            "expected a subcommand: drc, erc, lvs, pex, all, lib, xor, system or compare"
+                .to_string(),
         );
     };
 
@@ -131,7 +132,8 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         "lib" | "system" => (none, false, true, false),
         other => {
             return usage(format!(
-                "unknown subcommand {other}; expected drc, erc, lvs, pex, all, lib, xor or system"
+                "unknown subcommand {other}; expected drc, erc, lvs, pex, all, lib, xor, system \
+                 or compare"
             ))
         }
     };
@@ -415,11 +417,12 @@ mod tests {
         let cases = [
             (
                 "",
-                "expected a subcommand: drc, erc, lvs, pex, all, lib, xor or system",
+                "expected a subcommand: drc, erc, lvs, pex, all, lib, xor, system or compare",
             ),
             (
                 "dcr t --deck d",
-                "unknown subcommand dcr; expected drc, erc, lvs, pex, all, lib, xor or system",
+                "unknown subcommand dcr; expected drc, erc, lvs, pex, all, lib, xor, system or \
+                 compare",
             ),
             (
                 "system s.json --deck d --reference r",

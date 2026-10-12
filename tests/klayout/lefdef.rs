@@ -135,7 +135,7 @@ fn klayout_lefdef_differential_on_seeded_designs() {
         &klayout,
         &["-b", "-r", "lefdef.rb"],
         &dir,
-        Duration::from_secs(1800),
+        Duration::from_mins(30),
     );
 
     let mut rows: BTreeMap<(u64, String), [i128; 3]> = BTreeMap::new();

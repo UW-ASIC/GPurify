@@ -22,7 +22,7 @@ mod oracles;
 use std::path::{Path, PathBuf};
 
 /// The targets, as `fuzz/Cargo.toml` names them.
-const TARGETS: [&str; 9] = [
+const TARGETS: [&str; 10] = [
     "gds",
     "gds_structured",
     "deck",
@@ -32,6 +32,7 @@ const TARGETS: [&str; 9] = [
     "liberty_spec",
     "drc_e2e",
     "lefdef",
+    "spef",
 ];
 
 fn repo() -> &'static Path {
@@ -162,6 +163,18 @@ fn liberty_spec() {
 #[test]
 fn lefdef() {
     replay("lefdef", oracles::lefdef, &["fuzz/seeds/lefdef"]);
+}
+
+/// Oracle: `oracles::spef`: a typed error, never a panic, and an accepted
+/// file is a well-formed canonical network; seeded with every SPEF and
+/// DSPF golden the writers produce.
+#[test]
+fn spef() {
+    replay(
+        "spef",
+        oracles::spef,
+        &["fuzz/seeds/spef", "tests/golden/pex"],
+    );
 }
 
 /// The target has no seed directory, so its regressions directory is the
