@@ -47,16 +47,42 @@ fn edge_of(a: Point, b: Point) -> Edge {
 
 /// Every boundary edge of one polygon, holes included, outer ring first.
 pub fn poly_edges(poly: PolygonRef<'_>) -> impl Iterator<Item = (Point, Point)> + '_ {
-    std::iter::once(poly.outer())
-        .chain(poly.holes())
-        .flat_map(|ring| {
-            let (xs, ys) = ring.coords();
-            let n = xs.len();
-            (0..n).map(move |i| {
-                let j = (i + 1) % n;
-                (Point { x: xs[i], y: ys[i] }, Point { x: xs[j], y: ys[j] })
-            })
+    poly.rings().flat_map(|ring| {
+        let (xs, ys) = ring.coords();
+        let n = xs.len();
+        (0..n).map(move |i| {
+            let j = (i + 1) % n;
+            (Point { x: xs[i], y: ys[i] }, Point { x: xs[j], y: ys[j] })
         })
+    })
+}
+
+/// Every edge of positive length, ascending by its least x: the order the
+/// pair scans break on once an edge starts past the limit.
+fn edges_by_x(poly: PolygonRef<'_>) -> Vec<Seg> {
+    let mut edges: Vec<Seg> = poly_edges(poly)
+        .filter(|(a, b)| a != b)
+        .map(|(a, b)| Seg { a, b })
+        .collect();
+    edges.sort_unstable_by_key(|e| e.a.x.min(e.b.x));
+    edges
+}
+
+/// The midpoint of two points given doubled, floored: the report point of a
+/// pair from [`seg_seg_near2`].
+fn mid4(p: (i64, i64), q: (i64, i64)) -> Point {
+    Point {
+        x: Dbu::new_unchecked((p.0 + q.0).div_euclid(4)),
+        y: Dbu::new_unchecked((p.1 + q.1).div_euclid(4)),
+    }
+}
+
+/// A segment's direction, widened so products of two stay exact.
+fn dir(s: Seg) -> (i128, i128) {
+    (
+        i128::from(s.b.x.raw() - s.a.x.raw()),
+        i128::from(s.b.y.raw() - s.a.y.raw()),
+    )
 }
 
 /// The gap between two facing edges and its midpoint, or `None` when they do
@@ -144,7 +170,7 @@ fn sweep_axis(
             .enumerate()
             .filter(|(_, e)| e.vertical == vertical)
             .flat_map(|(i, e)| {
-                let i = u32::try_from(i).expect("a polygon's edges are indexed by a u32");
+                let i = crate::narrow(i);
                 [(e.lo, ENTER, i), (e.hi, LEAVE, i)]
             }),
     );
@@ -238,7 +264,7 @@ fn neck2(poly: PolygonRef<'_>, limit: Dbu) -> Option<(i128, Point)> {
     // corner sits in one `limit`-wide column.
     // Each concave corner, with the diagonal its void quadrant points along.
     let mut corners: Vec<(i64, i64, i64, i64)> = Vec::new();
-    for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+    for ring in poly.rings() {
         let (xs, ys) = ring.coords();
         let n = xs.len();
         for i in 0..n {
@@ -326,16 +352,7 @@ pub fn narrowest_pair2(
             best = Some((d2, at));
         }
     };
-    let mid4 = |p: (i64, i64), q: (i64, i64)| Point {
-        x: Dbu::new_unchecked((p.0 + q.0).div_euclid(4)),
-        y: Dbu::new_unchecked((p.1 + q.1).div_euclid(4)),
-    };
-
-    let mut edges: Vec<Seg> = poly_edges(poly)
-        .filter(|(a, b)| a != b)
-        .map(|(a, b)| Seg { a, b })
-        .collect();
-    edges.sort_unstable_by_key(|e| e.a.x.min(e.b.x));
+    let edges = edges_by_x(poly);
     for (i, &e) in edges.iter().enumerate() {
         let reach = e.a.x.max(e.b.x).raw() + limit.raw();
         for &f in &edges[i + 1..] {
@@ -355,7 +372,7 @@ pub fn narrowest_pair2(
         return best;
     }
 
-    for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+    for ring in poly.rings() {
         let (xs, ys) = ring.coords();
         let n = xs.len();
         for i in 0..n {
@@ -381,12 +398,6 @@ pub fn narrowest_pair2(
 /// (`KLayout`'s `euclidian_near_part_of_edge`): each cut to the other's
 /// material side, line included. `None` for any other pair.
 fn slanted(e: Seg, f: Seg) -> Option<(Seg, Seg)> {
-    let dir = |s: Seg| {
-        (
-            i128::from(s.b.x.raw() - s.a.x.raw()),
-            i128::from(s.b.y.raw() - s.a.y.raw()),
-        )
-    };
     let ((ux, uy), (vx, vy)) = (dir(e), dir(f));
     if ux * vy == uy * vx || ux * vx + uy * vy >= 0 {
         return None;
@@ -437,14 +448,7 @@ fn slanted(e: Seg, f: Seg) -> Option<(Seg, Seg)> {
 /// other's material side (`material_between`), or each on the other's empty
 /// side over a stretch of positive length.
 fn facing(e: Seg, f: Seg, material_between: bool) -> bool {
-    let dir = |s: Seg| (s.b.x.raw() - s.a.x.raw(), s.b.y.raw() - s.a.y.raw());
     let ((ux, uy), (vx, vy)) = (dir(e), dir(f));
-    let (ux, uy, vx, vy) = (
-        i128::from(ux),
-        i128::from(uy),
-        i128::from(vx),
-        i128::from(vy),
-    );
     if ux * vy != uy * vx || ux * vx + uy * vy >= 0 {
         return false;
     }
@@ -453,7 +457,7 @@ fn facing(e: Seg, f: Seg, material_between: bool) -> bool {
     let side = |line: Seg, of: Point| {
         let (lx, ly) = dir(line);
         let (wx, wy) = (of.x.raw() - line.a.x.raw(), of.y.raw() - line.a.y.raw());
-        (i128::from(lx) * i128::from(wy) - i128::from(ly) * i128::from(wx)).signum()
+        (lx * i128::from(wy) - ly * i128::from(wx)).signum()
     };
     let (fe, ef) = (side(e, f.a), side(f, e.a));
     // Antiparallel on one line and touching: where the figure meets itself
@@ -504,19 +508,11 @@ pub fn narrowest_pair_any(
     let mut keep = |d2: (i128, bool), e: Seg, f: Seg| {
         if d2.0 < bound && best.is_none_or(|(b, _)| d2 < b) {
             let (_, p, q) = seg_seg_near2(e, f);
-            let at = Point {
-                x: Dbu::new_unchecked((p.0 + q.0).div_euclid(4)),
-                y: Dbu::new_unchecked((p.1 + q.1).div_euclid(4)),
-            };
-            best = Some((d2, at));
+            best = Some((d2, mid4(p, q)));
         }
     };
     let rev = |s: Seg| Seg { a: s.b, b: s.a };
-    let mut edges: Vec<Seg> = poly_edges(poly)
-        .filter(|(a, b)| a != b)
-        .map(|(a, b)| Seg { a, b })
-        .collect();
-    edges.sort_unstable_by_key(|e| e.a.x.min(e.b.x));
+    let edges = edges_by_x(poly);
     for (i, &e) in edges.iter().enumerate() {
         let reach = e.a.x.max(e.b.x).raw() + limit.raw();
         let (ylo, yhi) = (e.a.y.min(e.b.y).raw(), e.a.y.max(e.b.y).raw());
