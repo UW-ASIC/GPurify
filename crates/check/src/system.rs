@@ -80,6 +80,7 @@
 //! wafer-on-wafer process that may need no die-to-die protection, §4.3), and
 //! the package's own R, L and C (TR18.0-01 §6.4, §6.6) are not.
 
+use crate::drc::rules::{bbox_gap2, gap_midpoint};
 use crate::erc::centre;
 use crate::lvs::graph::{narrow, transpose_into, Graph};
 use crate::report::{record_run, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
@@ -402,13 +403,13 @@ pub fn check_alignment(
                     if pairs.binary_search(&(narrow(i), narrow(j))).is_ok() {
                         continue;
                     }
-                    let gap2 = gap2(bump.at, other.at);
+                    let gap2 = bbox_gap2(bump.at, other.at);
                     if gap2.raw() < min.mul_wide(min).raw() {
                         out.push(Violation {
                             rule,
                             layer: NO_LAYER,
                             severity: Severity::Error,
-                            at: gap_middle(bump.at, other.at),
+                            at: gap_midpoint(bump.at, other.at),
                             measured: Measurement::Length(isqrt(gap2)),
                             limit: Measurement::Length(min),
                             shapes: (bump.poly, Some(other.poly)),
@@ -418,37 +419,6 @@ pub fn check_alignment(
             }
         }
         record_run(runs, out, before, rule, Outcome::Ran, examined);
-    }
-}
-
-/// The squared gap between two boxes; 0 when they touch or overlap.
-fn gap2(a: Bbox, b: Bbox) -> DbuArea {
-    let axis = |lo: Dbu, hi: Dbu, olo: Dbu, ohi: Dbu| {
-        i128::from((olo.raw() - hi.raw()).max(lo.raw() - ohi.raw()).max(0))
-    };
-    let (dx, dy) = (
-        axis(a.xlo, a.xhi, b.xlo, b.xhi),
-        axis(a.ylo, a.yhi, b.ylo, b.yhi),
-    );
-    DbuArea::new(dx * dx + dy * dy)
-}
-
-/// The middle of the gap between two boxes, per axis the middle of the gap
-/// or of the overlap, floored.
-fn gap_middle(a: Bbox, b: Bbox) -> Point {
-    let mid = |lo: Dbu, hi: Dbu, olo: Dbu, ohi: Dbu| {
-        let (from, to) = if ohi < lo {
-            (ohi, lo)
-        } else if hi < olo {
-            (hi, olo)
-        } else {
-            (lo.max(olo), hi.min(ohi))
-        };
-        Dbu::new_unchecked((from.raw() + to.raw()).div_euclid(2))
-    };
-    Point {
-        x: mid(a.xlo, a.xhi, b.xlo, b.xhi),
-        y: mid(a.ylo, a.yhi, b.ylo, b.yhi),
     }
 }
 
@@ -1076,10 +1046,10 @@ mod tests {
         }
         // The gap and its middle are symmetric in the two boxes.
         let (p, q) = (rect(0, 0, 10, 10), rect(13, 14, 23, 24));
-        assert_eq!(gap_middle(q, p), gap_middle(p, q));
-        assert_eq!(gap2(q, p).raw(), 25);
-        assert_eq!(gap2(rect(-5, 2, -2, 8), p).raw(), 4);
-        assert_eq!(gap2(p, rect(5, 5, 20, 20)).raw(), 0);
+        assert_eq!(gap_midpoint(q, p), gap_midpoint(p, q));
+        assert_eq!(bbox_gap2(q, p).raw(), 25);
+        assert_eq!(bbox_gap2(rect(-5, 2, -2, 8), p).raw(), 4);
+        assert_eq!(bbox_gap2(p, rect(5, 5, 20, 20)).raw(), 0);
     }
 
     /// A one-layer face: a 10 x 20 rectangle on layer 0 and maybe one more
