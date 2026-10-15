@@ -717,3 +717,233 @@ fn every_shipped_deck_translates() {
         }
     }
 }
+
+/// A deck of the kinds that measure shapes at any angle (DRC-116), and the
+/// booleans that feed them. `sized` and `with_width` are left out as in
+/// [`OCTILINEAR_DECK`]; so are opposite and adjacent enclosure, which refuse
+/// such edges, and `angle`, whose allowed list a skew edge breaks by design.
+const ANYANGLE_DECK: &str = "grid 1nm
+layer met1 = gds(68, 20)
+layer met2 = gds(69, 20)
+layer via1 = gds(68, 44)
+layer both = met1 and met2
+layer cut = met1 not met2
+layer all = met1 or met2
+connect conductors [met1, met2]
+connect touch_within_layer
+rule w width(met1) >= 100nm
+rule el edge_length(met1) >= 60nm
+rule n notch(met1) >= 100nm
+rule s space(met1) >= 100nm
+rule sd space(met1, met2) >= 80nm
+rule a area(met1) >= 30000nm2
+rule ha hole_area(cut) >= 30000nm2
+rule cw width(cut) >= 60nm
+rule f forbidden(met2.with_area(< 20000nm2))
+rule ba area(both) >= 10000nm2
+rule cn notch(cut) >= 100nm
+rule as space(all) >= 100nm
+rule en enclosure(met2, met1) >= 50nm
+rule enn enclosure(met2, met1, noncoincident) >= 50nm
+rule ev enclosure(via1, met1) >= 30nm
+rule evn enclosure(via1, met1, noncoincident) >= 30nm
+rule mi inside(met2, met1)
+rule miv inside(via1, met1)
+rule mc contains(met1, via1) >= 1
+";
+
+/// Even-odd: whether the grid point `p` is strictly inside `ring` (on an
+/// edge is not).
+fn strictly_inside(ring: &[(i64, i64)], p: (i64, i64)) -> bool {
+    let n = ring.len();
+    let mut odd = false;
+    for i in 0..n {
+        let (a, b) = (ring[i], ring[(i + 1) % n]);
+        let side = (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0);
+        let within = (a.0.min(b.0)..=a.0.max(b.0)).contains(&p.0)
+            && (a.1.min(b.1)..=a.1.max(b.1)).contains(&p.1);
+        if side == 0 && within {
+            return false;
+        }
+        if (a.1 > p.1) != (b.1 > p.1) && (side > 0) == (b.1 > a.1) {
+            odd = !odd;
+        }
+    }
+    odd
+}
+
+/// Whether two closed segments share a point.
+fn segments_meet(p: ((i64, i64), (i64, i64)), q: ((i64, i64), (i64, i64))) -> bool {
+    let cross = |o: (i64, i64), a: (i64, i64), b: (i64, i64)| {
+        ((a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)).signum()
+    };
+    let on = |s: ((i64, i64), (i64, i64)), r: (i64, i64)| {
+        r.0 >= s.0 .0.min(s.1 .0)
+            && r.0 <= s.0 .0.max(s.1 .0)
+            && r.1 >= s.0 .1.min(s.1 .1)
+            && r.1 <= s.0 .1.max(s.1 .1)
+    };
+    let (d1, d2) = (cross(q.0, q.1, p.0), cross(q.0, q.1, p.1));
+    let (d3, d4) = (cross(p.0, p.1, q.0), cross(p.0, p.1, q.1));
+    (d1 * d2 < 0 && d3 * d4 < 0)
+        || (d1 == 0 && on(q, p.0))
+        || (d2 == 0 && on(q, p.1))
+        || (d3 == 0 && on(p, q.0))
+        || (d4 == 0 && on(p, q.1))
+}
+
+/// Whether `inner` lies strictly inside `outer`: every vertex inside and no
+/// two edges meeting.
+fn strictly_within(inner: &[(i64, i64)], outer: &[(i64, i64)]) -> bool {
+    let edges = |r: &[(i64, i64)]| -> Vec<((i64, i64), (i64, i64))> {
+        (0..r.len()).map(|i| (r[i], r[(i + 1) % r.len()])).collect()
+    };
+    inner.iter().all(|&p| strictly_inside(outer, p))
+        && edges(inner)
+            .iter()
+            .all(|&e| edges(outer).iter().all(|&f| !segments_meet(e, f)))
+}
+
+/// A star-shaped polygon at any angle round `(cx, cy)` on a 10 nm lattice:
+/// 3 to 8 vertices at distinct angles round the centre, up to `reach` from
+/// it, counter-clockwise.
+fn star(rng: &mut gpurify_testgen::Rng, (cx, cy): (i64, i64), reach: i64) -> Vec<(i64, i64)> {
+    loop {
+        let n = rng.range(3, 9);
+        let mut pts: Vec<(i64, i64)> = (0..n)
+            .map(|_| {
+                (
+                    cx + rng.range(-reach, reach + 1) * 10,
+                    cy + rng.range(-reach, reach + 1) * 10,
+                )
+            })
+            .filter(|&p| p != (cx, cy))
+            .collect();
+        let half = |(x, y): (i64, i64)| y < cy || (y == cy && x < cx);
+        let turn = |p: (i64, i64), q: (i64, i64)| (p.0 - cx) * (q.1 - cy) - (p.1 - cy) * (q.0 - cx);
+        pts.sort_by(|&p, &q| half(p).cmp(&half(q)).then_with(|| 0.cmp(&turn(p, q))));
+        let k = pts.len();
+        let distinct = pts
+            .windows(2)
+            .all(|w| !(turn(w[0], w[1]) == 0 && half(w[0]) == half(w[1])));
+        if k >= 3 && distinct && (0..k).all(|i| turn(pts[i], pts[(i + 1) % k]) > 0) {
+            return pts;
+        }
+    }
+}
+
+/// Random shapes at any angle on [`ANYANGLE_DECK`]'s layers, on a 10 nm
+/// lattice. No two edges cross between grid points, so nothing is rounded
+/// and the comparison is of the measures alone: each met1 star sits in its
+/// own 600 nm cell (neighbours come close, never overlap), and each met2
+/// star and via1 square lies strictly inside a met1 star (a shrunk copy, kept
+/// only when it is inside) or alone in an empty cell.
+fn anyangle_fixtures(count: u64) -> Vec<harness::Fixture> {
+    (0..count)
+        .map(|seed| {
+            let mut rng = gpurify_testgen::Rng::new(seed ^ 0xa1_1a);
+            let mut layout = harness::Layout::default();
+            for cell in 0..9i64 {
+                let (ox, oy) = ((cell % 3) * 600, (cell / 3) * 600);
+                // The centre at least `reach` lattice steps inside the cell.
+                let reach = rng.range(3, 30);
+                let free = 60 - 2 * reach;
+                let centre = |rng: &mut gpurify_testgen::Rng| {
+                    (
+                        ox + (reach + rng.range(0, free.max(0) + 1)) * 10,
+                        oy + (reach + rng.range(0, free.max(0) + 1)) * 10,
+                    )
+                };
+                match rng.range(0, 6) {
+                    0 => {}
+                    1 => {
+                        let c = centre(&mut rng);
+                        layout = layout.polygon("met2", &star(&mut rng, c, reach));
+                    }
+                    _ => {
+                        let c = centre(&mut rng);
+                        let outer = star(&mut rng, c, reach);
+                        layout = layout.polygon("met1", &outer);
+                        if rng.range(0, 2) == 0 {
+                            // Shrunk about the centre, which every star sees whole.
+                            let k = rng.range(2, 8);
+                            let inner: Vec<(i64, i64)> = outer
+                                .iter()
+                                .map(|&(x, y)| {
+                                    (
+                                        c.0 + ((x - c.0) * k / 10).div_euclid(10) * 10,
+                                        c.1 + ((y - c.1) * k / 10).div_euclid(10) * 10,
+                                    )
+                                })
+                                .collect();
+                            let mut inner = inner;
+                            inner.dedup();
+                            while inner.len() > 1 && inner.first() == inner.last() {
+                                inner.pop();
+                            }
+                            // Still a star round `c`: each turn round it under 180
+                            // degrees and positive, so the ring is simple.
+                            let k = inner.len();
+                            let star_round_c = k >= 3
+                                && (0..k).all(|i| {
+                                    let (p, q) = (inner[i], inner[(i + 1) % k]);
+                                    (p.0 - c.0) * (q.1 - c.1) - (p.1 - c.1) * (q.0 - c.0) > 0
+                                });
+                            if star_round_c && strictly_within(&inner, &outer) {
+                                layout = layout.polygon("met2", &inner);
+                            }
+                        }
+                        if rng.range(0, 2) == 0 {
+                            let side = rng.range(2, 6) * 10;
+                            let (x, y) = (c.0 + rng.range(-3, 3) * 10, c.1 + rng.range(-3, 3) * 10);
+                            let square =
+                                [(x, y), (x + side, y), (x + side, y + side), (x, y + side)];
+                            if strictly_within(&square, &outer) {
+                                layout = layout.polygon("via1", &square);
+                            }
+                        }
+                    }
+                }
+            }
+            harness::Fixture::new(&format!("anyangle/{seed}"), &[], ANYANGLE_DECK, drc())
+                .layout(layout)
+        })
+        .collect()
+}
+
+/// DRC-116: the kinds that measure shapes at any angle against `KLayout`'s
+/// same checks.
+///
+/// Oracle: differential against `KLayout`, through the mirror deck, on 1500
+/// random layouts of star-shaped polygons at any angle (`docs/klayout-mirror.md`
+/// a9), each rule compared as its verdict states.
+#[test]
+#[ignore = "release tier: needs klayout (nix develop .#oracles)"]
+fn random_anyangle_layouts_agree_with_the_klayout_mirror() {
+    let fixtures = anyangle_fixtures(1500);
+    differential(
+        "anyangle",
+        fixtures
+            .chunks(ROUND)
+            .map(|round| jobs_of(round, "anyangle")),
+    );
+}
+
+/// The any-angle differential's layouts are valid, hold edges at angles
+/// other than multiples of 45 degrees, and every rule of its deck runs on
+/// them in `GPurify`, so the release-tier comparison compares rather than
+/// counting refusals.
+///
+/// Oracle: the DRC-116 scope (`docs/deck.md`, "Geometry at any angle"):
+/// each kind in [`ANYANGLE_DECK`] measures such shapes, so none records
+/// `Refused`.
+#[test]
+fn the_anyangle_differential_layouts_run_every_rule() {
+    let jobs = jobs_of(&anyangle_fixtures(40), "anyangle-merge");
+    assert_eq!(jobs.len(), 40, "every layout loads and runs");
+    for job in &jobs {
+        for (id, (outcome, _)) in &job.gpurify {
+            assert_ne!(*outcome, Ran::Refused, "{} {id}", job.name);
+        }
+    }
+}
