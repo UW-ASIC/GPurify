@@ -35,9 +35,9 @@ use crate::field::filament::{self, default_wdir, Filament, Vec3};
 use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::{Bbox, Dbu, GeometryStore, Grid, LayerId, PolyId};
 use gpurify_ingest::deck::{Connectivity, ProcessStack};
-use num_complex::Complex64;
 use rayon::prelude::*;
 use std::cmp::Reverse;
+use std::ops::{Add, AddAssign, Div, Mul, Sub, SubAssign};
 
 /// The one frequency the impedance is extracted at: 1 MHz, where skin effect is
 /// negligible on chip and ωL is still well above round-off next to R.
@@ -516,7 +516,7 @@ pub fn extract_inductance_into(
     let f = FREQUENCY_HZ;
     let z = port_impedance_matrix(&set, nodes.len(), &ports, f)?;
     let w = 2.0 * std::f64::consts::PI * f;
-    let henry = |z: Complex64| if w == 0.0 { 0.0 } else { z.im / w };
+    let henry = |z: Complex| if w == 0.0 { 0.0 } else { z.im / w };
     let n = ports.len();
     for p in 0..n {
         let zp = z[p * n + p];
@@ -828,22 +828,9 @@ fn port_impedance_matrix(
     nn: usize,
     ports: &[(usize, usize)],
     f: f64,
-) -> Result<Vec<Complex64>, InductanceError> {
+) -> Result<Vec<Complex>, InductanceError> {
     let fils = &set.fils;
     let nb = fils.len();
-
-    // Partial inductance, upper triangle by rows (order-preserving collect).
-    let rows: Vec<Vec<f64>> = (0..nb)
-        .into_par_iter()
-        .map(|i| {
-            let mut row = vec![0.0; nb - i];
-            row[0] = filament::self_inductance(&fils[i]);
-            for j in (i + 1)..nb {
-                row[j - i] = filament::mutual(&fils[i], &fils[j]);
-            }
-            row
-        })
-        .collect();
 
     // Ground: a port's negative terminal, else the component's lowest node.
     let comp = connected_components(set, nn);
@@ -876,39 +863,40 @@ fn port_impedance_matrix(
         }
     }
 
-    // Zb = R (diagonal) + jωL.
+    // Zb = R (diagonal) + jωL. The upper triangle by rows, in parallel, each
+    // pair's partial inductance taken lower filament first; then mirrored.
     let w = 2.0 * std::f64::consts::PI * f;
-    let mut zb = vec![Complex64::new(0.0, 0.0); nb * nb];
-    for i in 0..nb {
-        for j in 0..nb {
-            let l = if j >= i {
-                rows[i][j - i]
-            } else {
-                rows[j][i - j]
-            };
-            let mut val = Complex64::new(0.0, w * l);
-            if i == j {
-                val += Complex64::new(set.r[i], 0.0);
+    let mut zb = vec![Complex::ZERO; nb * nb];
+    zb.par_chunks_mut(nb.max(1))
+        .enumerate()
+        .for_each(|(i, row)| {
+            row[i] = Complex::new(0.0, w * filament::self_inductance(&fils[i]));
+            row[i] += Complex::new(set.r[i], 0.0);
+            for j in (i + 1)..nb {
+                row[j] = Complex::new(0.0, w * filament::mutual(&fils[i], &fils[j]));
             }
-            zb[i * nb + j] = val;
+        });
+    for i in 0..nb {
+        for j in 0..i {
+            zb[i * nb + j] = zb[j * nb + i];
         }
     }
     let lu = Lu::factor(zb, nb).ok_or(InductanceError::Singular(f))?;
 
     // X[:, n] = Zb⁻¹ (Aᵀ column n) for every non-ground node.
-    let xcols: Vec<Option<Vec<Complex64>>> = (0..nn)
+    let xcols: Vec<Option<Vec<Complex>>> = (0..nn)
         .into_par_iter()
         .map(|n| {
             if is_ground[n] {
                 return None;
             }
-            let mut rhs = vec![Complex64::new(0.0, 0.0); nb];
+            let mut rhs = vec![Complex::ZERO; nb];
             for b in 0..nb {
                 if set.n1[b] == n {
-                    rhs[b] += Complex64::new(1.0, 0.0);
+                    rhs[b] += Complex::new(1.0, 0.0);
                 }
                 if set.n2[b] == n {
-                    rhs[b] -= Complex64::new(1.0, 0.0);
+                    rhs[b] -= Complex::new(1.0, 0.0);
                 }
             }
             Some(lu.solve(&rhs))
@@ -916,7 +904,7 @@ fn port_impedance_matrix(
         .collect();
 
     // Reduced nodal admittance Yn = A X, scattered per branch.
-    let mut yn = vec![Complex64::new(0.0, 0.0); nred * nred];
+    let mut yn = vec![Complex::ZERO; nred * nred];
     for n in 0..nn {
         let Some(xc) = &xcols[n] else { continue };
         let rn = red_of[n];
@@ -934,19 +922,19 @@ fn port_impedance_matrix(
 
     // Unit current into each port p; the voltage across every port q is Z[q][p].
     let n = ports.len();
-    let mut z = vec![Complex64::new(0.0, 0.0); n * n];
+    let mut z = vec![Complex::ZERO; n * n];
     for (p, &(a, c)) in ports.iter().enumerate() {
-        let mut iinj = vec![Complex64::new(0.0, 0.0); nred];
+        let mut iinj = vec![Complex::ZERO; nred];
         if !is_ground[a] {
-            iinj[red_of[a]] += Complex64::new(1.0, 0.0);
+            iinj[red_of[a]] += Complex::new(1.0, 0.0);
         }
         if !is_ground[c] {
-            iinj[red_of[c]] -= Complex64::new(1.0, 0.0);
+            iinj[red_of[c]] -= Complex::new(1.0, 0.0);
         }
         let v = yn_lu.solve(&iinj);
         let volt = |node: usize| {
             if is_ground[node] {
-                Complex64::new(0.0, 0.0)
+                Complex::ZERO
             } else {
                 v[red_of[node]]
             }
@@ -996,16 +984,84 @@ fn connected_components(set: &FilamentSet, nn: usize) -> Vec<usize> {
     comp
 }
 
+/// `re + i·im`: num-complex 0.4's arithmetic, operation for operation, so
+/// every impedance kept its bits when this replaced that crate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Complex {
+    re: f64,
+    im: f64,
+}
+
+impl Complex {
+    const ZERO: Self = Self::new(0.0, 0.0);
+
+    const fn new(re: f64, im: f64) -> Self {
+        Self { re, im }
+    }
+
+    /// `|z|`, through `hypot`, so no square overflows.
+    fn norm(self) -> f64 {
+        self.re.hypot(self.im)
+    }
+}
+
+impl Add for Complex {
+    type Output = Self;
+    fn add(self, o: Self) -> Self {
+        Self::new(self.re + o.re, self.im + o.im)
+    }
+}
+
+impl Sub for Complex {
+    type Output = Self;
+    fn sub(self, o: Self) -> Self {
+        Self::new(self.re - o.re, self.im - o.im)
+    }
+}
+
+impl Mul for Complex {
+    type Output = Self;
+    fn mul(self, o: Self) -> Self {
+        Self::new(
+            self.re * o.re - self.im * o.im,
+            self.re * o.im + self.im * o.re,
+        )
+    }
+}
+
+impl Div for Complex {
+    type Output = Self;
+    fn div(self, o: Self) -> Self {
+        let norm_sqr = o.re * o.re + o.im * o.im;
+        Self::new(
+            (self.re * o.re + self.im * o.im) / norm_sqr,
+            (self.im * o.re - self.re * o.im) / norm_sqr,
+        )
+    }
+}
+
+impl AddAssign for Complex {
+    fn add_assign(&mut self, o: Self) {
+        *self = *self + o;
+    }
+}
+
+impl SubAssign for Complex {
+    fn sub_assign(&mut self, o: Self) {
+        *self = *self - o;
+    }
+}
+
 /// Dense complex LU with partial pivoting (PA = LU), row-major `n × n`.
 struct Lu {
-    factors: Vec<Complex64>,
+    factors: Vec<Complex>,
     piv: Vec<usize>,
     n: usize,
 }
 
 impl Lu {
     /// `None` when a pivot column is exactly zero.
-    fn factor(mut lu: Vec<Complex64>, n: usize) -> Option<Self> {
+    fn factor(mut lu: Vec<Complex>, n: usize) -> Option<Self> {
         let mut piv: Vec<usize> = (0..n).collect();
         for k in 0..n {
             let mut p = k;
@@ -1031,7 +1087,7 @@ impl Lu {
             let pivot = lu[k * n + k];
             let (top, tail) = lu.split_at_mut((k + 1) * n);
             let pivot_row = &top[k * n..(k + 1) * n];
-            let update = |row: &mut [Complex64]| {
+            let update = |row: &mut [Complex]| {
                 let factor = row[k] / pivot;
                 row[k] = factor;
                 for j in (k + 1)..n {
@@ -1051,9 +1107,9 @@ impl Lu {
         })
     }
 
-    fn solve(&self, b: &[Complex64]) -> Vec<Complex64> {
+    fn solve(&self, b: &[Complex]) -> Vec<Complex> {
         let n = self.n;
-        let mut x: Vec<Complex64> = self.piv.iter().map(|&p| b[p]).collect();
+        let mut x: Vec<Complex> = self.piv.iter().map(|&p| b[p]).collect();
         for i in 0..n {
             let mut sum = x[i];
             for j in 0..i {

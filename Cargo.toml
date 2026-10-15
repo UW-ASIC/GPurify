@@ -39,7 +39,6 @@ gpurify-testgen = { path = "crates/testgen" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 rayon = "1"
-num-complex = "0.4"
 flate2 = "1"
 thiserror = "1"
 fearless_simd = "1"
