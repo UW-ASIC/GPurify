@@ -36,19 +36,19 @@ fn ratio(x: f64) -> Finding {
     measured(Measurement::Ratio(x))
 }
 
-fn count(n: u32) -> Finding {
+pub(crate) fn count(n: u32) -> Finding {
     measured(Measurement::Count(n))
 }
 
-fn millivolts(x: f64) -> Finding {
+pub(crate) fn millivolts(x: f64) -> Finding {
     measured(Measurement::Voltage(Qty::new(x)))
 }
 
-fn microamps(x: f64) -> Finding {
+pub(crate) fn microamps(x: f64) -> Finding {
     measured(Measurement::Current(Qty::new(x)))
 }
 
-fn ohms(x: f64) -> Finding {
+pub(crate) fn ohms(x: f64) -> Finding {
     measured(Measurement::Resistance(Qty::new(x)))
 }
 
@@ -57,7 +57,7 @@ fn length(nm: i64) -> Finding {
 }
 
 /// Where a limit sits against the value it is swept around.
-fn side(limit: f64, value: f64) -> &'static str {
+pub(crate) fn side(limit: f64, value: f64) -> &'static str {
     match limit.total_cmp(&value) {
         std::cmp::Ordering::Less => "below",
         std::cmp::Ordering::Equal => "at",
@@ -68,15 +68,15 @@ fn side(limit: f64, value: f64) -> &'static str {
 /// `value` and one part in a thousand either side: the three limits a value is
 /// swept with. The middle one is the value itself, so a deck writing it with
 /// `{}` reads back the same `f64`.
-fn sweep(value: f64) -> [f64; 3] {
+pub(crate) fn sweep(value: f64) -> [f64; 3] {
     [value * 0.999, value, value * 1.001]
 }
 
 /// A box `(xlo, ylo, xhi, yhi)` in nanometres.
-type Rect = (i64, i64, i64, i64);
+pub(crate) type Rect = (i64, i64, i64, i64);
 
 /// Adds a rectangle to a layout in place.
-fn rect(layout: &mut Layout, layer: &str, (xlo, ylo, xhi, yhi): Rect) {
+pub(crate) fn rect(layout: &mut Layout, layer: &str, (xlo, ylo, xhi, yhi): Rect) {
     *layout = std::mem::take(layout).rect(layer, xlo, ylo, xhi, yhi);
 }
 
@@ -1997,10 +1997,10 @@ fn topo_deck(limits: Limits) -> String {
 const NETS: usize = 4;
 const TRACK_Y0: i64 = 3000;
 const TRACK_PITCH: i64 = 1000;
-const TRACK_H: i64 = 400;
+pub(crate) const TRACK_H: i64 = 400;
 const PITCH: i64 = 4000;
 
-fn track_y(net: usize) -> i64 {
+pub(crate) fn track_y(net: usize) -> i64 {
     TRACK_Y0 + net as i64 * TRACK_PITCH
 }
 
@@ -2014,7 +2014,7 @@ fn riser(l: &mut Layout, x: i64, base: i64, net: usize) {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Model {
+pub(crate) enum Model {
     Nfet,
     Pfet,
     Clamp,
@@ -2054,7 +2054,7 @@ impl Model {
 /// first, which extraction calls the source) and drain, and its bulk for the
 /// `_b` models.
 #[derive(Clone, Copy, Debug)]
-struct Dev {
+pub(crate) struct Dev {
     model: Model,
     g: usize,
     s: usize,
@@ -2062,7 +2062,7 @@ struct Dev {
     b: Option<usize>,
 }
 
-fn dev(model: Model, g: usize, s: usize, d: usize) -> Dev {
+pub(crate) fn dev(model: Model, g: usize, s: usize, d: usize) -> Dev {
     Dev {
         model,
         g,
@@ -3528,7 +3528,7 @@ fn esd(depth: Depth) -> Vec<Fixture> {
 /// `mku` an up diode (pad to power rail), `mkr` a rail diode (ground to
 /// power), and `mkx`, `mky` the up and rail diodes reversed. `padv` joins a
 /// supply's own pad pin to its rail.
-const ESD_PROCESS: &str = "grid 1nm
+pub(crate) const ESD_PROCESS: &str = "grid 1nm
 layer pad = gds(1, 0)
 layer met1 = gds(2, 0)
 layer met2 = gds(3, 0)
@@ -3559,19 +3559,19 @@ pex padv thickness 100nm height 400nm sheet 0.25ohm dielectric 3.9 area_cap 1aF/
 ";
 
 /// Every diode model of [`ESD_PROCESS`], as a deck's `clamps` list.
-const ESD_CLAMPS: &str = "[\"down\", \"up\", \"rail\", \"up_rev\", \"rail_rev\"]";
+pub(crate) const ESD_CLAMPS: &str = "[\"down\", \"up\", \"rail\", \"up_rev\", \"rail_rev\"]";
 
 /// Every strip's length: x from 0 to 20 µm, tapped at its centre, 10 µm.
-const STRIP: i64 = 20_000;
+pub(crate) const STRIP: i64 = 20_000;
 
 /// Where each strip's lower edge sits: the pad at 0, VSS 3 µm below, VDD 3 µm
 /// above.
-const STRIP_Y: [i64; 3] = [0, -3000, 3000];
+pub(crate) const STRIP_Y: [i64; 3] = [0, -3000, 3000];
 
 /// One diode clamp of [`ESD_PROCESS`] by its recogniser, which fixes the two
 /// strips it joins (anode first).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Diode {
+pub(crate) enum Diode {
     /// `mkd`: VSS to the pad.
     Down,
     /// `mku`: the pad to VDD.
@@ -3587,7 +3587,7 @@ enum Diode {
 
 impl Diode {
     /// The marker layer, and the strips (0 pad, 1 VSS, 2 VDD) the marker spans.
-    fn marker(self) -> (&'static str, usize, usize) {
+    pub(crate) fn marker(self) -> (&'static str, usize, usize) {
         match self {
             Diode::Down => ("mkd", 1, 0),
             Diode::Up => ("mku", 0, 2),
@@ -3601,7 +3601,7 @@ impl Diode {
 /// The three strips, widths `w` (pad, VSS, VDD), labelled PAD, VSS and VDD,
 /// with a 200 nm diode marker centred on `x` for each `(diode, x)`, reaching
 /// 100 nm into both strips it spans.
-fn esd_layout(w: [i64; 3], diodes: &[(Diode, i64)]) -> Layout {
+pub(crate) fn esd_layout(w: [i64; 3], diodes: &[(Diode, i64)]) -> Layout {
     let mut l = Layout::default();
     for (k, (layer, text, name)) in [
         ("pad", "padtxt", "PAD"),
@@ -3636,7 +3636,7 @@ fn esd_layout(w: [i64; 3], diodes: &[(Diode, i64)]) -> Layout {
 }
 
 /// VDD a 1.8 V power supply and VSS its ground.
-fn esd_intent() -> String {
+pub(crate) fn esd_intent() -> String {
     intent(
         &[("a", 1800.0)],
         &[("VDD", "a", "power"), ("VSS", "a", "ground")],
@@ -4223,7 +4223,7 @@ fn esd_turn_on() -> Vec<Fixture> {
 /// [`TOPO_PROCESS`] with a diode recogniser `mkdi` (model `dio`): its anode
 /// the first diffusion under the marker, its cathode the second; and a
 /// resistor recogniser `mkres` (model `rs`) drawn the same way.
-fn diode_process() -> String {
+pub(crate) fn diode_process() -> String {
     format!(
         "{TOPO_PROCESS}layer mkdi = gds(27, 0)\n\
          layer mkres = gds(28, 0)\n\
@@ -4244,7 +4244,7 @@ fn circuit(labels: &[&str], devs: &[Dev], diodes: &[(usize, usize)]) -> Layout {
 
 /// [`circuit`] with two-pin devices of any recogniser: `(marker, first pin's
 /// net, second pin's net)`, the first pin's diffusion drawn first.
-fn circuit_pins(labels: &[&str], devs: &[Dev], pins: &[(&str, usize, usize)]) -> Layout {
+pub(crate) fn circuit_pins(labels: &[&str], devs: &[Dev], pins: &[(&str, usize, usize)]) -> Layout {
     let mut l = Layout::default();
     for (i, dv) in devs.iter().enumerate() {
         let x0 = i as i64 * PITCH;
@@ -4563,7 +4563,7 @@ const DOMAIN_NETS: [&str; 7] = ["VDD1", "VSS1", "VDD2", "VSS2", "VSS3", "SIG", "
 
 /// VDD1 and VSS1 are domain `d1`, VDD2 and VSS2 domain `d2`, VSS3 the only
 /// supply of `d3`, each at 1.8 V.
-fn domain_intent() -> String {
+pub(crate) fn domain_intent() -> String {
     intent(
         &[("d1", 1800.0), ("d2", 1800.0), ("d3", 1800.0)],
         &[
