@@ -826,3 +826,30 @@ fn ac_current_rows_load_the_grid_with_their_own_current() {
         }
     }
 }
+
+/// A node is examined when its net states any drop limit, however many it
+/// states, and a drop fraction is of the domain's nominal.
+///
+/// Oracle: Ohm's law on the series ladder above (worst drop 1.75 mV of
+/// 1800 mV, 0.000972...): with an absolute limit, a fraction and an
+/// overvoltage all stated, the pad and three load taps are examined; a
+/// 0.0009 fraction (1.62 mV) catches the far node alone, at 1.75 mV,
+/// while the absolute 100 mV limit catches nothing.
+#[test]
+fn ir_drop_examines_every_node_whose_net_states_any_limit() {
+    let report = erc(
+        "rule ir ir_drop()\n",
+        &intent(
+            1800.0,
+            &[("VDD", "power")],
+            r#"{"net":"VDD","max_drop_mv":100,"max_drop_fraction":0.0009,"max_overvoltage_mv":100,"budget_current_ua":3000}"#,
+        ),
+        ladder_on("VDD"),
+    );
+    let run = report.run("ir");
+    assert_eq!((run.outcome, run.examined), (Outcome::Ran, 4));
+    let rows = report.rows("ir");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].1, (18_000, 500));
+    assert_eq!(millivolts(rows[0].2), 1.75);
+}
