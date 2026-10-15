@@ -5,6 +5,8 @@
     reason = "each test binary links only the fixtures it names"
 )]
 
+pub mod deck;
+
 use gpurify_check::drc::{Rule, RuleSet};
 use gpurify_check::report::{RuleRun, Violations};
 use gpurify_geom::view::validate_layer_into;
