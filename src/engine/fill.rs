@@ -225,7 +225,7 @@ fn fill_one(loaded: &Loaded, spec: &FillSpec) -> Result<(LayerId, Vec<Bbox>), Fi
     let drawn = deck
         .drc
         .first_derived
-        .map_or(store.layer_count(), |l| l.idx());
+        .map_or(store.layer_count(), LayerId::idx);
     let drawn_extent = extent(
         store,
         (0..drawn).map(|l| LayerId(u16::try_from(l).expect("a LayerId is a u16"))),
