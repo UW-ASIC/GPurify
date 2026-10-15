@@ -2,7 +2,7 @@
 //! the rule kinds' rustdocs state: each case one value either side of the
 //! line, the refusal named with the value it reports.
 
-use crate::deck_fixture::{check, met1, new_deck, one_layer_deck};
+use crate::common::deck::{check, met1, new_deck, one_layer_deck};
 use gpurify_check::drc::{DrcError, RuleSet};
 use gpurify_geom::Grid;
 use gpurify_ingest::deck::parse_deck;

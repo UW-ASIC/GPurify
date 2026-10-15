@@ -5,12 +5,12 @@
 //! level, with the same oracles.
 
 use crate::common::deck::{
-    area, check, check_under, deck, new_deck, ratio, rect, Shape, Symmetry, Want,
+    by_rule, check_everywhere, check_under, deck, new_deck, Finding, Layout, Symmetry,
 };
 
 /// Windows anchor on the die's corner: translations only.
 fn identity(s: Symmetry) -> bool {
-    s.turns == 0 && !s.mirror
+    s == (0, false)
 }
 
 fn ratio_of(n: i64, d: f64) -> f64 {
@@ -28,17 +28,16 @@ fn aspect_ratio_holds_the_long_side_over_the_short_one_to_the_limit() {
     for (limit, text, lengths) in [(300, "3", [299, 300, 301]), (250, "2.5", [249, 250, 251])] {
         let deck = deck(&format!("rule ar aspect_ratio(met1) <= {text}"));
         for l in lengths {
-            let want: Vec<Want> = if l > limit {
-                vec![ratio("ar", ratio_of(l, 100.0)).at2(100, l)]
+            let want: Vec<(&str, Finding)> = if l > limit {
+                vec![("ar", Finding::ratio(ratio_of(l, 100.0)).at_half(100, l))]
             } else {
                 vec![]
             };
-            check(
+            check_everywhere(
                 &format!("bar/{l}"),
                 &deck,
-                &[rect("met1", 0, 0, 100, l)],
-                &["ar"],
-                &want,
+                &Layout::default().rect("met1", 0, 0, 100, l),
+                &by_rule(&["ar"], &want),
             );
         }
     }
@@ -52,31 +51,38 @@ fn aspect_ratio_holds_the_long_side_over_the_short_one_to_the_limit() {
 #[test]
 fn aspect_ratio_judges_merged_figures_by_their_box() {
     let deck = deck("rule ar aspect_ratio(met1) <= 3");
-    let cases: [(&str, Vec<Shape>, Vec<Want>); 4] = [
+    let cases: [(&str, Layout, Vec<(&str, Finding)>); 4] = [
         (
             "halves",
-            vec![rect("met1", 0, 0, 100, 150), rect("met1", 0, 150, 100, 301)],
-            vec![ratio("ar", 3.01)],
+            Layout::default()
+                .rect("met1", 0, 0, 100, 150)
+                .rect("met1", 0, 150, 100, 301),
+            vec![("ar", Finding::ratio(3.01))],
         ),
         (
             "l_of_two_long_arms",
-            vec![rect("met1", 0, 0, 400, 100), rect("met1", 0, 100, 100, 400)],
+            Layout::default()
+                .rect("met1", 0, 0, 400, 100)
+                .rect("met1", 0, 100, 100, 400),
             vec![],
         ),
         (
             "ring",
-            vec![
-                rect("met1", 0, 0, 1000, 50),
-                rect("met1", 0, 150, 1000, 200),
-                rect("met1", 0, 50, 100, 150),
-                rect("met1", 900, 50, 1000, 150),
-            ],
-            vec![ratio("ar", 5.0)],
+            Layout::default()
+                .rect("met1", 0, 0, 1000, 50)
+                .rect("met1", 0, 150, 1000, 200)
+                .rect("met1", 0, 50, 100, 150)
+                .rect("met1", 900, 50, 1000, 150),
+            vec![("ar", Finding::ratio(5.0))],
         ),
-        ("empty", vec![rect("met2", 0, 0, 1000, 100)], vec![]),
+        (
+            "empty",
+            Layout::default().rect("met2", 0, 0, 1000, 100),
+            vec![],
+        ),
     ];
     for (name, shapes, want) in cases {
-        check(name, &deck, &shapes, &["ar"], &want);
+        check_everywhere(name, &deck, &shapes, &by_rule(&["ar"], &want));
     }
 }
 
@@ -91,17 +97,18 @@ const REGION: &str = "rule dmax region_density(met3, cap) <= 25%\n\
 fn region_density_is_the_layer_s_share_of_each_region_figure() {
     let deck = new_deck(&["met3", "cap"], REGION);
     for h in [249, 250, 251] {
-        let want: Vec<Want> = if h > 250 {
-            vec![ratio("dmax", ratio_of(h, 1000.0)).at(500, 500)]
+        let want: Vec<(&str, Finding)> = if h > 250 {
+            vec![("dmax", Finding::ratio(ratio_of(h, 1000.0)).at(500, 500))]
         } else {
             vec![]
         };
-        check(
+        check_everywhere(
             &format!("coverage/{h}"),
             &deck,
-            &[rect("cap", 0, 0, 1000, 1000), rect("met3", 0, 0, 1000, h)],
-            &["dmax", "dmin"],
-            &want,
+            &Layout::default()
+                .rect("cap", 0, 0, 1000, 1000)
+                .rect("met3", 0, 0, 1000, h),
+            &by_rule(&["dmax", "dmin"], &want),
         );
     }
 }
@@ -118,46 +125,44 @@ fn region_density_is_the_layer_s_share_of_each_region_figure() {
 #[test]
 fn region_density_counts_only_inside_each_region_figure() {
     let deck = new_deck(&["met3", "cap"], REGION);
-    let ring = [
-        rect("cap", 0, 0, 1000, 250),
-        rect("cap", 0, 750, 1000, 1000),
-        rect("cap", 0, 250, 250, 750),
-        rect("cap", 750, 250, 1000, 750),
-    ];
-    let cases: [(&str, Vec<Shape>, Vec<Want>); 4] = [
+    let ring = Layout::default()
+        .rect("cap", 0, 0, 1000, 250)
+        .rect("cap", 0, 750, 1000, 1000)
+        .rect("cap", 0, 250, 250, 750)
+        .rect("cap", 750, 250, 1000, 750);
+    let cases: [(&str, Layout, Vec<(&str, Finding)>); 4] = [
         (
             "two_regions",
+            Layout::default()
+                .rect("cap", 0, 0, 1000, 1000)
+                .rect("met3", 0, 0, 1000, 300)
+                .rect("cap", 3000, 0, 4000, 1000)
+                .rect("met3", 3000, 0, 4000, 50),
             vec![
-                rect("cap", 0, 0, 1000, 1000),
-                rect("met3", 0, 0, 1000, 300),
-                rect("cap", 3000, 0, 4000, 1000),
-                rect("met3", 3000, 0, 4000, 50),
-            ],
-            vec![
-                ratio("dmax", 0.3).at(500, 500),
-                ratio("dmin", 0.05).at(3500, 500),
+                ("dmax", Finding::ratio(0.3).at(500, 500)),
+                ("dmin", Finding::ratio(0.05).at(3500, 500)),
             ],
         ),
         (
             "outside_not_counted",
-            vec![
-                rect("cap", 0, 0, 1000, 1000),
-                rect("met3", -500, 0, 1000, 250),
-            ],
+            Layout::default()
+                .rect("cap", 0, 0, 1000, 1000)
+                .rect("met3", -500, 0, 1000, 250),
             vec![],
         ),
         (
             "holed_region",
-            ring.iter()
-                .cloned()
-                .chain([rect("met3", 250, 250, 750, 750)])
-                .collect(),
-            vec![ratio("dmin", 0.0)],
+            ring.clone().rect("met3", 250, 250, 750, 750),
+            vec![("dmin", Finding::ratio(0.0))],
         ),
-        ("no_region", vec![rect("met3", 0, 0, 1000, 1000)], vec![]),
+        (
+            "no_region",
+            Layout::default().rect("met3", 0, 0, 1000, 1000),
+            vec![],
+        ),
     ];
     for (name, shapes, want) in cases {
-        check(name, &deck, &shapes, &["dmax", "dmin"], &want);
+        check_everywhere(name, &deck, &shapes, &by_rule(&["dmax", "dmin"], &want));
     }
 }
 
@@ -192,25 +197,27 @@ fn cover_density_holds_each_window_to_the_band_its_cover_picks() {
                 None => vec![0, 100_000],
             };
             for held in held {
-                let mut shapes = vec![
-                    rect("die", 0, 0, 1000, 1000),
-                    rect("c", 0, 0, 1000, cover / 1000),
-                ];
+                let mut layout = Layout::default().rect("die", 0, 0, 1000, 1000).rect(
+                    "c",
+                    0,
+                    0,
+                    1000,
+                    cover / 1000,
+                );
                 if held > 0 {
-                    shapes.push(rect("m", 0, 0, held / 1000, 1000));
+                    layout = layout.rect("m", 0, 0, held / 1000, 1000);
                 }
-                let want: Vec<Want> = match need {
+                let want: Vec<(&str, Finding)> = match need {
                     Some(need) if held < need => {
-                        vec![ratio("cd", ratio_of(held, 1e6)).at(500, 500)]
+                        vec![("cd", Finding::ratio(ratio_of(held, 1e6)).at(500, 500))]
                     }
                     _ => vec![],
                 };
                 check_under(
                     &format!("cover_density/{cover}/{inclusive}/{held}"),
                     &deck,
-                    &shapes,
-                    &["cd"],
-                    &want,
+                    &layout,
+                    &by_rule(&["cd"], &want),
                     identity,
                 );
             }
@@ -229,31 +236,29 @@ fn density_balance_is_the_lesser_coverage_over_the_greater_per_window() {
         "rule bal density_balance(c1, c2, die; window: 1000nm, step: 1000nm) >= 0.5",
     );
     for w in [249, 250, 251] {
-        let mut want = vec![ratio("bal", 0.0).at(1500, 500)];
+        let mut want = vec![("bal", Finding::ratio(0.0).at(1500, 500))];
         if w < 250 {
-            want.push(ratio("bal", ratio_of(w, 500.0)).at(500, 500));
+            want.push(("bal", Finding::ratio(ratio_of(w, 500.0)).at(500, 500)));
         }
         check_under(
             &format!("density_balance/{w}"),
             &deck,
-            &[
-                rect("die", 0, 0, 3000, 1000),
-                rect("c1", 0, 0, 500, 1000),
-                rect("c2", 600, 0, 600 + w, 1000),
-                rect("c1", 1000, 0, 1400, 1000),
-            ],
-            &["bal"],
-            &want,
+            &Layout::default()
+                .rect("die", 0, 0, 3000, 1000)
+                .rect("c1", 0, 0, 500, 1000)
+                .rect("c2", 600, 0, 600 + w, 1000)
+                .rect("c1", 1000, 0, 1400, 1000),
+            &by_rule(&["bal"], &want),
             identity,
         );
     }
 }
 
 /// Lines 1000 long and 100 tall at each `y`.
-fn lines(ys: &[i64]) -> Vec<Shape> {
-    ys.iter()
-        .map(|&y| rect("met1", 0, y, 1000, y + 100))
-        .collect()
+fn lines(ys: &[i64]) -> Layout {
+    ys.iter().fold(Layout::default(), |layout, &y| {
+        layout.rect("met1", 0, y, 1000, y + 100)
+    })
 }
 
 /// Oracle: the closed form (Papadopoulou and Lee, 1999): two parallel lines
@@ -273,27 +278,29 @@ fn critical_area_is_the_closed_form_of_parallel_lines() {
          rule wide critical_area(met1; radius: 350nm) <= 1um2",
     );
     let rules = ["below", "at", "above", "wide"];
-    check(
+    check_everywhere(
         "two_lines",
         &deck,
         &lines(&[0, 300]),
-        &rules,
-        &[area("below", 130_000).at(500, 200)],
+        &by_rule(&rules, &[("below", Finding::area(130_000).at(500, 200))]),
     );
-    let three = ["below", "at", "above"].map(|r| area(r, 260_000).at(500, 350));
+    let three = ["below", "at", "above"].map(|r| (r, Finding::area(260_000).at(500, 350)));
     let mut want = three.to_vec();
-    want.push(area("wide", 1_360_000).at(500, 350));
-    check("three_lines", &deck, &lines(&[0, 300, 600]), &rules, &want);
-    check("apart", &deck, &lines(&[0, 500]), &rules, &[]);
-    check(
+    want.push(("wide", Finding::area(1_360_000).at(500, 350)));
+    check_everywhere(
+        "three_lines",
+        &deck,
+        &lines(&[0, 300, 600]),
+        &by_rule(&rules, &want),
+    );
+    check_everywhere("apart", &deck, &lines(&[0, 500]), &by_rule(&rules, &[]));
+    check_everywhere(
         "one_figure",
         &deck,
-        &[
-            rect("met1", 0, 0, 1000, 100),
-            rect("met1", 0, 100, 100, 1000),
-        ],
-        &rules,
-        &[],
+        &Layout::default()
+            .rect("met1", 0, 0, 1000, 100)
+            .rect("met1", 0, 100, 100, 1000),
+        &by_rule(&rules, &[]),
     );
 }
 
@@ -311,12 +318,16 @@ fn mean_critical_area_weights_each_radius() {
          rule above critical_area(met1; radii: [50nm, 150nm, 250nm], weights: [0.5, 0.25, 0.25]) <= 145001nm2",
     );
     let rules = ["below", "at", "above"];
-    check(
+    check_everywhere(
         "two_lines",
         &deck,
         &lines(&[0, 300]),
-        &rules,
-        &[area("below", 145_000).at(500, 200)],
+        &by_rule(&rules, &[("below", Finding::area(145_000).at(500, 200))]),
     );
-    check("out_of_reach", &deck, &lines(&[0, 700]), &rules, &[]);
+    check_everywhere(
+        "out_of_reach",
+        &deck,
+        &lines(&[0, 700]),
+        &by_rule(&rules, &[]),
+    );
 }

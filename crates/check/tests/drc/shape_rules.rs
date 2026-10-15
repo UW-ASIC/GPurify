@@ -4,16 +4,12 @@
 //! `drc_overlay.rs`) at the crate level, with the same oracles.
 
 use crate::common::deck::{
-    any, area, check, count, new_deck, ratio, rect, run, Shape, Symmetry, Want,
+    apply, by_rule, check_everywhere, new_deck, run, Finding, Layout, SYMMETRIES,
 };
 use gpurify_check::report::{Measurement, Outcome};
 use gpurify_testgen::dbu;
 
 const ANGLE: &str = "rule r interior_angle(met1) >= 90deg\nrule ihp interior_angle() >= 87deg";
-
-fn met(layer: &'static str, points: &[(i64, i64)]) -> Shape {
-    (layer, points.to_vec())
-}
 
 /// Oracle: angles fixed by construction. A rectangle (90 at a limit of 90:
 /// legal), an L (its inner corner 270), a ring (its hole, a clockwise row,
@@ -23,25 +19,23 @@ fn met(layer: &'static str, points: &[(i64, i64)]) -> Shape {
 #[test]
 fn right_and_reflex_corners_are_legal() {
     let deck = new_deck(&["met1", "met2"], ANGLE);
-    let cases: [(&str, Vec<Shape>); 4] = [
-        ("rectangle", vec![rect("met1", 0, 0, 1000, 500)]),
+    let cases: [(&str, Layout); 4] = [
+        ("rectangle", Layout::default().rect("met1", 0, 0, 1000, 500)),
         (
             "l_shape",
-            vec![
-                rect("met1", 0, 0, 1000, 100),
-                rect("met1", 0, 100, 100, 1000),
-            ],
+            Layout::default()
+                .rect("met1", 0, 0, 1000, 100)
+                .rect("met1", 0, 100, 100, 1000),
         ),
         (
             "ring",
-            vec![
-                rect("met1", 0, 0, 1000, 1000),
-                met("met1", &[(300, 300), (300, 700), (700, 700), (700, 300)]),
-            ],
+            Layout::default()
+                .rect("met1", 0, 0, 1000, 1000)
+                .polygon("met1", &[(300, 300), (300, 700), (700, 700), (700, 300)]),
         ),
         (
             "octagon",
-            vec![met(
+            Layout::default().polygon(
                 "met1",
                 &[
                     (100, 0),
@@ -53,11 +47,11 @@ fn right_and_reflex_corners_are_legal() {
                     (0, 900),
                     (0, 100),
                 ],
-            )],
+            ),
         ),
     ];
     for (name, shapes) in cases {
-        check(name, &deck, &shapes, &["r", "ihp"], &[]);
+        check_everywhere(name, &deck, &shapes, &by_rule(&["r", "ihp"], &[]));
     }
 }
 
@@ -70,32 +64,39 @@ fn right_and_reflex_corners_are_legal() {
 fn acute_corners_are_reported_at_their_vertices() {
     let deck = new_deck(&["met1", "met2"], ANGLE);
     let triangle = [(0, 0), (1000, 0), (0, 1000)];
-    let acute = |rule| [ratio(rule, 45.0).at(1000, 0), ratio(rule, 45.0).at(0, 1000)];
-    let both: Vec<Want> = acute("r").into_iter().chain(acute("ihp")).collect();
-    check(
+    let acute = |rule| {
+        [
+            (rule, Finding::ratio(45.0).at(1000, 0)),
+            (rule, Finding::ratio(45.0).at(0, 1000)),
+        ]
+    };
+    let both: Vec<(&str, Finding)> = acute("r").into_iter().chain(acute("ihp")).collect();
+    check_everywhere(
         "right_triangle",
         &deck,
-        &[met("met1", &triangle)],
-        &["r", "ihp"],
-        &both,
+        &Layout::default().polygon("met1", &triangle),
+        &by_rule(&["r", "ihp"], &both),
     );
-    let thirty: Vec<Want> = ["r", "ihp"]
+    let thirty: Vec<(&str, Finding)> = ["r", "ihp"]
         .into_iter()
-        .flat_map(|rule| [any(rule).at(1732, 0), any(rule).at(0, 1000)])
+        .flat_map(|rule| {
+            [
+                (rule, Finding::any().at(1732, 0)),
+                (rule, Finding::any().at(0, 1000)),
+            ]
+        })
         .collect();
-    check(
+    check_everywhere(
         "thirty_sixty",
         &deck,
-        &[met("met1", &[(0, 0), (1732, 0), (0, 1000)])],
-        &["r", "ihp"],
-        &thirty,
+        &Layout::default().polygon("met1", &[(0, 0), (1732, 0), (0, 1000)]),
+        &by_rule(&["r", "ihp"], &thirty),
     );
-    check(
+    check_everywhere(
         "other_layer",
         &deck,
-        &[met("met2", &triangle)],
-        &["r", "ihp"],
-        &acute("ihp"),
+        &Layout::default().polygon("met2", &triangle),
+        &by_rule(&["r", "ihp"], &acute("ihp")),
     );
 }
 
@@ -109,13 +110,15 @@ fn an_angle_at_the_limit_is_legal() {
         "rule a interior_angle(met1) >= 45deg\nrule b interior_angle(met1) >= 46deg",
     );
     let triangle = [(0, 0), (1000, 0), (0, 1000)];
-    let want = [ratio("b", 45.0).at(1000, 0), ratio("b", 45.0).at(0, 1000)];
-    check(
+    let want = [
+        ("b", Finding::ratio(45.0).at(1000, 0)),
+        ("b", Finding::ratio(45.0).at(0, 1000)),
+    ];
+    check_everywhere(
         "limit",
         &deck,
-        &[met("met1", &triangle)],
-        &["a", "b"],
-        &want,
+        &Layout::default().polygon("met1", &triangle),
+        &by_rule(&["a", "b"], &want),
     );
 }
 
@@ -134,35 +137,38 @@ fn polygon_validity_reports_crossing_and_degenerate_rings() {
         (1000, -1000),
         (0, -1000),
     ];
-    let both = |n: usize| -> Vec<Want> {
+    let both = |n: usize| -> Vec<(&str, Finding)> {
         (0..n)
-            .flat_map(|_| [count("v", 0), count("all", 0)])
+            .flat_map(|_| [("v", Finding::count(0)), ("all", Finding::count(0))])
             .collect()
     };
-    let cases: [(&str, Vec<Shape>, Vec<Want>); 4] = [
-        ("self_crossing", vec![met("met1", &crossing)], both(1)),
+    let cases: [(&str, Layout, Vec<(&str, Finding)>); 4] = [
+        (
+            "self_crossing",
+            Layout::default().polygon("met1", &crossing),
+            both(1),
+        ),
         (
             "zero_area",
-            vec![met("met1", &[(0, 0), (1000, 0), (500, 0)])],
+            Layout::default().polygon("met1", &[(0, 0), (1000, 0), (500, 0)]),
             both(1),
         ),
         (
             "valid_shapes",
-            vec![
-                rect("met1", 0, 0, 1000, 500),
-                met("met1", &[(2000, 0), (3000, 0), (2000, 1000)]),
-            ],
+            Layout::default()
+                .rect("met1", 0, 0, 1000, 500)
+                .polygon("met1", &[(2000, 0), (3000, 0), (2000, 1000)]),
             vec![],
         ),
         (
             "other_layer",
-            vec![met("met2", &crossing)],
-            vec![count("all", 0)],
+            Layout::default().polygon("met2", &crossing),
+            vec![("all", Finding::count(0))],
         ),
     ];
-    for (name, mut shapes, want) in cases {
-        shapes.push(rect("met1", 5000, 5000, 6000, 6000));
-        check(name, &deck, &shapes, &["v", "all"], &want);
+    for (name, shapes, want) in cases {
+        let shapes = shapes.rect("met1", 5000, 5000, 6000, 6000);
+        check_everywhere(name, &deck, &shapes, &by_rule(&["v", "all"], &want));
     }
 }
 
@@ -178,54 +184,42 @@ fn origin_measures_the_lower_left_corner_s_distance_from_the_origin() {
     let deck = new_deck(&["seal", "met1"], "rule x.19 origin(seal)");
     let root = |d2: i64| (0..=d2).take_while(|r| r * r <= d2).last().unwrap_or(0);
     for (dx, dy) in [(0, 0), (1, 0), (0, -1), (3, 4)] {
-        let drawn = [
-            rect("met1", dx + 500, dy + 500, dx + 600, dy + 600),
-            rect("seal", dx, dy, dx + 4000, dy + 100),
-            rect("seal", dx, dy + 3900, dx + 4000, dy + 4000),
-            rect("seal", dx, dy + 100, dx + 100, dy + 3900),
-            rect("seal", dx + 3900, dy + 100, dx + 4000, dy + 3900),
-        ];
-        for s in Symmetry::all() {
-            let moved: Vec<Shape> = drawn
-                .iter()
-                .map(|(layer, points)| {
-                    let mut out: Vec<_> = points.iter().map(|&p| s.apply(p)).collect();
-                    if s.mirror {
-                        out.reverse();
-                    }
-                    (*layer, out)
-                })
-                .collect();
+        let drawn = Layout::default()
+            .rect("met1", dx + 500, dy + 500, dx + 600, dy + 600)
+            .rect("seal", dx, dy, dx + 4000, dy + 100)
+            .rect("seal", dx, dy + 3900, dx + 4000, dy + 4000)
+            .rect("seal", dx, dy + 100, dx + 100, dy + 3900)
+            .rect("seal", dx + 3900, dy + 100, dx + 4000, dy + 3900);
+        for s in SYMMETRIES {
             let corners = [
                 (dx, dy),
                 (dx + 4000, dy),
                 (dx, dy + 4000),
                 (dx + 4000, dy + 4000),
             ]
-            .map(|p| s.apply(p));
+            .map(|p| apply(s, p));
             let x = corners.iter().map(|c| c.0).min().expect("four corners");
             let y = corners.iter().map(|c| c.1).min().expect("four corners");
-            let ran = run(&deck, &moved);
-            let want: Vec<(String, Measurement, (i64, i64))> = if (x, y) == (0, 0) {
+            let rows = run(&deck, &drawn.transformed(s, 0, 0));
+            let want: Vec<(Measurement, (i64, i64))> = if (x, y) == (0, 0) {
                 vec![]
             } else {
-                vec![(
-                    "x.19".to_owned(),
-                    Measurement::Length(dbu(root(x * x + y * y))),
-                    (x, y),
-                )]
+                vec![(Measurement::Length(dbu(root(x * x + y * y))), (x, y))]
             };
-            assert_eq!(ran.found, want, "({dx}, {dy}) under {s:?}");
-            assert_eq!(ran.runs, [("x.19".to_owned(), Outcome::Ran, 4)]);
+            let [row] = &rows[..] else {
+                panic!("one row: {rows:?}")
+            };
+            let found: Vec<_> = row.findings.iter().map(|f| (f.0, f.2)).collect();
+            assert_eq!(found, want, "({dx}, {dy}) under {s:?}");
+            assert_eq!(
+                (row.id.as_str(), row.outcome, row.examined),
+                ("x.19", Outcome::Ran, 4)
+            );
         }
     }
     // An empty seal layer is skipped, not passed.
-    let ran = run(&deck, &[rect("met1", 0, 0, 10, 10)]);
-    assert!(
-        matches!(ran.runs[0].1, Outcome::Skipped(_)),
-        "{:?}",
-        ran.runs
-    );
+    let rows = run(&deck, &Layout::default().rect("met1", 0, 0, 10, 10));
+    assert!(matches!(rows[0].outcome, Outcome::Skipped(_)), "{rows:?}");
 }
 
 /// Oracle: `Rule::Forbidden`'s definition (shapes as the store holds them,
@@ -236,33 +230,36 @@ fn origin_measures_the_lower_left_corner_s_distance_from_the_origin() {
 #[test]
 fn forbidden_reports_each_drawn_shape_with_its_area() {
     let deck = new_deck(&["met1", "met2"], "rule f forbidden(met2)");
-    let ten = || [area("f", 10_000), area("f", 10_000)];
-    let cases: [(&str, Vec<Shape>, Vec<Want>); 4] = [
+    let ten = || [("f", Finding::area(10_000)), ("f", Finding::area(10_000))];
+    let cases: [(&str, Layout, Vec<(&str, Finding)>); 4] = [
         (
             "overlapping_drawn",
-            vec![rect("met2", 0, 0, 100, 100), rect("met2", 50, 0, 150, 100)],
+            Layout::default()
+                .rect("met2", 0, 0, 100, 100)
+                .rect("met2", 50, 0, 150, 100),
             ten().to_vec(),
         ),
         (
             "abutting_drawn",
-            vec![rect("met2", 0, 0, 100, 100), rect("met2", 100, 0, 200, 100)],
+            Layout::default()
+                .rect("met2", 0, 0, 100, 100)
+                .rect("met2", 100, 0, 200, 100),
             ten().to_vec(),
         ),
         (
             "holed",
-            vec![
-                rect("met2", 0, 0, 1000, 1000),
-                met("met2", &[(400, 400), (400, 600), (600, 600), (600, 400)]),
-            ],
-            vec![area("f", 960_000)],
+            Layout::default()
+                .rect("met2", 0, 0, 1000, 1000)
+                .polygon("met2", &[(400, 400), (400, 600), (600, 600), (600, 400)]),
+            vec![("f", Finding::area(960_000))],
         ),
         (
             "other_layer_only",
-            vec![rect("met1", 0, 0, 100, 100)],
+            Layout::default().rect("met1", 0, 0, 100, 100),
             vec![],
         ),
     ];
     for (name, shapes, want) in cases {
-        check(name, &deck, &shapes, &["f"], &want);
+        check_everywhere(name, &deck, &shapes, &by_rule(&["f"], &want));
     }
 }

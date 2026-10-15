@@ -5,7 +5,7 @@
 //! of the same name, its oracle restated on the test, run through this
 //! crate's deck compiler and rule set.
 
-use crate::deck_fixture::{
+use crate::common::deck::{
     below, check_everywhere, lengths, new_deck, row, run, sweep, Finding, Layout,
 };
 use gpurify_check::report::Measurement;

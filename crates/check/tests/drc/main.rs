@@ -4,7 +4,6 @@ mod allowed_width_rules;
 mod area_rules;
 mod common;
 mod corner_model;
-mod deck_fixture;
 mod density_rules;
 mod determinism;
 mod dfm_deck;
