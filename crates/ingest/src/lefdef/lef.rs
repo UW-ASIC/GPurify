@@ -350,7 +350,9 @@ fn library_property(
     }
     while let Some(word) = words.next() {
         if word != "EDGETYPE" {
-            return Err(lx.err(format!("LEF58_CELLEDGESPACINGTABLE: {word} where EDGETYPE belongs")));
+            return Err(lx.err(format!(
+                "LEF58_CELLEDGESPACINGTABLE: {word} where EDGETYPE belongs"
+            )));
         }
         let mut field = || {
             words
@@ -396,7 +398,12 @@ fn edge_types(lx: &Lexer<'_>, dbu: i64, value: &str) -> Result<Vec<EdgeType>, Le
         if words.is_empty() {
             continue;
         }
-        let bad = || lx.err(format!("LEF58_EDGETYPE: cannot read `{}`", statement.trim()));
+        let bad = || {
+            lx.err(format!(
+                "LEF58_EDGETYPE: cannot read `{}`",
+                statement.trim()
+            ))
+        };
         let side = match words.get(1).copied() {
             Some("LEFT") => EdgeSide::Left,
             Some("RIGHT") => EdgeSide::Right,
