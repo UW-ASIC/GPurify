@@ -157,14 +157,13 @@ pub fn extract_into(
     grid: Grid,
     matrix: &mut CapMatrix,
 ) -> Result<Accuracy, solve::SolveError> {
-    let mut order = selected.to_vec();
-    order.sort_unstable();
-    let meshing = mesh_options(store, nets, connectivity, &order, stack, grid);
+    // The estimate is a sum and a bounding box: the selection's order is moot.
+    let meshing = mesh_options(store, nets, connectivity, selected, stack, grid);
     extract_meshed_into(
         store,
         nets,
         connectivity,
-        &order,
+        selected,
         stack,
         grid,
         meshing,
@@ -295,18 +294,19 @@ fn columns_meshed_into(
 
     let stratified = !mesh.interface.is_empty();
     let iterations = if stratified {
-        // Every charge in vacuum; the interfaces' rows hold the dielectrics.
+        // Every charge in vacuum: the conductors' rows are potentials, the
+        // interfaces' rows hold the dielectrics.
         let vacuum = vec![1.0; mesh.panel.len()];
-        let operator = matvec::CpuMatVec::with_permittivity(&mesh.panel, &vacuum);
         let first = mesh.conductor_start[n] as usize;
+        let operator = matvec::CpuMatVec::new(&mesh.panel, &vacuum, first);
         let field = dielectric::FieldRows::build(&mesh.panel, first, &mesh.interface);
         let apply = |x: &[f64], y: &mut [f64]| {
             operator.apply(x, y);
-            field.apply(&mesh.panel, x, y);
+            field.apply(x, y);
         };
         columns_into(apply, &mesh, options, columns, matrix)?
     } else {
-        let operator = matvec::CpuMatVec::build(&mesh);
+        let operator = matvec::CpuMatVec::new(&mesh.panel, &mesh.epsilon, mesh.panel.len());
         let apply = |x: &[f64], y: &mut [f64]| operator.apply(x, y);
         columns_into(apply, &mesh, options, columns, matrix)?
     };
