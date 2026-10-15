@@ -31,7 +31,8 @@ impl Rng {
         }
     }
 
-    /// The next 64 bits of the stream.
+    /// The next 64 bits of the stream: one step, the unit every other draw
+    /// is built from, so a seed's sequence is the sequence of these.
     pub fn next_u64(&mut self) -> u64 {
         let mut x = self.state;
         x ^= x >> 12;

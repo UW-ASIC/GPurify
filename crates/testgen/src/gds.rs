@@ -64,9 +64,10 @@ const METRES_PER_DBU: f64 = 1e-9;
 /// trip returns the flattened store and not the original file. Polygons go
 /// out in store order, each as a `BOUNDARY` on its layer's stream pair from
 /// `layers`; a clockwise row is a hole of the outer row before it, the order
-/// the reader stores a keyhole in, and goes out inside that outer's keyhole. Shapes on a derived layer are skipped: they are the deck's
-/// arithmetic over geometry already in the file. On error, `out` holds a
-/// partial library and must be discarded.
+/// the reader stores a keyhole in, and goes out inside that outer's keyhole.
+/// Shapes on a derived layer are skipped: they are the deck's arithmetic over
+/// geometry already in the file. On error, `out` holds a partial library and
+/// must be discarded.
 ///
 /// # Errors
 ///
