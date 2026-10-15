@@ -669,3 +669,106 @@ fn a_hotter_run_or_more_current_never_clears_a_wire() {
         );
     }
 }
+
+/// An `em_thermal` row runs only on a model with meaning, each bound
+/// exactly where its documentation puts it: `sigma` and the thermal
+/// conductivity finite and positive, the spreading finite and zero or more
+/// (zero is a one-dimensional heat path), `limit_failure` strictly inside
+/// `(0, 1)`, `max_failure` in `(0, 1]`, and a reference temperature above
+/// absolute zero, an activation energy of zero or more and a finite
+/// positive current exponent.
+///
+/// Oracle: the documented domains, construct-from-answer: each row differs
+/// from the legal table in one value, one step either side of its bound.
+#[test]
+fn em_thermal_runs_exactly_on_the_documented_domain_of_each_parameter() {
+    let grid = series_chain(2, 1.0, 1_800.0, 500.0);
+    let id = rule(44);
+    let cases: [(&str, fn(&mut EmThermalTable), Outcome); 19] = [
+        ("legal", |_| {}, Outcome::Ran),
+        ("sigma 0", |t| t.sigma[0] = 0.0, Outcome::Refused),
+        ("sigma NaN", |t| t.sigma[0] = f64::NAN, Outcome::Refused),
+        (
+            "sigma inf",
+            |t| t.sigma[0] = f64::INFINITY,
+            Outcome::Refused,
+        ),
+        (
+            "conductivity 0",
+            |t| t.thermal_conductivity[0] = 0.0,
+            Outcome::Refused,
+        ),
+        (
+            "conductivity inf",
+            |t| t.thermal_conductivity[0] = f64::INFINITY,
+            Outcome::Refused,
+        ),
+        ("spreading 0", |t| t.heat_spreading[0] = 0.0, Outcome::Ran),
+        (
+            "spreading -0.01",
+            |t| t.heat_spreading[0] = -0.01,
+            Outcome::Refused,
+        ),
+        (
+            "spreading inf",
+            |t| t.heat_spreading[0] = f64::INFINITY,
+            Outcome::Refused,
+        ),
+        (
+            "limit_failure 0",
+            |t| t.limit_failure[0] = 0.0,
+            Outcome::Refused,
+        ),
+        (
+            "limit_failure 1",
+            |t| t.limit_failure[0] = 1.0,
+            Outcome::Refused,
+        ),
+        (
+            "max_failure 0",
+            |t| t.max_failure[0] = 0.0,
+            Outcome::Refused,
+        ),
+        ("max_failure 1", |t| t.max_failure[0] = 1.0, Outcome::Ran),
+        (
+            "max_failure 1.01",
+            |t| t.max_failure[0] = 1.01,
+            Outcome::Refused,
+        ),
+        (
+            "reference 0 K",
+            |t| t.reference_temperature[0] = kelvin(0.0),
+            Outcome::Refused,
+        ),
+        (
+            "current exponent 0",
+            |t| t.current_exponent[0] = 0.0,
+            Outcome::Refused,
+        ),
+        (
+            "current exponent inf",
+            |t| t.current_exponent[0] = f64::INFINITY,
+            Outcome::Refused,
+        ),
+        (
+            "activation 0 eV",
+            |t| t.activation_energy_ev[0] = 0.0,
+            Outcome::Ran,
+        ),
+        (
+            "activation -0.01 eV",
+            |t| t.activation_energy_ev[0] = -0.01,
+            Outcome::Refused,
+        ),
+    ];
+    for (why, edit, want) in cases {
+        let mut table = thermal_table(id, &[LayerId(0)], 1e9, 1e9);
+        table.max_failure = vec![0.5];
+        edit(&mut table);
+        let (out, runs) = run_thermal(&grid, &table, 358.15);
+        assert_eq!(run_of(&runs, id).outcome, want, "{why}");
+        if want == Outcome::Refused {
+            assert!(out.is_empty(), "{why}: a refused row reports nothing");
+        }
+    }
+}
