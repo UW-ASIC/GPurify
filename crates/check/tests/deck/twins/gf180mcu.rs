@@ -1324,11 +1324,13 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             200.0,
             Some(nm(200)),
             None,
+            None,
+            None,
         ),
     );
     d.rule(
         "ANT.1.DG",
-        antenna(l["gate_hv"], &[l["poly2_con"]], 200.0, Some(nm(200)), None),
+        antenna(l["gate_hv"], &[l["poly2_con"]], 200.0, Some(nm(200)), None, None, None),
     );
     d.rule(
         "ANT.2",
@@ -1548,11 +1550,11 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     );
     d.rule(
         "ANT.8",
-        antenna(l["gate_thin"], &[l["contact"]], 10.0, None, None),
+        antenna(l["gate_thin"], &[l["contact"]], 10.0, None, None, None, None),
     );
     d.rule(
         "ANT.8.DG",
-        antenna(l["gate_hv"], &[l["contact"]], 10.0, None, None),
+        antenna(l["gate_hv"], &[l["contact"]], 10.0, None, None, None, None),
     );
     d.rule(
         "ANT.9",

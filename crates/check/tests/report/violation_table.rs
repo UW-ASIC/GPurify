@@ -103,6 +103,7 @@ fn table_of(rows: &[Violation]) -> Violations {
         table.limit.push(row.limit);
         table.shape_a.push(row.shapes.0);
         table.shape_b.push(row.shapes.1);
+        table.fix.push(None);
     }
     table
 }
@@ -133,7 +134,7 @@ fn render(table: &Violations) -> Vec<u8> {
 /// Every column is a column of the same table.
 ///
 /// The `SoA` invariant with no compiler behind it. A push or a sort that
-/// touches seven of the eight columns leaves a table that still answers
+/// touches all but one of the nine columns leaves a table that still answers
 /// `len()` correctly and is wrong everywhere else.
 fn assert_columns_are_parallel(table: &Violations, what: &str) {
     let rows = table.rule.len();
@@ -145,6 +146,7 @@ fn assert_columns_are_parallel(table: &Violations, what: &str) {
         ("limit", table.limit.len()),
         ("shape_a", table.shape_a.len()),
         ("shape_b", table.shape_b.len()),
+        ("fix", table.fix.len()),
     ] {
         assert!(
             length == rows,

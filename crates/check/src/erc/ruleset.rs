@@ -1,9 +1,9 @@
-//! The fifty-four tables, the deck parser that fills them, and the dispatcher.
+//! The fifty-seven tables, the deck parser that fills them, and the dispatcher.
 //!
 //! Data in: a deck's rule table. Data out: a [`RuleSet`]; [`RuleSet::run`]
 //! produces violations and exactly one `RuleRun` per configured row.
 
-use crate::erc::facts::{IntentMap, NetFacts};
+use crate::erc::facts::{IntentMap, NetFacts, NetTypes};
 use crate::erc::power::{NetNetworks, Power, PowerError, Process};
 use crate::erc::rules::{
     antenna, domain, electrical, esd, latchup, matching, reliability, supply, topology,
@@ -61,6 +61,8 @@ pub struct RuleSet {
     pub supply_path: topology::SupplyPathTable,
     /// `gate_path` rows: [`topology::GatePathTable`].
     pub gate_path: topology::GatePathTable,
+    /// `net_type` rows: [`topology::NetTypeTable`].
+    pub net_type: topology::NetTypeTable,
     /// `combinational_loop` rows: [`topology::CombinationalLoopTable`].
     pub combinational_loop: topology::CombinationalLoopTable,
 
@@ -160,6 +162,10 @@ pub struct RuleSet {
     pub hv_tag: domain::HvTagTable,
     /// `power_switch` rows: [`domain::PowerSwitchTable`].
     pub power_switch: domain::PowerSwitchTable,
+    /// `hot_carrier` rows: [`domain::HotCarrierTable`].
+    pub hot_carrier: domain::HotCarrierTable,
+    /// `well_sharing` rows: [`domain::WellSharingTable`].
+    pub well_sharing: domain::WellSharingTable,
     /// `undriven_gate` rows: [`domain::UndrivenGateTable`].
     pub undriven_gate: domain::UndrivenGateTable,
     /// `missing_isolation` rows: [`domain::MissingIsolationTable`].
@@ -182,6 +188,8 @@ pub struct RunInputs<'a> {
     /// The design intent keyed by net; [`IntentMap::is_usable`] decides which
     /// rows skip.
     pub intent: &'a IntentMap,
+    /// The intent's net types per net; empty without any.
+    pub net_types: &'a NetTypes,
     /// What each net can reach from the declared supplies.
     pub voltage: &'a NetVoltage,
     /// What each net can reach in each declared power state, in the intent's
@@ -352,6 +360,16 @@ impl Row<'_> {
         Ok(areas.into_iter().zip(values).collect())
     }
 
+    fn opt_area(&self, param: &'static str) -> Result<Option<DbuArea>, ErcError> {
+        match self.find(param) {
+            None => Ok(None),
+            Some(_) => match self.need(param)? {
+                ParamValue::Area(value) => Ok(Some(value)),
+                _ => Err(self.wrong_type(param)),
+            },
+        }
+    }
+
     fn opt_number(&self, param: &'static str) -> Result<Option<f64>, ErcError> {
         match self.find(param) {
             None => Ok(None),
@@ -422,6 +440,22 @@ impl Row<'_> {
                     ParamValue::Model(model) => out.push(model),
                     _ => return Err(self.wrong_type(param)),
                 }
+            }
+        }
+        Ok(out)
+    }
+
+    /// A net-type condition: the names before a `"!"` must all be present,
+    /// those after it absent (US20100306720A1 \[0262\]); empty when absent.
+    fn condition(&self, param: &'static str) -> Result<Vec<(StrId, bool)>, ErcError> {
+        let bang = self.strings.get("!");
+        let mut negated = false;
+        let mut out = Vec::new();
+        for name in self.models(param)? {
+            if Some(name) == bang && !negated {
+                negated = true;
+            } else {
+                out.push((name, negated));
             }
         }
         Ok(out)
@@ -629,10 +663,14 @@ impl RuleSet {
                     let max_ratio = row.number("max_ratio")?;
                     let measure = row.antenna_measure()?;
                     let diode = row.opt_layer("diode_layer")?;
+                    let diode_area = row.opt_area("diode_area")?;
+                    let diode_min = row.opt_area("diode_min")?;
                     let table = &mut set.antenna;
                     row.head(&mut table.head)?;
                     table.gate.push(layers[0]);
                     table.diode.push(diode);
+                    table.diode_area.push(diode_area);
+                    table.diode_min.push(diode_min);
                     table.collector.extend_from_slice(&layers[1..]);
                     table
                         .collector_measure
@@ -1125,9 +1163,11 @@ impl RuleSet {
                 "supply_path" => {
                     row.layers(0)?;
                     let both = row.flag("both", false)?;
+                    let labels_are_ports = row.flag("labels_are_ports", false)?;
                     let table = &mut set.supply_path;
                     row.head(&mut table.head)?;
                     table.both.push(both);
+                    table.labels_are_ports.push(labels_are_ports);
                 }
                 "power_switch" => {
                     row.layers(0)?;
@@ -1136,6 +1176,26 @@ impl RuleSet {
                     row.head(&mut table.head)?;
                     table.model.extend(models);
                     close_csr(&mut table.model_start, table.model.len());
+                }
+                "hot_carrier" => {
+                    row.layers(0)?;
+                    let models = row.models("model")?;
+                    let max_length = row.length("max_length")?;
+                    let table = &mut set.hot_carrier;
+                    row.head(&mut table.head)?;
+                    table.model.extend(models);
+                    close_csr(&mut table.model_start, table.model.len());
+                    table.max_length.push(max_length);
+                }
+                "well_sharing" => {
+                    row.layers(0)?;
+                    let models = row.models("model")?;
+                    let resistors = row.flag("resistors", false)?;
+                    let table = &mut set.well_sharing;
+                    row.head(&mut table.head)?;
+                    table.model.extend(models);
+                    close_csr(&mut table.model_start, table.model.len());
+                    table.resistors.push(resistors);
                 }
                 "matching" => {
                     let layers = row.layers(1)?;
@@ -1152,6 +1212,19 @@ impl RuleSet {
                 "combinational_loop" => {
                     row.layers(0)?;
                     row.head(&mut set.combinational_loop.head)?;
+                }
+                "net_type" => {
+                    row.layers(0)?;
+                    let net = row.condition("net")?;
+                    let path = row.condition("path")?;
+                    let breaks = row.condition("break")?;
+                    let exclude = row.models("exclude")?;
+                    let table = &mut set.net_type;
+                    row.head(&mut table.head)?;
+                    table.net.push(net);
+                    table.path.push(path);
+                    table.breaks.push(breaks);
+                    table.exclude.push(exclude);
                 }
                 "gate_path" => {
                     row.layers(0)?;
@@ -1390,6 +1463,8 @@ impl RuleSet {
             "latchup_victim" => &self.latchup_victim.head,
             "matching" => &self.matching.head,
             "power_switch" => &self.power_switch.head,
+            "hot_carrier" => &self.hot_carrier.head,
+            "well_sharing" => &self.well_sharing.head,
             "floating_gate" => &self.floating_gate.head,
             "floating_well" => &self.floating_well.head,
             "gate_oxide" => &self.gate_oxide.head,
@@ -1413,6 +1488,7 @@ impl RuleSet {
             "fanout" => &self.fanout.head,
             "supply_path" => &self.supply_path.head,
             "gate_path" => &self.gate_path.head,
+            "net_type" => &self.net_type.head,
             "combinational_loop" => &self.combinational_loop.head,
             "undriven_gate" => &self.undriven_gate.head,
             "missing_isolation" => &self.missing_isolation.head,
@@ -1430,6 +1506,13 @@ impl RuleSet {
             "antenna" => {
                 let t = &self.antenna;
                 c.positive("max_ratio", t.max_ratio[r])?;
+                // A floor with no per-ratio area would name no hint.
+                match (t.diode_area[r], t.diode_min[r]) {
+                    (None, Some(_)) => return Err(c.missing("diode_area")),
+                    (Some(area), _) if area.raw() <= 0 => return Err(c.non_positive("diode_area")),
+                    (_, Some(area)) if area.raw() <= 0 => return Err(c.non_positive("diode_min")),
+                    _ => {}
+                }
                 for &measure in &t.collector_measure[span(&t.collector_start)] {
                     if let antenna::AntennaMeasure::Sidewall { thickness } = measure {
                         c.length("sidewall_thickness", thickness)?;
@@ -1618,6 +1701,15 @@ impl RuleSet {
                 }
             }
             "power_switch" if span(&self.power_switch.model_start).is_empty() => {
+                return Err(c.missing("model"));
+            }
+            "hot_carrier" => {
+                if span(&self.hot_carrier.model_start).is_empty() {
+                    return Err(c.missing("model"));
+                }
+                c.length("max_length", self.hot_carrier.max_length[r])?;
+            }
+            "well_sharing" if span(&self.well_sharing.model_start).is_empty() => {
                 return Err(c.missing("model"));
             }
             "esd_pin_pair" => {
@@ -1820,6 +1912,7 @@ impl RuleSet {
             &self.fanout.head,
             &self.supply_path.head,
             &self.gate_path.head,
+            &self.net_type.head,
             &self.combinational_loop.head,
             &self.supply_short.head,
             &self.soft_connection.head,
@@ -1830,6 +1923,8 @@ impl RuleSet {
             &self.floating_supply.head,
             &self.matching.head,
             &self.power_switch.head,
+            &self.hot_carrier.head,
+            &self.well_sharing.head,
             &self.antenna.head,
             &self.antenna_electrical.head,
             &self.density_cmp.head,
@@ -1898,6 +1993,7 @@ impl RuleSet {
             facts,
             ports,
             intent,
+            net_types,
             voltage,
             states,
             switched,
@@ -1923,8 +2019,9 @@ impl RuleSet {
         );
         topology::check_unconnected_pin(design, facts, &self.unconnected_pin, out, runs);
         topology::check_fanout(design, &self.fanout, out, runs);
-        topology::check_supply_path(design, facts, intent, &self.supply_path, out, runs);
+        topology::check_supply_path(design, facts, ports, intent, &self.supply_path, out, runs);
         topology::check_gate_path(design, intent, &self.gate_path, out, runs);
+        topology::check_net_type(design, facts, net_types, &self.net_type, out, runs);
         topology::check_combinational_loop(design, intent, &self.combinational_loop, out, runs);
         matching::check_matching(design, &self.matching, out, runs);
         domain::check_power_switch(
@@ -1936,6 +2033,8 @@ impl RuleSet {
             out,
             runs,
         );
+        domain::check_hot_carrier(design, intent, &self.hot_carrier, out, runs);
+        domain::check_well_sharing(design, &self.well_sharing, out, runs);
 
         supply::check_supply_short(design, &self.supply_short, scratch, out, runs);
         supply::check_soft_connection(design, &self.soft_connection, scratch, out, runs);

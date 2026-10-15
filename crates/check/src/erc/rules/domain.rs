@@ -1,7 +1,8 @@
 //! Rules over the voltages each net can reach ([`NetVoltage`]).
 //!
 //! Data in: devices, design intent, the propagated voltages. Data out:
-//! violations at device markers and one run per row. All skip without intent.
+//! violations at device markers and one run per row. All but `well_sharing`
+//! skip without intent.
 //! A device whose measured terminals no supply reaches is not examined.
 
 use crate::erc::facts::IntentMap;
@@ -9,9 +10,11 @@ use crate::erc::ruleset::RuleHead;
 use crate::erc::voltage::{is_channel, NetVoltage};
 use crate::erc::{first_vertex, record_run, skip_rows, Design};
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
+use crate::topology::device::{DeviceMeasure, DeviceParam};
 use crate::topology::{DeviceId, NetId, TerminalRole};
 use gpurify_geom::{prefix, Dbu, LayerId, Qty, Voltage};
 use gpurify_ingest::deck::DeviceKind;
+use gpurify_ingest::intent::SupplyRole;
 use gpurify_ingest::StrId;
 
 /// Device models and one voltage limit per row: `gate_oxide` and `drain_source`.
@@ -1203,5 +1206,319 @@ pub fn check_power_switch(
             Outcome::Ran,
             examined,
         );
+    }
+}
+
+/// A hot-carrier susceptible transistor: deck kind `hot_carrier`, written
+/// `hot_carrier(; models: models, max_length: len)`.
+///
+/// A transistor of a listed model, drawn at most `max_length` long (a
+/// minimum-channel device), used in both directions. [GF180MCU] §14.1.4.1
+/// (e): "Longer than minimum channel length should be used in circuits where
+/// NMOSFETs are used in bi-directional mode"; its reason, "When source and
+/// drain are exchanged, as in a pass gate, the degradation is more severe".
+/// A device is used in both directions when neither channel end is a
+/// declared supply and each end, cut off from the other through this device
+/// and any device joining the same two nets (its partner in a transmission
+/// gate), still reaches both a power and a ground supply through MOS
+/// channels: each side can be driven high and low by itself, so current can
+/// flow through the device either way. A pass gate between two inverter
+/// outputs is one; the upper device of a NAND stack is not (its lower node
+/// reaches ground only), nor an inverter's (a supply end), nor a pass gate
+/// into gates alone. The guideline is advice, so a deck writes the row at
+/// `warning` severity. Needs design intent, for which nets are the supplies.
+///
+/// # Limits
+///
+/// "Bi-directional" is not defined further by the guideline; reading it as
+/// both sides driven both ways is this kind's. The guideline's static voltage
+/// bound (Vds within Vddmax) is [`check_drain_source`]'s, and its stress
+/// condition in time (the fraction a FET conducts) has no static reading. A
+/// device whose length was not measured is not examined.
+///
+/// Catalog: ERC-F4 in the [check catalog]. Defined by [GF180MCU] §14.1.4.1
+/// (a), (b) and (e). Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_manual/drm_14_1.html
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct HotCarrierTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// `model[model_start[i] .. model_start[i + 1]]` are row `i`'s models.
+    pub model_start: Vec<u32>,
+    /// Device model names, CSR by `model_start`; at least one per row.
+    pub model: Vec<StrId>,
+    /// Per row: the longest channel still minimum, database units. Positive
+    /// from a deck.
+    pub max_length: Vec<Dbu>,
+}
+
+/// Every MOS's channel ends `[source, drain]`, `NetId::NONE` for another
+/// kind or an end on no net.
+fn channel_ends(design: Design<'_>) -> Vec<[NetId; 2]> {
+    let devices = design.devices;
+    (0..devices.len())
+        .map(|device| {
+            if devices.kind[device] != DeviceKind::Mos {
+                return [NetId::NONE; 2];
+            }
+            let (nets, roles) = devices.terminals_of(device_id(device));
+            [TerminalRole::Source, TerminalRole::Drain].map(|role| terminal(nets, roles, role))
+        })
+        .collect()
+}
+
+/// Runs every [`HotCarrierTable`] row.
+///
+/// `examined` counts devices of the row's models at most `max_length` long.
+/// A violation sits at the first vertex of the device's marker, on the
+/// marker layer, measuring its length against `max_length`. Every row is
+/// skipped when no design intent was given or it declares no supply this
+/// layout has.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_hot_carrier(
+    design: Design<'_>,
+    intent: &IntentMap,
+    table: &HotCarrierTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if intent.supply_net.is_empty() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
+    let devices = design.devices;
+    let ends = channel_ends(design);
+    let supply = |net: NetId| intent.supply(net).map(|(role, _)| role);
+    let mut seen = vec![0u32; design.nets.net_count()];
+    let mut stamp = 0u32;
+    let mut walk: Vec<NetId> = Vec::new();
+    // Whether `from` reaches both a power and a ground supply through MOS
+    // channels, never through a device joining `cut`'s two nets.
+    // ponytail: one walk per side of every short device; share walks per
+    // cut pair if a large design makes this quadratic.
+    let mut both_rails = |from: NetId, cut: [NetId; 2]| {
+        stamp += 1;
+        let mut roles = [false; 2];
+        walk.clear();
+        walk.push(from);
+        while let Some(at) = walk.pop() {
+            if at.idx() >= seen.len() || seen[at.idx()] == stamp {
+                continue;
+            }
+            seen[at.idx()] = stamp;
+            if let Some(role) = supply(at) {
+                roles[usize::from(role == SupplyRole::Ground)] = true;
+                continue;
+            }
+            for &other in devices.devices_on(at) {
+                let [a, b] = ends[other.0 as usize];
+                if a == NetId::NONE || b == NetId::NONE {
+                    continue;
+                }
+                if (a == cut[0] && b == cut[1]) || (a == cut[1] && b == cut[0]) {
+                    continue;
+                }
+                if a == at || b == at {
+                    walk.push(if a == at { b } else { a });
+                }
+            }
+        }
+        roles == [true, true]
+    };
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let rule = table.head.rule[row];
+        let models = csr(&table.model_start, &table.model, row);
+        let limit = table.max_length[row];
+        let mut examined = 0u64;
+        for device in 0..devices.len() {
+            if !models.contains(&devices.model[device]) {
+                continue;
+            }
+            let length = devices
+                .params_of(device_id(device))
+                .iter()
+                .find_map(|&(param, value)| match (param, value) {
+                    (DeviceParam::Length, DeviceMeasure::Length(l)) => Some(l),
+                    _ => None,
+                });
+            let Some(length) = length.filter(|&l| l <= limit) else {
+                continue;
+            };
+            examined += 1;
+            let [s, d] = ends[device];
+            if s == NetId::NONE || d == NetId::NONE || s == d {
+                continue;
+            }
+            if supply(s).is_some() || supply(d).is_some() {
+                continue;
+            }
+            if both_rails(s, [s, d]) && both_rails(d, [s, d]) {
+                let severity = table.head.severity[row];
+                let (measured, limit) = (Measurement::Length(length), Measurement::Length(limit));
+                push_device(design, device, rule, severity, measured, limit, out);
+            }
+        }
+        record_run(runs, out, before, rule, Outcome::Ran, examined);
+    }
+}
+
+/// Transistors sharing a well with another supply: deck kind
+/// `well_sharing`, written `well_sharing(; models: models, resistors:
+/// bool)`.
+///
+/// Mitsubishi's latch-up verification ([US 5,638,286], first embodiment)
+/// "groups together all of the transistors included in the same well region
+/// as the transistors having the same back gate terminal", and of each
+/// group "extracts an MOS transistor which does not meet any of the
+/// conditions as a latch-up MOS transistor":
+///
+/// 1. its source "is connected directly to the well region";
+/// 2. it "is connected to the latter through a resistance";
+/// 3. it "is connected to the latter in series in a drain-source terminal
+///    direction through a single or a plurality of transistors included in
+///    the same well region".
+///
+/// Here the well region is a transistor's bulk net, its back gate terminal,
+/// so a row checks every transistor of a listed model with a bulk on a net:
+/// it passes when a channel end (source or drain alike: a MOS is symmetric)
+/// is on the bulk net (1); with `resistors: true`, when a resistor joins a
+/// channel end to the bulk net (2); or when a chain of channels of other
+/// transistors whose bulk is the same net joins a channel end to it (3).
+/// Otherwise it is flagged: a transistor fed from a supply other than its
+/// well's, such as the patent's Q5, whose source reaches its well "in
+/// relation to the different N- well region". A potential difference
+/// between the two supplies "causes a base current to flow in the forward
+/// direction to the PNP" (col. 2), whatever their nominal voltages, so this
+/// is topological where [`check_well_bias`] compares voltages. The scope,
+/// which models sit in a well (the patent's n-well transistors, or an
+/// isolated p-well's by the same reasoning) and whether a resistor counts,
+/// is the deck's. Needs no design intent.
+///
+/// # Limits
+///
+/// A resistor counts only between a channel end and the bulk net, with no
+/// limit on its value (the patent states none), and not inside a chain.
+/// Calibre PERC's own "PMOS/NMOS devices sharing the same well" check is
+/// named in public material (Hogan & Medhat, 2021) but not defined; this is
+/// the patent's. A device with no bulk terminal on a net is not examined.
+///
+/// Catalog: ERC-D9 in the [check catalog]. Defined by [US 5,638,286].
+/// Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [US 5,638,286]: https://patents.google.com/patent/US5638286A/en
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct WellSharingTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// `model[model_start[i] .. model_start[i + 1]]` are row `i`'s models.
+    pub model_start: Vec<u32>,
+    /// Device model names, CSR by `model_start`; at least one per row.
+    pub model: Vec<StrId>,
+    /// Per row: a resistor between a channel end and the well's net
+    /// satisfies the check (the patent's condition 2).
+    pub resistors: Vec<bool>,
+}
+
+/// Runs every [`WellSharingTable`] row.
+///
+/// `examined` counts devices of the row's models with a bulk on a net. A
+/// violation sits at the first vertex of the device's marker, on the marker
+/// layer, measuring the conditions met, 0, against 1. Every row runs.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_well_sharing(
+    design: Design<'_>,
+    table: &WellSharingTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    let devices = design.devices;
+    let ends = channel_ends(design);
+    let bulk: Vec<NetId> = (0..devices.len())
+        .map(|device| {
+            if devices.kind[device] != DeviceKind::Mos {
+                return NetId::NONE;
+            }
+            let (nets, roles) = devices.terminals_of(device_id(device));
+            terminal(nets, roles, TerminalRole::Bulk)
+        })
+        .collect();
+    // Whether a resistor joins `a` and `b`.
+    let resistor_between = |a: NetId, b: NetId| {
+        devices.devices_on(a).iter().any(|&other| {
+            if devices.kind[other.0 as usize] != DeviceKind::Resistor {
+                return false;
+            }
+            let (nets, _) = devices.terminals_of(other);
+            nets.len() == 2 && ((nets[0] == a && nets[1] == b) || (nets[0] == b && nets[1] == a))
+        })
+    };
+    let mut seen = vec![0u32; design.nets.net_count()];
+    let mut stamp = 0u32;
+    let mut walk: Vec<NetId> = Vec::new();
+    // Whether a chain of channels of transistors other than `skip` whose bulk
+    // is `well` joins one of `from` to `well`.
+    let mut chained = |from: [NetId; 2], well: NetId, skip: usize| {
+        stamp += 1;
+        walk.clear();
+        walk.extend(from.into_iter().filter(|&net| net != NetId::NONE));
+        while let Some(at) = walk.pop() {
+            if at == well {
+                return true;
+            }
+            if at.idx() >= seen.len() || seen[at.idx()] == stamp {
+                continue;
+            }
+            seen[at.idx()] = stamp;
+            for &other in devices.devices_on(at) {
+                let other = other.0 as usize;
+                let [a, b] = ends[other];
+                if other == skip || bulk[other] != well || a == NetId::NONE || b == NetId::NONE {
+                    continue;
+                }
+                if a == at || b == at {
+                    walk.push(if a == at { b } else { a });
+                }
+            }
+        }
+        false
+    };
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let rule = table.head.rule[row];
+        let models = csr(&table.model_start, &table.model, row);
+        let mut examined = 0u64;
+        for device in 0..devices.len() {
+            let well = bulk[device];
+            if well == NetId::NONE || !models.contains(&devices.model[device]) {
+                continue;
+            }
+            examined += 1;
+            let channel = ends[device];
+            let on = |end: NetId| end != NetId::NONE && end == well;
+            let through_resistor =
+                |end: NetId| end != NetId::NONE && resistor_between(end, well);
+            if channel.into_iter().any(on)
+                || (table.resistors[row] && channel.into_iter().any(through_resistor))
+                || chained(channel, well, device)
+            {
+                continue;
+            }
+            let severity = table.head.severity[row];
+            let (measured, limit) = (Measurement::Count(0), Measurement::Count(1));
+            push_device(design, device, rule, severity, measured, limit, out);
+        }
+        record_run(runs, out, before, rule, Outcome::Ran, examined);
     }
 }

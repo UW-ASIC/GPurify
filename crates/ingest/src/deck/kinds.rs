@@ -1300,6 +1300,8 @@ pub(crate) const KINDS: &[Kind] = &[
             p("max_ratio", "max_ratio", Dim::Scalar),
             opt("sidewall", "sidewall_thickness", Dim::Length),
             opt("diode", "diode_layer", Dim::Layer),
+            opt("diode_area", "diode_area", Dim::Area),
+            opt("diode_min", "diode_min", Dim::Area),
         ],
     ),
     erc(
@@ -1445,6 +1447,17 @@ pub(crate) const KINDS: &[Kind] = &[
     erc("floating_well", &[0, 1], false, &[]),
     erc("fanout", &[], false, &[p("max", "max_gates", Dim::Count)]),
     erc(
+        "net_type",
+        &[],
+        false,
+        &[
+            opt("net", "net", Dim::Models),
+            opt("path", "path", Dim::Models),
+            opt("break", "break", Dim::Models),
+            opt("exclude", "exclude", Dim::Models),
+        ],
+    ),
+    erc(
         "gate_path",
         &[],
         false,
@@ -1453,7 +1466,15 @@ pub(crate) const KINDS: &[Kind] = &[
             p("max_devices", "max_devices", Dim::Count),
         ],
     ),
-    erc("supply_path", &[], false, &[p("both", "both", Dim::Bool)]),
+    erc(
+        "supply_path",
+        &[],
+        false,
+        &[
+            p("both", "both", Dim::Bool),
+            p("labels_are_ports", "labels_are_ports", Dim::Bool),
+        ],
+    ),
     erc("combinational_loop", &[], false, &[]),
     erc("floating_supply", &[], false, &[]),
     erc(
@@ -1626,6 +1647,24 @@ pub(crate) const KINDS: &[Kind] = &[
         &[
             p("models", "model", Dim::Models),
             p("max", "max_voltage", Dim::Voltage),
+        ],
+    ),
+    erc(
+        "hot_carrier",
+        &[],
+        false,
+        &[
+            p("models", "model", Dim::Models),
+            p("max_length", "max_length", Dim::Length),
+        ],
+    ),
+    erc(
+        "well_sharing",
+        &[],
+        false,
+        &[
+            p("models", "model", Dim::Models),
+            p("resistors", "resistors", Dim::Bool),
         ],
     ),
     erc(

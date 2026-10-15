@@ -181,7 +181,7 @@ pub(super) fn deck() -> String {
             let (max, diode_max) = match r.profile {
                 Profile::Plain => {
                     return format!(
-                        "rule {} antenna(gate, {}; max_ratio: {LIMIT}, sidewall: {sidewall}, diode: {diode})",
+                        "rule {} antenna(gate, {}; max_ratio: {LIMIT}, sidewall: {sidewall}, diode: {diode}, diode_area: none, diode_min: none)",
                         r.id, r.collectors
                     )
                 }

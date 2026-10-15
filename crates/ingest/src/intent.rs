@@ -17,7 +17,10 @@ pub enum IntentError {
     /// rate above 1, a rise time longer than the clock period, or a negative
     /// decap, or a power state that repeats a name, turns off a net no
     /// supply declares, or pins an input twice or to a voltage that is not
-    /// finite.
+    /// finite, or a net type stating both or neither of `nets` and `models`,
+    /// an unknown pin name or no model, a type set naming no declared type or
+    /// earlier set or reusing a name, or more than [`MAX_NET_TYPES`] types and
+    /// sets.
     #[error("malformed intent file: {0}")]
     Malformed(String),
     /// A net listed more than once in `supplies`, in one domain or two.
@@ -72,7 +75,64 @@ pub struct DesignIntent {
     temperature: Option<Qty<Temperature, { prefix::BASE }>>,
     /// Declared power states, in file order.
     states: Vec<PowerState>,
+    /// Declared net types, in file order.
+    net_types: Vec<NetType>,
+    /// Declared type sets, in file order.
+    type_sets: Vec<TypeSet>,
 }
+
+/// A net type a design assigns, as the programmable-ERC patent
+/// US20100306720A1 assigns them: by net name (its `perc::commanda`,
+/// \[0198\]-\[0214\]) or by the devices on a net (`perc::commanda+`,
+/// \[0215\]-\[0239\]). "A net can have multiple net types" (\[0206\]); "no
+/// net types are assumed by default", so a declared supply carries one only
+/// through `lvsPower` or `lvsGround` (\[0207\]).
+#[derive(Debug, Clone)]
+pub struct NetType {
+    /// The type's name.
+    pub name: StrId,
+    /// What assigns it.
+    pub by: NetTypeBy,
+}
+
+/// How a [`NetType`] picks its nets.
+#[derive(Debug, Clone)]
+pub enum NetTypeBy {
+    /// Net names, each matched whole against a net's layout label: a `?`
+    /// "matches zero or more characters" (\[0201\]). The reserved names
+    /// `lvsPower` and `lvsGround` are the declared power and ground
+    /// supplies, and `lvsOutline` every labelled net, the top cell's
+    /// external nets (\[0209\]-\[0211\]).
+    Names(Vec<String>),
+    /// The nets on the `pins` of every device of the `models` (with
+    /// `negate`, of every model but those), all of a device's pins when
+    /// `pins` is empty (\[0216\], \[0230\]). Pin names: `g`, `s`, `d`, `b`
+    /// of a MOS, `c`, `b`, `e` of a bipolar, `pos` and `neg` of a two-pin
+    /// device.
+    Devices {
+        /// Device model names.
+        models: Vec<StrId>,
+        /// Every model but `models`: the patent's `!` before a subtype list.
+        negate: bool,
+        /// Pin names; empty for every pin.
+        pins: Vec<String>,
+    },
+}
+
+/// A type set: a net "is said to have the type named \<type_set\> if the net
+/// has at least one net type contained in" its list (US20100306720A1
+/// \[0240\]-\[0246\]), a list that may name other sets.
+#[derive(Debug, Clone)]
+pub struct TypeSet {
+    /// The set's name.
+    pub name: StrId,
+    /// The types and sets it is the logical OR of.
+    pub types: Vec<StrId>,
+}
+
+/// The most net types and type sets one design may declare together: the
+/// patent's "at most 64 unique net types" (\[0200\]), one bit each.
+pub const MAX_NET_TYPES: usize = 64;
 
 /// One power state of the design: which supplies are switched off, and which
 /// inputs are held at a voltage, while it lasts (IEEE 1801 power states, cited
@@ -168,6 +228,16 @@ impl DesignIntent {
         &self.states
     }
 
+    /// The declared net types, in file order; empty when the file has none.
+    pub fn net_types(&self) -> &[NetType] {
+        &self.net_types
+    }
+
+    /// The declared type sets, in file order; empty when the file has none.
+    pub fn type_sets(&self) -> &[TypeSet] {
+        &self.type_sets
+    }
+
     /// The junction temperature the file states, absolute; `None` leaves the
     /// run's default.
     pub fn temperature(&self) -> Option<Qty<Temperature, { prefix::BASE }>> {
@@ -180,6 +250,7 @@ impl DesignIntent {
             && self.supplies.is_empty()
             && self.limits.is_empty()
             && self.states.is_empty()
+            && self.net_types.is_empty()
     }
 }
 
@@ -199,7 +270,32 @@ struct IntentFile {
     temperature_c: Option<f64>,
     #[serde(default)]
     states: Vec<StateSpec>,
+    #[serde(default)]
+    net_types: Vec<NetTypeSpec>,
+    #[serde(default)]
+    type_sets: Vec<TypeSetSpec>,
 }
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NetTypeSpec {
+    #[serde(rename = "type")]
+    name: String,
+    nets: Option<Vec<String>>,
+    models: Option<Vec<String>>,
+    #[serde(default)]
+    pins: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TypeSetSpec {
+    set: String,
+    types: Vec<String>,
+}
+
+/// Pin names a device-assigned net type may list.
+const PIN_NAMES: [&str; 8] = ["g", "s", "d", "b", "c", "e", "pos", "neg"];
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -332,9 +428,18 @@ fn checked_switching(
 ///                               "clock_period_ps": <n>, "rise_time_ps": <n>,
 ///                               "decap_pf": <n> } }],
 ///   "states":   [{ "name": "<state>", "off": ["<supply net>"],
-///                  "inputs": [{ "net": "<name>", "voltage_mv": <n> }] }]
+///                  "inputs": [{ "net": "<name>", "voltage_mv": <n> }] }],
+///   "net_types": [{ "type": "<type>", "nets": ["<name with ?>"] },
+///                 { "type": "<type>", "models": ["!"?, "<model>"],
+///                   "pins": ["g"|"s"|"d"|"b"|"c"|"e"|"pos"|"neg"] }],
+///   "type_sets": [{ "set": "<set>", "types": ["<type or set>"] }]
 /// }
 /// ```
+///
+/// A `net_types` entry states `nets` or `models`, not both ([`NetType`]); a
+/// type may be assigned by several entries. A type set may name a type, or a
+/// set declared before it, and no name is both a type and a set; together
+/// they number at most [`MAX_NET_TYPES`].
 ///
 /// Every section is optional; an absent key is [`NetLimits`]'s `None`, and an
 /// absent `decap_pf` is zero. `temperature_c` is the junction temperature
@@ -500,6 +605,74 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
             inputs.push((id, Qty::new(input.voltage_mv)));
         }
         out.states.push(PowerState { name, off, inputs });
+    }
+
+    let mut names: Vec<StrId> = Vec::new();
+    for spec in &file.net_types {
+        let name = strings.intern(&spec.name);
+        let by = match (&spec.nets, &spec.models) {
+            (Some(nets), None) if spec.pins.is_empty() => NetTypeBy::Names(nets.clone()),
+            (None, Some(models)) => {
+                if let Some(pin) = spec.pins.iter().find(|p| !PIN_NAMES.contains(&p.as_str())) {
+                    return Err(IntentError::Malformed(format!(
+                        "net type {}: pin {pin} is none of {}",
+                        spec.name,
+                        PIN_NAMES.join(", ")
+                    )));
+                }
+                let negate = models.first().is_some_and(|m| m == "!");
+                let models = &models[usize::from(negate)..];
+                if models.is_empty() {
+                    return Err(IntentError::Malformed(format!(
+                        "net type {}: models names no model",
+                        spec.name
+                    )));
+                }
+                NetTypeBy::Devices {
+                    models: models.iter().map(|m| strings.intern(m)).collect(),
+                    negate,
+                    pins: spec.pins.clone(),
+                }
+            }
+            _ => {
+                return Err(IntentError::Malformed(format!(
+                    "net type {}: states either nets, or models with optional pins",
+                    spec.name
+                )))
+            }
+        };
+        if !names.contains(&name) {
+            names.push(name);
+        }
+        out.net_types.push(NetType { name, by });
+    }
+    for spec in &file.type_sets {
+        let name = strings.intern(&spec.set);
+        if names.contains(&name) {
+            return Err(IntentError::Malformed(format!(
+                "type set {} repeats a type or set name",
+                spec.set
+            )));
+        }
+        let mut types = Vec::with_capacity(spec.types.len());
+        for member in &spec.types {
+            let id = strings.intern(member);
+            if !names.contains(&id) {
+                return Err(IntentError::Malformed(format!(
+                    "type set {} names {member}, no type or earlier set",
+                    spec.set
+                )));
+            }
+            types.push(id);
+        }
+        names.push(name);
+        out.type_sets.push(TypeSet { name, types });
+    }
+    if names.len() > MAX_NET_TYPES {
+        return Err(IntentError::Malformed(format!(
+            "{} net types and type sets declared; at most {MAX_NET_TYPES}",
+            names.len()
+        )));
     }
     Ok(out)
 }

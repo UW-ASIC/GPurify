@@ -883,6 +883,12 @@ impl CompiledDeck {
             if let Some(diode) = t.diode[r] {
                 row = row.value("diode_layer", ParamValue::Layer(diode));
             }
+            if let Some(area) = t.diode_area[r] {
+                row = row.value("diode_area", ParamValue::Area(area));
+            }
+            if let Some(area) = t.diode_min[r] {
+                row = row.value("diode_min", ParamValue::Area(area));
+            }
             file(&t.head, r, row);
         }
         let t = &erc.antenna_electrical;
@@ -1361,7 +1367,9 @@ impl CompiledDeck {
         }
         let t = &erc.supply_path;
         for r in 0..t.head.len() {
-            let row = Row::new("supply_path", &[]).value("both", ParamValue::Flag(t.both[r]));
+            let row = Row::new("supply_path", &[])
+                .value("both", ParamValue::Flag(t.both[r]))
+                .value("labels_are_ports", ParamValue::Flag(t.labels_are_ports[r]));
             file(&t.head, r, row);
         }
         let t = &erc.power_switch;
@@ -1371,6 +1379,22 @@ impl CompiledDeck {
                 row.params.push(("model", model(id)));
             }
             file(&t.head, r, row);
+        }
+        let t = &erc.hot_carrier;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("hot_carrier", &[]);
+            for &id in &t.model[span(&t.model_start, r)] {
+                row.params.push(("model", model(id)));
+            }
+            file(&t.head, r, row.length("max_length", t.max_length[r]));
+        }
+        let t = &erc.well_sharing;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("well_sharing", &[]);
+            for &id in &t.model[span(&t.model_start, r)] {
+                row.params.push(("model", model(id)));
+            }
+            file(&t.head, r, row.value("resistors", ParamValue::Flag(t.resistors[r])));
         }
         let t = &erc.matching;
         for r in 0..t.head.len() {
@@ -1390,6 +1414,26 @@ impl CompiledDeck {
                 r,
                 Row::new("combinational_loop", &[]),
             );
+        }
+        let t = &erc.net_type;
+        for r in 0..t.head.len() {
+            let mut row = Row::new("net_type", &[]);
+            let conditions = [("net", &t.net[r]), ("path", &t.path[r]), ("break", &t.breaks[r])];
+            for (param, condition) in conditions {
+                for negated in [false, true] {
+                    let names = condition.iter().filter(|&&(_, n)| n == negated);
+                    if negated && names.clone().next().is_some() {
+                        row.params.push((param, ParamSource::Model("!".to_owned())));
+                    }
+                    for &(id, _) in names {
+                        row.params.push((param, model(id)));
+                    }
+                }
+            }
+            for &id in &t.exclude[r] {
+                row.params.push(("exclude", model(id)));
+            }
+            file(&t.head, r, row);
         }
         let t = &erc.gate_path;
         for r in 0..t.head.len() {

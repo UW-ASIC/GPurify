@@ -1,12 +1,14 @@
 //! Two tables computed once per run and read by most rules.
 //!
 //! Data in: nets, devices, ports, and the optional design intent.
-//! Data out: [`NetFacts`] (roles per net) and [`IntentMap`] (intent keyed by
-//! [`NetId`]); [`IntentMap::is_usable`] is the one skip decision.
+//! Data out: [`NetFacts`] (roles per net), [`IntentMap`] (intent keyed by
+//! [`NetId`]) and [`NetTypes`] (the intent's net types per net);
+//! [`IntentMap::is_usable`] is the one skip decision.
 
 use crate::topology::{DeviceTable, NetId, NetTable, PortTable, TerminalRole};
 use gpurify_geom::{prefix, Qty, Voltage};
-use gpurify_ingest::intent::{DesignIntent, DomainId, NetLimits, SupplyRole};
+use gpurify_ingest::intent::{DesignIntent, DomainId, NetLimits, NetTypeBy, SupplyRole};
+use gpurify_ingest::{StrId, StrTable};
 
 /// Which terminal roles are present on a net, one bit per role. Every
 /// `Pin(_)` is one bit: a symmetric device's pin index carries no meaning.
@@ -342,6 +344,146 @@ pub fn resolve_intent_into(
         {
             out.limit_net.push(net);
             out.limit.push(limits);
+        }
+    }
+}
+
+/// The design's net types (US20100306720A1's net types and type sets),
+/// resolved onto extracted nets by [`resolve_net_types_into`].
+#[derive(Debug, Default, Clone)]
+pub struct NetTypes {
+    /// Bit `i` of a mask is `name[i]`: the declared types, then the sets, in
+    /// the intent's order. At most 64.
+    pub name: Vec<StrId>,
+    /// Per net, the types and sets it has; empty when the intent declares
+    /// none.
+    pub mask: Vec<u64>,
+}
+
+impl NetTypes {
+    /// The bit of the type or set `name`, or `None` for a name the intent
+    /// does not declare.
+    pub fn bit(&self, name: StrId) -> Option<u64> {
+        self.name.iter().position(|&n| n == name).map(|i| 1u64 << i)
+    }
+
+    /// The types and sets of `net`; none for a net past the table.
+    pub fn of(&self, net: NetId) -> u64 {
+        self.mask.get(net.idx()).copied().unwrap_or(0)
+    }
+}
+
+/// Whether `text` matches `pattern` whole, a `?` in the pattern matching
+/// zero or more characters (US20100306720A1 \[0201\]).
+fn glob(pattern: &[u8], text: &[u8]) -> bool {
+    match pattern.split_first() {
+        None => text.is_empty(),
+        Some((b'?', rest)) => (0..=text.len()).any(|skip| glob(rest, &text[skip..])),
+        Some((&c, rest)) => text.first() == Some(&c) && glob(rest, &text[1..]),
+    }
+}
+
+/// The pin name a device-assigned net type lists for a terminal role.
+fn pin_name(role: TerminalRole) -> &'static str {
+    match role {
+        TerminalRole::Gate => "g",
+        TerminalRole::Source => "s",
+        TerminalRole::Drain => "d",
+        TerminalRole::Bulk | TerminalRole::Base => "b",
+        TerminalRole::Emitter => "e",
+        TerminalRole::Collector => "c",
+        TerminalRole::Pin(0) => "pos",
+        TerminalRole::Pin(1) => "neg",
+        TerminalRole::Pin(_) => "",
+    }
+}
+
+/// Assigns the intent's net types to extracted nets; `out` is cleared and
+/// refilled, empty without intent or without a declared type.
+///
+/// A type by name marks every net whose label (its first, in `ports`)
+/// matches one of its names, `lvsPower` and `lvsGround` marking the supplies
+/// `supplies` resolved and `lvsOutline` every labelled net; a type by device
+/// marks the nets on the listed pins of the listed models' devices. A set is
+/// marked on a net with any of its members, in declaration order, so a set
+/// may name an earlier set.
+pub fn resolve_net_types_into(
+    intent: Option<&DesignIntent>,
+    ports: &PortTable,
+    nets: &NetTable,
+    devices: &DeviceTable,
+    supplies: &IntentMap,
+    strings: &StrTable,
+    out: &mut NetTypes,
+) {
+    out.name.clear();
+    out.mask.clear();
+    let Some(intent) = intent.filter(|i| !i.net_types().is_empty()) else {
+        return;
+    };
+    for net_type in intent.net_types() {
+        if !out.name.contains(&net_type.name) {
+            out.name.push(net_type.name);
+        }
+    }
+    out.name.extend(intent.type_sets().iter().map(|set| set.name));
+    debug_assert!(out.name.len() <= 64, "the intent caps types and sets at 64");
+    let count = nets.net_count();
+    out.mask.resize(count, 0);
+    for net_type in intent.net_types() {
+        let bit = out.bit(net_type.name).expect("a declared type has a bit");
+        match &net_type.by {
+            NetTypeBy::Names(patterns) => {
+                for (net, mask) in (0u32..).map(NetId).zip(out.mask.iter_mut()) {
+                    let label = ports.name_of(net);
+                    let role = supplies.supply(net).map(|(role, _)| role);
+                    let hit = patterns.iter().any(|pattern| match pattern.as_str() {
+                        "lvsPower" => role == Some(SupplyRole::Power),
+                        "lvsGround" => role == Some(SupplyRole::Ground),
+                        "lvsOutline" => label.is_some(),
+                        _ => label.is_some_and(|name| {
+                            glob(pattern.as_bytes(), strings.resolve(name).as_bytes())
+                        }),
+                    });
+                    if hit {
+                        *mask |= bit;
+                    }
+                }
+            }
+            NetTypeBy::Devices {
+                models,
+                negate,
+                pins,
+            } => {
+                for device in 0..devices.len() {
+                    if models.contains(&devices.model[device]) == *negate {
+                        continue;
+                    }
+                    let id = crate::topology::DeviceId(
+                        u32::try_from(device).expect("a device id is a u32"),
+                    );
+                    let (nets, roles) = devices.terminals_of(id);
+                    for (&net, &role) in nets.iter().zip(roles) {
+                        let listed = pins.is_empty() || pins.iter().any(|p| p == pin_name(role));
+                        if listed && net.idx() < count {
+                            out.mask[net.idx()] |= bit;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for set in intent.type_sets() {
+        let bit = out.bit(set.name).expect("a declared set has a bit");
+        let members = set
+            .types
+            .iter()
+            .filter_map(|&member| out.bit(member))
+            .fold(0, |all, b| all | b);
+        for mask in &mut out.mask {
+            if *mask & members != 0 {
+                *mask |= bit;
+            }
         }
     }
 }

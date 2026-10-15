@@ -111,7 +111,7 @@ pub struct CmpModel {
 
 /// Antenna ratio at one etch stage: deck kind `antenna`, written
 /// `antenna(gate, collectors..; max_ratio: n, sidewall: len | none,
-/// diode: layer | none)`.
+/// diode: layer | none, diode_area: area | none, diode_min: area | none)`.
 ///
 /// A conductor being plasma-etched collects charge in proportion to its area
 /// (or, for a thick layer, its sidewall) and discharges it through the thin
@@ -163,6 +163,17 @@ pub struct CmpModel {
 ///
 /// The ratio is dimensionless. No design intent is needed.
 ///
+/// With `diode_area`, each finding carries a fix hint
+/// ([`Violations::fix`]): the protection-diode area that clears it,
+/// `diode_area` times the measured ratio and at least `diode_min` (0 when
+/// `none`), rounded up to a whole square database unit. This is [IHP
+/// SG13G2] Ant.g Note 4, "PDarea (µm²) = 0.02 x (Vn_area / (GatPoly over
+/// Activ)_area)" with a 0.16 µm² protection diode (Ant.g) as its least size:
+/// a row whose ratio is Note 2's `Vn_area` (cumulative contact and via
+/// area) over the gate area writes `diode_area: 0.02um2, diode_min:
+/// 0.16um2`. The hint assumes the diode joins the gate's net at or below the
+/// row's lowest etch stage; where the router places it is not the rule's.
+///
 /// # Limits
 ///
 /// - Only the `diode` layer exempts a gate: reaching other diffusion or a
@@ -180,7 +191,7 @@ pub struct CmpModel {
 ///   layer) is [`AntennaElectricalTable`]'s.
 ///
 /// Catalog: ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A9, ERC-A11,
-/// ERC-A12, ERC-A13 in the [check catalog]. Defined by
+/// ERC-A12, ERC-A13, ERC-A15 (the fix hint) in the [check catalog]. Defined by
 /// [LEF/DEF 5.8] Appendix C (PAR, CAR, `ANTENNAMODEL`); [GF180MCU] ANT.1-ANT.15;
 /// [IHP SG13G2] Ant.a-Ant.f; [SKY130] antenna rules, licon.1 and via.1;
 /// [KLayout] `antenna_check` (diodes). Source tags are in [check-sources.md].
@@ -211,6 +222,13 @@ pub struct AntennaTable {
     /// Per row: the protection-diode layer whose gates the row leaves to
     /// another, or `None` to hold every gate.
     pub diode: Vec<Option<LayerId>>,
+    /// Per row: the protection-diode area a finding needs per unit of its
+    /// ratio (IHP's 0.02 µm²), or `None` for no fix hint. Positive from a
+    /// deck.
+    pub diode_area: Vec<Option<DbuArea>>,
+    /// Per row: the least protection-diode area a fix hint names (IHP's
+    /// 0.16 µm²), or `None` for none. Stated only with `diode_area`.
+    pub diode_min: Vec<Option<DbuArea>>,
     /// The deck's connectivity, shared by every row.
     pub stack: Stack,
 }
@@ -277,9 +295,27 @@ pub struct AntennaTable {
 /// tap). It is judged before any credit, so a row can exempt one layer and
 /// credit another (sky130's `AntennaDiode` excludes the `pAntennaShort`).
 ///
+/// A finding carries a fix hint ([`Violations::fix`]) wherever the row's
+/// diode credit can clear it: the least protection-diode area, added to what
+/// the gate's net already has, at which the credited ratio is within its
+/// limit, rounded up to a whole square database unit. It is the row's own
+/// model solved for the diode area, as SKY130's EGAR solves to "(EA / A_gate
+/// - MAX_EGAR - diode_bonus) / K" and [US 9,142,556] solves "antenna ratio <
+/// (diode area x α + β)" for the area (col. 6: "(c) > 58.196"), and as
+/// IHP's Ant.g Note 4 states a required diode area: with a `diode_max_ratio`
+/// table, the first area at which the table reaches the credited ratio,
+/// read segment by segment. A ratio the credit and the table can never bring
+/// within the limit (the table holds its last value past its last point) has
+/// no hint, and neither does a row whose ratio itself moves with the diode
+/// (`area_minus_diode`, `gate_plus_diode` or `diode_reduce`), whose least
+/// area is not this closed form. Where a bonus clears the finding, the hint
+/// is one square database unit: any diode. The hint assumes the diode joins
+/// the gate's net at or below the row's lowest etch stage.
+///
 /// Catalog: ERC-A4, ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A9, ERC-A12,
-/// ERC-A13 in the [check catalog]. Defined by [SKY130] antenna EGAR, .ar.1
-/// and Table Ig, and the sky130 technology LEF's PWL tables; [LEF/DEF 5.8]
+/// ERC-A13, ERC-A15 (the fix hint) in the [check catalog]. Defined by [SKY130] antenna EGAR, .ar.1
+/// and Table Ig, and the sky130 technology LEF's PWL tables; [US 9,142,556]
+/// (the area solve); [LEF/DEF 5.8]
 /// `ANTENNACUMROUTINGPLUSCUT`, `ANTENNAAREAFACTOR`, `ANTENNAAREAMINUSDIFF`,
 /// `ANTENNAGATEPLUSDIFF`, `ANTENNAAREADIFFREDUCEPWL`, `ANTENNADIFFAREARATIO`
 /// tables and `ANTENNAMODEL`; [GF180MCU] ANT.16; [IHP SG13G2] Ant.b/e,
@@ -293,6 +329,7 @@ pub struct AntennaTable {
 /// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
 /// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
 /// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/antenna.html
+/// [US 9,142,556]: https://patents.google.com/patent/US9142556B2/en
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct AntennaElectricalTable {
     /// Rule id and severity per row.
@@ -696,6 +733,100 @@ fn pwl(points: &[(DbuArea, f64)], area: i128) -> f64 {
     }
 }
 
+/// `per` times `ratio`, rounded up to a whole square database unit: an
+/// area a finding needs.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    reason = "a diode's area in database units is far below 2^53"
+)]
+fn area_times(per: DbuArea, ratio: f64) -> i128 {
+    (per.raw() as f64 * ratio).ceil() as i128
+}
+
+/// One gate's antenna ratio under an [`AntennaElectricalTable`] row whose
+/// ratio does not move with the diode: the credited value and the limit as
+/// functions of the diode area on the net, square database units.
+struct Credit<'a> {
+    ratio: f64,
+    /// `diode_credit` per square database unit.
+    per_dbu2: f64,
+    bonus: f64,
+    max_ratio: f64,
+    table: &'a [(DbuArea, f64)],
+}
+
+impl Credit<'_> {
+    /// The credited ratio with `area` of diode; `area` is positive.
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "a diode's area in database units is far below 2^53"
+    )]
+    fn credited(&self, area: i128) -> f64 {
+        self.ratio - self.per_dbu2 * area as f64 - self.bonus
+    }
+
+    /// The limit with `area` of diode; `area` is positive.
+    fn limit(&self, area: i128) -> f64 {
+        if self.table.is_empty() {
+            self.max_ratio
+        } else {
+            pwl(self.table, area)
+        }
+    }
+
+    /// How far over its limit the gate is with `area` of diode.
+    fn excess(&self, area: i128) -> f64 {
+        self.credited(area) - self.limit(area)
+    }
+
+    /// The least diode area above `present` (and above 0) at which the
+    /// gate is within its limit, or `None` when no area brings it there.
+    /// The excess is linear between the table's points, and past the last
+    /// one falls only by the credit: each piece is solved in turn, its root
+    /// rounded up.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        reason = "a diode's area in database units is far below 2^53"
+    )]
+    fn least_diode(&self, present: i128) -> Option<i128> {
+        let start = present.max(0) + 1;
+        let mut ends: Vec<i128> = self
+            .table
+            .iter()
+            .map(|&(at, _)| at.raw())
+            .filter(|&at| at > start)
+            .collect();
+        ends.dedup();
+        // Within the limit, up to the rounding of a sum of a few f64 terms: a
+        // root landing exactly on a whole area is that area.
+        let within = |area: i128| self.excess(area) <= 1e-9 * self.limit(area).abs().max(1.0);
+        // Within a piece the excess is linear: from the unit below its root,
+        // step up to the first area within the limit.
+        let settle = |root: f64| {
+            let mut area = (root.round() as i128 - 1).max(start);
+            while !within(area) {
+                area += 1;
+            }
+            area
+        };
+        let mut from = start;
+        if within(from) {
+            return Some(from);
+        }
+        for to in ends {
+            let (a, b) = (self.excess(from), self.excess(to));
+            if within(to) {
+                return Some(settle(from as f64 + a / (a - b) * (to - from) as f64));
+            }
+            from = to;
+        }
+        // Past the last point the limit holds; only the credit falls.
+        (self.per_dbu2 > 0.0).then(|| settle(from as f64 + self.excess(from) / self.per_dbu2))
+    }
+}
+
 /// One antenna row. Each gate figure's ratio is summed over the row's etch
 /// stages. With no `par` (an [`AntennaTable`] row), a stage adds the doubled
 /// collecting area of the collectors etched there on the gate's net over the
@@ -703,8 +834,8 @@ fn pwl(points: &[(DbuArea, f64)], area: i128) -> f64 {
 /// [`Par`], conductors before the cuts on them (the etch order), and the
 /// running sum is truncated at zero after each (LEF's CAR). `judge` receives
 /// the ratio and the diode area on the gate's net at the row's stage, and
-/// returns the value and the limit it is compared with, or `None` for a gate
-/// this row does not hold. Gates on one net at every stage share a ratio and
+/// returns the value, the limit it is compared with and the finding's fix
+/// hint (a diode area), or `None` for a gate this row does not hold. Gates on one net at every stage share a ratio and
 /// are judged once, reported at their lowest gate polygon. `examined` is the
 /// number of such groups judged; `None` is `Refused` (a layer that will not
 /// validate or merge).
@@ -720,7 +851,7 @@ fn antenna_row(
     measures: &[AntennaMeasure],
     stack: &Stack,
     par: Option<Par<'_>>,
-    judge: impl Fn(f64, DbuArea) -> Option<(f64, f64)>,
+    judge: impl Fn(f64, DbuArea) -> Option<(f64, f64, Option<DbuArea>)>,
     scratch: &mut Scratch,
     out: &mut Violations,
 ) -> Option<u64> {
@@ -895,7 +1026,8 @@ fn antenna_row(
         if exempted[first] {
             continue;
         }
-        let Some((value, limit)) = judge(ratio[first], DbuArea::new(diode_area[first] / 2)) else {
+        let Some((value, limit, fix)) = judge(ratio[first], DbuArea::new(diode_area[first] / 2))
+        else {
             continue;
         };
         let limit = Measurement::Ratio(limit);
@@ -917,6 +1049,9 @@ fn antenna_row(
             limit,
             shapes: (poly, None),
         });
+        if let Some(fix) = fix {
+            out.set_fix(out.len() - 1, Measurement::Area(fix));
+        }
     }
     Some(examined)
 }
@@ -957,7 +1092,15 @@ pub fn check_antenna(
             &table.collector_measure[span],
             &table.stack,
             None,
-            |ratio, diode| (diode.raw() == 0).then_some((ratio, table.max_ratio[row])),
+            |ratio, diode| {
+                (diode.raw() == 0).then(|| {
+                    let fix = table.diode_area[row].map(|per| {
+                        let floor = table.diode_min[row].map_or(0, DbuArea::raw);
+                        DbuArea::new(area_times(per, ratio).max(floor))
+                    });
+                    (ratio, table.max_ratio[row], fix)
+                })
+            },
             scratch,
             out,
         );
@@ -1018,17 +1161,25 @@ pub fn check_antenna_electrical(
                 reason = "a diode's area in database units is far below 2^53"
             )]
             |ratio, diode_area| {
+                let fixed = table.area_minus_diode[row] == 0.0
+                    && table.gate_plus_diode[row] == 0.0
+                    && table.diode_reduce[row].is_empty();
+                let model = Credit {
+                    ratio,
+                    per_dbu2: credit / per_um2,
+                    bonus,
+                    max_ratio: table.max_ratio[row],
+                    table: diode_max,
+                };
+                let fix = fixed
+                    .then(|| model.least_diode(diode_area.raw()))
+                    .flatten()
+                    .map(|area| DbuArea::new(area - diode_area.raw()));
                 // Every credit is for a diode: no diode on the net, none given.
                 if diode_area.raw() == 0 {
-                    return Some((ratio, table.max_ratio[row]));
+                    return Some((ratio, table.max_ratio[row], fix));
                 }
-                let limit = if diode_max.is_empty() {
-                    table.max_ratio[row]
-                } else {
-                    pwl(diode_max, diode_area.raw())
-                };
-                let credited = ratio - credit * (diode_area.raw() as f64 / per_um2) - bonus;
-                Some((credited, limit))
+                Some((model.credited(diode_area.raw()), model.limit(diode_area.raw()), fix))
             },
             scratch,
             out,

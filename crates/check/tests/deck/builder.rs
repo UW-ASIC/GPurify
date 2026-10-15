@@ -266,7 +266,7 @@ layer tap = gds(4, 0)
 layer well = gds(5, 0)
 rule m1.1 width(met1) >= 140nm
 rule m1.2 space(met1) >= 140nm
-rule ar.met3.1 antenna(gate, met3; max_ratio: 400, sidewall: 2000nm, diode: none)
+rule ar.met3.1 antenna(gate, met3; max_ratio: 400, sidewall: 2000nm, diode: none, diode_area: none, diode_min: none)
 rule x.18 forbidden(met3 and tap)
 connect conductors [met1, met3]
 device mos gate model \"nfet\" terminals [gate, met1, met1, well]
@@ -292,7 +292,7 @@ fn apply(d: &mut DeckBuilder<'_>, overrides: &[Override]) {
             Override::AddArea => d.add("m1.6", min_area(met1, DbuArea::new(83_000))),
             Override::ReplaceAntenna => d.replace(
                 "ar.met3.1",
-                antenna(gate, &[met3], 400.0, Some(nm(845)), None),
+                antenna(gate, &[met3], 400.0, Some(nm(845)), None, None, None),
             ),
             Override::RemoveForbidden => d.remove("x.18"),
         }

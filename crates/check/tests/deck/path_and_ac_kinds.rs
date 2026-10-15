@@ -20,7 +20,7 @@ layer via1 = gds(3, 0)
 layer mk = gds(4, 0)
 connect conductors [pad, met1]
 device diode mk model \"dio\" terminals [met1, pad]
-rule sp supply_path(; both: true)
+rule sp supply_path(; both: true, labels_are_ports: true)
 rule gp gate_path(; ground: false, max_devices: 3)
 rule cl combinational_loop()
 rule fs floating_supply()
@@ -50,7 +50,7 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
         &[met1, pad],
         DeviceValue::default(),
     );
-    d.rule("sp", supply_path(true));
+    d.rule("sp", supply_path(true, true));
     d.rule("gp", gate_path(false, 3));
     d.rule("cl", combinational_loop());
     d.rule("fs", floating_supply());

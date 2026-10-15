@@ -67,6 +67,11 @@ pub struct Violations {
     pub shape_a: Vec<PolyId>,
     /// The second of [`Violation::shapes`] per row.
     pub shape_b: Vec<Option<PolyId>>,
+    /// A fix hint per row, `None` for most: for an antenna finding, the
+    /// least protection-diode area ([`Measurement::Area`]) that would clear
+    /// it (catalog ERC-A15). Set by [`Self::set_fix`]; [`Self::get`] does not
+    /// carry it, and [`Self::push_row`] does.
+    pub fix: Vec<Option<Measurement>>,
 }
 
 impl Violations {
@@ -100,6 +105,29 @@ impl Violations {
         self.limit.push(violation.limit);
         self.shape_a.push(violation.shapes.0);
         self.shape_b.push(violation.shapes.1);
+        self.fix.push(None);
+    }
+
+    /// Appends row `row` of `other`, its fix hint included.
+    ///
+    /// # Panics
+    ///
+    /// When `row` is not below `other`'s [`Self::len`].
+    pub fn push_row(&mut self, other: &Self, row: usize) {
+        self.push(other.get(row));
+        let last = self.len() - 1;
+        self.fix[last] = other.fix[row];
+    }
+
+    /// Attaches a fix hint to row `row`.
+    ///
+    /// # Panics
+    ///
+    /// When `row` is not below [`Self::len`], or in a debug build when
+    /// `fix` is not finite.
+    pub fn set_fix(&mut self, row: usize, fix: Measurement) {
+        debug_assert!(fix.is_finite(), "{fix:?}");
+        self.fix[row] = Some(fix);
     }
 
     /// Appends another table's rows after this one's, in their order. The
@@ -113,6 +141,7 @@ impl Violations {
         self.limit.extend_from_slice(&other.limit);
         self.shape_a.extend_from_slice(&other.shape_a);
         self.shape_b.extend_from_slice(&other.shape_b);
+        self.fix.extend_from_slice(&other.fix);
     }
 
     /// Drops every row from `len` on.
@@ -125,6 +154,7 @@ impl Violations {
         self.limit.truncate(len);
         self.shape_a.truncate(len);
         self.shape_b.truncate(len);
+        self.fix.truncate(len);
     }
 
     /// The row at `index`, gathered from every column.
@@ -169,6 +199,7 @@ impl Violations {
         permute_column(&perm, &mut self.limit);
         permute_column(&perm, &mut self.shape_a);
         permute_column(&perm, &mut self.shape_b);
+        permute_column(&perm, &mut self.fix);
     }
 
     fn row_key(&self, row: usize) -> RowKey {

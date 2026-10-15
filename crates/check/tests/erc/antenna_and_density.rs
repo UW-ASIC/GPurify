@@ -21,7 +21,7 @@ use gpurify_check::erc::rules::antenna::{
 use gpurify_check::erc::{Design, Scratch};
 use gpurify_check::report::{Measurement, RuleRun, Severity, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable};
-use gpurify_geom::{Bbox, GeometryStore, LayerId};
+use gpurify_geom::{Bbox, DbuArea, GeometryStore, LayerId};
 use gpurify_ingest::deck::Connectivity;
 use gpurify_ingest::StrId;
 use gpurify_testgen::shapes::{random_rectilinear_layer, RandomLayerSpec};
@@ -79,6 +79,8 @@ fn antenna_table(id: StrId, max_ratio: f64) -> AntennaTable {
         collector_measure: vec![AntennaMeasure::Area],
         max_ratio: vec![max_ratio],
         diode: vec![None],
+        diode_area: vec![None],
+        diode_min: vec![None],
         stack: Stack::default(),
     }
 }
@@ -272,6 +274,8 @@ fn a_cumulative_antenna_check_measures_each_fabrication_stage_over_what_exists_a
         // table and can be read rather than inferred from a verdict.
         max_ratio: vec![1.0, 1.0],
         diode: vec![None; 2],
+        diode_area: vec![None; 2],
+        diode_min: vec![None; 2],
         stack: Stack::default(),
     };
 
@@ -337,6 +341,8 @@ fn each_later_fabrication_stage_reports_at_least_the_ratio_the_one_before_it_did
         // that collects anything at all lands in the table.
         max_ratio: vec![f64::MIN_POSITIVE; 2],
         diode: vec![None; 2],
+        diode_area: vec![None; 2],
+        diode_min: vec![None; 2],
         stack: Stack::default(),
     };
 
@@ -390,6 +396,8 @@ fn run_staged(
         collector_measure: vec![measure; collectors.len()],
         max_ratio: vec![max_ratio],
         diode: vec![None],
+        diode_area: vec![None],
+        diode_min: vec![None],
         stack,
     };
     let mut scratch = Scratch::default();
@@ -772,4 +780,199 @@ fn every_windows_density_is_a_fraction_between_zero_and_one() {
             );
         }
     }
+}
+
+/// A one-square-micrometre gate (layer 2) joined by a cut (layer 1) to a
+/// wire on layer 0 made of `wire` rectangles, and, with `diode`, a diode
+/// (layer 3) of that many square nanometres (`(w, h)`) joined to the wire by
+/// a second cut. The ratio is the wire's area in square micrometres.
+fn gate_wire_diode(wire: &[(i64, i64, i64, i64)], diode: Option<(i64, i64)>) -> (GeometryStore, NetTable) {
+    let mut layout = LayoutBuilder::new(4);
+    for &(xlo, ylo, xhi, yhi) in wire {
+        layout.rect(LayerId(0), xlo, ylo, xhi, yhi);
+    }
+    layout.rect(LayerId(2), 0, 0, 1_000, 1_000);
+    layout.rect(LayerId(1), 400, 400, 600, 600);
+    if let Some((w, h)) = diode {
+        layout.rect(LayerId(3), 2_000, 0, 2_000 + w, h);
+        layout.rect(LayerId(1), 2_100, 100, 2_200, 200);
+    }
+    let (store, _) = layout.finish();
+    let connectivity = Connectivity {
+        conductors: vec![LayerId(0), LayerId(2), LayerId(3)],
+        via_cut: vec![LayerId(1), LayerId(1)],
+        via_connects: vec![(LayerId(0), LayerId(2)), (LayerId(0), LayerId(3))],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    gpurify_check::topology::extract_nets_into(&store, &connectivity, &mut nets);
+    (store, nets)
+}
+
+/// A wire of `um2` square micrometres, a micrometre wide.
+fn wire_of(um2: i64) -> Vec<(i64, i64, i64, i64)> {
+    vec![(0, 0, um2 * 1_000, 1_000)]
+}
+
+/// An `antenna_electrical` row on [`gate_wire_diode`]: credit and bonus per
+/// diode, its limit, and a `diode_max_ratio` table (square nanometres).
+fn credit_row(
+    id: StrId,
+    (credit, bonus, max_ratio): (f64, f64, f64),
+    table: &[(i128, f64)],
+) -> AntennaElectricalTable {
+    AntennaElectricalTable {
+        head: head(id),
+        gate: vec![LayerId(2)],
+        collector_start: vec![0, 1],
+        collector: vec![LayerId(0)],
+        collector_measure: vec![AntennaMeasure::Area],
+        diode: vec![Some(LayerId(3))],
+        diode_credit: vec![credit],
+        diode_bonus: vec![bonus],
+        cut_factor: vec![1.0],
+        area_minus_diode: vec![0.0],
+        gate_plus_diode: vec![0.0],
+        diode_reduce: vec![Vec::new()],
+        diode_max_ratio: vec![table
+            .iter()
+            .map(|&(area, value)| (DbuArea::new(area), value))
+            .collect()],
+        exempt: vec![None],
+        max_ratio: vec![max_ratio],
+        stack: Stack::default(),
+    }
+}
+
+/// The fix hint on each row of an `antenna_electrical` run over `wire` and
+/// `diode`, with the run's examined count checked at one.
+fn fixes(
+    wire: &[(i64, i64, i64, i64)],
+    diode: Option<(i64, i64)>,
+    model: (f64, f64, f64),
+    table: &[(i128, f64)],
+) -> Vec<Option<Measurement>> {
+    let (store, nets) = gate_wire_diode(wire, diode);
+    let devices = DeviceTable::default();
+    let design = Design {
+        store: &store,
+        nets: &nets,
+        devices: &devices,
+    };
+    let id = rule(90);
+    let mut scratch = Scratch::default();
+    let (mut violations, mut runs) = report();
+    check_antenna_electrical(
+        design,
+        common::manufacturing_grid(),
+        &credit_row(id, model, table),
+        &mut scratch,
+        &mut violations,
+        &mut runs,
+    );
+    assert_eq!(assert_rule_ran(&runs, id).examined, 1);
+    violations.fix.clone()
+}
+
+fn nm2(area: i128) -> Option<Measurement> {
+    Some(Measurement::Area(DbuArea::new(area)))
+}
+
+/// SKY130's met1 antenna rule in its DRM form: MAX_EGAR 400, K 400 per µm²,
+/// diode_bonus 2200.
+const SKY130_MET1: (f64, f64, f64) = (400.0, 2200.0, 400.0);
+
+/// The sky130 technology LEF's met1 `ANTENNADIFFSIDEAREARATIO PWL ( ( 0 400 )
+/// ( 0.0125 400 ) ( 0.0225 2609 ) ( 22.5 11600 ) )`, in square nanometres.
+const SKY130_MET1_PWL: [(i128, f64); 4] = [
+    (0, 400.0),
+    (12_500, 400.0),
+    (22_500, 2609.0),
+    (22_500_000, 11600.0),
+];
+
+/// Oracle: closed form, the SKY130 DRM's antenna rule solved for the diode
+/// area (catalog ERC-A15). EGAR = ratio − 400·diode − 2200 ≤ 400 gives the
+/// diode (ratio − 2600)/400 µm²: a ratio of 2650 needs 0.125 µm², 3000 needs
+/// 1 µm². At 2500 the bonus alone clears it, so any diode does: one square
+/// nanometre. A net already holding 0.5 µm² at 3000 (credited 600) needs
+/// 0.5 µm² more. Breaks if the hint ignores the bonus, the present diode, or
+/// the credit's unit (per µm², not per nm²).
+#[test]
+fn an_antenna_fix_hint_is_the_drm_rule_solved_for_the_diode_area() {
+    assert_eq!(fixes(&wire_of(2650), None, SKY130_MET1, &[]), vec![nm2(125_000)]);
+    assert_eq!(fixes(&wire_of(3000), None, SKY130_MET1, &[]), vec![nm2(1_000_000)]);
+    assert_eq!(fixes(&wire_of(2500), None, SKY130_MET1, &[]), vec![nm2(1)]);
+    assert_eq!(
+        fixes(&wire_of(3000), Some((500, 1_000)), SKY130_MET1, &[]),
+        vec![nm2(500_000)]
+    );
+}
+
+/// Oracle: closed form, the sky130 LEF's PWL read backwards (catalog
+/// ERC-A15). With no credit the limit is the table: at a ratio of 2500 the
+/// first area where it reaches 2500 lies on the 0.0125-0.0225 µm² segment,
+/// 12 500 + 2100 / 0.2209 = 22 006.6, so 22 007 nm²; at 2650 on the next,
+/// 22 500 + 41 / 0.0004 = 125 000 nm², which the DRM form also gives (the
+/// two public forms agree). At 12 000 the table holds 11 600 past its last
+/// point, so no diode clears it and there is no hint. Breaks if the solve
+/// interpolates the wrong segment or extrapolates past the table.
+#[test]
+fn an_antenna_fix_hint_reads_a_pwl_limit_table_backwards() {
+    let pwl = (0.0, 0.0, 400.0);
+    assert_eq!(fixes(&wire_of(2500), None, pwl, &SKY130_MET1_PWL), vec![nm2(22_007)]);
+    assert_eq!(fixes(&wire_of(2650), None, pwl, &SKY130_MET1_PWL), vec![nm2(125_000)]);
+    assert_eq!(fixes(&wire_of(12_000), None, pwl, &SKY130_MET1_PWL), vec![None]);
+}
+
+/// Oracle: spec example, US 9,142,556 B2 col. 6: an antenna ratio of
+/// 25478.59873 against "(c)×400+2200" needs "(c)>58.196" µm² of diode. As a
+/// row: credit 400 per µm², no bonus, limit 2200; the wire is 25 478 598 730
+/// nm² over a 1 µm² gate, so the diode is 23 278.59873 / 400 = 58.196 496 825
+/// µm², 58 196 497 nm² rounded up. Breaks if the hint drops the base limit
+/// or rounds down.
+#[test]
+fn an_antenna_fix_hint_matches_the_patents_worked_solve() {
+    let wire = [
+        (0, 0, 200_000, 127_392),
+        (0, 127_392, 19_873, 127_402),
+    ];
+    assert_eq!(
+        fixes(&wire, None, (400.0, 0.0, 2200.0), &[]),
+        vec![nm2(58_196_497)]
+    );
+}
+
+/// Oracle: spec example, IHP SG13G2 Ant.g Note 4, "PDarea (µm²) = 0.02 x
+/// (Vn_area / (GatPoly over Activ)_area)" with Ant.g's 0.16 µm² diode as the
+/// least (catalog ERC-A15). A ratio of 100 needs 2 µm²; 25 needs 0.5 µm²; 5
+/// needs 0.1 µm², floored to 0.16. A row without `diode_area` names no fix.
+/// Breaks if the floor or the per-ratio area is dropped.
+#[test]
+fn an_antenna_fix_hint_is_ihp_note_4() {
+    let run = |um2: i64, max_ratio: f64, hint: bool| {
+        let (store, nets) = gate_wire_diode(&wire_of(um2), None);
+        let devices = DeviceTable::default();
+        let design = Design {
+            store: &store,
+            nets: &nets,
+            devices: &devices,
+        };
+        let id = rule(91);
+        let mut table = antenna_table(id, max_ratio);
+        if hint {
+            table.diode_area = vec![Some(DbuArea::new(20_000))];
+            table.diode_min = vec![Some(DbuArea::new(160_000))];
+        }
+        let mut scratch = Scratch::default();
+        let (mut violations, mut runs) = report();
+        check_antenna(design, &table, &mut scratch, &mut violations, &mut runs);
+        assert_eq!(violations.len(), 1, "the ratio is over its limit");
+        violations.fix[0]
+    };
+    assert_eq!(run(100, 20.0, true), nm2(2_000_000));
+    assert_eq!(run(25, 20.0, true), nm2(500_000));
+    assert_eq!(run(5, 1.0, true), nm2(160_000));
+    assert_eq!(run(100, 20.0, false), None);
 }
