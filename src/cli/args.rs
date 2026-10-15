@@ -21,16 +21,24 @@ pub struct Cli {
     pub inputs: Inputs,
     pub options: RunOptions,
     pub format: Format,
-    /// `lib`: generate a macro's Liberty files instead of checking.
-    pub lib: Option<LibArgs>,
-    /// `xor`: the layout compared with `inputs.layout`, instead of checking.
-    pub other: Option<PathBuf>,
-    /// `system`: the system description, checked with `inputs.reference`
-    /// as its system netlist; `inputs.layout` and `inputs.deck` are empty.
-    pub system: Option<PathBuf>,
+    pub command: Command,
+}
+
+/// What the run does with its inputs.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Command {
+    /// `drc`, `erc`, `lvs`, `pex` or `all`: check `inputs.layout`.
+    Check,
+    /// `xor`: compare `inputs.layout` with this layout, instead of checking.
+    Xor(PathBuf),
     /// `fill` or `enhance`: the edit the deck configures, and the GDSII file
     /// to write the edited layout to; the report is DRC's on that file.
-    pub edit: Option<(Edit, PathBuf)>,
+    Edit(Edit, PathBuf),
+    /// `lib`: generate a macro's Liberty files instead of checking.
+    Lib(LibArgs),
+    /// `system`: the system description, checked with `inputs.reference`
+    /// as its system netlist; `inputs.layout` and `inputs.deck` are empty.
+    System(PathBuf),
 }
 
 /// A layout edit the deck configures, written to a new GDSII file.
@@ -43,7 +51,7 @@ pub enum Edit {
 }
 
 /// What `lib` was asked for; the levels are the spec's `accuracy`.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct LibArgs {
     pub spec: PathBuf,
     pub output_dir: PathBuf,
@@ -138,12 +146,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         }
     }
 
-    let none = Checks {
-        drc: false,
-        erc: false,
-        lvs: false,
-        pex: false,
-    };
+    let none = Checks::default();
     // (checks, takes --intent, takes --reference, takes --quasistatic*)
     let (checks, takes_intent, takes_reference, takes_quasistatic) = match subcommand.as_str() {
         // `xor` compares two layouts; its rows report as the DRC stage.
@@ -279,14 +282,10 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
             },
             options: RunOptions {
                 checks,
-                lvs: gpurify_check::lvs::CompareOptions::default(),
-                quasistatic_nets: Vec::new(),
+                ..RunOptions::default()
             },
             format,
-            lib: None,
-            other: None,
-            system: Some(PathBuf::from(system)),
-            edit: None,
+            command: Command::System(PathBuf::from(system)),
         });
     }
     let Some(&layout) = layouts.first() else {
@@ -316,20 +315,19 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
             quasistatic_nets: quasistatic,
         },
         format,
-        lib,
-        other: layouts
-            .get(1)
-            .filter(|_| edit.is_none())
-            .copied()
-            .map(PathBuf::from),
-        system: None,
-        edit: edit.zip(layouts.get(1).copied().map(PathBuf::from)),
+        // A second layout is `xor`'s or an edit's: no other command takes one.
+        command: match (lib, edit, layouts.get(1).map(PathBuf::from)) {
+            (Some(lib), ..) => Command::Lib(lib),
+            (None, Some(edit), Some(output)) => Command::Edit(edit, output),
+            (None, None, Some(other)) => Command::Xor(other),
+            (None, _, None) => Command::Check,
+        },
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, Cli, Format};
+    use super::{parse, Cli, Command, Format};
     use crate::engine::Checks;
 
     fn parse_str(argv: &str) -> Result<Cli, String> {
@@ -373,7 +371,9 @@ mod tests {
     fn lib_takes_its_spec_and_directory() {
         let cli =
             parse_str("lib t --deck d --spec s.json --output-dir o --lef m.lef").expect("legal");
-        let lib = cli.lib.expect("a lib run");
+        let Command::Lib(lib) = cli.command else {
+            panic!("a lib run: {:?}", cli.command);
+        };
         assert_eq!(lib.spec.to_str(), Some("s.json"));
         assert_eq!(lib.output_dir.to_str(), Some("o"));
         assert!(lib.lef.is_some());
@@ -395,10 +395,7 @@ mod tests {
     fn system_takes_its_description_and_netlist() {
         let cli =
             parse_str("system stack.json --reference sys.spice --format json").expect("legal");
-        assert_eq!(
-            cli.system.as_deref(),
-            Some(std::path::Path::new("stack.json"))
-        );
+        assert_eq!(cli.command, Command::System("stack.json".into()));
         assert_eq!(
             cli.inputs
                 .reference
@@ -407,8 +404,10 @@ mod tests {
             Some(std::path::Path::new("sys.spice"))
         );
         assert_eq!(cli.format, Format::Json);
-        assert!(cli.lib.is_none());
-        assert_eq!(parse_str("drc t --deck d").expect("legal").system, None);
+        assert_eq!(
+            parse_str("drc t --deck d").expect("legal").command,
+            Command::Check
+        );
     }
 
     /// Oracle: construct-from-answer, against `docs/usage.md`: `xor` takes its
@@ -418,15 +417,12 @@ mod tests {
     fn xor_takes_its_two_layouts_in_order() {
         let cli = parse_str("xor a.gds b.gds --deck d --format json").expect("legal");
         assert_eq!(cli.inputs.layout.to_str(), Some("a.gds"));
-        assert_eq!(
-            cli.other.as_deref().and_then(std::path::Path::to_str),
-            Some("b.gds")
-        );
+        assert_eq!(cli.command, Command::Xor("b.gds".into()));
         assert_eq!(cli.format, Format::Json);
-        assert!(parse_str("drc a.gds --deck d")
-            .expect("legal")
-            .other
-            .is_none());
+        assert_eq!(
+            parse_str("drc a.gds --deck d").expect("legal").command,
+            Command::Check
+        );
     }
 
     /// Oracle: construct-from-answer, against `docs/usage.md`: a DEF layout
@@ -621,8 +617,7 @@ mod tests {
         for (word, edit) in [("fill", Edit::Fill), ("enhance", Edit::Enhance)] {
             let cli =
                 parse_str(&format!("{word} a.gds b.gds --deck d --format json")).expect("legal");
-            assert_eq!(cli.edit, Some((edit, std::path::PathBuf::from("b.gds"))));
-            assert_eq!(cli.other, None);
+            assert_eq!(cli.command, Command::Edit(edit, "b.gds".into()));
             let drc = Checks {
                 drc: true,
                 erc: false,

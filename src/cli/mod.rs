@@ -14,8 +14,11 @@ mod compare;
 mod format;
 
 use crate::deck::DeckFn;
-use crate::engine::Summary;
+use crate::engine::{Extracted, Inputs, Loaded, Outputs, Summary};
 use crate::export::{json, parasitic, Header};
+use gpurify_geom::Grid;
+use gpurify_ingest::StrTable;
+use std::path::Path;
 use std::process::ExitCode;
 
 /// Parses the process's command line, runs, prints the report, and exits
@@ -57,48 +60,51 @@ pub fn main_with(decks: &[(&str, DeckFn)]) -> ExitCode {
         Ok(cli) => cli,
         Err(error) => return fail(&error),
     };
-    // An edit writes its layout, then reports DRC on what it wrote.
-    if let Some((edit, output)) = cli.edit.clone() {
-        if let Err(code) = write_edit(&cli, edit, &output, decks) {
-            return code;
+    match &cli.command {
+        args::Command::Lib(lib) => {
+            return liberty(&cli.inputs, lib, decks)
+                .map_or_else(|code| code, |()| ExitCode::SUCCESS)
         }
-        cli.inputs.layout = output;
+        // An edit writes its layout, then reports DRC on what it wrote.
+        args::Command::Edit(edit, output) => {
+            if let Err(code) = write_edit(&cli.inputs, *edit, output, decks) {
+                return code;
+            }
+            cli.inputs.layout.clone_from(output);
+        }
+        _ => {}
     }
-    if let Some(lib) = &cli.lib {
-        return liberty(&cli, lib, decks);
-    }
-
-    let (summary, text) = match render(&cli, decks) {
-        Ok(first) => first,
-        Err(code) => return code,
-    };
-    print!("{text}");
-
-    if summary.passed() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
+    match render(&cli, decks) {
+        Ok((summary, text)) => {
+            print!("{text}");
+            if summary.passed() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        Err(code) => code,
     }
 }
 
 /// `fill` or `enhance`: the edited layout, written to `output`, and what
 /// was added, on stderr (stdout carries the report).
 fn write_edit(
-    cli: &args::Cli,
+    inputs: &Inputs,
     edit: args::Edit,
-    output: &std::path::Path,
+    output: &Path,
     decks: &[(&str, DeckFn)],
 ) -> Result<(), ExitCode> {
     let (bytes, note) = match edit {
         args::Edit::Fill => {
             let (bytes, squares) =
-                crate::engine::fill::fill_gds(&cli.inputs, decks).map_err(|error| fail(&error))?;
+                crate::engine::fill::fill_gds(inputs, decks).map_err(|error| fail(&error))?;
             let total: usize = squares.iter().sum();
             (bytes, format!("{total} fill squares"))
         }
         args::Edit::Enhance => {
-            let (bytes, kept) = crate::engine::enhance::enhance_gds(&cli.inputs, decks)
-                .map_err(|error| fail(&error))?;
+            let (bytes, kept) =
+                crate::engine::enhance::enhance_gds(inputs, decks).map_err(|error| fail(&error))?;
             let note = format!(
                 "{} redundant cuts, {} strap sides widened",
                 kept.cuts, kept.sides
@@ -117,41 +123,18 @@ fn write_edit(
 /// One whole run, rendered in the requested format. An error has already been
 /// reported on stderr when this returns `Err`.
 fn render(cli: &args::Cli, decks: &[(&str, DeckFn)]) -> Result<(Summary, String), ExitCode> {
-    if let Some(system) = &cli.system {
-        let reference = cli
-            .inputs
-            .reference
-            .first()
-            .expect("the parser requires a system netlist");
+    let mut text = String::new();
+    if let args::Command::System(system) = &cli.command {
+        let reference =
+            (cli.inputs.reference.first()).expect("the parser requires a system netlist");
         let run = crate::engine::system::run(system, reference).map_err(|error| fail(&error))?;
         // A system has no one deck or layout: both name the system file.
-        let header = Header {
-            tool_version: env!("CARGO_PKG_VERSION"),
-            deck_path: system.display().to_string(),
-            layout_path: system.display().to_string(),
-            timestamp: None,
-        };
-        let mut text = String::new();
-        if cli.format == args::Format::Json {
-            json::write_report(
-                &json::Report {
-                    header: &header,
-                    violations: &run.outputs.violations,
-                    waived: &run.outputs.waived,
-                    runs: &run.outputs.runs,
-                    strings: &run.strings,
-                    grid: run.grid,
-                },
-                &mut text,
-            )
-            .map_err(|error| fail(&error))?;
-        } else {
-            format::write_violations(&run.outputs, &run.strings, run.grid, &mut text);
-            format::write_summary(&run.summary, &mut text);
-        }
+        let header = header(system, system);
+        let report = (&run.outputs, &run.summary, &run.strings, run.grid);
+        write_checks(cli.format, &header, report, &mut text)?;
         return Ok((run.summary, text));
     }
-    let (loaded, extracted, outputs, summary) = if let Some(other) = &cli.other {
+    let (loaded, extracted, outputs, summary) = if let args::Command::Xor(other) = &cli.command {
         let (loaded, outputs, summary) = crate::engine::xor::run_with(&cli.inputs, other, decks)
             .map_err(|error| fail(&error))?;
         (loaded, None, outputs, summary)
@@ -162,34 +145,20 @@ fn render(cli: &args::Cli, decks: &[(&str, DeckFn)]) -> Result<(Summary, String)
         (loaded, Some(extracted), outputs, summary)
     };
 
-    let header = Header {
-        tool_version: env!("CARGO_PKG_VERSION"),
-        deck_path: cli.inputs.deck.display().to_string(),
-        layout_path: cli.inputs.layout.display().to_string(),
-        timestamp: None,
-    };
-    let mut text = String::new();
+    let header = header(&cli.inputs.deck, &cli.inputs.layout);
     let written = match cli.format {
-        args::Format::Text => {
-            format::write_violations(&outputs, &loaded.strings, loaded.grid, &mut text);
-            format::write_summary(&summary, &mut text);
-            reports(cli, &loaded, extracted.as_ref(), &outputs, &mut text).map_err(|why| {
-                eprintln!("error: {why}");
-                ExitCode::FAILURE
-            })?;
+        args::Format::Text | args::Format::Json => {
+            let report = (&outputs, &summary, &loaded.strings, loaded.grid);
+            write_checks(cli.format, &header, report, &mut text)?;
+            if cli.format == args::Format::Text {
+                let pex = cli.options.checks.pex;
+                reports(pex, &loaded, extracted.as_ref(), &outputs, &mut text).map_err(|why| {
+                    eprintln!("error: {why}");
+                    ExitCode::FAILURE
+                })?;
+            }
             Ok(())
         }
-        args::Format::Json => json::write_report(
-            &json::Report {
-                header: &header,
-                violations: &outputs.violations,
-                waived: &outputs.waived,
-                runs: &outputs.runs,
-                strings: &loaded.strings,
-                grid: loaded.grid,
-            },
-            &mut text,
-        ),
         args::Format::Spef | args::Format::Dspf => {
             let spef = cli.format == args::Format::Spef;
             // An empty netlist would read as a design with no parasitics.
@@ -229,25 +198,56 @@ fn render(cli: &args::Cli, decks: &[(&str, DeckFn)]) -> Result<(Summary, String)
     Ok((summary, text))
 }
 
-/// The deck's `report` lines: `p2p` and `coupling`, one line per pair,
-/// after a PEX run (PEX-016), and `cluster`, one line per cluster, after
-/// any check (FLOW-010).
+/// `text` or `json`: the rule records, violations and summary of a run
+/// whose names are in `strings` and locations on `grid`.
+fn write_checks(
+    format: args::Format,
+    header: &Header,
+    (outputs, summary, strings, grid): (&Outputs, &Summary, &StrTable, Grid),
+    text: &mut String,
+) -> Result<(), ExitCode> {
+    if format == args::Format::Json {
+        let report = json::Report {
+            header,
+            violations: &outputs.violations,
+            waived: &outputs.waived,
+            runs: &outputs.runs,
+            strings,
+            grid,
+        };
+        return json::write_report(&report, text).map_err(|error| fail(&error));
+    }
+    format::write_violations(outputs, strings, grid, text);
+    format::write_summary(summary, text);
+    Ok(())
+}
+
+/// The report header of a run on `deck` and `layout`, undated.
+fn header(deck: &Path, layout: &Path) -> Header {
+    Header {
+        tool_version: env!("CARGO_PKG_VERSION"),
+        deck_path: deck.display().to_string(),
+        layout_path: layout.display().to_string(),
+        timestamp: None,
+    }
+}
+
+/// The deck's `report` lines: `cluster`, one line per cluster, after any
+/// check (FLOW-010), and, when `pex` ran, `p2p` and `coupling`, one line
+/// per pair (PEX-016).
 fn reports(
-    cli: &args::Cli,
-    loaded: &crate::engine::Loaded,
-    extracted: Option<&crate::engine::Extracted>,
-    outputs: &crate::engine::Outputs,
+    pex: bool,
+    loaded: &Loaded,
+    extracted: Option<&Extracted>,
+    outputs: &Outputs,
     text: &mut String,
 ) -> Result<(), String> {
     use std::fmt::Write as _;
     let wanted = &loaded.deck.reports;
     #[expect(clippy::cast_precision_loss, reason = "a resolution is a small count")]
     let per_um = loaded.grid.dbu_per_um() as f64;
-    let um = |d: gpurify_geom::Dbu| {
-        #[expect(clippy::cast_precision_loss, reason = "a coordinate")]
-        let v = d.raw() as f64 / per_um;
-        v
-    };
+    #[expect(clippy::cast_precision_loss, reason = "a coordinate")]
+    let um = |d: gpurify_geom::Dbu| d.raw() as f64 / per_um;
     if let Some(reach) = wanted.cluster {
         for c in crate::engine::triage::cluster(&outputs.violations, reach) {
             let _ = writeln!(
@@ -263,7 +263,7 @@ fn reports(
         }
     }
     // A deck serves every check; its PEX reports print when PEX ran.
-    let Some(extracted) = extracted.filter(|_| cli.options.checks.pex) else {
+    let Some(extracted) = extracted.filter(|_| pex) else {
         return Ok(());
     };
     for (net, points) in &wanted.p2p {
@@ -290,36 +290,24 @@ fn reports(
 
 /// `lib`: load and extract once, then generate every accuracy the spec
 /// asks for. `"accuracy": "all"` writes each level under its own
-/// subdirectory.
-fn liberty(cli: &args::Cli, lib: &args::LibArgs, decks: &[(&str, DeckFn)]) -> ExitCode {
-    let spec = match std::fs::read_to_string(&lib.spec)
+/// subdirectory. An error has already been reported on stderr when this
+/// returns `Err`.
+fn liberty(inputs: &Inputs, lib: &args::LibArgs, decks: &[(&str, DeckFn)]) -> Result<(), ExitCode> {
+    let error = |why: String| {
+        eprintln!("error: {why}");
+        ExitCode::FAILURE
+    };
+    let spec = std::fs::read_to_string(&lib.spec)
         .map_err(|e| format!("{}: {e}", lib.spec.display()))
         .and_then(|text| crate::liberty::spec::parse(&text).map_err(|e| e.to_string()))
-    {
-        Ok(spec) => spec,
-        Err(why) => {
-            eprintln!("error: {why}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let lef = match &lib.lef {
-        None => None,
-        Some(path) => match std::fs::read_to_string(path) {
-            Ok(text) => Some(text),
-            Err(e) => {
-                eprintln!("error: {}: {e}", path.display());
-                return ExitCode::FAILURE;
-            }
-        },
-    };
-    let loaded = match crate::engine::pipeline::load_with(&cli.inputs, decks) {
-        Ok(loaded) => loaded,
-        Err(error) => return fail(&error),
-    };
-    let extracted = match crate::engine::pipeline::extract(&loaded) {
-        Ok(extracted) => extracted,
-        Err(error) => return fail(&error),
-    };
+        .map_err(error)?;
+    let lef = (lib.lef.as_ref())
+        .map(|path| {
+            std::fs::read_to_string(path).map_err(|e| error(format!("{}: {e}", path.display())))
+        })
+        .transpose()?;
+    let loaded = crate::engine::pipeline::load_with(inputs, decks).map_err(|e| fail(&e))?;
+    let extracted = crate::engine::pipeline::extract(&loaded).map_err(|e| fail(&e))?;
     // Simulator decks and logs; kept only when a simulation fails, to debug it.
     let scratch = std::env::temp_dir().join(format!("gpurify-lib-{}", std::process::id()));
     let many = spec.accuracy.len() > 1;
@@ -340,27 +328,19 @@ fn liberty(cli: &args::Cli, lib: &args::LibArgs, decks: &[(&str, DeckFn)]) -> Ex
             tool_version: env!("CARGO_PKG_VERSION"),
         };
         let started = std::time::Instant::now();
-        let generated = match crate::liberty::generate(&loaded, &extracted, &request) {
-            Ok(generated) => generated,
-            Err(error) => {
-                eprintln!("error: {} accuracy: {error}", accuracy.name());
-                let written = std::fs::read_dir(&work).is_ok_and(|mut d| d.next().is_some());
-                if written {
-                    eprintln!("simulator decks and logs are kept in {}", work.display());
-                }
-                return ExitCode::FAILURE;
+        let generated = crate::liberty::generate(&loaded, &extracted, &request).map_err(|e| {
+            eprintln!("error: {} accuracy: {e}", accuracy.name());
+            if std::fs::read_dir(&work).is_ok_and(|mut d| d.next().is_some()) {
+                eprintln!("simulator decks and logs are kept in {}", work.display());
             }
-        };
+            ExitCode::FAILURE
+        })?;
         for (path, text) in &generated.files {
             let path = dir.join(path);
-            let written = path
-                .parent()
+            (path.parent())
                 .map_or(Ok(()), std::fs::create_dir_all)
-                .and_then(|()| std::fs::write(&path, text));
-            if let Err(e) = written {
-                eprintln!("error: {}: {e}", path.display());
-                return ExitCode::FAILURE;
-            }
+                .and_then(|()| std::fs::write(&path, text))
+                .map_err(|e| error(format!("{}: {e}", path.display())))?;
             println!("{}: wrote {}", accuracy.name(), path.display());
         }
         for note in &generated.notes {
@@ -374,7 +354,7 @@ fn liberty(cli: &args::Cli, lib: &args::LibArgs, decks: &[(&str, DeckFn)]) -> Ex
         let _ = std::fs::remove_dir_all(&work);
     }
     let _ = std::fs::remove_dir_all(&scratch);
-    ExitCode::SUCCESS
+    Ok(())
 }
 
 fn fail(error: &dyn std::error::Error) -> ExitCode {
