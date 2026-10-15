@@ -58,7 +58,7 @@ fn store(deck: &CompiledDeck, strings: &StrTable, rects: &[Rect]) -> GeometrySto
         );
     }
     let (mut store, _) = builder.finish(deck.layers.len());
-    derive_layers(&mut store, deck, &Provenance::default(), strings).expect("derives");
+    derive_layers(&mut store, deck, &Provenance::default(), strings);
     store
 }
 

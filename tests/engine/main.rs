@@ -671,8 +671,7 @@ fn a_consumer_checks_each_edit_against_one_shared_deck() {
             );
         }
         let (mut store, _) = builder.finish(deck.layers.len());
-        gpurify_ingest::layout::derive_layers(&mut store, deck, &Provenance::default(), strings)
-            .expect("the derived layers compute");
+        gpurify_ingest::layout::derive_layers(&mut store, deck, &Provenance::default(), strings);
         let (mut out, mut runs) = (Violations::default(), Vec::new());
         rules.run(&store, &mut out, &mut runs);
         let name = |id| strings.resolve(id).to_owned();

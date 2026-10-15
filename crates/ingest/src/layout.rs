@@ -202,10 +202,6 @@ pub fn read_gds_bytes(path: &std::path::Path) -> Result<Vec<u8>, LayoutError> {
 /// or an operand that was not computed itself) is left empty and marked
 /// ([`GeometryStore::mark_uncomputed`]): only the rules that read it refuse.
 ///
-/// # Errors
-///
-/// None today; the `Result` is kept for the reader's other refusals.
-///
 /// # Panics
 ///
 /// When `store` has fewer layers than the deck, or already holds shapes on a
@@ -215,10 +211,9 @@ pub fn derive_layers<D: AsRef<LayerTable> + ?Sized>(
     deck: &D,
     provenance: &Provenance,
     strings: &StrTable,
-) -> Result<(), LayoutError> {
+) {
     // A store built in memory has no cells: every shape's tag is empty.
     derive_layers_into(store, deck.as_ref(), &provenance.placed, strings, &[]);
-    Ok(())
 }
 
 /// Compute every deck-derived layer and append it to the store, in id order.
@@ -418,11 +413,8 @@ fn derive_layers_into(
                                 .filter(|label| label.layer == operands[0])
                                 .map(|label| label.at)
                                 .filter(|&p| {
-                                    !(0..crate::narrow(b.len())).any(|idx| {
-                                        let poly = b.get(idx);
-                                        poly.bbox().contains(Bbox::point(p.x, p.y))
-                                            && on_material(poly, p)
-                                    })
+                                    !(0..crate::narrow(b.len()))
+                                        .any(|idx| on_material(b.get(idx), p))
                                 })
                                 .map(|p| {
                                     let up = |v: Dbu| Dbu::new_unchecked(v.raw() + 1);
@@ -451,11 +443,7 @@ fn derive_layers_into(
                             let flags: Vec<bool> = (0..crate::narrow(a.len()))
                                 .map(|idx| {
                                     let poly = a.get(idx);
-                                    let holds = matching.iter().any(|&p| {
-                                        poly.bbox().contains(Bbox::point(p.x, p.y))
-                                            && on_material(poly, p)
-                                    });
-                                    holds == keep
+                                    matching.iter().any(|&p| on_material(poly, p)) == keep
                                 })
                                 .collect();
                             a.select_into(&flags, &mut folded);
@@ -500,6 +488,9 @@ fn derive_layers_into(
 
 /// Whether `p` lies on the polygon's material, its boundary included.
 fn on_material(poly: PolygonRef<'_>, p: Point) -> bool {
+    if !poly.bbox().contains(Bbox::point(p.x, p.y)) {
+        return false;
+    }
     let on_ring = |ring: RingRef<'_>| {
         let (xs, ys) = ring.coords();
         (0..xs.len()).any(|i| {
@@ -561,6 +552,7 @@ pub mod gds {
     use crate::provenance::Provenance;
     use fearless_simd::{dispatch, i64x4, mask64x4, prelude::*, Level};
     use gpurify_geom::boolean::canonical_rings_into;
+    use gpurify_geom::ops::Point;
     use gpurify_geom::{Bbox, Dbu, Grid, LayerId, MAX_ABS_DBU};
     use gpurify_geom::{GeometryStore, GeometryStoreBuilder};
     use gpurify_geom::{StrId, StrTable};
@@ -1694,13 +1686,10 @@ pub mod gds {
     struct Flatten<'a> {
         lib: &'a Library,
         layers: &'a LayerTable,
-        strings: &'a StrTable,
         unknown: UnknownLayers,
         labels: LabelDepth,
         builder: GeometryStoreBuilder,
         provenance: Provenance,
-        /// Cells on the current root-to-here chain, for the cycle check.
-        on_chain: Vec<bool>,
         /// Each cell's flat polygon and text counts, from
         /// [`Library::flat_counts`].
         counts: Vec<[u64; 2]>,
@@ -1811,12 +1800,10 @@ pub mod gds {
             let mut walk = Flatten {
                 lib: self,
                 layers,
-                strings,
                 unknown,
                 labels,
                 builder: GeometryStoreBuilder::with_capacity(self.elems.len(), self.xs.len()),
                 provenance: Provenance::default(),
-                on_chain: vec![false; self.cells.len()],
                 counts,
                 own,
                 tag: 0,
@@ -1827,10 +1814,8 @@ pub mod gds {
                 tx: Vec::new(),
                 ty: Vec::new(),
             };
-            for (index, &is_referenced) in self.referenced().iter().enumerate() {
-                if !is_referenced {
-                    walk.visit(narrow(index), Xform::IDENTITY, true, 1)?;
-                }
+            for root in self.roots() {
+                walk.visit(root, Xform::IDENTITY, true, 1)?;
             }
 
             // Labels are not bound yet; only the cell tags follow the layer sort.
@@ -1899,11 +1884,9 @@ pub mod gds {
             let mut reach = vec![None; self.cells.len()];
             let mut out = Vec::new();
             let layers = deck.as_ref();
-            for (index, &is_referenced) in self.referenced().iter().enumerate() {
-                if !is_referenced {
-                    let walk = (&boxed[..], layers);
-                    self.find_boxes(narrow(index), Xform::IDENTITY, walk, &mut reach, &mut out)?;
-                }
+            for root in self.roots() {
+                let walk = (&boxed[..], layers);
+                self.find_boxes(root, Xform::IDENTITY, walk, &mut reach, &mut out)?;
             }
             Ok(out)
         }
@@ -1954,17 +1937,11 @@ pub mod gds {
                 Some(own) => {
                     let [xlo, ylo, xhi, yhi] =
                         transformed(own, at).ok_or(LayoutError::UnsupportedTransform)?;
-                    for v in [xlo, ylo, xhi, yhi] {
-                        if v.unsigned_abs() > MAX_ABS_DBU.unsigned_abs() {
-                            return Err(LayoutError::CoordinateOutOfRange(v));
-                        }
-                    }
-                    let dbu = Dbu::new_unchecked;
                     Bbox {
-                        xlo: dbu(xlo),
-                        ylo: dbu(ylo),
-                        xhi: dbu(xhi),
-                        yhi: dbu(yhi),
+                        xlo: in_domain(xlo)?,
+                        ylo: in_domain(ylo)?,
+                        xhi: in_domain(xhi)?,
+                        yhi: in_domain(yhi)?,
                     }
                 }
                 None => Bbox::EMPTY,
@@ -1974,19 +1951,8 @@ pub mod gds {
                 let Some(layer) = layers.of_stream(text.layer, text.texttype) else {
                     continue;
                 };
-                let (x, y) = at
-                    .apply(text.x, text.y)
-                    .ok_or(LayoutError::UnsupportedTransform)?;
-                for v in [x, y] {
-                    if v.unsigned_abs() > MAX_ABS_DBU.unsigned_abs() {
-                        return Err(LayoutError::CoordinateOutOfRange(v));
-                    }
-                }
                 pins.push(crate::provenance::PlacedLabel {
-                    at: gpurify_geom::ops::Point {
-                        x: Dbu::new_unchecked(x),
-                        y: Dbu::new_unchecked(y),
-                    },
+                    at: placed_point(at, text.x, text.y)?,
                     layer,
                     name: text.string,
                 });
@@ -2045,6 +2011,23 @@ pub mod gds {
         }
     }
 
+    /// `v` as a coordinate, refused outside the `±MAX_ABS_DBU` domain.
+    fn in_domain(v: i64) -> Result<Dbu, LayoutError> {
+        if v.unsigned_abs() > MAX_ABS_DBU.unsigned_abs() {
+            return Err(LayoutError::CoordinateOutOfRange(v));
+        }
+        Ok(Dbu::new_unchecked(v))
+    }
+
+    /// The point `(x, y)` placed by `at`, refused on overflow or outside the domain.
+    fn placed_point(at: Xform, x: i64, y: i64) -> Result<Point, LayoutError> {
+        let (x, y) = at.apply(x, y).ok_or(LayoutError::UnsupportedTransform)?;
+        Ok(Point {
+            x: in_domain(x)?,
+            y: in_domain(y)?,
+        })
+    }
+
     /// `[xlo, ylo, xhi, yhi]` under `at`: the box of its four corners.
     /// `None` on overflow.
     fn transformed(b: [i64; 4], at: Xform) -> Option<[i64; 4]> {
@@ -2094,16 +2077,12 @@ pub mod gds {
             &self,
             strings: &StrTable,
         ) -> Result<([u64; 2], Vec<[u64; 2]>), LayoutError> {
-            let referenced = self.referenced();
             let mut counted = vec![None; self.cells.len()];
             let mut on_chain = vec![false; self.cells.len()];
             let mut total = [0u64; 2];
-            for (index, &is_referenced) in referenced.iter().enumerate() {
-                if !is_referenced {
-                    let (count, _) =
-                        self.flat_count(narrow(index), strings, &mut counted, &mut on_chain, 1)?;
-                    total = [0, 1].map(|k| total[k].saturating_add(count[k]));
-                }
+            for root in self.roots() {
+                let (count, _) = self.flat_count(root, strings, &mut counted, &mut on_chain, 1)?;
+                total = [0, 1].map(|k| total[k].saturating_add(count[k]));
             }
             // A cycle no root reaches is as malformed as one a root reaches:
             // counting what is left refuses it. A library whose every cell is
@@ -2117,13 +2096,13 @@ pub mod gds {
             Ok((total, each.collect()))
         }
 
-        /// Whether each cell is placed by some reference; the roots are the rest.
-        fn referenced(&self) -> Vec<bool> {
+        /// The cells no reference places, in file order.
+        fn roots(&self) -> impl Iterator<Item = u32> {
             let mut referenced = vec![false; self.cells.len()];
             for reference in &self.refs {
                 referenced[reference.child as usize] = true;
             }
-            referenced
+            (0..narrow(self.cells.len())).filter(move |&cell| !referenced[cell as usize])
         }
 
         /// How many `[polygons, texts]` `cell` flattens to: its own elements
@@ -2177,6 +2156,8 @@ pub mod gds {
     impl Flatten<'_> {
         /// Emit one cell's geometry under `at`, then recurse into its references.
         /// Its labels are placed when `root`, or under [`LabelDepth::All`].
+        /// [`Library::flat_counts`] has refused a cycle and a chain past the
+        /// depth cap, so the recursion is bounded.
         fn visit(
             &mut self,
             cell: u32,
@@ -2184,19 +2165,9 @@ pub mod gds {
             root: bool,
             depth: u32,
         ) -> Result<(), LayoutError> {
+            debug_assert!(depth <= MAX_HIERARCHY_DEPTH, "flat_counts caps the depth");
             let lib = self.lib;
             let index = cell as usize;
-            if self.on_chain[index] {
-                return Err(LayoutError::CyclicHierarchy(
-                    self.strings.resolve(lib.cells[index].name).to_owned(),
-                ));
-            }
-            if depth > MAX_HIERARCHY_DEPTH {
-                return Err(LayoutError::HierarchyTooDeep(
-                    self.strings.resolve(lib.cells[index].name).to_owned(),
-                ));
-            }
-            self.on_chain[index] = true;
             let parent = self.tag;
             self.tag |= self.own.get(index).copied().unwrap_or(0);
 
@@ -2232,7 +2203,6 @@ pub mod gds {
             }
 
             self.tag = parent;
-            self.on_chain[index] = false;
             Ok(())
         }
 
@@ -2252,22 +2222,8 @@ pub mod gds {
             let Some(layer) = self.layer(label.layer, label.texttype)? else {
                 return Ok(());
             };
-            let (x, y) = at
-                .apply(label.x, label.y)
-                .ok_or(LayoutError::UnsupportedTransform)?;
-            for v in [x, y] {
-                if v.unsigned_abs() > MAX_ABS_DBU.unsigned_abs() {
-                    return Err(LayoutError::CoordinateOutOfRange(v));
-                }
-            }
-            self.provenance.place_label(
-                gpurify_geom::ops::Point {
-                    x: Dbu::new_unchecked(x),
-                    y: Dbu::new_unchecked(y),
-                },
-                layer,
-                label.string,
-            );
+            let point = placed_point(at, label.x, label.y)?;
+            self.provenance.place_label(point, layer, label.string);
             Ok(())
         }
 
@@ -4853,8 +4809,7 @@ layer nothing = m.in_cells(\"pad_*\")
         let mut builder = LayoutBuilder::new(deck.layers.len());
         builder.push(LayerId(0), &[0, 100, 100, 0], &[0, 0, 100, 100]);
         let (mut store, _) = builder.finish();
-        super::derive_layers(&mut store, &deck, &crate::Provenance::default(), &strings)
-            .expect("derives");
+        super::derive_layers(&mut store, &deck, &crate::Provenance::default(), &strings);
         let count = |name: &str| {
             store
                 .polys_on_layer(deck.layers.id(&strings, name).expect("declared"))

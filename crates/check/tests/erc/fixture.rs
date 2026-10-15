@@ -324,7 +324,7 @@ pub fn run(fixture: &Fixture) -> Result<Ran, String> {
         let name = strings.intern(text);
         provenance.place_label(point(*x, *y), id, name);
     }
-    derive_layers(&mut store, &deck, &provenance, &strings).map_err(|why| format!("{why}"))?;
+    derive_layers(&mut store, &deck, &provenance, &strings);
     provenance
         .resolve_labels(&store, &deck.connectivity)
         .map_err(|why| format!("labels: {why}"))?;

@@ -306,8 +306,7 @@ pub fn recheck(
         }
     }
     let (mut part, order) = builder.finish(store.layer_count());
-    derive_layers(&mut part, &deck.layers, &Provenance::default(), strings)
-        .expect("deriving layers in memory does not fail");
+    derive_layers(&mut part, &deck.layers, &Provenance::default(), strings);
     let derived_rows = by_key(&store, drawn..store.layer_count());
     let to_new = |from: &GeometryStore, row: PolyId, drawn_map: &dyn Fn(u32) -> Option<u32>| {
         if row.0 == u32::MAX || row.idx() >= from.poly_count() {
