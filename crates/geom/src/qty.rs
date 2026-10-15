@@ -80,7 +80,8 @@ pub struct Qty<D: Dimension, const P: i8> {
 }
 
 impl<D: Dimension, const P: i8> Qty<D, P> {
-    /// Wrap a count of `10^P` base units.
+    /// Wraps a count of `10^P` base units. Unchecked: a `NaN` is stored as
+    /// given, and [`Self::is_finite`] is how a consumer refuses it.
     pub const fn new(raw: f64) -> Self {
         Self {
             raw,
@@ -88,24 +89,24 @@ impl<D: Dimension, const P: i8> Qty<D, P> {
         }
     }
 
-    /// The count of `10^P` base units.
+    /// Returns the count of `10^P` base units.
     pub const fn raw(self) -> f64 {
         self.raw
     }
 
-    /// The value in base units, regardless of `P`. `3 aF` becomes `3e-18`.
+    /// Returns the value in base units, regardless of `P`: `3 aF` becomes `3e-18`.
     pub fn base(self) -> f64 {
         self.to::<0>().raw()
     }
 
-    /// Restate at a different prefix. Explicit, so a lossy rescale is visible
-    /// at the call site.
+    /// Restates the value at prefix `Q`. Explicit, so a lossy rescale is
+    /// visible at the call site.
     pub fn to<const Q: i8>(self) -> Qty<D, Q> {
         // One multiply: at Q == P the factor is exactly 1.0, bit for bit.
         Qty::new(self.raw * 10f64.powi(i32::from(P) - i32::from(Q)))
     }
 
-    /// True when the value is finite. A `NaN` limit compares false against
+    /// Returns whether the value is finite. A `NaN` limit compares false against
     /// everything and silently passes a rule, so reports assert this.
     pub fn is_finite(self) -> bool {
         self.raw.is_finite()

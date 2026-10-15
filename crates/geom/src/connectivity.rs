@@ -6,8 +6,8 @@
 #[repr(transparent)]
 pub struct ComponentLabel(pub u32);
 
-/// Label every node with its component; `out` is cleared and refilled to
-/// `node_count` rows.
+/// Labels every node with its component, into `out` (cleared and refilled
+/// to `node_count` rows). Near-linear in nodes plus edges.
 ///
 /// # Panics
 ///
