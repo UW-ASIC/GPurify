@@ -302,6 +302,24 @@ impl Printer<'_> {
                 number(tsv.liner_k)?
             );
         }
+        if let Some(substrate) = &source.pex_models.substrate {
+            let layers = substrate
+                .layers
+                .iter()
+                .map(|&(t, rho)| Ok(format!("({}nm, {})", number(t)?, number(rho)?)))
+                .collect::<Result<Vec<_>, PrintError>>()?;
+            let _ = writeln!(
+                out,
+                "pex_substrate ports [{}] backside {} profile [{}]",
+                substrate.ports.join(", "),
+                if substrate.grounded {
+                    "grounded"
+                } else {
+                    "floating"
+                },
+                layers.join(", ")
+            );
+        }
         for device in &source.pex_models.device {
             let _ = writeln!(
                 out,

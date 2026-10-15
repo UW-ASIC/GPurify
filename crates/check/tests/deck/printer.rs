@@ -215,11 +215,13 @@ extraction rcc coupling_threshold 0.1fF
     }
 }
 
-/// A deck's parasitic models (`pex_fill`, `pex_device`, `pex_tsv`) survive printing,
+/// A deck's parasitic models (`pex_fill`, `pex_device`, `pex_tsv`,
+/// `pex_substrate`) survive printing,
 /// and one naming what the deck lacks is refused.
 /// Oracle: round trip; and the refusals `docs/deck.md` states (a fill
 /// layer that carries no net, a model no `device mos` declares, a key
-/// missing).
+/// missing, a substrate port that holds no net or a layer of no
+/// thickness).
 #[test]
 fn a_deck_with_pex_models_survives_printing() {
     let text = "grid 1nm
@@ -236,6 +238,7 @@ pex_tsv via1 length 50um liner 200nm liner_k 3.9
 pex fill1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9 area_cap 25.8aF/um2 fringe_cap 40.5aF/um
 pex_fill fill1 floating
 pex_device \"nfet\" gate_contact_cap 0.3aF/um gate_diffusion_cap 0.25aF/um
+pex_substrate ports [diff] backside grounded profile [(3um, 10), (300um, 0.01)]
 ";
     let mut strings = StrTable::default();
     let deck = compile(text, grid(), &mut strings).expect("the deck compiles");
@@ -253,4 +256,11 @@ pex_device \"nfet\" gate_contact_cap 0.3aF/um gate_diffusion_cap 0.25aF/um
     assert!(refused(("pex_tsv via1", "pex_tsv met1")));
     assert!(refused((" liner_k 3.9", "")));
     assert_eq!(deck.pex_models.tsv[0].length_nm, 50_000.0);
+    let substrate = deck.pex_models.substrate.as_ref().expect("a substrate");
+    assert_eq!(substrate.layers, [(3000.0, 10.0), (300_000.0, 0.01)]);
+    assert!(substrate.grounded);
+    assert!(refused(("ports [diff]", "ports [gate]")));
+    assert!(refused(("(3um, 10)", "(0um, 10)")));
+    assert!(refused((" backside grounded", "")));
+    assert!(refused(("backside grounded", "backside wet")));
 }

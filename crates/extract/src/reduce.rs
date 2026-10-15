@@ -74,7 +74,8 @@ pub fn reduce(network: &mut ParasiticNetwork, extraction: Extraction) {
         match element {
             Parasitic::Resistance(_)
             | Parasitic::Inductance(_)
-            | Parasitic::MutualInductance(_) => {
+            | Parasitic::MutualInductance(_)
+            | Parasitic::SubstrateResistance(_) => {
                 if keeps_resistance {
                     network.push(near, far, element);
                 }

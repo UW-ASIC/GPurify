@@ -211,6 +211,7 @@
 //! | PEX-009 | PEX netlist diff and qualification | implemented | [`compare`], net by net; [`foreign`] reads another tool's SPEF or DSPF, nets linked by name; `gpurify compare` on the command line |
 //! | PEX-010 | SPEF output | implemented | `gpurify::export::parasitic::write_spef` |
 //! | PEX-011 | Device-region (MEOL) parasitics | partial | [`device_region`]: the deck's `pex_device` gate-to-contact and gate-to-diffusion capacitance per µm of width; no device-internal resistance |
+//! | PEX-013 | Substrate network | implemented | [`substrate`]: the deck's `pex_substrate`, a layered silicon under the die, solved between the nets on its port layers and to a grounded backside |
 //! | PEX-015 | 3D-IC extraction | partial | [`tsv`]: the deck's `pex_tsv`, a through-silicon via's liner capacitance; no TSV coupling, bumps or interposer |
 //! | PEX-016 | Point-to-point resistance and net-to-net coupling report | partial | `gpurify::engine::p2p` (`pex --p2p`, `--coupling`), over ERC's chain resistor model |
 //! | PEX-012 | Metal-fill treatment | partial | [`fill`]: the deck's `pex_fill`, floating (Kron reduction), grounded or ignored; no virtual fill |
@@ -228,6 +229,7 @@ pub mod foreign;
 pub mod network;
 pub mod quasistatic;
 pub mod reduce;
+pub mod substrate;
 pub mod tsv;
 
 pub use network::{Parasitic, ParasiticNetwork};

@@ -490,3 +490,109 @@ fn a_def_on_a_layer_the_deck_lacks_is_refused() {
     };
     assert!(why.message.contains("/nonexistent/tech.lef"), "{why}");
 }
+
+/// The substrate network of a DEF whose taps are its only shapes, through
+/// the run and both writers (PEX-013).
+fn substrate_run(tag: &str, nets: &str, backside: &str) -> (String, String, Vec<(bool, f64)>) {
+    let lef = "VERSION 5.8 ;\nUNITS DATABASE MICRONS 1000 ; END UNITS\n\
+               LAYER tap TYPE ROUTING ; WIDTH 1 ; END tap\nEND LIBRARY\n";
+    let deck = format!(
+        "grid 1nm\nlayer tap = gds(1, 0)\nconnect conductors [tap]\n\
+         connect touch_within_layer\nconnect label tap names tap\n\
+         pex tap thickness 100nm height 0nm sheet 1ohm dielectric 3.9 area_cap 0aF/um2 fringe_cap 0aF/um\n\
+         pex_substrate ports [tap] backside {backside} profile [(2um, 1), (5um, 10)]\n"
+    );
+    let mut inputs = inputs(tag, &design(nets));
+    inputs.lef = vec![{
+        let path = inputs.lef[0].with_file_name("tap.lef");
+        std::fs::write(&path, lef).expect("writable");
+        path
+    }];
+    std::fs::write(&inputs.deck, deck).expect("writable");
+    let options = RunOptions {
+        checks: Checks {
+            drc: false,
+            erc: false,
+            lvs: false,
+            pex: true,
+        },
+        lvs: gpurify_check::lvs::CompareOptions::default(),
+        quasistatic_nets: Vec::new(),
+    };
+    let (loaded, extracted, outputs, _) = run(&inputs, &options).expect("the DEF runs");
+    let network = outputs.parasitics.expect("PEX ran");
+    let header = gpurify::export::Header {
+        tool_version: "test",
+        deck_path: "top.deck".into(),
+        layout_path: "top.def".into(),
+        timestamp: None,
+    };
+    let (mut spef, mut dspf) = (String::new(), String::new());
+    gpurify::export::parasitic::write_spef(
+        &network,
+        &extracted.ports,
+        &loaded.strings,
+        &header,
+        &mut spef,
+    )
+    .expect("SPEF");
+    gpurify::export::parasitic::write_dspf(
+        &network,
+        &extracted.ports,
+        &loaded.strings,
+        &header,
+        &mut dspf,
+    )
+    .expect("DSPF");
+    let substrate = (0..network.element_count())
+        .filter_map(|row| match network.value[row] {
+            Parasitic::SubstrateResistance(r) => Some((network.to[row].is_none(), r.raw())),
+            _ => None,
+        })
+        .collect();
+    (spef, dspf, substrate)
+}
+
+/// A tap covering the whole die over two layers and a grounded backside is
+/// one resistor to ground, the layers in series, in both writers.
+///
+/// Oracle: closed form (Ohm's law): the die is the tap's 10 × 10 µm, so the
+/// current runs straight down through 2 µm of 1 Ω·cm and 5 µm of 10 Ω·cm,
+/// `(2 · 10⁴ + 5 · 10⁵) Ω·µm / 100 µm² = 5200 Ω`; SPEF carries it as a
+/// comment and DSPF as an `R` card to node 0 (the writers' docs).
+#[test]
+fn a_tap_over_a_layered_substrate_is_its_series_resistance_in_spef_and_dspf() {
+    let (spef, dspf, substrate) = substrate_run(
+        "substrate-ohm",
+        "SPECIALNETS 1 ;\n- vss + RECT tap ( 0 0 ) ( 10000 10000 ) ;\nEND SPECIALNETS",
+        "grounded",
+    );
+    let [(true, ohms)] = substrate[..] else {
+        panic!("one resistor to ground: {substrate:?}")
+    };
+    assert!((ohms - 5200.0).abs() < 1e-9 * 5200.0, "{ohms}");
+    assert!(spef.contains("// substrate vss:0 0 5200"), "{spef}");
+    assert!(dspf.contains("R1 vss:0 0 5200"), "{dspf}");
+}
+
+/// Two taps on a floating backside: one resistor between their nets and
+/// none to ground, written as a comment and an `R` card between the nets.
+///
+/// Oracle: the model's definition (`gpurify_extract::substrate`): with no
+/// backside contact every current leaves through another port, so the
+/// network is the one conductance between the two ports.
+#[test]
+fn two_taps_on_a_floating_backside_are_one_resistor_between_their_nets() {
+    let (spef, dspf, substrate) = substrate_run(
+        "substrate-float",
+        "SPECIALNETS 2 ;\n- a + RECT tap ( 0 0 ) ( 2000 2000 ) ;\n\
+         - b + RECT tap ( 8000 0 ) ( 10000 2000 ) ;\nEND SPECIALNETS",
+        "floating",
+    );
+    let [(false, ohms)] = substrate[..] else {
+        panic!("one resistor between the taps: {substrate:?}")
+    };
+    assert!(ohms > 0.0);
+    assert!(spef.contains("// substrate a:0 b:0 "), "{spef}");
+    assert!(dspf.contains("R1 a:0 b:0 "), "{dspf}");
+}

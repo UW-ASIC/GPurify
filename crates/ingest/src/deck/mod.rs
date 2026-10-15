@@ -150,6 +150,23 @@ pub struct PexModels {
     /// `pex_tsv <cut layer> length <l> liner <t> liner_k <k>`, in deck
     /// order: a through-silicon via layer's geometry (catalog PEX-015).
     pub tsv: Vec<TsvModel>,
+    /// `pex_substrate ports [..] backside grounded|floating profile [..]`,
+    /// at most one: the silicon under the die, for the substrate network
+    /// (catalog PEX-013).
+    pub substrate: Option<SubstrateModel>,
+}
+
+/// The `pex_substrate` line: the silicon's layers and backside, and the
+/// layers whose shapes contact it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubstrateModel {
+    /// The port layers (taps, wells), as written.
+    pub ports: Vec<String>,
+    /// Whether the backside is a grounded contact; else it carries no
+    /// current.
+    pub grounded: bool,
+    /// Each layer's `(thickness nm, resistivity Ω·cm)`, top-down.
+    pub layers: Vec<(f64, f64)>,
 }
 
 /// One `pex_tsv` line: a through-silicon via cut layer, each cut a copper
