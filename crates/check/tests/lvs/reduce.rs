@@ -1084,3 +1084,28 @@ fn diffusions_on_symmetric_channel_nets_pair_the_way_they_agree() {
         );
     }
 }
+
+/// Oracle: the series law's precondition (module docs): a stack merges only
+/// devices of one kind and one model. [`series_pair_tight`]'s bracket, its
+/// gates strapped and both lengths stated, with the upper device a `pch`
+/// instead: nothing else differs, so it stays two devices, while the same
+/// stack of one model is one.
+#[test]
+fn a_stack_of_two_models_stays_two_devices() {
+    let mut builder = GraphBuilder::new(5);
+    builder.device_with_params(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 4)],
+        SHORT,
+    );
+    builder.device_with_params(
+        DeviceKind::Mos,
+        PCH,
+        &[(Gate, 0), (Source, 2), (Drain, 3), (Bulk, 4)],
+        SHORT,
+    );
+    let mixed = builder.finish();
+    assert_eq!(reduce_sized(&mixed), mixed, "two models are two devices");
+    assert_eq!(reduce_sized(&series_pair_tight()).device_count(), 1);
+}

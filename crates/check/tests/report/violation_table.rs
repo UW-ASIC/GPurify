@@ -352,3 +352,31 @@ fn a_warning_never_outranks_an_error() {
         Some(Severity::Error)
     );
 }
+
+/// Oracle: law. Rows equal in every key field but a ratio measured sort by
+/// the ratio in numeric order, negatives first, the sign deciding before the
+/// magnitude: the input is the answer reversed, so a key that ignored the
+/// value would leave it reversed.
+#[test]
+fn rows_differing_only_in_a_ratio_sort_by_its_numeric_value() {
+    let ratios = [-3.0, -0.5, -0.0, 0.25, 2.0, 1e300];
+    let row = |value: f64| Violation {
+        rule: StrId(1),
+        layer: LayerId(1),
+        severity: Severity::Error,
+        at: point(0, 0),
+        measured: Measurement::Ratio(value),
+        limit: Measurement::Count(0),
+        shapes: (PolyId(0), None),
+    };
+    let reversed: Vec<Violation> = ratios.iter().rev().map(|&v| row(v)).collect();
+    let mut table = table_of(&reversed);
+    table.sort_canonical();
+    let got: Vec<f64> = (0..ratios.len())
+        .map(|i| match row_at(&table, i).measured {
+            Measurement::Ratio(v) => v,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(got, ratios);
+}
