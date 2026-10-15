@@ -536,3 +536,78 @@ fn required_spacing_answers_for_its_own_layer_at_its_thresholds() {
     assert_eq!(at(&table, a, q(3000, 1001, None)), Some(dbu(500)));
     assert_eq!(at(&table, a, q(2999, 1001, None)), Some(dbu(200)));
 }
+
+/// Oracle: `Rule::validate`'s rustdoc and each variant's: a via
+/// redundancy's `space` is "0 or more"; a DFM score's recommended value
+/// lies above its required one (refused with their difference); a keep-out
+/// zone's class is oblong (its long side past its short one, refused with
+/// the difference), its `to` class positive, its zone reaches 0 or more.
+/// Each value is read at the line and one unit past it.
+#[test]
+fn validate_holds_each_value_to_its_stated_range() {
+    let refuse = |limit: i64| gpurify_check::drc::DrcError::NonPositiveLimit {
+        rule: "r".to_owned(),
+        limit,
+    };
+    let check = |rule: Rule| rule.validate("r", &[]);
+    let (a, b, c) = (LayerId(0), LayerId(1), LayerId(2));
+    let redundancy = |space: i64| Rule::ViaRedundancy {
+        cut: a,
+        lower: b,
+        upper: c,
+        pitch: dbu(200),
+        space: dbu(space),
+        limit: 0.5,
+    };
+    assert_eq!(check(redundancy(0)), Ok(()));
+    assert_eq!(check(redundancy(-1)), Err(refuse(-1)));
+    let dfm = |required: i64, recommended: i64| Rule::DfmScore {
+        check: gpurify_check::drc::ruleset::DfmCheck::Space,
+        layer: a,
+        outer: None,
+        required: dbu(required),
+        recommended: dbu(recommended),
+        rate: 0.5,
+        limit: 0.9,
+    };
+    assert_eq!(check(dfm(100, 101)), Ok(()));
+    assert_eq!(check(dfm(100, 100)), Err(refuse(0)));
+    assert_eq!(check(dfm(100, 99)), Err(refuse(-1)));
+    let zone = |class: (i64, i64), to: Option<(i64, i64)>, end: (i64, i64), side: (i64, i64)| {
+        Rule::KeepOutZone {
+            layer: a,
+            class: (dbu(class.0), dbu(class.1)),
+            to: to.map(|(s, l)| (dbu(s), dbu(l))),
+            end: (dbu(end.0), dbu(end.1)),
+            side: (dbu(side.0), dbu(side.1)),
+        }
+    };
+    assert_eq!(
+        check(zone((100, 101), Some((1, 1)), (0, 0), (0, 0))),
+        Ok(())
+    );
+    assert_eq!(
+        check(zone((100, 100), None, (10, 80), (50, 20))),
+        Err(refuse(0))
+    );
+    assert_eq!(
+        check(zone((100, 99), None, (10, 80), (50, 20))),
+        Err(refuse(-1))
+    );
+    assert_eq!(
+        check(zone((0, 300), None, (10, 80), (50, 20))),
+        Err(refuse(0))
+    );
+    assert_eq!(
+        check(zone((100, 300), Some((0, 100)), (10, 80), (50, 20))),
+        Err(refuse(0))
+    );
+    for (end, side, bad) in [
+        ((-1, 80), (50, 20), -1),
+        ((10, -2), (50, 20), -2),
+        ((10, 80), (-3, 20), -3),
+        ((10, 80), (50, -4), -4),
+    ] {
+        assert_eq!(check(zone((100, 300), None, end, side)), Err(refuse(bad)));
+    }
+}

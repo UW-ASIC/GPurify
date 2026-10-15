@@ -5,6 +5,7 @@ mod common;
 mod corner_model;
 mod deck_fixture;
 mod determinism;
+mod dfm_deck;
 mod facing_rules;
 mod grid_rules;
 mod overlay_deck;
