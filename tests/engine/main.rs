@@ -240,8 +240,7 @@ fn a_short_between_labelled_nets_extracts_and_intent_on_it_is_refused() {
             gpurify_ingest::intent::parse_intent(intent, &mut loaded.strings)
                 .expect("valid intent"),
         );
-        let (_, summary) = run_checks(&loaded, &extracted, &options(Checks { erc: true, ..NONE }))
-            .expect("the stage reports, it does not fail");
+        let (_, summary) = run_checks(&loaded, &extracted, &options(Checks { erc: true, ..NONE }));
         match summary.erc {
             StageStatus::Refused(why) => {
                 assert!(shorted && why.contains("VDD, VSS"), "{why}");
@@ -265,7 +264,7 @@ fn a_quasistatic_name_on_two_nets_is_refused() {
     let extracted = extract(&loaded).expect("an open is not an extraction error");
     let mut opts = options(Checks { pex: true, ..NONE });
     opts.quasistatic_nets = vec!["A".to_owned()];
-    let (_, summary) = run_checks(&loaded, &extracted, &opts).expect("refused, not failed");
+    let (_, summary) = run_checks(&loaded, &extracted, &opts);
     assert!(
         matches!(&summary.pex, StageStatus::Refused(why) if why.contains("A labels 2 disconnected nets")),
         "{:?}",
@@ -282,7 +281,7 @@ fn a_quasistatic_name_on_two_nets_is_refused() {
 fn a_run_selecting_no_check_reports_four_declines_and_passes() {
     let loaded = empty_loaded(GeometryStore::default(), Deck::default());
     let extracted = extract(&loaded).expect("empty extracts");
-    let (out, summary) = run_checks(&loaded, &extracted, &options(NONE)).expect("cannot fail");
+    let (out, summary) = run_checks(&loaded, &extracted, &options(NONE));
     for status in [&summary.drc, &summary.erc, &summary.lvs, &summary.pex] {
         assert_eq!(status, &StageStatus::NotSelected);
     }
@@ -324,13 +323,13 @@ fn lvs_is_skipped_without_a_reference_and_a_mismatch_fails_the_run_with_one() {
     let mut loaded = empty_loaded(GeometryStore::default(), Deck::default());
     let extracted = extract(&loaded).expect("empty extracts");
 
-    let (out, summary) = run_checks(&loaded, &extracted, &options(lvs)).expect("a skip");
+    let (out, summary) = run_checks(&loaded, &extracted, &options(lvs));
     assert!(matches!(summary.lvs, StageStatus::Skipped(_)));
     assert!(out.lvs.is_none());
     assert!(!summary.passed());
 
     loaded.reference = Some(reference_with_one_transistor());
-    let (out, summary) = run_checks(&loaded, &extracted, &options(lvs)).expect("a comparison");
+    let (out, summary) = run_checks(&loaded, &extracted, &options(lvs));
     assert_eq!(summary.lvs, StageStatus::Ran);
     // The five layout checks, every one run and clean: an unconfigurable
     // check records no row, so it cannot keep a clean comparison from passing.
@@ -564,8 +563,7 @@ fn sky130_lvs(rects: &[(&str, i64, i64, i64, i64)], reference: &str) -> (Verdict
         design: None,
     };
     let extracted = extract(&loaded).expect("extracts");
-    let (out, summary) =
-        run_checks(&loaded, &extracted, &options(Checks { lvs: true, ..NONE })).expect("runs");
+    let (out, summary) = run_checks(&loaded, &extracted, &options(Checks { lvs: true, ..NONE }));
     assert_eq!(summary.lvs, StageStatus::Ran);
     let rules = out
         .violations

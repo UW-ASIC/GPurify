@@ -537,9 +537,7 @@ pub fn deck(data: &[u8]) {
         lvs: CompareOptions::default(),
         quasistatic_nets: Vec::new(),
     };
-    let Ok((outputs, summary)) = run_checks(&loaded, &extracted, &options) else {
-        return;
-    };
+    let (outputs, summary) = run_checks(&loaded, &extracted, &options);
     // A stage that did not run says why in its status, not row by row: ERC
     // is skipped on a layout with no geometry, which a deck drawing no layer
     // gets here.

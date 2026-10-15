@@ -576,8 +576,7 @@ pub fn run(fixture: &Fixture) -> Result<Ran, String> {
         lvs: CompareOptions::default(),
         quasistatic_nets: fixture.quasistatic.clone(),
     };
-    let (outputs, summary) =
-        run_checks(&loaded, &extracted, &options).map_err(|why| format!("run: {why}"))?;
+    let (outputs, summary) = run_checks(&loaded, &extracted, &options);
 
     let name = |id| loaded.strings.resolve(id).to_owned();
     let v = &outputs.violations;

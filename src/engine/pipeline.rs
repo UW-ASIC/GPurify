@@ -5,7 +5,7 @@
 //! [`Extracted`] (nets, devices, ports).
 
 use gpurify_check::deck::{BuildError, CompileError, CompiledDeck, DeckFn};
-use gpurify_check::topology::{DeviceTable, Extraction, NetTable, PortTable};
+use gpurify_check::topology::{DeviceTable, NetTable, PortTable};
 use gpurify_geom::{GeometryStore, Grid};
 use gpurify_ingest::layout::UnknownLayers;
 use gpurify_ingest::lefdef::{self, LefDefError};
@@ -77,17 +77,6 @@ pub struct Extracted {
     pub ports: PortTable,
 }
 
-impl Extracted {
-    /// Borrow the three topology tables together.
-    pub fn as_extraction(&self) -> Extraction<'_> {
-        Extraction {
-            nets: &self.nets,
-            devices: &self.devices,
-            ports: &self.ports,
-        }
-    }
-}
-
 /// Reads every input.
 ///
 /// The layout's grid is read before the deck is parsed, because every deck
@@ -154,12 +143,7 @@ fn load_from(
         .map(|&(_, build)| build);
     let source = match builtin {
         Some(_) => String::new(),
-        None => std::fs::read_to_string(&inputs.deck).map_err(|why| {
-            CompileError::from(gpurify_ingest::DeckError::Io(format!(
-                "{}: {why}",
-                inputs.deck.display()
-            )))
-        })?,
+        None => read_deck(&inputs.deck)?,
     };
     let mut strings = StrTable::default();
     let compile = |grid, strings: &mut StrTable| -> Result<CompiledDeck, LoadError> {
@@ -278,14 +262,15 @@ pub struct Die {
 ///
 /// As [`load`], but for the reference and the intent.
 pub fn load_die(layout: &Path, deck: &Path, strings: &mut StrTable) -> Result<Die, LoadError> {
-    let source = std::fs::read_to_string(deck).map_err(|why| {
-        CompileError::from(gpurify_ingest::DeckError::Io(format!(
-            "{}: {why}",
-            deck.display()
-        )))
-    })?;
+    let source = read_deck(deck)?;
     let bytes = gpurify_ingest::layout::read_gds_bytes(layout)?;
     read_die(&bytes, &source, &deck.display().to_string(), strings)
+}
+
+/// A deck file's text; an unreadable one is the deck's error, naming it.
+fn read_deck(path: &Path) -> Result<String, CompileError> {
+    std::fs::read_to_string(path)
+        .map_err(|why| gpurify_ingest::DeckError::Io(format!("{}: {why}", path.display())).into())
 }
 
 /// Reads one GDSII layout and the deck text `deck` (named `deck_file` in its

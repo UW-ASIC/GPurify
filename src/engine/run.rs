@@ -13,14 +13,14 @@ use gpurify_extract::ParasiticNetwork;
 use gpurify_geom::{celsius, prefix, Qty, Temperature};
 use gpurify_geom::{Bbox, LayerId};
 
-/// Which checks to run.
+/// Which checks to run; the default selects none.
 ///
 /// A check left out is [`StageStatus::NotSelected`], which does not fail
 /// [`Summary::passed`], so a run with none selected passes having checked
 /// nothing. A deck whose rules do not compile was refused when it was loaded,
 /// whatever is selected.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Checks {
     /// Design rules: every DRC row of the deck, then its custom rules.
     pub drc: bool,
@@ -42,8 +42,9 @@ impl Checks {
     };
 }
 
-/// How to run.
-#[derive(Debug, Clone)]
+/// How to run. The default selects no check, with default LVS settings and
+/// no field-solved net.
+#[derive(Debug, Clone, Default)]
 pub struct RunOptions {
     /// Which of the four checks to run.
     pub checks: Checks,
@@ -220,16 +221,12 @@ fn drawn_bbox(loaded: &Loaded) -> Bbox {
 /// so it fails every run.
 /// `loaded` must come from [`load`](crate::engine::pipeline::load), and
 /// `extracted` from [`extract`](crate::engine::pipeline::extract) over it.
-///
-/// # Errors
-///
-/// None today: a check that cannot run is a [`StageStatus`], not an error.
-/// The `Result` is the room a later failure of the whole run needs.
+/// It cannot fail: a check that cannot run is a [`StageStatus`].
 pub fn run_checks(
     loaded: &Loaded,
     extracted: &Extracted,
     options: &RunOptions,
-) -> Result<(Outputs, Summary), EngineError> {
+) -> (Outputs, Summary) {
     let mut out = Outputs::default();
     let staged = !loaded.deck.stages.name.is_empty();
     let drc = if options.checks.drc {
@@ -267,11 +264,7 @@ pub fn run_checks(
     if !layout_checked && extracted.ports.shorted_net().is_some() {
         append_stage(&mut out, |violations, runs| {
             gpurify_check::lvs::check_net_seed_conflicts(
-                gpurify_check::Design {
-                    store: &loaded.store,
-                    nets: &extracted.nets,
-                    devices: &extracted.devices,
-                },
+                design(loaded, extracted),
                 &extracted.ports,
                 &loaded.strings,
                 violations,
@@ -282,7 +275,16 @@ pub fn run_checks(
 
     apply_waivers(loaded, &mut out);
     let summary = summarize(&mut out, [drc, erc, lvs, pex]);
-    Ok((out, summary))
+    (out, summary)
+}
+
+/// The layout and its topology, as the checks read them together.
+fn design<'a>(loaded: &'a Loaded, extracted: &'a Extracted) -> gpurify_check::Design<'a> {
+    gpurify_check::Design {
+        store: &loaded.store,
+        nets: &extracted.nets,
+        devices: &extracted.devices,
+    }
 }
 
 /// Put `out` in canonical order and count it, with each stage's status in
@@ -513,11 +515,7 @@ fn run_erc(loaded: &Loaded, extracted: &Extracted, out: &mut Outputs) -> StageSt
         Err(why) => return StageStatus::Refused(why),
     };
     let inputs = gpurify_check::erc::Inputs {
-        design: gpurify_check::Design {
-            store: &loaded.store,
-            nets: &extracted.nets,
-            devices: &extracted.devices,
-        },
+        design: design(loaded, extracted),
         ports: &extracted.ports,
         intent: loaded.intent.as_ref(),
         process: gpurify_check::erc::Process {
@@ -664,14 +662,11 @@ fn run_lvs(
         &loaded.strings,
         Some(loaded.grid),
     );
+    let design = design(loaded, extracted);
     // The layout-dependent effects the deck's `lvs lde` rows ask for.
     gpurify_check::lvs::add_lde_params(
         &mut layout,
-        gpurify_check::Design {
-            store: &loaded.store,
-            nets: &extracted.nets,
-            devices: &extracted.devices,
-        },
+        design,
         (&loaded.deck.lvs.lde, &loaded.deck.layers),
         &loaded.strings,
         loaded.grid,
@@ -679,33 +674,21 @@ fn run_lvs(
     append_stage(out, |violations, runs| {
         gpurify_check::lvs::check_layout(
             &layout,
-            gpurify_check::Design {
-                store: &loaded.store,
-                nets: &extracted.nets,
-                devices: &extracted.devices,
-            },
+            design,
             &extracted.ports,
             (&loaded.strings, &loaded.deck.lvs),
             violations,
             runs,
         );
         gpurify_check::lvs::check_param_ranges(
-            gpurify_check::Design {
-                store: &loaded.store,
-                nets: &extracted.nets,
-                devices: &extracted.devices,
-            },
+            design,
             &loaded.deck.lvs.range,
             &loaded.strings,
             violations,
             runs,
         );
         gpurify_check::lvs::check_device_counts(
-            gpurify_check::Design {
-                store: &loaded.store,
-                nets: &extracted.nets,
-                devices: &extracted.devices,
-            },
+            design,
             &loaded.deck.lvs.count,
             &loaded.strings,
             violations,
@@ -728,11 +711,6 @@ fn run_lvs(
                 loaded.provenance.black_boxes(),
                 loaded.provenance.black_box_pins(),
             );
-            let design = gpurify_check::Design {
-                store: &loaded.store,
-                nets: &extracted.nets,
-                devices: &extracted.devices,
-            };
             let ports = &reference.black_box_ports;
             if let Err(cell) = gpurify_check::lvs::add_black_boxes(
                 &mut layout,
@@ -1082,8 +1060,8 @@ fn reciprocity_refusal(accuracy: &gpurify_extract::quasistatic::Accuracy) -> Opt
 /// # Errors
 ///
 /// [`EngineError::Load`] and [`EngineError::Extract`] from the first two
-/// steps, then whatever [`run_checks`] returns. An error means no verdict;
-/// a check that could not run is not an error but a [`StageStatus`].
+/// steps. An error means no verdict; a check that could not run is not an
+/// error but a [`StageStatus`].
 pub fn run(
     inputs: &Inputs,
     options: &RunOptions,
@@ -1104,7 +1082,7 @@ pub fn run_with(
 ) -> Result<(Loaded, Extracted, Outputs, Summary), EngineError> {
     let loaded = crate::engine::pipeline::load_with(inputs, decks)?;
     let extracted = crate::engine::pipeline::extract(&loaded)?;
-    let (outputs, summary) = run_checks(&loaded, &extracted, options)?;
+    let (outputs, summary) = run_checks(&loaded, &extracted, options);
     Ok((loaded, extracted, outputs, summary))
 }
 

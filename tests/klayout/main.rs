@@ -146,7 +146,7 @@ fn corpus_jobs() -> Vec<Job> {
                 lvs: gpurify::check::lvs::CompareOptions::default(),
                 quasistatic_nets: Vec::new(),
             };
-            let (outputs, _) = run_checks(&loaded, &extracted, &options).ok()?;
+            let (outputs, _) = run_checks(&loaded, &extracted, &options);
             Some(Job {
                 name: format!(
                     "corpus/{}",

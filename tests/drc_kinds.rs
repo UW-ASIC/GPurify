@@ -91,7 +91,7 @@ fn run(deck: &str, rects: &[(&str, [i64; 4])]) -> Found {
         lvs: CompareOptions::default(),
         quasistatic_nets: Vec::new(),
     };
-    let (out, _) = run_checks(&loaded, &extracted, &options).expect("the deck builds");
+    let (out, _) = run_checks(&loaded, &extracted, &options);
     let name = |id| loaded.strings.resolve(id).to_owned();
     let v = &out.violations;
     Found {

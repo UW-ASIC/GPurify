@@ -105,19 +105,6 @@ fn findings(loaded: &Loaded, out: &Outputs) -> BTreeMap<(StrId, i64, i64), (usiz
     counts
 }
 
-fn drc_only() -> RunOptions {
-    RunOptions {
-        checks: Checks {
-            drc: true,
-            erc: false,
-            lvs: false,
-            pex: false,
-        },
-        lvs: gpurify_check::lvs::CompareOptions::default(),
-        quasistatic_nets: Vec::new(),
-    }
-}
-
 /// The layout as given, checked: its findings and net count.
 fn checked(
     inputs: &Inputs,
@@ -126,7 +113,14 @@ fn checked(
 ) -> Result<(Loaded, super::Extracted, Outputs), EngineError> {
     let loaded = load_bytes(inputs, gds, decks)?;
     let extracted = extract(&loaded)?;
-    let (outputs, _) = run_checks(&loaded, &extracted, &drc_only())?;
+    let drc = RunOptions {
+        checks: Checks {
+            drc: true,
+            ..Checks::default()
+        },
+        ..RunOptions::default()
+    };
+    let (outputs, _) = run_checks(&loaded, &extracted, &drc);
     Ok((loaded, extracted, outputs))
 }
 

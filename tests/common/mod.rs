@@ -143,7 +143,7 @@ impl Run {
             lvs: lvs::CompareOptions::default(),
             quasistatic_nets: Vec::new(),
         };
-        run_checks(&loaded, &extracted, &options)
+        Ok(run_checks(&loaded, &extracted, &options))
     }
 
     /// Every rule id the deck declares, as the parser alone reads the deck
@@ -653,8 +653,7 @@ fn run_case_inputs(inputs: &Inputs, checks: Checks) -> Result<CaseRun, String> {
         quasistatic_nets: Vec::new(),
     };
 
-    let (outputs, summary) =
-        run_checks(&loaded, &extracted, &options).map_err(|why| format!("run failed: {why}"))?;
+    let (outputs, summary) = run_checks(&loaded, &extracted, &options);
 
     Ok(CaseRun {
         loaded,
@@ -700,8 +699,7 @@ pub fn run_case_field_solved(domain: &str, id: &str) -> Result<CaseRun, String> 
         quasistatic_nets: named,
     };
 
-    let (outputs, summary) =
-        run_checks(&loaded, &extracted, &options).map_err(|why| format!("run failed: {why}"))?;
+    let (outputs, summary) = run_checks(&loaded, &extracted, &options);
 
     Ok(CaseRun {
         loaded,

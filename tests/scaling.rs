@@ -90,7 +90,7 @@ fn engine(bytes: &[u8]) -> Duration {
         lvs: CompareOptions::default(),
         quasistatic_nets: Vec::new(),
     };
-    let (outputs, _) = run_checks(&loaded, &extracted, &options).expect("the deck runs");
+    let (outputs, _) = run_checks(&loaded, &extracted, &options);
     let elapsed = start.elapsed();
     assert_eq!(outputs.runs.len(), 5);
     for run in &outputs.runs {

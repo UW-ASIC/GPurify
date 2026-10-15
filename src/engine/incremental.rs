@@ -32,6 +32,7 @@
 //!
 //! [`RuleSet::run`]: gpurify_check::drc::RuleSet::run
 
+use super::triage::root;
 use gpurify_check::deck::CompiledDeck;
 use gpurify_check::drc::RuleSet;
 use gpurify_check::report::{Outcome, RuleRun, Violation, Violations};
@@ -188,14 +189,6 @@ fn grow(b: Bbox, by: i64) -> Bbox {
 
 fn holds(b: Bbox, p: Point) -> bool {
     b.xlo <= p.x && p.x <= b.xhi && b.ylo <= p.y && p.y <= b.yhi
-}
-
-fn root(parent: &mut [usize], mut i: usize) -> usize {
-    while parent[i] != i {
-        parent[i] = parent[parent[i]];
-        i = parent[i];
-    }
-    i
 }
 
 /// The DRC findings of `store`, an edit of `previous.store`, as

@@ -14,6 +14,7 @@ use gpurify::engine::pipeline::{extract, load, Inputs};
 use gpurify::engine::run::{run_checks, Checks, RunOptions};
 use gpurify::geom::index::{candidate_pairs_into, SpatialIndex};
 use gpurify::geom::{Dbu, LayerId};
+use gpurify_testgen::oracle::scratch;
 use gpurify_testgen::{scale_corpus, ScaleCorpus, ScaleSpec};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -76,7 +77,7 @@ fn stage_timings_across_the_scale_corpus() {
 
     // Real, clustered geometry. Not comparable with the sweep: fixed per-run
     // costs dominate at this size.
-    let dir = scratch_dir("stages");
+    let dir = scratch("bench-stages");
     let deck = dir.join("rules.deck");
     std::fs::write(&deck, unlabelled_deck().join("\n")).expect("writable");
     let inputs = fixture_inputs(&deck);
@@ -110,21 +111,13 @@ fn unlabelled_deck() -> Vec<String> {
         .collect()
 }
 
-fn scratch_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("gpurify-bench-{tag}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("a scratch directory");
-    dir
-}
-
 /// The whole conformance library. `Drop`, because it draws layers `params.deck`
 /// never declares.
 fn fixture_inputs(deck: &Path) -> Inputs {
     Inputs {
         layout: fixtures().join("_source/conformance.gds"),
         deck: deck.to_path_buf(),
-        reference: Vec::new(),
-        intent: None,
-        lef: Vec::new(),
+        ..Inputs::default()
     }
 }
 
@@ -137,7 +130,7 @@ fn every_rule_in_the_deck_timed_on_its_own() {
     let (rules, base): (Vec<String>, Vec<String>) = unlabelled_deck()
         .into_iter()
         .partition(|line| line.starts_with("rule "));
-    let dir = scratch_dir("rules");
+    let dir = scratch("bench-rules");
 
     let timed_deck = |tag: &str, rule: &str, checks: Checks| {
         let path = dir.join(format!("{tag}.deck"));
@@ -146,14 +139,12 @@ fn every_rule_in_the_deck_timed_on_its_own() {
         let extracted = extract(&loaded).expect("the fixture corpus extracts");
         let options = RunOptions {
             checks,
-            lvs: gpurify::check::lvs::CompareOptions::default(),
-            quasistatic_nets: Vec::new(),
+            ..RunOptions::default()
         };
         let start = Instant::now();
         let mut record = None;
         for _ in 0..RULE_ITERS {
-            let (out, _) = run_checks(&loaded, &extracted, &options)
-                .unwrap_or_else(|why| panic!("{tag}: {why}"));
+            let (out, _) = run_checks(&loaded, &extracted, &options);
             record = out.runs.first().copied();
         }
         (start.elapsed() / RULE_ITERS, record)
@@ -162,8 +153,7 @@ fn every_rule_in_the_deck_timed_on_its_own() {
     let checks_for = |kind: &str| Checks {
         drc: true,
         erc: gpurify::check::erc::ruleset::KINDS.contains(&kind),
-        lvs: false,
-        pex: false,
+        ..Checks::default()
     };
     let floor = |checks: Checks| {
         let _cold = timed_deck("baseline", "", checks);

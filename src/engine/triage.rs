@@ -117,7 +117,7 @@ pub fn cluster(violations: &Violations, reach: Dbu) -> Vec<Cluster> {
 }
 
 /// The union-find root of `k`, halving the path.
-fn root(parent: &mut [usize], mut k: usize) -> usize {
+pub(crate) fn root(parent: &mut [usize], mut k: usize) -> usize {
     while parent[k] != k {
         parent[k] = parent[parent[k]];
         k = parent[k];
