@@ -471,3 +471,75 @@ fn the_electrical_queries_read_what_the_deck_states() {
         Some(1950f64.to_bits())
     );
 }
+
+/// Oracle: the queries' rustdoc, on a deck written so each answer is read
+/// off the text: every enclosure kind is stated for a via in two metals
+/// with different limits, so a query must keep to its pair (the largest
+/// minimum per kind, the smallest maximum, `full_width` on one pair only);
+/// an array spacing applies to arrays of more cuts than its threshold; and
+/// each density row answers for its own layer.
+#[test]
+fn the_queries_keep_to_the_layers_they_are_asked_about() {
+    use gpurify_check::deck::Enclosure;
+    let text = "grid 1nm
+layer m = gds(1, 0)
+layer n = gds(2, 0)
+layer v = gds(3, 0)
+rule e1 enclosure(v, m) >= 30nm
+rule e2 enclosure(v, n) >= 50nm
+rule e3 enclosure(v, m, opposite) >= 40nm
+rule e4 enclosure(v, n, opposite) >= 70nm
+rule e5 enclosure(v, m, adjacent) >= 45nm
+rule e6 enclosure(v, n, adjacent) >= 60nm
+rule e7 enclosure(v, m, noncoincident) >= 20nm
+rule e8 enclosure(v, n, noncoincident) >= 25nm
+rule e9 enclosure(v, m) <= 95nm
+rule e10 enclosure(v, n) <= 80nm
+rule e11 enclosure(v, n) <= 85nm
+rule fw full_width(v, n)
+rule va2 via_array_space(v; array: 2) >= 100nm
+rule va3 via_array_space(v; array: 3) >= 200nm
+rule d1 density(m; window: 500nm, step: 250nm) >= 0.3
+rule d2 global_density(n) <= 0.5
+";
+    let (deck, strings) = shipped(text);
+    let id = |name: &str| deck.layers.id(&strings, name).expect("declared");
+    let (m, n, v) = (id("m"), id("n"), id("v"));
+    assert_eq!(
+        deck.enclosure(v, m),
+        Enclosure {
+            all_sides: Some(nm(30)),
+            opposite: Some(nm(45)),
+            noncoincident: Some(nm(20)),
+            at_most: Some(nm(95)),
+            full_width: false,
+        }
+    );
+    assert_eq!(
+        deck.enclosure(v, n),
+        Enclosure {
+            all_sides: Some(nm(50)),
+            opposite: Some(nm(70)),
+            noncoincident: Some(nm(25)),
+            at_most: Some(nm(80)),
+            full_width: true,
+        }
+    );
+    assert_eq!(deck.enclosure(m, v), Enclosure::default());
+
+    // "More than its threshold": 2 cuts are no array of either, 3 an
+    // array of the first, 4 of both.
+    assert_eq!(deck.via_array_spacing(v, 2), None);
+    assert_eq!(deck.via_array_spacing(v, 3), Some(nm(100)));
+    assert_eq!(deck.via_array_spacing(v, 4), Some(nm(200)));
+    assert_eq!(deck.via_array_spacing(m, 4), None);
+
+    let density = |layer| -> Vec<(String, Option<(Dbu, Dbu)>)> {
+        deck.density(layer)
+            .map(|row| (strings.resolve(row.rule).to_owned(), row.window))
+            .collect()
+    };
+    assert_eq!(density(m), [("d1".to_owned(), Some((nm(500), nm(250))))]);
+    assert_eq!(density(n), [("d2".to_owned(), None)]);
+    assert!(density(v).is_empty());
+}
