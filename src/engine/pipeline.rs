@@ -206,12 +206,11 @@ fn load_from(
         (library, grid, deck, Some(lefdef::Design { def, lef }))
     } else {
         let read;
-        let bytes = match gds {
-            Some(bytes) => bytes,
-            None => {
-                read = gpurify_ingest::layout::read_gds_bytes(&inputs.layout)?;
-                &read
-            }
+        let bytes = if let Some(bytes) = gds {
+            bytes
+        } else {
+            read = gpurify_ingest::layout::read_gds_bytes(&inputs.layout)?;
+            &read
         };
         // Layout strings are interned before the deck's, which fixes every StrId.
         let library = gpurify_ingest::layout::gds::Library::parse(bytes, &mut strings)?;
