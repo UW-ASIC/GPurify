@@ -462,3 +462,46 @@ fn derived_layers_compute_at_any_angle() {
     assert_eq!(found.outcome("fb"), Outcome::Ran);
     assert_eq!(found.of("fb").len(), 1);
 }
+
+/// Every finding and outcome of `rules` on `rings` after symmetry `t`, as
+/// sorted text.
+fn found_under(rules: &str, rings: &[(&str, Vec<(i64, i64)>)], t: usize) -> Vec<String> {
+    let moved: Vec<(&str, Vec<(i64, i64)>)> = rings
+        .iter()
+        .map(|(layer, ring)| (*layer, symmetric(ring, t)))
+        .collect();
+    let found = run_on(rules, &moved);
+    let mut all: Vec<String> = found
+        .findings
+        .iter()
+        .map(|f| format!("{f:?}"))
+        .chain(found.outcomes.iter().map(|o| format!("{o:?}")))
+        .collect();
+    all.sort();
+    all
+}
+
+/// `rules` on `layout` find the same under all eight grid symmetries.
+fn holds_under_symmetries(rules: &str, layout: &[(&str, Vec<(i64, i64)>)]) {
+    let base = found_under(rules, layout, 0);
+    for t in 1..8 {
+        assert_eq!(found_under(rules, layout, t), base, "symmetry {t}");
+    }
+}
+/// The eight symmetries of the square: the identity, the mirrors and the
+fn symmetric(ring: &[(i64, i64)], t: usize) -> Vec<(i64, i64)> {
+    let mut out: Vec<(i64, i64)> = ring
+        .iter()
+        .map(|&(x, y)| {
+            let (x, y) = if t & 4 == 0 { (x, y) } else { (y, x) };
+            (
+                if t & 1 == 0 { x } else { -x },
+                if t & 2 == 0 { y } else { -y },
+            )
+        })
+        .collect();
+    if (t & 1 != 0) ^ (t & 2 != 0) ^ (t & 4 != 0) {
+        out.reverse();
+    }
+    out
+}
