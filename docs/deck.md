@@ -181,9 +181,10 @@ Every other check refuses one.
 
 ### 45-degree geometry
 
-Layer operations take edges at 45° as well as horizontal and vertical ones;
-an edge at any other angle makes the layer's derived layers fail to compute.
-Every result keeps its vertices on the grid and its edges at multiples of 45°:
+Layer operations take edges at 45° as well as horizontal and vertical ones
+(and at any other angle, [below](#geometry-at-any-angle)). On octilinear
+layers every result keeps its vertices on the grid and its edges at
+multiples of 45°:
 
 - Where a rising and a falling 45° edge cross between grid points (at a
   half-grid point), the result's vertex there is replaced by the two grid
@@ -223,6 +224,49 @@ of each on the other's inner side, as KLayout's Euclidean `width` measures it
 and the foundry decks check it: a box chamfered next to a side shorter than
 the limit is too narrow there. Distances to a 45° edge can fall
 between whole units and are compared exactly; a reported value is floored.
+
+### Geometry at any angle
+
+A polygon may have edges at any angle, as GDSII writes a curve: its
+vertices lie on the grid and its edges run between them. Every layer
+operation takes such edges, and so do the checks listed below; every other
+check refuses a layer holding one.
+
+- Where two edges at such angles cross between grid points, the crossing is
+  rounded to the nearest grid point, a half away from zero, as KLayout
+  rounds it, and every edge passing within that point's pixel (the square
+  of points that round to it) is bent through it: snap rounding (J. D.
+  Hobby, "Practical segment intersection with finite precision output",
+  Computational Geometry 13, 1999; L. Guibas and D. Marimont, "Rounding
+  arrangements dynamically", IJCGA 8, 1998). Rounding carries no boundary
+  across another, so it creates no crossing, and moves every boundary point
+  less than half a unit along each axis. An edge end within a bent edge's
+  pixel bends that edge too, as KLayout's edge processor makes such an end
+  an attractor. An edge no rounding bends keeps its shape exactly: shapes
+  that cross nothing merge to themselves as drawn. Where a layer has an edge
+  at such an angle the 45° tip cutting above gives way to this rule.
+- `.sized(len)` sweeps every edge by the square, as at 45° (KLayout moves
+  an edge along its normal instead), and the swept edges' crossings are
+  rounded as above.
+- `.with_length` measures `√(dx² + dy²)` exactly. `.inside_part` and
+  `.outside_part` end a part cut between the points of the lattice its line
+  passes at the last such point inside it, and drop a part holding no two.
+- `.with_width` reads `width` (below), its bounds compared exactly against
+  the fraction. `.with_rect` and `.extended` refuse such edges.
+
+Of the checks, `width`, `notch`, `space` (one layer and two), `area`,
+`hole_area`, `edge_length`, `forbidden`, `inside`, `contains` and
+`enclosure` (every side and `noncoincident`) measure such shapes. A
+distance to a slanted edge is a fraction (the point (10, 7) is `25/√26` from
+the line along (5, 1) through the origin, `√24.04`): it is compared against
+the limit exactly, in integers, and reported floored, so that point fails a
+5 nm space and passes a 4 nm one. `width` is KLayout's Euclidean width at
+its default angle limit, as at 45°: the least distance between the parts
+of any two edges more than 90 degrees apart that lie on each other's
+material side, an acute tip 0. `notch` pairs antiparallel edges only.
+`enclosure` `opposite` and `adjacent`, which read straight out from an
+edge, refuse such edges, as does every kind not listed. The differences
+from KLayout are named in `docs/klayout-mirror.md` (a9).
 
 Wherever a rule takes a layer, it can take a layer expression instead:
 `forbidden(licon and poly and (diff or tap))` is the same as declaring that

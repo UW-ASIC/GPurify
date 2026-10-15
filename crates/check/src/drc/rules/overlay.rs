@@ -22,9 +22,11 @@ use crate::report::{
 use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
 use gpurify_geom::derive::inside_flags;
 use gpurify_geom::index::{cross_layer_pairs_into, SpatialIndex};
-use gpurify_geom::ops::{isqrt, seg_seg_dist2, seg_seg_near2, Point, Seg};
+use gpurify_geom::ops::{isqrt, seg_seg_dist2, seg_seg_near2, seg_seg_twice2, Point, Seg};
 use gpurify_geom::rects::{clipped_area, covered_area, decompose_into};
-use gpurify_geom::relation::{pair_threshold2, projected_reach2, Metric, Relation, Zero};
+use gpurify_geom::relation::{
+    pair_threshold2, pair_threshold_any, projected_reach2, Metric, Relation, Zero,
+};
 use gpurify_geom::width::{narrowest_facing, narrowest_neck, poly_edges};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, PolygonRef, ValidatedLayer};
 use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
@@ -483,7 +485,7 @@ pub(crate) fn enclosure(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    match s.validated.pair_octilinear(store, outer, inner_layer) {
+    match s.validated.pair_any(store, outer, inner_layer) {
         None => return REFUSED,
         Some((hosts, drawn)) if !(hosts.is_rectilinear() && drawn.is_rectilinear()) => {
             return enclosure_octilinear(
@@ -626,7 +628,7 @@ pub(crate) fn enclosure(
     (Outcome::Ran, examined)
 }
 
-/// [`enclosure`] where either layer has a 45-degree edge. Hosts are the
+/// [`enclosure`] where either layer has a slanted edge. Hosts are the
 /// figures of the merged outer layer, as there; an inner polygon is hosted
 /// by the figure that covers it (`gpurify_geom::derive::inside_flags`). An
 /// inner polygon no host covers measures 0.
@@ -643,6 +645,13 @@ pub(crate) fn enclosure(
 /// rectilinear inner polygon, as the decks do (cuts); one with a 45-degree
 /// edge refuses. Full width and a wire band refuse: both cut their layers
 /// into rectangles.
+///
+/// At any other angle (DRC-116), every side and non-coincident read the same
+/// distances, exact fractions floored when reported
+/// (`gpurify_geom::ops::seg_seg_twice2`,
+/// `gpurify_geom::relation::pair_threshold_any`); opposite and adjacent,
+/// which measure by projection, refuse a host or inner layer with such an
+/// edge.
 fn enclosure_octilinear(
     store: &GeometryStore,
     rule: StrId,
@@ -657,14 +666,15 @@ fn enclosure_octilinear(
         layer_out: merged,
         ..
     } = s;
-    let Some((hosts, drawn)) = validated.pair_octilinear(store, outer, inner_layer) else {
+    let Some((hosts, drawn)) = validated.pair_any(store, outer, inner_layer) else {
         return REFUSED;
     };
     let straight_out = matches!(mode, Mode::Opposite | Mode::Adjacent);
+    let octilinear = hosts.is_octilinear() && drawn.is_octilinear();
     if mode == Mode::FullWidth
         || wire.from.raw() > 0
         || wire.below.is_some()
-        || (straight_out && !drawn.is_rectilinear())
+        || (straight_out && !(drawn.is_rectilinear() && octilinear))
     {
         return REFUSED;
     }
@@ -685,7 +695,8 @@ fn enclosure_octilinear(
         let host = home[poly as usize].filter(|_| covered[poly as usize]);
         let (reading, at, host_row) = match host {
             Some(figure) => {
-                let Some((twice, at)) = octilinear_reading(shape, merged.get(figure), mode) else {
+                let reading = octilinear_reading(shape, merged.get(figure), mode, octilinear);
+                let Some((twice, at)) = reading else {
                     continue;
                 };
                 (twice, at, Some(owners[figure as usize]))
@@ -725,10 +736,14 @@ fn nearest_mid(e: Seg, f: Seg) -> Point {
 /// A hosted inner polygon's enclosure under `mode` (not full width), as
 /// twice its square, and where to report it; `None` when nothing measures it
 /// (no edge pair, so no limit is broken). See [`enclosure_octilinear`].
+/// Without `octilinear`, every side and non-coincident read their any-angle
+/// fractions, floored, which compare against a whole squared limit as the
+/// fractions do.
 fn octilinear_reading(
     inner: PolygonRef<'_>,
     host: PolygonRef<'_>,
     mode: Mode,
+    octilinear: bool,
 ) -> Option<(i128, Point)> {
     let inner_edges: Vec<Seg> = poly_edges(inner).map(|(a, b)| Seg { a, b }).collect();
     let host_edges: Vec<Seg> = poly_edges(host).map(|(a, b)| Seg { a, b }).collect();
@@ -742,14 +757,23 @@ fn octilinear_reading(
         Mode::EverySide => inner_edges
             .iter()
             .flat_map(|&e| {
-                host_edges
-                    .iter()
-                    .map(move |&f| (seg_seg_near2(e, f).0, e, f))
+                host_edges.iter().map(move |&f| {
+                    let twice = if octilinear {
+                        seg_seg_near2(e, f).0
+                    } else {
+                        seg_seg_twice2(e, f).0
+                    };
+                    (twice, e, f)
+                })
             })
             .min_by_key(|&(r, _, _)| r)
             .map(|(r, e, f)| (r, nearest_mid(e, f))),
         Mode::NonCoincident => {
             let pair = |e: Seg, f: Seg| {
+                if !octilinear {
+                    return pair_threshold_any(Relation::Overlap, Zero::Never, rev(f), rev(e))
+                        .map(|(floor, _)| floor);
+                }
                 pair_threshold2(
                     Relation::Overlap,
                     Metric::Euclidean,

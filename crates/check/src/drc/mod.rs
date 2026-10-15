@@ -150,9 +150,21 @@ impl Validated {
     }
 
     /// `layer` validated with edges at 45 degrees allowed, or `None` when it
-    /// does not validate (the rule is `Refused`): for a rule proved on
-    /// octilinear geometry.
+    /// does not validate or has an edge at another angle (the rule is
+    /// `Refused`): for a rule proved on octilinear geometry.
     pub(crate) fn get_octilinear(
+        &mut self,
+        store: &GeometryStore,
+        layer: LayerId,
+    ) -> Option<&ValidatedLayer> {
+        self.get_any(store, layer)
+            .filter(|validated| validated.is_octilinear())
+    }
+
+    /// `layer` validated with edges at any angle allowed, or `None` when it
+    /// does not validate (the rule is `Refused`): for a rule proved on
+    /// geometry at any angle.
+    pub(crate) fn get_any(
         &mut self,
         store: &GeometryStore,
         layer: LayerId,
@@ -163,23 +175,22 @@ impl Validated {
         self.slots[layer.idx()]
             .get_or_insert_with(|| {
                 let mut out = ValidatedLayer::default();
-                validate_layer_with(store, layer, Angles::Octilinear, &mut out).map(|()| out)
+                validate_layer_with(store, layer, Angles::Any, &mut out).map(|()| out)
             })
             .as_ref()
             .ok()
     }
 
-    /// Two layers validated with edges at 45 degrees allowed, as
-    /// [`Validated::get_octilinear`], borrowed together; `None` when either
-    /// does not validate.
-    pub(crate) fn pair_octilinear(
+    /// Two layers validated with edges at any angle allowed, borrowed
+    /// together; `None` when either does not validate.
+    pub(crate) fn pair_any(
         &mut self,
         store: &GeometryStore,
         a: LayerId,
         b: LayerId,
     ) -> Option<(&ValidatedLayer, &ValidatedLayer)> {
-        self.get_octilinear(store, a)?;
-        self.get_octilinear(store, b)?;
+        self.get_any(store, a)?;
+        self.get_any(store, b)?;
         let get = |layer: LayerId| self.slots[layer.idx()].as_ref()?.as_ref().ok();
         Some((get(a)?, get(b)?))
     }
