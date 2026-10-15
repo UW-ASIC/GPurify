@@ -320,6 +320,27 @@ impl Printer<'_> {
                 layers.join(", ")
             );
         }
+        for fill in &source.edits.fill {
+            let _ = writeln!(
+                out,
+                "fill {} for {} size {} space {} keep {} avoid [{}]",
+                fill.layer,
+                fill.density,
+                self.length(i128::from(fill.size.raw()))?,
+                self.length(i128::from(fill.space.raw()))?,
+                self.length(i128::from(fill.keep.raw()))?,
+                fill.avoid.join(", ")
+            );
+        }
+        for widen in &source.edits.widen {
+            let _ = writeln!(
+                out,
+                "widen {} net {} by {}",
+                widen.layer,
+                quoted(&widen.net)?,
+                self.length(i128::from(widen.by.raw()))?
+            );
+        }
         for device in &source.pex_models.device {
             let _ = writeln!(
                 out,

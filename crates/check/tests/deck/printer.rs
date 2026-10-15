@@ -264,3 +264,36 @@ pex_substrate ports [diff] backside grounded profile [(3um, 10), (300um, 0.01)]
     assert!(refused((" backside grounded", "")));
     assert!(refused(("backside grounded", "backside wet")));
 }
+
+/// A deck's layout edits (`fill`, `widen`) survive printing, and one
+/// drawing on a derived layer or missing a key is refused.
+/// Oracle: round trip; and the refusals `docs/deck.md` states (an edit
+/// draws on a drawn layer, `fill` states every key, `size` is positive).
+#[test]
+fn a_deck_with_layout_edits_survives_printing() {
+    let text = "grid 5nm
+layer met1 = gds(68, 20)
+layer fill1 = gds(68, 28)
+layer nofill = gds(68, 99)
+layer all1 = met1 or fill1
+fill fill1 for all1 size 1um space 0.5um keep 2um avoid [met1, nofill]
+widen met1 net \"VP*\" by 100nm
+";
+    let mut strings = StrTable::default();
+    let deck = compile(text, grid(), &mut strings).expect("the deck compiles");
+    assert_eq!(deck.edits.fill[0].space.raw(), 500);
+    assert_eq!(deck.edits.widen[0].net, "VP*");
+    assert_round_trip("layout edits", &deck, &mut strings);
+    let printed = print(&deck, &strings).expect("prints");
+    let again = compile(&printed, grid(), &mut strings).expect("compiles");
+    assert_eq!(again.edits, deck.edits);
+    let refused = |swap: (&str, &str)| {
+        let text = text.replace(swap.0, swap.1);
+        compile(&text, grid(), &mut StrTable::default()).is_err()
+    };
+    assert!(refused(("fill fill1 for", "fill all1 for")));
+    assert!(refused(("widen met1", "widen all1")));
+    assert!(refused((" keep 2um", "")));
+    assert!(refused(("size 1um", "size 0um")));
+    assert!(refused(("avoid [met1, nofill]", "avoid [met1, nowhere]")));
+}

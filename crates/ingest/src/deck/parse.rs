@@ -481,9 +481,11 @@ impl<'a> Parser<'a> {
             "waive" => self.waive(),
             "ignore" => self.ignore(),
             "lvs" => self.lvs(),
+            "fill" => self.fill(),
+            "widen" => self.widen(),
             _ => Err(self.err(
                 span,
-                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, if, connect, device, pex, pex_fill, pex_device, pex_tsv, pex_substrate, temperature, lvs, extraction, corner, stage or waive"),
+                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, if, connect, device, pex, pex_fill, pex_device, pex_tsv, pex_substrate, temperature, lvs, extraction, corner, stage, waive, fill or widen"),
             )),
         }
     }
@@ -2061,6 +2063,74 @@ impl<'a> Parser<'a> {
             grounded,
             layers,
         });
+        Ok(())
+    }
+
+    /// `fill <layer> for <layer> size <l> space <l> keep <l> avoid [..]`:
+    /// how `gpurify fill` draws density fill ([`super::FillSpec`]), every
+    /// key required once, in any order.
+    fn fill(&mut self) -> R<()> {
+        let layer = self.layer_word()?;
+        self.expect("for")?;
+        let density = self.layer_word()?;
+        let keys = ["size", "space", "keep"];
+        let mut lengths = [None::<Dbu>; 3];
+        let mut avoid = None;
+        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+            let (key, span) = self.ident("size, space, keep or avoid")?;
+            if key == "avoid" {
+                if avoid.replace(self.layer_list()?).is_some() {
+                    return Err(self.err(span, "`avoid` is given twice"));
+                }
+                continue;
+            }
+            let Some(at) = keys.iter().position(|&k| k == key) else {
+                return Err(self.err(
+                    span,
+                    &format!("unknown fill key `{key}`; expected size, space, keep or avoid"),
+                ));
+            };
+            let value = self.value()?;
+            let length = self.length(&value, &key)?;
+            // `keep` may be zero (fill may touch what it avoids); the rest draw.
+            if length.raw() < 0 || (at < 2 && length.raw() == 0) {
+                return Err(self.err(value.span(), &format!("{key} must be positive")));
+            }
+            if lengths[at].replace(length).is_some() {
+                return Err(self.err(span, &format!("`{key}` is given twice")));
+            }
+        }
+        let ([Some(size), Some(space), Some(keep)], Some(avoid)) = (lengths, avoid) else {
+            let t = self.peek();
+            return Err(self.err_tok(t, "fill states size, space, keep and avoid"));
+        };
+        self.out.edits.fill.push(super::FillSpec {
+            layer,
+            density,
+            size,
+            space,
+            keep,
+            avoid,
+        });
+        Ok(())
+    }
+
+    /// `widen <layer> net "<pattern>" by <len>`: the power straps `gpurify
+    /// enhance` widens ([`super::WidenSpec`]).
+    fn widen(&mut self) -> R<()> {
+        let layer = self.layer_word()?;
+        self.expect("net")?;
+        let net = self.quoted("a net name pattern in quotes")?;
+        self.expect("by")?;
+        let value = self.value()?;
+        let by = self.length(&value, "by")?;
+        if by.raw() <= 0 {
+            return Err(self.err(value.span(), "by must be positive"));
+        }
+        self.out
+            .edits
+            .widen
+            .push(super::WidenSpec { layer, net, by });
         Ok(())
     }
 

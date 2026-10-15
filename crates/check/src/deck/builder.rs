@@ -733,6 +733,8 @@ pub struct DeckBuilder<'s> {
     extraction: Option<gpurify_ingest::deck::Extraction>,
     /// The base deck's parasitic models, kept as they are.
     pex_models: gpurify_ingest::deck::PexModels,
+    /// The base deck's layout edits, kept as they are.
+    edits: gpurify_ingest::deck::Edits,
     /// The base deck's `corner` lines, kept as they are.
     corners: Vec<gpurify_ingest::deck::CornerSource>,
     /// The base deck's stages, each with its rules' ids; a rule added here is
@@ -787,6 +789,7 @@ impl<'s> DeckBuilder<'s> {
             lvs: LvsSrc::default(),
             extraction: None,
             pex_models: gpurify_ingest::deck::PexModels::default(),
+            edits: gpurify_ingest::deck::Edits::default(),
             corners: Vec::new(),
             stages: Vec::new(),
             waivers: Vec::new(),
@@ -860,6 +863,7 @@ impl<'s> DeckBuilder<'s> {
             lvs: source.lvs,
             extraction: source.extraction,
             pex_models: source.pex_models,
+            edits: source.edits,
             corners: source.corners,
             stages: source.stages,
             waivers: source.waivers,
@@ -1522,6 +1526,7 @@ impl<'s> DeckBuilder<'s> {
             stages,
             waivers,
             pex_models: self.pex_models,
+            edits: self.edits,
         };
         let deck = lower(&source, self.strings).map_err(CompileError::from)?;
         let mut compiled = CompiledDeck::from_deck(deck, self.grid, self.strings)?;

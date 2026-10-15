@@ -131,6 +131,56 @@ pub struct Deck {
     pub lvs: LvsControls,
     /// The parasitic models beyond the stack (`pex_fill`, …), as written.
     pub pex_models: PexModels,
+    /// The layout edits the deck configures (`fill`, `widen`), as written.
+    pub edits: Edits,
+}
+
+/// What `gpurify fill` and `gpurify enhance` draw, as the deck states it:
+/// by layer and net names as written, lengths in grid units. Neither is a
+/// check; each is an edit of the layout that the deck's own rules then
+/// check (catalog FLOW-007, FLOW-009).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Edits {
+    /// `fill` lines, in deck order.
+    pub fill: Vec<FillSpec>,
+    /// `widen` lines, in deck order.
+    pub widen: Vec<WidenSpec>,
+}
+
+/// `fill <layer> for <density layer> size <len> space <len> keep <len>
+/// avoid [<layer>, ..]`: square fill shapes `size` on a side, `space`
+/// apart, drawn on `layer` (a drawn layer) at least `keep` from every
+/// shape of the `avoid` layers, until each `density` and `global_density`
+/// rule on `density` holds its minimum without passing its maximum.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FillSpec {
+    /// The drawn layer the fill goes on.
+    pub layer: String,
+    /// The layer whose density rules the fill meets, usually the metal
+    /// and its fill together (`met1 or met1_fill`).
+    pub density: String,
+    /// A fill square's side; positive.
+    pub size: Dbu,
+    /// The gap between neighbouring fill squares; positive.
+    pub space: Dbu,
+    /// The least distance from a fill square to a shape of `avoid`.
+    pub keep: Dbu,
+    /// The layers fill keeps `keep` from: the drawn metal, a no-fill
+    /// region.
+    pub avoid: Vec<String>,
+}
+
+/// `widen <layer> net "<pattern>" by <len>`: each rectangle on `layer`
+/// whose net carries a label matching the glob `pattern` (a power strap)
+/// grows by `len` on each long side where that adds no finding.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WidenSpec {
+    /// The drawn layer the straps are on.
+    pub layer: String,
+    /// A glob over net names: `*` any run, `?` one character.
+    pub net: String,
+    /// How far each long side moves out; positive.
+    pub by: Dbu,
 }
 
 /// The parasitic models a deck states beyond the `pex` stack, by layer
