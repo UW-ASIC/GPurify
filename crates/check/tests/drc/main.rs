@@ -1,5 +1,6 @@
 //! Integration tests for `drc`, one module each.
 
+mod allowed_width_rules;
 mod area_rules;
 mod common;
 mod corner_model;
