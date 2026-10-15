@@ -43,7 +43,9 @@
 //! conductors and growing by [`GROWTH`] beyond them; a conductor touching or
 //! crossing the interface cuts its footprint out.
 
+use super::matvec::{near, NearPairs, BLOCK, TILE, VACUUM_PERMITTIVITY};
 use super::mesh::Panel;
+use fearless_simd::{dispatch, f64x4, Level, Simd, SimdBase, SimdFloat};
 use gpurify_ingest::deck::ProcessStack;
 use rayon::prelude::*;
 
@@ -390,23 +392,21 @@ fn far(target: [f64; 3], source: [f64; 3]) -> f64 {
 pub struct FieldRows {
     /// The first interface panel; the rows are `first ..` of the system.
     first: usize,
+    /// Every panel's centroid, metres, as columns.
+    cx: Vec<f64>,
+    cy: Vec<f64>,
+    cz: Vec<f64>,
     /// `λ / 2π` per row.
     weight: Vec<f64>,
     /// `√A / ε₀` per row.
     scale: Vec<f64>,
     /// `1 / A` per row.
     inverse_area: Vec<f64>,
-    /// Near pairs by row, as `matvec`'s: row `g`'s are
-    /// `near_start[g] .. near_start[g + 1]`, each the exact entry less the
-    /// far kernel's (all of the exact entry on the diagonal, where the far
-    /// kernel is not summed).
-    near_start: Vec<u32>,
-    near_column: Vec<u32>,
-    near_value: Vec<f64>,
+    /// Near pairs by row, each the exact entry less the far kernel's (all
+    /// of the exact entry on the diagonal, where the far kernel is not
+    /// summed).
+    near: NearPairs,
 }
-
-/// Vacuum permittivity, F/m. CODATA 2018.
-const VACUUM_PERMITTIVITY: f64 = 8.854_187_812_8e-12;
 
 impl FieldRows {
     /// The rows of `panel[first ..]`, the interface panels, whose `λ` is
@@ -417,18 +417,13 @@ impl FieldRows {
     /// *O*(I · P) distance tests for I interface panels among P, and a
     /// closed form per near pair.
     pub fn build(panel: &[Panel], first: usize, lambda: &[f64]) -> Self {
-        let reach = |p: &Panel| p.half[0].hypot(p.half[1]);
         let rows: Vec<Vec<(u32, f64)>> = (first..panel.len())
             .into_par_iter()
             .map(|g| {
                 let target = &panel[g];
                 let mut row = Vec::new();
                 for (p, source) in panel.iter().enumerate() {
-                    let d2 = (0..3)
-                        .map(|axis| (target.centre[axis] - source.centre[axis]).powi(2))
-                        .sum::<f64>();
-                    let limit = NEAR * (reach(target) + reach(source));
-                    if p != g && !(d2 < limit * limit) {
+                    if p != g && !near(target, source, NEAR) {
                         continue;
                     }
                     let value = if p == g {
@@ -443,16 +438,13 @@ impl FieldRows {
             .collect();
         let mut out = FieldRows {
             first,
+            near: NearPairs::from_rows(rows),
             ..FieldRows::default()
         };
-        out.near_start.push(0);
-        for row in rows {
-            for (column, value) in row {
-                out.near_column.push(column);
-                out.near_value.push(value);
-            }
-            out.near_start
-                .push(u32::try_from(out.near_column.len()).expect("the near pairs fit a u32"));
+        for p in panel {
+            out.cx.push(p.centre[0]);
+            out.cy.push(p.centre[1]);
+            out.cz.push(p.centre[2]);
         }
         for (g, &l) in lambda.iter().enumerate() {
             let area = panel[first + g].area;
@@ -465,27 +457,99 @@ impl FieldRows {
 
     /// Overwrites `y[first ..]` with the interface rows of `x`. Each row is a
     /// strict ascending fold of the far kernel over every other panel, then
-    /// its near corrections in column order.
-    pub fn apply(&self, panel: &[Panel], x: &[f64], y: &mut [f64]) {
-        let first = self.first;
-        y[first..].par_iter_mut().enumerate().for_each(|(g, out)| {
-            let row = first + g;
-            let target = panel[row].centre;
-            let mut field = 0.0_f64;
-            for (p, (&q, source)) in x.iter().zip(panel).enumerate() {
-                if p != row {
-                    field += q * far(target, source.centre);
+    /// its near corrections in column order; the output bits depend on it.
+    /// Rows run in parallel, 4 per SIMD lane group.
+    ///
+    /// # Panics
+    ///
+    /// If `x` or `y` is shorter than the panels.
+    pub fn apply(&self, x: &[f64], y: &mut [f64]) {
+        let n = self.cx.len();
+        let (x, y) = (&x[..n], &mut y[self.first..n]);
+        let level = Level::new();
+        y.par_chunks_mut(BLOCK)
+            .enumerate()
+            .for_each(|(block, out)| {
+                let first = block * BLOCK;
+                dispatch!(level, s => self.rows_simd(s, first, x, out));
+                for (offset, value) in out.iter_mut().enumerate() {
+                    let g = first + offset;
+                    let field = self.near.fold_row(g, x, *value);
+                    *value = self.scale[g]
+                        * (x[self.first + g] * self.inverse_area[g] - self.weight[g] * field);
                 }
+            });
+    }
+
+    /// The far-kernel sums of rows `first ..` (interface rows, from 0) into
+    /// `out`, [`TILE`] at a time; the remainder is scalar.
+    #[inline(always)]
+    fn rows_simd<S: Simd>(&self, s: S, first: usize, x: &[f64], out: &mut [f64]) {
+        const VECTORS: usize = TILE / 4;
+        let (tiles, tail) = out.as_chunks_mut::<TILE>();
+        for (t, tile) in tiles.iter_mut().enumerate() {
+            // The tile's first panel.
+            let i = self.first + first + t * TILE;
+            let lanes = |column: &[f64], v: usize| f64x4::from_slice(s, &column[i + 4 * v..][..4]);
+            let tx: [_; VECTORS] = std::array::from_fn(|v| lanes(&self.cx, v));
+            let ty: [_; VECTORS] = std::array::from_fn(|v| lanes(&self.cy, v));
+            let tz: [_; VECTORS] = std::array::from_fn(|v| lanes(&self.cz, v));
+            let mut acc = [f64x4::splat(s, 0.0); VECTORS];
+            // `acc += x_p · far` on every lane, as `far` forms it.
+            let add = |p: usize, acc: &mut [f64x4<S>; VECTORS]| {
+                let (sx, sy, sz) = (self.cx[p], self.cy[p], self.cz[p]);
+                for v in 0..VECTORS {
+                    let dx = tx[v] - sx;
+                    let dy = ty[v] - sy;
+                    let dz = tz[v] - sz;
+                    let image = tz[v] + sz;
+                    let plane = dx * dx + dy * dy;
+                    let r2 = plane + dz * dz;
+                    let i2 = plane + image * image;
+                    let far = dz / (r2 * r2.sqrt()) - image / (i2 * i2.sqrt());
+                    acc[v] += far * x[p];
+                }
+            };
+            for p in 0..i {
+                add(p, &mut acc);
             }
-            let pairs = self.near_start[g] as usize..self.near_start[g + 1] as usize;
-            for (&column, &value) in self.near_column[pairs.clone()]
-                .iter()
-                .zip(&self.near_value[pairs])
-            {
-                field += value * x[column as usize];
+            // The tile's own columns: each skips the one lane it is the
+            // diagonal of, where the kernel is 0/0.
+            for p in i..i + TILE {
+                let (v, lane) = ((p - i) / 4, (p - i) % 4);
+                let mut kept = [0.0; 4];
+                acc[v].store_slice(&mut kept);
+                add(p, &mut acc);
+                let mut sum = [0.0; 4];
+                acc[v].store_slice(&mut sum);
+                sum[lane] = kept[lane];
+                acc[v] = f64x4::from_slice(s, &sum);
             }
-            *out = self.scale[g] * (x[row] * self.inverse_area[g] - self.weight[g] * field);
-        });
+            for p in i + TILE..x.len() {
+                add(p, &mut acc);
+            }
+            for v in 0..VECTORS {
+                acc[v].store_slice(&mut tile[4 * v..][..4]);
+            }
+        }
+        let done = first + tiles.len() * TILE;
+        for (offset, value) in tail.iter_mut().enumerate() {
+            *value = self.row_scalar(done + offset, x);
+        }
+    }
+
+    /// Interface row `g`'s far-kernel sum: the reference the SIMD tile must
+    /// match bit for bit.
+    fn row_scalar(&self, g: usize, x: &[f64]) -> f64 {
+        let row = self.first + g;
+        let target = [self.cx[row], self.cy[row], self.cz[row]];
+        let mut field = 0.0_f64;
+        for (p, &q) in x.iter().enumerate() {
+            if p != row {
+                field += q * far(target, [self.cx[p], self.cy[p], self.cz[p]]);
+            }
+        }
+        field
     }
 }
 
@@ -621,6 +685,49 @@ mod tests {
             .collect();
         for g in gaps.windows(2) {
             assert!((g[1] / g[0] - super::GROWTH).abs() < 1e-9, "{gaps:?}");
+        }
+    }
+
+    /// Oracle: the scalar row fold. Every count of interface rows up to
+    /// three tiles, and a block's edges, after 0, 1 and 5 conductor panels:
+    /// every row's bits match the scalar fold's, its diagonal skipped.
+    #[test]
+    fn the_simd_field_rows_match_the_scalar_fold_bit_for_bit() {
+        use super::{FieldRows, NearPairs, TILE};
+        use gpurify_testgen::Rng;
+
+        let mut rng = Rng::new(7);
+        for first in [0, 1, 5] {
+            for rows in (0..=3 * TILE + 1).chain([63, 64, 65, 129]) {
+                let n = first + rows;
+                let column = |rng: &mut Rng| (0..n).map(|_| rng.unit() * 2e-5).collect();
+                let mut field = FieldRows {
+                    first,
+                    cx: column(&mut rng),
+                    cy: column(&mut rng),
+                    cz: column(&mut rng),
+                    near: NearPairs::from_rows(vec![Vec::new(); rows]),
+                    ..FieldRows::default()
+                };
+                for _ in 0..rows {
+                    field.weight.push(rng.unit() - 0.5);
+                    field.scale.push(1e6 * rng.unit());
+                    field.inverse_area.push(1e12 * rng.unit());
+                }
+                let x: Vec<f64> = (0..n).map(|_| rng.unit() * 2e-15 - 1e-15).collect();
+                let mut y = vec![f64::NAN; n];
+                field.apply(&x, &mut y);
+                for g in 0..rows {
+                    let want = field.scale[g]
+                        * (x[first + g] * field.inverse_area[g]
+                            - field.weight[g] * field.row_scalar(g, &x));
+                    assert_eq!(
+                        y[first + g].to_bits(),
+                        want.to_bits(),
+                        "first {first}, rows {rows}, row {g}"
+                    );
+                }
+            }
         }
     }
 }

@@ -25,7 +25,7 @@ use fearless_simd::{dispatch, f64x4, Level, Simd, SimdBase, SimdFloat};
 use rayon::prelude::*;
 
 /// Vacuum permittivity, F/m. CODATA 2018.
-const VACUUM_PERMITTIVITY: f64 = 8.854_187_812_8e-12;
+pub(super) const VACUUM_PERMITTIVITY: f64 = 8.854_187_812_8e-12;
 
 /// `4πε₀`, the denominator of the free-space Green's function.
 const FOUR_PI_EPS0: f64 = 4.0 * std::f64::consts::PI * VACUUM_PERMITTIVITY;
@@ -56,10 +56,67 @@ const GAUSS: [(f64, f64); 4] = [
 ];
 
 /// Rows per rayon task; a multiple of the tile.
-const BLOCK: usize = 64;
+pub(super) const BLOCK: usize = 64;
 
 /// Target rows evaluated together against one broadcast source.
-const TILE: usize = 8;
+pub(super) const TILE: usize = 8;
+
+/// Whether panels `a` and `b` are near: centroids closer than `factor`
+/// times the sum of their half-diagonals.
+pub(super) fn near(a: &Panel, b: &Panel, factor: f64) -> bool {
+    let reach = |p: &Panel| p.half[0].hypot(p.half[1]);
+    let d2 = (0..3)
+        .map(|axis| (a.centre[axis] - b.centre[axis]).powi(2))
+        .sum::<f64>();
+    let limit = factor * (reach(a) + reach(b));
+    d2 < limit * limit
+}
+
+/// Exact-minus-approximate corrections to a dense kernel, by row (CSR): row
+/// `i`'s are `start[i] .. start[i + 1]` of `column` and `value`, ascending
+/// by column.
+#[derive(Debug, Default)]
+pub(super) struct NearPairs {
+    start: Vec<u32>,
+    column: Vec<u32>,
+    value: Vec<f64>,
+}
+
+impl NearPairs {
+    /// Flattens one `(column, value)` list per row, in row order.
+    pub(super) fn from_rows(rows: Vec<Vec<(u32, f64)>>) -> Self {
+        let mut out = Self {
+            start: Vec::with_capacity(rows.len() + 1),
+            ..Self::default()
+        };
+        out.start.push(0);
+        for row in rows {
+            for (column, value) in row {
+                out.column.push(column);
+                out.value.push(value);
+            }
+            out.start
+                .push(u32::try_from(out.column.len()).expect("the near pairs fit a u32"));
+        }
+        out
+    }
+
+    /// The number of rows.
+    fn rows(&self) -> usize {
+        self.start.len().saturating_sub(1)
+    }
+
+    /// Row `i`'s pairs folded onto `acc` in column order: `acc + Σ v·x[c]`.
+    pub(super) fn fold_row(&self, i: usize, x: &[f64], acc: f64) -> f64 {
+        let pairs = self.start[i] as usize..self.start[i + 1] as usize;
+        self.column[pairs.clone()]
+            .iter()
+            .zip(&self.value[pairs])
+            .fold(acc, |acc, (&column, &value)| {
+                acc + value * x[column as usize]
+            })
+    }
+}
 
 /// The panels as `SoA` columns, reduced to what the kernel reads.
 #[derive(Debug, Default)]
@@ -74,32 +131,24 @@ pub struct CpuMatVec {
     radius: Vec<f64>,
     /// `1 / (4π ε₀ ε_r)` for the dielectric above each panel.
     coefficient: Vec<f64>,
-    /// Near pairs, by row: row `i`'s are `near_start[i] .. near_start[i + 1]`
-    /// of the two columns below, ascending by column. Empty: no near pairs.
-    near_start: Vec<u32>,
-    /// The column of each near pair.
-    near_column: Vec<u32>,
-    /// Exact minus dense entry of each near pair, added after the dense row.
-    near_value: Vec<f64>,
+    /// Exact minus dense entry of each near pair, added after the dense row;
+    /// one row per row [`Self::apply`] writes.
+    near: NearPairs,
 }
 
 impl CpuMatVec {
-    /// The kernel's columns for `mesh`, and its near pairs.
+    /// The kernel over `panel`, each in the dielectric `epsilon` gives it
+    /// (all 1 for the total-charge formulation of a stratified stack, where
+    /// every charge sits in vacuum, `super::dielectric`), and the near pairs
+    /// of its first `rows` panels: the rows [`Self::apply`] writes.
     ///
     /// # Time complexity
     ///
-    /// *O*(P²) distance tests, one dense product's worth, then a closed form
-    /// for each near pair: a bounded number per panel at a uniform edge.
+    /// *O*(`rows` · P) distance tests for P panels, then a closed form for
+    /// each near pair: a bounded number per panel at a uniform edge.
     // ponytail: every pair is tested for nearness; a spatial index when the
     // dense product itself is replaced.
-    pub fn build(mesh: &super::mesh::Mesh) -> Self {
-        Self::with_permittivity(&mesh.panel, &mesh.epsilon)
-    }
-
-    /// [`Self::build`] over `panel`, each in the dielectric `epsilon` gives
-    /// it; all 1 for the total-charge formulation of a stratified stack,
-    /// where every charge sits in vacuum (`super::dielectric`).
-    pub fn with_permittivity(panel: &[Panel], epsilon: &[f64]) -> Self {
+    pub fn new(panel: &[Panel], epsilon: &[f64], rows: usize) -> Self {
         let mut out = Self::default();
         for (panel, &epsilon) in panel.iter().zip(epsilon) {
             out.cx.push(panel.centre[0]);
@@ -108,19 +157,12 @@ impl CpuMatVec {
             out.radius.push(panel.area.sqrt() / SELF_POTENTIAL_SHAPE);
             out.coefficient.push(1.0 / (FOUR_PI_EPS0 * epsilon));
         }
-        let rows: Vec<Vec<(u32, f64)>> = (0..panel.len())
-            .into_par_iter()
-            .map(|i| out.near_row(panel, i))
-            .collect();
-        out.near_start.push(0);
-        for row in rows {
-            for (column, value) in row {
-                out.near_column.push(column);
-                out.near_value.push(value);
-            }
-            out.near_start
-                .push(u32::try_from(out.near_column.len()).expect("the near pairs fit a u32"));
-        }
+        out.near = NearPairs::from_rows(
+            (0..rows)
+                .into_par_iter()
+                .map(|i| out.near_row(panel, i))
+                .collect(),
+        );
         out
     }
 
@@ -132,14 +174,9 @@ impl CpuMatVec {
     /// for the quadrature's error, so the matrix stays symmetric and the
     /// solve reciprocal.
     fn near_row(&self, panel: &[Panel], i: usize) -> Vec<(u32, f64)> {
-        let reach = |p: &Panel| p.half[0].hypot(p.half[1]);
         let mut row = Vec::new();
         for (j, other) in panel.iter().enumerate() {
-            let d2 = (0..3)
-                .map(|axis| (panel[i].centre[axis] - other.centre[axis]).powi(2))
-                .sum::<f64>();
-            let limit = NEAR * (reach(&panel[i]) + reach(other));
-            if j != i && !(d2 < limit * limit) {
+            if j != i && !near(&panel[i], other, NEAR) {
                 continue;
             }
             let (ik, jk) = (self.coefficient[i], self.coefficient[j]);
@@ -171,24 +208,6 @@ impl CpuMatVec {
             - weight / (plane + image_z * image_z + soft).sqrt()
     }
 
-    /// Adds the near pairs of rows `first ..` to `out`, each row's in
-    /// ascending column order after its dense sum.
-    fn add_near(&self, first: usize, x: &[f64], out: &mut [f64]) {
-        if self.near_start.is_empty() {
-            return;
-        }
-        for (offset, value) in out.iter_mut().enumerate() {
-            let i = first + offset;
-            let pairs = self.near_start[i] as usize..self.near_start[i + 1] as usize;
-            for (&column, &entry) in self.near_column[pairs.clone()]
-                .iter()
-                .zip(&self.near_value[pairs])
-            {
-                *value += entry * x[column as usize];
-            }
-        }
-    }
-
     /// `y := P x`, `P_ij = w_ij (1/√(|c_i − c_j|² + ρ_i ρ_j) − 1/√(|c_i − c̄_j|² + ρ_i ρ_j))`
     /// for a far pair, with `w_ij = 2 k_i k_j / (k_i + k_j)` and `c̄_j` panel
     /// `j`'s image in the substrate plane `z = 0`; `x` = total panel charge.
@@ -206,16 +225,25 @@ impl CpuMatVec {
     /// The harmonic mean of `k` is exact in a uniform stack, where every
     /// panel's `k` is one; a stratified stack is solved with every `k` that of
     /// vacuum and its interfaces in the mesh (`super::dielectric`).
+    ///
+    /// Writes the first `rows` entries of `y` ([`Self::new`]) and reads one
+    /// entry of `x` per panel.
+    ///
+    /// # Panics
+    ///
+    /// If `x` is shorter than the panels or `y` than the rows: a short
+    /// vector panics, never solves a prefix.
     pub fn apply(&self, x: &[f64], y: &mut [f64]) {
-        let n = self.cx.len();
-        // Release-mode length check: a short vector panics, never solves a prefix.
-        let (x, y) = (&x[..n], &mut y[..n]);
+        let (x, y) = (&x[..self.cx.len()], &mut y[..self.near.rows()]);
         let level = Level::new();
         y.par_chunks_mut(BLOCK)
             .enumerate()
             .for_each(|(block, out)| {
-                dispatch!(level, s => self.rows_simd(s, block * BLOCK, x, out));
-                self.add_near(block * BLOCK, x, out);
+                let first = block * BLOCK;
+                dispatch!(level, s => self.rows_simd(s, first, x, out));
+                for (offset, value) in out.iter_mut().enumerate() {
+                    *value = self.near.fold_row(first + offset, x, *value);
+                }
             });
     }
 
@@ -373,6 +401,8 @@ mod tests {
 
     fn random(rng: &mut Rng, n: usize) -> (CpuMatVec, Vec<f64>) {
         let mut m = CpuMatVec::default();
+        // Every row written, none with a near pair.
+        m.near = super::NearPairs::from_rows(vec![Vec::new(); n]);
         let mut x = Vec::with_capacity(n);
         for i in 0..n {
             // Every fourth panel coincides with its predecessor: r2 is the softening alone.
