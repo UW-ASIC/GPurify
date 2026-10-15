@@ -12,6 +12,7 @@ mod min_step_rules;
 mod overlay_laws;
 mod overlay_rules;
 mod patterning_rules;
+mod shape_rules;
 mod spacing_rules;
 mod via_rules;
 mod width_rules;
