@@ -191,6 +191,7 @@ pub fn load_with(inputs: &Inputs, decks: &[(&str, DeckFn)]) -> Result<Loaded, Lo
         (library, grid, deck, None)
     };
     let (store, mut provenance) = library.flatten(&deck, &strings, UnknownLayers::Reject)?;
+    provenance.set_black_boxes(library.black_boxes(&deck.lvs.blackbox, &deck, &strings)?);
     provenance.resolve_labels(&store, &deck.connectivity)?;
 
     let reference = if inputs.reference.is_empty() {
@@ -198,10 +199,11 @@ pub fn load_with(inputs: &Inputs, decks: &[(&str, DeckFn)]) -> Result<Loaded, Lo
     } else {
         let (netlist, top) = read_reference_files(&inputs.reference, &deck.devices, &mut strings)?;
         // LVS compares leaf devices, so a block the schematic places by
-        // instance must be in the comparison: flatten below the top. With
-        // no unique top, LVS reports that instead of guessing.
+        // instance must be in the comparison: flatten below the top, but
+        // for the deck's black boxes. With no unique top, LVS reports that
+        // instead of guessing.
         Some(match top {
-            Some(top) => netlist.flatten_top(top, &mut strings)?,
+            Some(top) => netlist.flatten_top_with(top, &deck.lvs.blackbox, &mut strings)?,
             None => netlist,
         })
     };

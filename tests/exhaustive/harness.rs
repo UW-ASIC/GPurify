@@ -521,6 +521,10 @@ pub fn run(fixture: &Fixture) -> Result<Ran, String> {
     let (store, mut provenance) = library
         .flatten(&deck, &strings, UnknownLayers::Reject)
         .map_err(|why| format!("flatten: {why}"))?;
+    let boxes = library
+        .black_boxes(&deck.lvs.blackbox, &deck, &strings)
+        .map_err(|why| format!("black boxes: {why}"))?;
+    provenance.set_black_boxes(boxes);
     provenance
         .resolve_labels(&store, &deck.connectivity)
         .map_err(|why| format!("labels: {why}"))?;
@@ -540,7 +544,7 @@ pub fn run(fixture: &Fixture) -> Result<Ran, String> {
             // As `engine::pipeline::load` does: LVS compares the flattened top.
             Some(match top {
                 Some(top) => netlist
-                    .flatten_top(top, &mut strings)
+                    .flatten_top_with(top, &deck.lvs.blackbox, &mut strings)
                     .map_err(|why| format!("reference: {why}"))?,
                 None => netlist,
             })
@@ -664,7 +668,8 @@ pub fn written(fixture: &Fixture) -> Result<(Vec<u8>, Deck, StrTable), String> {
 
 /// `layout` as the structure `name`, then every cell it defines, each name
 /// once: a hierarchy for `write_library`. Only rectangles are written, and
-/// no labels.
+/// each label as a `TEXT` of the cell it is in: the top's name its nets, a
+/// cell's are its own (a black box's pins).
 fn structures(
     name: &str,
     layout: &Layout,
@@ -672,11 +677,6 @@ fn structures(
     strings: &StrTable,
     out: &mut Vec<Structure>,
 ) -> Result<(), String> {
-    if !layout.labels.is_empty() {
-        return Err(format!(
-            "layout: {name}: a hierarchical layout carries no labels"
-        ));
-    }
     let coordinate =
         |v: i64| i32::try_from(v * NM).map_err(|_| format!("layout: {name}: {v} is past i32"));
     let mut rects = Vec::new();
@@ -724,10 +724,26 @@ fn structures(
             array: None,
         });
     }
+    let mut texts = Vec::new();
+    for (layer, x, y, text) in &layout.labels {
+        let id = deck
+            .layers
+            .id(strings, layer)
+            .ok_or_else(|| format!("layout: {layer} is not a deck layer"))?;
+        let (gds_layer, texttype) = deck.layers.stream_of(id);
+        texts.push((
+            gds_layer,
+            texttype,
+            coordinate(*x)?,
+            coordinate(*y)?,
+            text.clone(),
+        ));
+    }
     out.push(Structure {
         name: name.to_owned(),
         rects,
         refs,
+        texts,
     });
     for (cell, inner) in &layout.cells {
         if !out.iter().any(|s| s.name == *cell) {

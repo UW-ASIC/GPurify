@@ -217,6 +217,7 @@ fn flattening_a_placed_cell() {
 
     let leaf = Structure {
         name: "LEAF".into(),
+        texts: Vec::new(),
         rects: (0..400)
             .map(|i| {
                 let (x, y) = ((i % 20) * 50, (i / 20) * 50);
@@ -227,6 +228,7 @@ fn flattening_a_placed_cell() {
     };
     let top = Structure {
         name: "TOP".into(),
+        texts: Vec::new(),
         rects: Vec::new(),
         refs: (0..4000)
             .map(|i| Placement {

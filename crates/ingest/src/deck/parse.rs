@@ -6,7 +6,8 @@ use super::lex::{lex, Tok, Token};
 use super::{
     lower, CornerSource, Deck, DeckError, DeckSource, DerivedOp, DerivedSource, DeviceKind,
     DeviceSource, DeviceValue, Extraction, ExtractionKind, LabelSource, LvsLimit, ParamSource,
-    ParamValue, RuleSource, StackSource, ToleranceSrc, ViaSource, MAX_CELL_SELECTIONS,
+    ParamValue, RuleSource, StackSource, ToleranceSrc, UnusedFilter, ViaSource,
+    MAX_CELL_SELECTIONS,
 };
 use gpurify_geom::{prefix::NANO, Dbu, DbuArea, Grid, Qty, StrTable};
 use std::collections::{HashMap, HashSet};
@@ -1369,6 +1370,45 @@ impl<'a> Parser<'a> {
                 }
                 Ok(())
             }
+            "filter_unused" => {
+                let mut options = Vec::new();
+                while self.peek().tok == Tok::Ident {
+                    let (word, at) = self.ident("a filter option")?;
+                    let Some(option) = UnusedFilter::ALL.into_iter().find(|o| o.name() == word)
+                    else {
+                        return Err(self.err(
+                            at,
+                            &format!("unknown filter option `{word}`; expected ae, af, ag, c or u"),
+                        ));
+                    };
+                    options.push(option);
+                }
+                let t = self.peek();
+                self.out
+                    .lvs
+                    .filter_unused(&options)
+                    .map_err(|why| self.err_tok(t, &why))
+            }
+            "supply" => {
+                let mut names = Vec::new();
+                while self.peek().tok == Tok::Str {
+                    names.push(self.quoted("a net name in quotes")?);
+                }
+                let names: Vec<&str> = names.iter().map(String::as_str).collect();
+                let t = self.peek();
+                self.out
+                    .lvs
+                    .supply(&names)
+                    .map_err(|why| self.err_tok(t, &why))
+            }
+            "blackbox" => {
+                let t = self.peek();
+                let pattern = self.quoted("a cell-name pattern in quotes")?;
+                self.out
+                    .lvs
+                    .blackbox(&pattern)
+                    .map_err(|why| self.err_tok(t, &why))
+            }
             "recognize_gates" => {
                 if std::mem::replace(&mut self.out.lvs.recognize_gates, true) {
                     return Err(self.err(span, "gates are already recognised"));
@@ -1447,7 +1487,7 @@ impl<'a> Parser<'a> {
                 &format!(
                     "unknown lvs control `{control}`; expected tolerance, ignore_parameter, \
                      asymmetric, permute, ignore, ignore_shorted, ports_by_name, range, topology, connect_implicit, \
-                     connect_explicit, max_res, min_caps, same_nets, count, lde or recognize_gates"
+                     connect_explicit, max_res, min_caps, same_nets, count, lde, recognize_gates, blackbox, filter_unused or supply"
                 ),
             )),
         }

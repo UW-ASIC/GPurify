@@ -561,7 +561,7 @@ pub mod gds {
     use crate::provenance::Provenance;
     use fearless_simd::{dispatch, i64x4, mask64x4, prelude::*, Level};
     use gpurify_geom::boolean::canonical_rings_into;
-    use gpurify_geom::{Dbu, Grid, LayerId, MAX_ABS_DBU};
+    use gpurify_geom::{Bbox, Dbu, Grid, LayerId, MAX_ABS_DBU};
     use gpurify_geom::{GeometryStore, GeometryStoreBuilder};
     use gpurify_geom::{StrId, StrTable};
 
@@ -1775,6 +1775,233 @@ pub mod gds {
         }
     }
 
+    /// What [`Library::black_boxes`] reads per cell, memoised: its extent
+    /// in its own frame as `[xlo, ylo, xhi, yhi]` (`None` for a cell holding
+    /// no shape at any depth), and whether a boxed cell is placed under it.
+    #[derive(Clone, Copy)]
+    struct Reach {
+        extent: Option<[i64; 4]>,
+        holds_box: bool,
+    }
+
+    impl Library {
+        /// Every placement of a cell whose name matches one of `patterns`
+        /// (whole-name globs, `*` and `?`, case included; the deck's `lvs
+        /// blackbox`), in the root frame: the cell's name, the extent of
+        /// every shape below it on any layer, and its own `TEXT`s on layers
+        /// the deck declares, placed as [`Self::flatten`] places a root's:
+        /// its pins (catalog LVS-033). A placement under another such
+        /// placement is part of it and not listed, and a root is never a
+        /// black box. In walk order: roots in file order, each cell's
+        /// references in order, an array row by row.
+        ///
+        /// The geometry is untouched: [`Self::flatten`] still draws every
+        /// shape, for DRC and for the nets LVS traces; LVS leaves out the
+        /// devices inside each extent and compares the placement by its pins.
+        ///
+        /// # Errors
+        ///
+        /// As [`Self::flatten`]'s count: [`LayoutError::CyclicHierarchy`]
+        /// and [`LayoutError::HierarchyTooDeep`]; then
+        /// [`LayoutError::UnsupportedTransform`] or
+        /// [`LayoutError::CoordinateOutOfRange`] for a pin placed out of the
+        /// coordinate domain.
+        pub fn black_boxes<D: AsRef<LayerTable> + ?Sized>(
+            &self,
+            patterns: &[String],
+            deck: &D,
+            strings: &StrTable,
+        ) -> Result<Vec<crate::provenance::BlackBox>, LayoutError> {
+            if patterns.is_empty() {
+                return Ok(Vec::new());
+            }
+            // Refuses a cycle and a chain past the depth cap, so the walks
+            // below recurse a bounded number of levels.
+            self.flat_counts(strings)?;
+            let boxed: Vec<bool> = self
+                .cells
+                .iter()
+                .map(|cell| {
+                    let name = strings.resolve(cell.name);
+                    patterns.iter().any(|p| super::glob_matches(p, name))
+                })
+                .collect();
+            let mut reach = vec![None; self.cells.len()];
+            let mut out = Vec::new();
+            let layers = deck.as_ref();
+            for (index, &is_referenced) in self.referenced().iter().enumerate() {
+                if !is_referenced {
+                    let walk = (&boxed[..], layers);
+                    self.find_boxes(narrow(index), Xform::IDENTITY, walk, &mut reach, &mut out)?;
+                }
+            }
+            Ok(out)
+        }
+
+        /// Pushes every black box placed below `cell`, placed at `at`.
+        fn find_boxes(
+            &self,
+            cell: u32,
+            at: Xform,
+            (boxed, layers): (&[bool], &LayerTable),
+            reach: &mut [Option<Reach>],
+            out: &mut Vec<crate::provenance::BlackBox>,
+        ) -> Result<(), LayoutError> {
+            let entry = &self.cells[cell as usize];
+            for reference in &self.refs[entry.ref_start as usize..entry.ref_end as usize] {
+                let child = reference.child;
+                let holds = self.reach(child, boxed, reach).holds_box;
+                if !boxed[child as usize] && !holds {
+                    continue;
+                }
+                for r in 0..reference.rows {
+                    for c in 0..reference.cols {
+                        let placed = at
+                            .compose(reference.element(r, c))
+                            .ok_or(LayoutError::UnsupportedTransform)?;
+                        if boxed[child as usize] {
+                            out.push(self.placed_box(child, placed, layers, reach, boxed)?);
+                        } else {
+                            self.find_boxes(child, placed, (boxed, layers), reach, out)?;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        /// One placement of the boxed `cell` at `at`.
+        fn placed_box(
+            &self,
+            cell: u32,
+            at: Xform,
+            layers: &LayerTable,
+            reach: &mut [Option<Reach>],
+            boxed: &[bool],
+        ) -> Result<crate::provenance::BlackBox, LayoutError> {
+            let entry = &self.cells[cell as usize];
+            let extent = match self.reach(cell, boxed, reach).extent {
+                Some(own) => {
+                    let [xlo, ylo, xhi, yhi] =
+                        transformed(own, at).ok_or(LayoutError::UnsupportedTransform)?;
+                    for v in [xlo, ylo, xhi, yhi] {
+                        if v.unsigned_abs() > MAX_ABS_DBU.unsigned_abs() {
+                            return Err(LayoutError::CoordinateOutOfRange(v));
+                        }
+                    }
+                    let dbu = Dbu::new_unchecked;
+                    Bbox {
+                        xlo: dbu(xlo),
+                        ylo: dbu(ylo),
+                        xhi: dbu(xhi),
+                        yhi: dbu(yhi),
+                    }
+                }
+                None => Bbox::EMPTY,
+            };
+            let mut pins = Vec::new();
+            for text in &self.texts[entry.text_start as usize..entry.text_end as usize] {
+                let Some(layer) = layers.of_stream(text.layer, text.texttype) else {
+                    continue;
+                };
+                let (x, y) = at
+                    .apply(text.x, text.y)
+                    .ok_or(LayoutError::UnsupportedTransform)?;
+                for v in [x, y] {
+                    if v.unsigned_abs() > MAX_ABS_DBU.unsigned_abs() {
+                        return Err(LayoutError::CoordinateOutOfRange(v));
+                    }
+                }
+                pins.push(crate::provenance::PlacedLabel {
+                    at: gpurify_geom::ops::Point {
+                        x: Dbu::new_unchecked(x),
+                        y: Dbu::new_unchecked(y),
+                    },
+                    layer,
+                    name: text.string,
+                });
+            }
+            Ok(crate::provenance::BlackBox {
+                cell: entry.name,
+                extent,
+                pins,
+            })
+        }
+
+        /// `cell`'s [`Reach`], memoised. The hierarchy is acyclic and
+        /// depth-capped ([`Self::flat_counts`]), so the recursion is bounded.
+        fn reach(&self, cell: u32, boxed: &[bool], memo: &mut [Option<Reach>]) -> Reach {
+            if let Some(known) = memo[cell as usize] {
+                return known;
+            }
+            let entry = &self.cells[cell as usize];
+            let mut extent: Option<[i64; 4]> = None;
+            let mut grow = |b: [i64; 4]| {
+                extent = Some(match extent {
+                    None => b,
+                    Some(e) => [
+                        e[0].min(b[0]),
+                        e[1].min(b[1]),
+                        e[2].max(b[2]),
+                        e[3].max(b[3]),
+                    ],
+                });
+            };
+            for elem in &self.elems[entry.elem_start as usize..entry.elem_end as usize] {
+                let run = elem.vert_start as usize..(elem.vert_start + elem.vert_len) as usize;
+                for (&x, &y) in self.xs[run.clone()].iter().zip(&self.ys[run]) {
+                    grow([x, y, x, y]);
+                }
+            }
+            let mut holds_box = false;
+            for reference in &self.refs[entry.ref_start as usize..entry.ref_end as usize] {
+                let child = self.reach(reference.child, boxed, memo);
+                holds_box |= boxed[reference.child as usize] || child.holds_box;
+                let Some(own) = child.extent else { continue };
+                // An array's extent is its corner elements': the steps are
+                // linear in the row and the column.
+                let (last_row, last_col) = (reference.rows - 1, reference.cols - 1);
+                for (r, c) in [(0, 0), (0, last_col), (last_row, 0), (last_row, last_col)] {
+                    // An overflow cannot be placed; `black_boxes` refuses it
+                    // where a box is placed under it.
+                    if let Some(placed) = transformed(own, reference.element(r, c)) {
+                        grow(placed);
+                    }
+                }
+            }
+            let known = Reach { extent, holds_box };
+            memo[cell as usize] = Some(known);
+            known
+        }
+    }
+
+    /// `[xlo, ylo, xhi, yhi]` under `at`: the box of its four corners.
+    /// `None` on overflow.
+    fn transformed(b: [i64; 4], at: Xform) -> Option<[i64; 4]> {
+        let mut out = [i64::MAX, i64::MAX, i64::MIN, i64::MIN];
+        for (x, y) in [(b[0], b[1]), (b[2], b[1]), (b[0], b[3]), (b[2], b[3])] {
+            let (x, y) = at.apply(x, y)?;
+            out = [out[0].min(x), out[1].min(y), out[2].max(x), out[3].max(y)];
+        }
+        Some(out)
+    }
+
+    impl Ref {
+        /// The transform of array element `(row, col)` relative to the
+        /// parent: the placement moved by the steps.
+        fn element(&self, row: u32, col: u32) -> Xform {
+            Xform {
+                dx: self.place.dx
+                    + i64::from(col) * self.col_step.0
+                    + i64::from(row) * self.row_step.0,
+                dy: self.place.dy
+                    + i64::from(col) * self.col_step.1
+                    + i64::from(row) * self.row_step.1,
+                ..self.place
+            }
+        }
+    }
+
     impl Library {
         /// How many polygons [`Self::flatten`] would produce, before derived
         /// layers and keyhole splitting, counted from the hierarchy without
@@ -1926,17 +2153,8 @@ pub mod gds {
                 }
                 for r in 0..reference.rows {
                     for c in 0..reference.cols {
-                        let placed = Xform {
-                            dx: reference.place.dx
-                                + i64::from(c) * reference.col_step.0
-                                + i64::from(r) * reference.row_step.0,
-                            dy: reference.place.dy
-                                + i64::from(c) * reference.col_step.1
-                                + i64::from(r) * reference.row_step.1,
-                            ..reference.place
-                        };
                         let at = at
-                            .compose(placed)
+                            .compose(reference.element(r, c))
                             .ok_or(LayoutError::UnsupportedTransform)?;
                         self.visit(reference.child, at, false, depth + 1)?;
                     }

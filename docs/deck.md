@@ -786,6 +786,9 @@ lvs same_nets "OUT_PAD" "OUT"
 lvs count "npn13G2" <= 4000
 lvs recognize_gates
 lvs lde "nfet" od diff max 10um well nwell scref 950nm
+lvs blackbox "sram_*"
+lvs filter_unused ae c u
+lvs supply "VDD" "VSS"
 ```
 
 An `lvs` statement changes how LVS compares the devices of one model, which
@@ -957,6 +960,45 @@ with no other net, and if their wiring does not agree they are reported
 (`lvs.unpaired_net`) rather than paired elsewhere by structure. It is a
 seed, so it never turns a mismatch into a match. Each net is named by one
 row at most; under `lvs ports_by_name`, a port's own name wins.
+
+**`lvs blackbox "pattern"`** compares a cell by its pins alone, its
+contents ignored on both sides, as KLayout's `blank_circuit` and Netgen's
+black boxes do: a macro whose schematic is not at hand, or a foundry's fixed
+cell such as a sky130 VPP capacitor, which Magic too recognises by its cell
+name. The pattern matches whole cell names, `*` any run of characters and
+`?` one, case included; give one statement per pattern. On the layout, each
+placement of a matching cell is one device: its pins are the cell's own
+text labels on a label layer, each on the net of the shape it sits on, and
+every device drawn wholly inside the placement's extent leaves the
+comparison. On the schematic, each `X` call of a matching subcircuit is one
+device on the call's nets, its body never read; the subcircuit must be
+defined, an empty `.subckt` with its ports being enough, since its port
+names are the pins. A pin pairs only with the port of its name, as both
+tools match a black box's named pins, so a pin labelled with no port's name,
+or a port with no pin, is a mismatch; black boxes never merge in parallel.
+The cell's own wiring is drawn and stays in the nets: two pins it joins are
+one net. A pattern may not match a `device` model.
+
+**`lvs filter_unused ae af ag c u`** leaves out of the comparison each
+transistor of the layout wired so it does nothing, as Calibre's `LVS FILTER
+UNUSED OPTION ... LAYOUT` does for the options a public source defines
+(US 8,751,985 B1, col. 7, quotes them from Calibre's documentation): `ae`,
+source, drain and gate all floating; `af`, source and drain tied together;
+`ag`, every pin tied together, bulk included; `c`, the gate on a supply
+net and the source or the drain floating; `u`, source and drain both
+floating. A pin floats when its net holds no other terminal and carries no
+label. Each transistor is judged once, as drawn, so one left floating only
+by another's removal stays; the schematic is not filtered. Give the options
+once, in one statement. **`lvs supply "name" ...`** names the power and
+ground nets `c` reads, by the layout label (Calibre's `LVS POWER NAME` and
+`LVS GROUND NAME` together, which US 2010/0306720 A1 says unused-MOS
+filtering uses); `c` needs one.
+
+An `X` call of a model a `device` statement names is that device (its
+`w` and `l` in µm, as PDK netlists write them), whether or not the
+schematic also defines a subcircuit of the name: the definition is the
+device's model, as a PDK's resistors and fixed cells written as
+subcircuits are, and is never compared (KLayout's `wants_subcircuit`).
 
 ## Parasitic stack
 

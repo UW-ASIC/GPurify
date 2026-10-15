@@ -143,6 +143,10 @@ lvs same_nets \"OUT_PAD\" \"OUT\"
 lvs count \"nfet\" >= 1 <= 4000
 lvs recognize_gates
 lvs lde \"nfet\" od diff max 5um well cap scref 950nm
+lvs blackbox \"SRAM_*\"
+lvs blackbox \"esd_?\"
+lvs filter_unused u ae c
+lvs supply \"VDD\" \"VSS\"
 ";
     let mut strings = StrTable::default();
     let deck = compile(text, grid(), &mut strings).expect("the deck compiles");
@@ -160,6 +164,9 @@ lvs lde \"nfet\" od diff max 5um well cap scref 950nm
         "lvs same_nets \"OUT_PAD\" \"OUT\"",
         "lvs count \"nfet\" >= 1 <= 4000",
         "lvs recognize_gates",
+        "lvs blackbox \"SRAM_*\"\nlvs blackbox \"esd_?\"",
+        "lvs filter_unused u ae c",
+        "lvs supply \"VDD\" \"VSS\"",
         "lvs lde \"nfet\" od diff max 5000nm well cap scref 950nm",
         "device inductor res model \"spiral\" terminals [poly, poly] inductance 2e0nH",
     ] {

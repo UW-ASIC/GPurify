@@ -55,7 +55,7 @@
 //! elements"). They are counted, and `GPurify` must call each a mismatch.
 
 use super::{
-    circuits, compared, compared_under, enumerated, measured, pin_names, polar, spice,
+    black_boxes, circuits, compared, compared_under, enumerated, measured, pin_names, polar, spice,
     verilog_tops, Circuit, Controls, Dev, Model, TOLERANCE,
 };
 use crate::harness::{self, Expect, Fixture};
@@ -384,6 +384,54 @@ fn curated() -> Vec<Case> {
         None,
     ));
     out.extend(controlled());
+    out.extend(boxes());
+    out
+}
+
+/// LVS-033 and LVS-067's fixed cells: every black-box fixture, Netgen
+/// reading the drawn cell's contents written out and the setup declaring
+/// the cell `model ... blackbox` ("will only recognize the pin names and
+/// pin order but will otherwise ignore the subcell contents").
+fn boxes() -> Vec<Case> {
+    black_boxes()
+        .into_iter()
+        .map(|case| {
+            let cells: Vec<String> = case
+                .fixture
+                .reference
+                .iter()
+                .chain([&case.drawn])
+                .flat_map(|text| text.lines())
+                .filter_map(|line| line.strip_prefix(".subckt "))
+                .filter_map(|line| line.split_whitespace().next())
+                .filter(|&cell| cell != "TOP")
+                .map(str::to_owned)
+                .collect();
+            let calls = |text: &str| boxed_calls(&for_netgen(text), &cells);
+            Case {
+                layout: calls(&case.drawn),
+                reference: calls(case.fixture.reference.as_deref().expect("an LVS fixture")),
+                fixture: case.fixture,
+                differs: None,
+                controls: case.controls,
+                verilog: None,
+            }
+        })
+        .collect()
+}
+
+/// `text`, already [`for_netgen`], with each call of one of `cells` passing
+/// `sub` too, as their `.subckt` lines gained it.
+fn boxed_calls(text: &str, cells: &[String]) -> String {
+    let mut out = String::new();
+    for line in text.lines() {
+        let mut words: Vec<&str> = line.split_whitespace().collect();
+        if line.starts_with('X') && words.last().is_some_and(|w| cells.iter().any(|c| c == w)) {
+            words.insert(words.len() - 1, "sub");
+        }
+        out.push_str(&words.join(" "));
+        out.push('\n');
+    }
     out
 }
 
@@ -469,6 +517,15 @@ fn netgen_controls(controls: &Controls) -> String {
                 out.push_str(&on_each_side(model, &line));
             }
         }
+    }
+    for pattern in &controls.boxed {
+        // `lsearch` globs as the deck's pattern does.
+        let _ = writeln!(
+            out,
+            "foreach side {{-circuit1 -circuit2}} {{\n    \
+             foreach cell [lsearch -all -inline [cells list -all $side] {{{pattern}}}] {{\n        \
+             model \"$side $cell\" blackbox\n    }}\n}}"
+        );
     }
     for &model in &controls.dummies_out {
         let model = model.name();

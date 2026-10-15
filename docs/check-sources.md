@@ -63,7 +63,7 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 | Domain | implemented | expressible | partial | missing | verify | out of scope |
 |---|---:|---:|---:|---:|---:|---:|
 | DRC | 56 | 6 | 41 | 3 | 0 | 0 |
-| LVS | 31 | 1 | 12 | 4 | 0 | 0 |
+| LVS | 31 | 1 | 15 | 1 | 0 | 0 |
 | ERC | 63 | 4 | 10 | 4 | 0 | 0 |
 | PEX | 9 | 0 | 6 | 1 | 0 | 0 |
 | Flow | 2 | 0 | 5 | 3 | 0 | 0 |
@@ -331,6 +331,7 @@ single oracle is a named gap that ledger P1 closes.
 | LVS-005 | Short isolation / localisation | partial | CAL:LVS ISOLATE SHORT,LVS ISOLATE OPENS; ICV:ShortFinder; PEG | SY; MR |
 | LVS-020 | Undeclared parameter | implemented | - | SY; MR |
 | LVS-047 | Logic-gate recognition | partial | CAL:LVS RECOGNIZE GATES; SubGemini; Silvaco Guardian LVS app note Logic Gate Recognition (2020) and example 4 | SY; MR |
+| LVS-048 | Filter unused devices | partial | CAL:LVS FILTER UNUSED; US8751985B1 (col. 7 ll. 44-62, Calibre's options quoted); US20100306720A1 [0162] | SY; NV |
 | LVS-066 | Device flavour (HVT/LVT) by implant marker | expressible | GF:App.A; IHP LVS decks | SY; MR |
 | LVS-071 | Spectre reader | implemented | - | SY; MR; fuzz |
 | LVS-074 | Layout-dependent-effect parameters (LOD SA/SB/SD, WPE SCA/SCB/SCC) | partial | BSIM4; SRC:datasheet; Silvaco SmartDRC/LVS app note Well Proximity and STI Stress Effect Parameters Extraction (2022) | CF; SE; SY |

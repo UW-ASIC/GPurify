@@ -613,6 +613,30 @@ fn run_lvs(
                 params: param_names(&loaded.strings),
                 ..options.lvs
             };
+            // Each black box is one device on its pins; what it holds is
+            // left out (catalog LVS-033).
+            let boxes = (
+                loaded.provenance.black_boxes(),
+                loaded.provenance.black_box_pins(),
+            );
+            let design = gpurify_check::Design {
+                store: &loaded.store,
+                nets: &extracted.nets,
+                devices: &extracted.devices,
+            };
+            let ports = &reference.black_box_ports;
+            if let Err(cell) = gpurify_check::lvs::add_black_boxes(
+                &mut layout,
+                design,
+                boxes,
+                ports,
+                &loaded.strings,
+            ) {
+                return StageStatus::Refused(format!(
+                    "black box {} has more pins than a compared cell holds",
+                    loaded.strings.resolve(cell)
+                ));
+            }
             // Must-connect nets are one net to compare, though the layout
             // keeps the open, which `check_layout` reported.
             let joined =

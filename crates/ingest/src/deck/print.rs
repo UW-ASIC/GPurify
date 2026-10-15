@@ -397,6 +397,8 @@ impl Printer<'_> {
                 DeviceKind::Capacitor => "capacitor",
                 DeviceKind::Diode => "diode",
                 DeviceKind::Inductor => "inductor",
+                // No device statement declares one; `lvs blackbox` does.
+                DeviceKind::Cell => "cell",
             };
             let _ = write!(
                 out,
@@ -459,6 +461,25 @@ impl Printer<'_> {
         }
         if lvs.recognize_gates {
             out.push_str("lvs recognize_gates\n");
+        }
+        if !lvs.filter_unused.is_empty() {
+            out.push_str("lvs filter_unused");
+            for option in &lvs.filter_unused {
+                out.push(' ');
+                out.push_str(option.name());
+            }
+            out.push('\n');
+        }
+        if !lvs.supply.is_empty() {
+            out.push_str("lvs supply");
+            for name in &lvs.supply {
+                out.push(' ');
+                out.push_str(&quoted(name)?);
+            }
+            out.push('\n');
+        }
+        for pattern in &lvs.blackbox {
+            let _ = writeln!(out, "lvs blackbox {}", quoted(pattern)?);
         }
         for (model, param, min, max) in &lvs.range {
             let _ = write!(out, "lvs range {} {param}", quoted(model)?);

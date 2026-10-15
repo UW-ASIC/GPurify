@@ -10,7 +10,7 @@ use crate::lvs::reduce::Merge;
 use crate::lvs::verdict::Discrepancy;
 use crate::topology::device::role_at;
 use crate::topology::TerminalRole;
-use gpurify_ingest::deck::{DeviceKind, LvsControls};
+use gpurify_ingest::deck::{DeviceKind, LvsControls, UnusedFilter};
 use gpurify_ingest::layout::glob_matches;
 use gpurify_ingest::{StrId, StrTable};
 
@@ -248,6 +248,67 @@ pub(crate) fn drop_ignored_devices(
     if kept.len() == graph.device_count() {
         return None;
     }
+    retain_devices(graph, &kept);
+    Some(kept)
+}
+
+/// Drops every layout transistor an `lvs filter_unused` option matches
+/// ([`UnusedFilter`], catalog LVS-048), as Calibre's `LVS FILTER UNUSED
+/// OPTION <option> LAYOUT` does, with the nets only they reached. One pass:
+/// each transistor is judged on the graph as drawn, as the patent's
+/// description checks each device once, so a transistor left floating by
+/// another's removal stays. Returns the rows of `graph` kept, as
+/// [`drop_ignored_devices`] does, or `None` when nothing was dropped.
+pub(crate) fn filter_unused(graph: &mut Graph, controls: &LvsControls) -> Option<Vec<u32>> {
+    if controls.filter_unused.is_empty() {
+        return None;
+    }
+    let mut is_port = vec![false; graph.net_count()];
+    for &net in &graph.port_net {
+        is_port[net as usize] = true;
+    }
+    let floating = |net: u32| {
+        net == u32::MAX || (!is_port[net as usize] && graph.terminals_on(net).len() == 1)
+    };
+    let unused = |device: u32| {
+        if graph.device_kind[device as usize] != DeviceKind::Mos {
+            return false;
+        }
+        let (nets, roles) = graph.terminals_of(device);
+        let at = |role| roles.iter().position(|&r| r == role).map(|i| nets[i]);
+        let (gate, source, drain) = (
+            at(TerminalRole::Gate),
+            at(TerminalRole::Source),
+            at(TerminalRole::Drain),
+        );
+        let float = |net: Option<u32>| net.is_some_and(floating);
+        let supply = |net: Option<u32>| {
+            net.and_then(|net| graph.net_name.get(net as usize).copied().flatten())
+                .is_some_and(|name| controls.supply.contains(&name))
+        };
+        controls.filter_unused.iter().any(|option| match option {
+            UnusedFilter::Ae => float(gate) && float(source) && float(drain),
+            UnusedFilter::Af => source.is_some() && source == drain,
+            UnusedFilter::Ag => nets.windows(2).all(|pair| pair[0] == pair[1]),
+            UnusedFilter::C => supply(gate) && (float(source) || float(drain)),
+            UnusedFilter::U => float(source) && float(drain),
+        })
+    };
+    let kept: Vec<u32> = (0..narrow(graph.device_count()))
+        .filter(|&device| !unused(device))
+        .collect();
+    if kept.len() == graph.device_count() {
+        return None;
+    }
+    retain_devices(graph, &kept);
+    Some(kept)
+}
+
+/// Keeps only the device rows `kept` (ascending), as if no other were drawn
+/// or written, and drops every net that lost its last terminal with them
+/// and is no port: no netlist could state such a net, while a port must
+/// still pair. Surviving devices and nets keep their order.
+pub(crate) fn retain_devices(graph: &mut Graph, kept: &[u32]) {
     let nets = graph.net_count();
     // A net survives while a kept device or a port holds it, or nothing
     // ever did: only what the dropped devices alone reached goes.
@@ -255,7 +316,7 @@ pub(crate) fn drop_ignored_devices(
     for &net in &graph.port_net {
         held[net as usize] = true;
     }
-    for &device in &kept {
+    for &device in kept {
         for &net in graph.terminals_of(device).0 {
             if let Some(slot) = held.get_mut(net as usize) {
                 *slot = true;
@@ -281,7 +342,7 @@ pub(crate) fn drop_ignored_devices(
     };
     out.device_terminal_start.push(0);
     out.device_param_start.push(0);
-    for &device in &kept {
+    for &device in kept {
         out.device_kind.push(graph.device_kind[device as usize]);
         out.device_model.push(graph.device_model[device as usize]);
         let (terminal_nets, roles) = graph.terminals_of(device);
@@ -295,7 +356,6 @@ pub(crate) fn drop_ignored_devices(
     }
     transpose_into(&mut out, next as usize);
     *graph = out;
-    Some(kept)
 }
 
 /// Whether a layout net labelled `name` is a must-connect net: its label

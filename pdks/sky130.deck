@@ -723,6 +723,11 @@ device capacitor cap2m model "sky130_fd_pr__cap_mim_m3_2" terminals [met5, met4]
 device capacitor cap_var_lvt model "sky130_fd_pr__cap_var_lvt" terminals [poly_c, ntap]
 device capacitor cap_var_hvt model "sky130_fd_pr__cap_var_hvt" terminals [poly_c, ntap]
 device capacitor cap_var_5v model "sky130_fd_pr__cap_var" terminals [poly_c, ntap]
+# VPP capacitors have no marker: Magic's sky130 techfile represents them
+# "only by script-generated subcells" and recognises them by cell name, so
+# LVS compares each placement by its pins (catalog LVS-067). The schematic
+# must define the subcircuit, an empty one with its pins being enough.
+lvs blackbox "sky130_fd_pr__cap_vpp_*"
 
 # --- Parasitic stack ---
 # Height and thickness [S5] (non-ReRAM stack, identical to [S6]'s diagram); sheet

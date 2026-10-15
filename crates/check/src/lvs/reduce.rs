@@ -10,6 +10,7 @@
 //! | MOS stating `W` | sums `W`, `nf` and the diffusions `as`, `ad`, `ps`, `pd`, each to its channel end; every other parameter, `L` included, agrees | sums `L`, which both state; every other parameter agrees; never with a diffusion stated | folded into `W` and the diffusions |
 //! | MOS stating no `W` | sums the count `m` (1 when the card states none); every other parameter agrees | as above | kept: that many in parallel |
 //! | resistor, capacitor, diode, bipolar, inductor | sums the count `m`; every other parameter agrees | never | kept |
+//! | a black box (`DeviceKind::Cell`) | never | never | kept |
 //! | the same, stating its value, under [`ParamNames::relaxed`] | combines the value by its law (a resistor's `r` and an inductor's `ind` harmonically, `1 / Σ 1/r`; a capacitor's `c`, a diode's `area`, a bipolar's `ae` by adding) and adds `w` (a resistor's), `area`, `perim` and `pe`; every other parameter agrees | a resistor, capacitor or inductor only: the value by the opposite law (`r` and `ind` adding, `c` harmonically), adding `area`, `perim` and a resistor's `l`; every other parameter, a resistor's `w` included, agrees | folded into the value and what adds |
 //!
 //! "Agrees" means the same parameter names with bit-identical values: the
@@ -35,8 +36,9 @@
 //!   same nets role for role become one, with the first's terminals. MOS
 //!   source and drain are interchangeable, and so are a resistor's ends; a
 //!   diode's or capacitor's pins are not. A MOS whose source and drain share
-//!   a net merges like any other. This applies to every device kind and
-//!   consumes no net.
+//!   a net merges like any other. This applies to every device kind but a
+//!   black box, which neither tool merges (a subcircuit instance is no
+//!   device to combine), and consumes no net.
 //!   Netgen's `l critical` merges parallel MOS whose `L` agree within its
 //!   tolerance; here they must be bit-identical, the conservative side.
 //! - **Series** (catalog LVS-041; on by default, while Netgen 1.5.323 never
@@ -170,7 +172,7 @@ impl Law {
             DeviceKind::Diode => (area?, false, [perim, None, None]),
             DeviceKind::Bjt => (ae?, false, [pe, area, perim]),
             DeviceKind::Inductor => (names.inductance?, true, [None, None, None]),
-            DeviceKind::Mos => return None,
+            DeviceKind::Mos | DeviceKind::Cell => return None,
         };
         params
             .iter()
@@ -691,8 +693,9 @@ fn prepare(src: &Graph, names: ParamNames, plan: &mut Plan, devices: usize, nets
         let diffusions = names.diffusions_in(params);
         let whole = diffusions == 0 || diffusions == names.diffusion.len();
         let counts = !wide && law.is_none() && names.multiplier.is_some();
+        let cell = kind == DeviceKind::Cell;
         plan.parallel_ok
-            .push(bound & ((wide && whole) || law.is_some() || counts));
+            .push(bound & !cell & ((wide && whole) || law.is_some() || counts));
         let counted = names.multiplier.filter(|_| !wide && law.is_none());
         let sums = law.map_or_else(|| parallel_sums(wide, names), Law::sums);
         plan.parallel_sig.push(signature(params, &sums, counted));

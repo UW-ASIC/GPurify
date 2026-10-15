@@ -173,6 +173,7 @@ pub(crate) const fn kind_code(kind: DeviceKind) -> u64 {
         DeviceKind::Capacitor => 3,
         DeviceKind::Diode => 4,
         DeviceKind::Inductor => 5,
+        DeviceKind::Cell => 6,
     }
 }
 

@@ -2336,5 +2336,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
                 .inside_part(l["hvntm"]),
         ),
     );
+    // VPP capacitors: no marker, recognised by cell name (catalog LVS-067).
+    d.lvs_blackbox("sky130_fd_pr__cap_vpp_*");
     d.finish()
 }

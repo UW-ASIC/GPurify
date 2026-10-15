@@ -181,7 +181,8 @@ pub fn write_store_labelled(
     put_record(out, ENDLIB, &[])
 }
 
-/// One structure for [`write_library`]: its rectangles, then its placements.
+/// One structure for [`write_library`]: its rectangles, its placements,
+/// then its texts.
 #[derive(Debug, Clone, Default)]
 pub struct Structure {
     /// The structure's name. ASCII only.
@@ -191,6 +192,9 @@ pub struct Structure {
     pub rects: Vec<(u16, u16, [i32; 4])>,
     /// Each an `SREF`, or an `AREF` when it is an array.
     pub refs: Vec<Placement>,
+    /// `(layer, texttype, x, y, text)`, each a `TEXT` after the placements.
+    /// ASCII only.
+    pub texts: Vec<(u16, u16, i32, i32, String)>,
 }
 
 /// One `SREF` or `AREF` in a [`Structure`].
@@ -251,6 +255,17 @@ pub fn write_library(cells: &[Structure], out: &mut Vec<u8>) -> Result<(), &'sta
         }
         for placement in &cell.refs {
             put_placement(out, placement)?;
+        }
+        for (layer, texttype, x, y, text) in &cell.texts {
+            let mut xy = [0u8; 8];
+            xy[..4].copy_from_slice(&x.to_be_bytes());
+            xy[4..].copy_from_slice(&y.to_be_bytes());
+            put_record(out, TEXT, &[])?;
+            put_record(out, LAYER, &layer.to_be_bytes())?;
+            put_record(out, TEXTTYPE, &texttype.to_be_bytes())?;
+            put_record(out, XY, &xy)?;
+            put_ascii(out, STRING, text)?;
+            put_record(out, ENDEL, &[])?;
         }
         put_record(out, ENDSTR, &[])?;
     }

@@ -1082,6 +1082,36 @@ impl<'s> DeckBuilder<'s> {
         self.devices.push(device);
     }
 
+    /// `lvs blackbox "pattern"`: a cell compared by its pins alone (catalog
+    /// LVS-033). Refused as the parser refuses it
+    /// ([`LvsSrc::blackbox`](gpurify_ingest::deck::LvsSrc::blackbox)).
+    #[track_caller]
+    pub fn lvs_blackbox(&mut self, pattern: &str) {
+        if let Err(why) = self.lvs.blackbox(pattern) {
+            self.refuse(format!("lvs blackbox: {why}"));
+        }
+    }
+
+    /// `lvs filter_unused ...`: the layout's unused transistors left out
+    /// (catalog LVS-048). Refused as the parser refuses it
+    /// ([`LvsSrc::filter_unused`](gpurify_ingest::deck::LvsSrc::filter_unused)).
+    #[track_caller]
+    pub fn lvs_filter_unused(&mut self, options: &[gpurify_ingest::deck::UnusedFilter]) {
+        if let Err(why) = self.lvs.filter_unused(options) {
+            self.refuse(format!("lvs filter_unused: {why}"));
+        }
+    }
+
+    /// `lvs supply "name" ...`: the supply nets `lvs filter_unused c` reads.
+    /// Refused as the parser refuses it
+    /// ([`LvsSrc::supply`](gpurify_ingest::deck::LvsSrc::supply)).
+    #[track_caller]
+    pub fn lvs_supply(&mut self, names: &[&str]) {
+        if let Err(why) = self.lvs.supply(names) {
+            self.refuse(format!("lvs supply: {why}"));
+        }
+    }
+
     /// Removes every recogniser of `model`. Refused when the deck has none.
     #[track_caller]
     pub fn remove_device(&mut self, model: &str) {

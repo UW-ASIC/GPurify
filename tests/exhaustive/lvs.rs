@@ -40,7 +40,7 @@
 //! cannot reach: hierarchy, stacks, passives, polarity, bulk, flavours,
 //! parameters and the layout-only rows.
 
-use crate::harness::{Depth, Expect, Finding, Fixture, Layout, NONE};
+use crate::harness::{Depth, Expect, Finding, Fixture, Layout, Symmetry, NONE};
 use gpurify::engine::run::Checks;
 use gpurify_testgen::Rng;
 use std::collections::BTreeSet;
@@ -1078,6 +1078,12 @@ struct Controls {
     /// `lvs recognize_gates`: a stack or a parallel group of plain,
     /// identical transistors takes its inputs in any order.
     gates: bool,
+    /// `lvs filter_unused`: the options, as the deck spells them.
+    unused: Vec<&'static str>,
+    /// `lvs supply`: the supply net names `filter_unused c` reads.
+    supply: Vec<&'static str>,
+    /// `lvs blackbox`: cell-name patterns.
+    boxed: Vec<&'static str>,
 }
 
 impl Controls {
@@ -1140,6 +1146,30 @@ impl Controls {
     /// nets stay, and [`reduce`] keeps only those a device or a port holds.
     fn kept(&self, c: &Circuit, drawn: bool) -> Circuit {
         let mut out = c.clone();
+        // deck.md's `filter_unused`, on the drawing alone and judged as
+        // drawn: a pin floats when its net holds no other pin and is no
+        // port (no label).
+        let mut held = vec![0usize; c.nets()];
+        for &p in c.devs.iter().flat_map(|d| &d.pins) {
+            held[p] += 1;
+        }
+        let floats = |net: usize| held[net] == 1 && !c.ports[net];
+        let supply = |net: usize| c.ports[net] && self.supply.contains(&c.names[net].as_str());
+        let unused = |d: &Dev| {
+            if !drawn || !d.model.is_mos() {
+                return false;
+            }
+            let (g, s, dr) = (d.pins[0], d.pins[1], d.pins[2]);
+            self.unused.iter().any(|&option| match option {
+                "ae" => floats(g) && floats(s) && floats(dr),
+                "af" => s == dr,
+                "ag" => d.pins.iter().all(|&p| p == g),
+                "u" => floats(s) && floats(dr),
+                "c" => supply(g) && (floats(s) || floats(dr)),
+                other => panic!("no filter option {other}"),
+            })
+        };
+        out.devs.retain(|d| !unused(d));
         out.devs.retain(|d| {
             let dummy = d.pins.iter().all(|&p| p == d.pins[0]);
             let value = |name| {
@@ -1260,6 +1290,16 @@ impl Controls {
         }
         if self.gates {
             out.push_str("lvs recognize_gates\n");
+        }
+        for pattern in &self.boxed {
+            let _ = writeln!(out, "lvs blackbox \"{pattern}\"");
+        }
+        if !self.unused.is_empty() {
+            let _ = writeln!(out, "lvs filter_unused {}", self.unused.join(" "));
+        }
+        if !self.supply.is_empty() {
+            let names: Vec<String> = self.supply.iter().map(|n| format!("\"{n}\"")).collect();
+            let _ = writeln!(out, "lvs supply {}", names.join(" "));
         }
         for &(layout, reference) in &self.same_nets {
             let _ = writeln!(out, "lvs same_nets \"{layout}\" \"{reference}\"");
@@ -1849,6 +1889,9 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(controlled());
     out.extend(layout_rows());
     out.extend(verilog_tops().into_iter().map(|top| top.fixture));
+    out.extend(black_boxes().into_iter().map(|case| case.fixture));
+    out.extend(subcircuit_devices());
+    out.extend(unused_filters());
     out
 }
 
@@ -4025,6 +4068,331 @@ fn layout_rows() -> Vec<Fixture> {
             None => fixture,
         });
     }
+    out
+}
+
+/// One black-box case (LVS-033, LVS-067): the fixture, the netlist Netgen
+/// reads for what is drawn (the drawn cell's contents written out, so the
+/// box is only ignored if the comparison ignores it), and the controls.
+struct BoxCase {
+    fixture: Fixture,
+    drawn: String,
+    controls: Controls,
+}
+
+/// `inner` drawn as the cell `name`, placed `count` times beside `top`'s
+/// drawing at `(dx + k * 6000, 0)` under `orientation`, with `top`'s nets
+/// `0..` extended under the cell's pin tracks, so the cell's pin `k` (its
+/// net `k`, labelled with its name, [`draw`]) lands on `top`'s net `k`.
+fn boxed_layout(top: &Circuit, cell: (&str, &Circuit), count: usize, mirror: bool) -> Layout {
+    let (name, inner) = cell;
+    let mut layout = draw(top);
+    if count > 0 {
+        // An unplaced cell would be a second root, flattened as drawn.
+        layout = layout.cell(name, draw(inner));
+    }
+    let first = column(top.devs.len()) + 2000;
+    // The cell's tracks run over x in -1000..column(devices) of its frame; a
+    // mirror in y maps them to -column(devices)..1000, so it moves right.
+    let width = column(inner.devs.len()) + 1000;
+    let mut reach = first;
+    for k in 0..count {
+        let at = first + 6000 * i64::try_from(k).expect("few placements");
+        let (orientation, dx) = if mirror {
+            (Symmetry::ALL[4], at + width - 1000)
+        } else {
+            (Symmetry::IDENTITY, at)
+        };
+        layout = layout.place(name, orientation, dx, 0);
+        // Overlapping the cell's tracks, past its edge either way round.
+        reach = at + 500;
+    }
+    for k in 0..inner.nets() {
+        let t = track(k);
+        layout = layout.rect("met2", -1000, t, reach, t + 200);
+    }
+    layout
+}
+
+/// `TOP` placing `cell` once per row of `on` (each row the `TOP` nets of the
+/// cell's ports, in order), with `cell` defined as `body`.
+fn boxed_spice(top: &Circuit, (name, body): (&str, &Circuit), on: &[&[usize]]) -> String {
+    let mut text = spice_hier(top, body, on[0]);
+    for (k, nets) in on.iter().enumerate().skip(1) {
+        let nets: Vec<&str> = nets.iter().map(|&n| top.names[n].as_str()).collect();
+        text = edited(
+            &text,
+            " BLK\n.ends",
+            &format!(" BLK\nX{k} {} BLK\n.ends", nets.join(" ")),
+        );
+    }
+    text.replace("BLK", name)
+}
+
+/// LVS-033 black boxes and LVS-067's fixed cells, each verdict derived by
+/// hand from the definition (deck.md, `lvs blackbox`; Netgen's "will only
+/// recognize the pin names and pin order but will otherwise ignore the
+/// subcell contents"): a placement matches an instance of the same cell
+/// whose pins land on the same nets by name, whatever either holds.
+///
+/// `TOP` is an `nmos` and a `pmos` on n0..n3; `BLK`, drawn, holds an
+/// `nmos` on its pins `P`, `Q`, `R`, placed so they land on n0, n1, n2.
+fn black_boxes() -> Vec<BoxCase> {
+    use Model::{N, P};
+    let top = Circuit::new(4, vec![Dev::mos(N, 3, 0, 1), Dev::mos(P, 3, 1, 2)]);
+    let pins = |names: [&str; 3], devs: Vec<Dev>| Circuit {
+        devs,
+        names: names.iter().map(|&n| n.to_owned()).collect(),
+        ports: vec![true; 3],
+    };
+    let drawn = pins(["P", "Q", "R"], vec![Dev::mos(N, 0, 1, 2)]);
+    let renamed = pins(["P", "Z", "R"], vec![Dev::mos(N, 0, 1, 2)]);
+    let written = pins(["P", "Q", "R"], vec![Dev::mos(P, 1, 0, 1)]);
+    let empty = pins(["P", "Q", "R"], Vec::new());
+    let boxed = Controls {
+        boxed: vec!["BLK"],
+        ..Controls::default()
+    };
+    let one: &[&[usize]] = &[&[0, 1, 2]];
+    let cases: [(&str, Layout, &Circuit, String, &Controls, bool); 9] = [
+        (
+            "match",
+            boxed_layout(&top, ("BLK", &drawn), 1, false),
+            &drawn,
+            boxed_spice(&top, ("BLK", &written), one),
+            &boxed,
+            true,
+        ),
+        (
+            "no_control",
+            boxed_layout(&top, ("BLK", &drawn), 1, false),
+            &drawn,
+            boxed_spice(&top, ("BLK", &written), one),
+            &Controls::default(),
+            false,
+        ),
+        (
+            "empty_body",
+            boxed_layout(&top, ("BLK", &drawn), 1, false),
+            &drawn,
+            boxed_spice(&top, ("BLK", &empty), one),
+            &boxed,
+            true,
+        ),
+        (
+            "pins_swapped",
+            boxed_layout(&top, ("BLK", &drawn), 1, false),
+            &drawn,
+            boxed_spice(&top, ("BLK", &written), &[&[1, 0, 2]]),
+            &boxed,
+            false,
+        ),
+        (
+            "pin_renamed",
+            boxed_layout(&top, ("BLK", &renamed), 1, false),
+            &renamed,
+            boxed_spice(&top, ("BLK", &written), one),
+            &boxed,
+            false,
+        ),
+        (
+            "not_drawn",
+            boxed_layout(&top, ("BLK", &drawn), 0, false),
+            &drawn,
+            boxed_spice(&top, ("BLK", &written), one),
+            &boxed,
+            false,
+        ),
+        (
+            "mirrored",
+            boxed_layout(&top, ("BLK", &drawn), 1, true),
+            &drawn,
+            boxed_spice(&top, ("BLK", &written), one),
+            &boxed,
+            true,
+        ),
+        (
+            "two",
+            boxed_layout(&top, ("BLK", &drawn), 2, false),
+            &drawn,
+            boxed_spice(&top, ("BLK", &written), &[&[0, 1, 2], &[0, 1, 2]]),
+            &boxed,
+            true,
+        ),
+        (
+            "two_drawn_one_written",
+            boxed_layout(&top, ("BLK", &drawn), 2, false),
+            &drawn,
+            boxed_spice(&top, ("BLK", &written), one),
+            &boxed,
+            false,
+        ),
+    ];
+    let mut out: Vec<BoxCase> = cases
+        .into_iter()
+        .map(|(name, layout, inner, reference, controls, matched)| {
+            let count = match name {
+                "not_drawn" => 0,
+                "two" | "two_drawn_one_written" => 2,
+                _ => 1,
+            };
+            let row: &[usize] = &[0, 1, 2];
+            let on = vec![row; count];
+            let drawn = if count == 0 {
+                spice(&top)
+            } else {
+                boxed_spice(&top, ("BLK", inner), &on)
+            };
+            let deck = format!("{}{}", full_deck(), controls.deck());
+            let mut fixture =
+                Fixture::new(&format!("lvs/blackbox/{name}"), &["LVS-033"], &deck, LVS)
+                    .layout(layout)
+                    .expect(Expect::Lvs(matched));
+            fixture.reference = Some(reference);
+            BoxCase {
+                fixture,
+                drawn,
+                controls: controls.clone(),
+            }
+        })
+        .collect();
+
+    // LVS-067: a foundry's fixed cell, a VPP capacitor drawn as plates and
+    // no device (Magic's sky130 `cap_vpp_*` cells, recognised by name), is
+    // one device by its pins `C0` and `C1`; written as a call to an empty
+    // subcircuit of its name, it matches on n0, n1 and not reversed.
+    let polar_top = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2)]);
+    let plates = Circuit {
+        devs: Vec::new(),
+        names: vec!["C0".to_owned(), "C1".to_owned()],
+        ports: vec![true; 2],
+    };
+    let vpp = Controls {
+        boxed: vec!["cap_vpp_*"],
+        ..Controls::default()
+    };
+    for (name, on, matched) in [("vpp/match", [0, 1], true), ("vpp/reversed", [1, 0], false)] {
+        let deck = format!("{}{}", full_deck(), vpp.deck());
+        let mut fixture = Fixture::new(&format!("lvs/{name}"), &["LVS-067", "LVS-033"], &deck, LVS)
+            .layout(boxed_layout(&polar_top, ("cap_vpp_4x4", &plates), 1, false))
+            .expect(Expect::Lvs(matched));
+        let on: &[usize] = &on;
+        fixture.reference = Some(boxed_spice(&polar_top, ("cap_vpp_4x4", &plates), &[on]));
+        out.push(BoxCase {
+            fixture,
+            drawn: boxed_spice(&polar_top, ("cap_vpp_4x4", &plates), &[&[0, 1]]),
+            controls: vpp.clone(),
+        });
+    }
+    out
+}
+
+/// LVS-067's marker route: a resistor the deck recognises by its marker
+/// (`rpoly`) written as a call to a subcircuit of the model's name that the
+/// netlist also defines, with a body of another model: it is that device,
+/// the body unread, so it matches on its nets and not elsewhere.
+/// Construct-from-answer: the card form, `R1 n0 n1 rpoly`, is the same
+/// circuit, and the oracle's verdict for it is the expectation.
+fn subcircuit_devices() -> Vec<Fixture> {
+    let drawn = polar(Dev::pins(Model::R, &[0, 1]));
+    let defined = ".subckt rpoly a b\nR0 a b rinner\n.ends\n";
+    [("rsubckt/match", [0, 1]), ("rsubckt/miswired", [0, 2])]
+        .into_iter()
+        .map(|(name, on)| {
+            let written = polar(Dev::pins(Model::R, &on));
+            let card = format!("R1 n{} n{} rpoly", on[0], on[1]);
+            let text = format!(
+                "{defined}{}",
+                edited(&spice(&written), &card, &format!("X{card}"))
+            );
+            with_text(name, &["LVS-067"], draw(&drawn), text)
+                .expect(Expect::Lvs(equivalent(&drawn, &written)))
+        })
+        .collect()
+}
+
+/// LVS-048: layout transistors an `lvs filter_unused` option matches leave
+/// the comparison, judged as drawn, on the layout only. Beside one `nmos`
+/// on n0..n2 (every net a port, n0 the deck's `lvs supply`), the drawing
+/// adds one transistor wired as each option describes, or nearly; the
+/// reference has only the first. Each extra against every option and none,
+/// and one written but not drawn, the verdict the oracle's
+/// ([`Controls::kept`] follows deck.md). Option `c`'s three cases are the
+/// research note's hand oracle: gate on the supply and drain floating is
+/// filtered; with the source on the supply too, neither end floats; a gate
+/// on a signal net is not on the supply.
+fn unused_filters() -> Vec<Fixture> {
+    use Model::N;
+    let base = Circuit::new(3, vec![Dev::mos(N, 0, 1, 2)]);
+    let with = |dev: Dev, internal: &[usize]| {
+        let nets = dev.pins.iter().max().copied().unwrap_or(0).max(2) + 1;
+        let mut c = Circuit::new(nets, vec![Dev::mos(N, 0, 1, 2), dev]);
+        for &net in internal {
+            c = c.internal(net);
+        }
+        c
+    };
+    let extras = [
+        ("all_floating", with(Dev::mos(N, 3, 4, 5), &[3, 4, 5])),
+        ("ends_floating", with(Dev::mos(N, 0, 3, 4), &[3, 4])),
+        ("ends_tied", with(Dev::mos(N, 0, 1, 1), &[])),
+        ("all_tied", with(Dev::mos(N, 1, 1, 1), &[])),
+        (
+            "gate_on_supply_drain_floating",
+            with(Dev::mos(N, 0, 1, 3), &[3]),
+        ),
+        ("gate_on_supply_ends_held", with(Dev::mos(N, 0, 0, 1), &[])),
+        (
+            "gate_on_signal_drain_floating",
+            with(Dev::mos(N, 1, 2, 3), &[3]),
+        ),
+        (
+            "chain",
+            Circuit::new(
+                6,
+                vec![
+                    Dev::mos(N, 0, 1, 2),
+                    Dev::mos(N, 0, 3, 4),
+                    Dev::mos(N, 0, 4, 5),
+                ],
+            )
+            .internal(3)
+            .internal(4)
+            .internal(5),
+        ),
+    ];
+    let mut out = Vec::new();
+    for (name, drawn) in &extras {
+        for option in ["ae", "af", "ag", "c", "u", "none"] {
+            let controls = Controls {
+                unused: if option == "none" {
+                    Vec::new()
+                } else {
+                    vec![option]
+                },
+                supply: vec!["n0"],
+                ..Controls::default()
+            };
+            out.push(compared_under(
+                &format!("filter_unused/{name}/{option}"),
+                &["LVS-048"],
+                (drawn, &base),
+                &controls,
+            ));
+        }
+    }
+    // The schematic's own unused transistor stays: the filter is the layout's.
+    let controls = Controls {
+        unused: vec!["ae", "af", "ag", "c", "u"],
+        supply: vec!["n0"],
+        ..Controls::default()
+    };
+    out.push(compared_under(
+        "filter_unused/written_only",
+        &["LVS-048"],
+        (&base, &extras[0].1),
+        &controls,
+    ));
     out
 }
 

@@ -13,7 +13,7 @@ use gpurify_check::deck::{
 };
 use gpurify_check::drc::DrcError;
 use gpurify_geom::{Dbu, DbuArea, StrId, StrTable};
-use gpurify_ingest::deck::DeckError;
+use gpurify_ingest::deck::{DeckError, UnusedFilter};
 
 fn nm(raw: i64) -> Dbu {
     Dbu::new_unchecked(raw)
@@ -223,6 +223,28 @@ fn every_parser_refusal_has_a_builder_twin() {
         builder_refusal(d.finish().unwrap_err()),
         None,
     ));
+
+    // A black box stated twice, a pattern KLayout would read otherwise, and
+    // unused filters stated twice (LVS-033, LVS-048).
+    for (statement, build) in [
+        (
+            "lvs blackbox \"B\"\nlvs blackbox \"B\"\n",
+            (|d: &mut DeckBuilder<'_>| {
+                d.lvs_blackbox("B");
+                d.lvs_blackbox("B");
+            }) as fn(&mut DeckBuilder<'_>),
+        ),
+        ("lvs blackbox \"B[12]\"\n", |d| d.lvs_blackbox("B[12]")),
+        ("lvs filter_unused u u\n", |d| {
+            d.lvs_filter_unused(&[UnusedFilter::U, UnusedFilter::U]);
+        }),
+    ] {
+        let mut strings = StrTable::default();
+        let (mut d, _, _) = start(&mut strings);
+        build(&mut d);
+        let (built, _) = builder_refusal(d.finish().unwrap_err());
+        cases.push((parser_refusal(&text(statement)), (built, None), None));
+    }
 
     for (parsed, (built, at), line) in cases {
         assert!(
