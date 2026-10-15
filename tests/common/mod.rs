@@ -21,6 +21,7 @@ use gpurify::geom::{Dbu, Grid};
 use gpurify::geom::{GeometryStore, LayerId, PolyId};
 use gpurify::ingest;
 use gpurify_ingest::StrId;
+use gpurify_testgen::oracle::scratch;
 use gpurify_testgen::LayoutBuilder;
 use serde::Deserialize;
 use std::path::PathBuf;
