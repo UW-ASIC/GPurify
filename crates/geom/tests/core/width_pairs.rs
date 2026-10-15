@@ -7,14 +7,14 @@
 
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::ops::Seg;
-use gpurify_geom::relation::{pair_threshold2, Metric, Relation, Zero};
+use gpurify_geom::relation::{pair_threshold2, projected_reach2, Metric, Relation, Zero};
 use gpurify_geom::view::{validate_layer_with, Angles, ValidatedLayer};
 use gpurify_geom::width::{
     narrowest_facing, narrowest_pair2, narrowest_width2, poly_edges, FacingScratch,
 };
 use gpurify_geom::{Dbu, LayerId};
 use gpurify_testgen::prop::{check, seeds};
-use gpurify_testgen::shapes::LayoutBuilder;
+use gpurify_testgen::shapes::{point, LayoutBuilder};
 use gpurify_testgen::Rng;
 
 /// A merged layer of the given rings, validated octilinear.
@@ -240,4 +240,62 @@ fn the_edge_pair_relation_reads_width_as_narrowest_pair2() {
         },
         |rings| pairs_agree(rings),
     );
+}
+
+/// `a`-`b` as a segment.
+fn segment(a: (i64, i64), b: (i64, i64)) -> Seg {
+    Seg {
+        a: point(a.0, a.1),
+        b: point(b.0, b.1),
+    }
+}
+
+/// Oracle: hand-derived. The 10 x 4 box at `(2, 6)` is narrowest across its
+/// top and bottom edges, 4 apart: twice squared, 32. Its report point is the
+/// midpoint of an end of one of those edges and that end's foot on the
+/// other, so it lies on the box's middle line `y = 8`, at `x = 2` or `x = 12`.
+#[test]
+fn the_narrowest_pair_is_reported_midway_between_its_two_nearest_points() {
+    let layer = merged(&[vec![(2, 6), (12, 6), (12, 10), (2, 10)]]);
+    let (twice, at) =
+        narrowest_pair2(layer.get(0), true, Dbu::new_unchecked(FAR)).expect("a box has a width");
+    assert_eq!(twice, 32);
+    assert_eq!(at.y.raw(), 8, "{at:?}");
+    assert!([2, 12].contains(&at.x.raw()), "{at:?}");
+}
+
+/// Oracle: hand-derived. In `KLayout`'s orientation `a` is the top edge of a
+/// shape below `y = 0`, and the slanted `b`, its shape up and to the right,
+/// crosses `a` at `(8, 0)`: the two edges touch, so under the default zero
+/// mode the pair is reported at distance 0 by projection. Only the part of
+/// `b` above `a`'s line, `(2, 6)`-`(8, 0)`, faces `a`; read whole, `b`'s
+/// lower end would put the nearest projected point at `(10, -2)`, 2 off.
+#[test]
+fn edges_that_cross_are_zero_apart_by_projection() {
+    let a = segment((0, 0), (10, 0));
+    let b = segment((14, -6), (2, 6));
+    assert_eq!(
+        pair_threshold2(
+            Relation::Space,
+            Metric::Projection,
+            Zero::WhenTouching,
+            a,
+            b
+        ),
+        Some(0)
+    );
+}
+
+/// Oracle: hand-derived. `a` is the top edge of a shape below `y = 0` and
+/// `b` the bottom edge of one above `y = 4`, both in `KLayout`'s orientation:
+/// the point `(5, 4)` of `b` stands square over `a` at 4, twice squared 32,
+/// and `(15, 4)` is past `a`'s end, so no projection reaches it.
+#[test]
+fn a_projected_reach_is_the_square_distance_over_the_edge_and_none_past_it() {
+    let a = segment((0, 0), (10, 0));
+    let b = segment((20, 4), (0, 4));
+    let reach =
+        |x: i64, y: i64| projected_reach2(Relation::Space, Zero::WhenTouching, a, b, point(x, y));
+    assert_eq!(reach(5, 4), Some(32));
+    assert_eq!(reach(15, 4), None);
 }
