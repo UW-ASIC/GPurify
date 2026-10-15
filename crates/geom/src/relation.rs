@@ -78,10 +78,6 @@ impl E {
         }
     }
     fn seg(self) -> Seg {
-        let pt = |(x, y): P| Point {
-            x: Dbu::new_unchecked(x),
-            y: Dbu::new_unchecked(y),
-        };
         Seg {
             a: pt(self.p1),
             b: pt(self.p2),
@@ -115,6 +111,13 @@ impl E {
     fn parallel(self, o: Self) -> bool {
         let ((ax, ay), (bx, by)) = (self.d(), o.d());
         ax * by == ay * bx
+    }
+}
+
+fn pt(p: P) -> Point {
+    Point {
+        x: Dbu::new_unchecked(p.0),
+        y: Dbu::new_unchecked(p.1),
     }
 }
 
@@ -156,17 +159,32 @@ fn cut_point(g: E, e: E) -> P {
     let num = wx * ey - wy * ex;
     let den = gx * ey - gy * ex;
     debug_assert_ne!(det, 0, "a crossing of non-parallel edges");
+    along_lattice(g, num, den)
+}
+
+/// The point `g.p1 + (num / den)·g.d`, which must be a lattice point: on the
+/// octilinear grid every crossing and foot this module forms is one.
+fn along_lattice(g: E, num: i128, den: i128) -> P {
+    let (gx, gy) = g.d();
     let step = |p: i64, d: i128| {
         let v = d * num;
-        debug_assert_eq!(v % den, 0, "an octilinear crossing is on the lattice");
+        debug_assert_eq!(v % den, 0, "an octilinear point is on the lattice");
         p + i64::try_from(v / den).expect("on the edge")
     };
     (step(g.p1.0, gx), step(g.p1.1, gy))
 }
 
-/// `other` cut to `e`'s inner (right) side, as both near-part functions do
-/// first; `None` when nothing of it is there.
-fn inner_part(zero: Zero, e: E, other: E) -> Option<E> {
+/// The part of an edge on another's inner side, when it has one.
+enum Part {
+    /// All of it.
+    Whole,
+    /// The stretch from this end of it to where it crosses the other's line.
+    From(P),
+}
+
+/// How much of `other` lies on `e`'s inner (right) side, `e`'s line counted
+/// in as `include_zero` says; `None` for none of it.
+fn inner_end(zero: Zero, e: E, other: E) -> Option<Part> {
     let (s1, s2) = if e.degenerate() {
         if segments_intersect(other.seg(), e.seg()) {
             (0, 0)
@@ -180,19 +198,29 @@ fn inner_part(zero: Zero, e: E, other: E) -> Option<E> {
     if s1 > thr && s2 > thr {
         return None;
     }
-    if s2 > thr {
-        return Some(E {
-            p1: other.p1,
+    Some(if s2 > thr {
+        Part::From(other.p1)
+    } else if s1 > thr {
+        Part::From(other.p2)
+    } else {
+        Part::Whole
+    })
+}
+
+/// `other` cut to `e`'s inner (right) side, as both near-part functions do
+/// first; `None` when nothing of it is there.
+fn inner_part(zero: Zero, e: E, other: E) -> Option<E> {
+    Some(match inner_end(zero, e, other)? {
+        Part::Whole => other,
+        Part::From(end) if end == other.p1 => E {
+            p1: end,
             p2: cut_point(other, e),
-        });
-    }
-    if s1 > thr {
-        return Some(E {
+        },
+        Part::From(end) => E {
             p1: cut_point(other, e),
-            p2: other.p2,
-        });
-    }
-    Some(other)
+            p2: end,
+        },
+    })
 }
 
 /// Twice the squared distance between two points.
@@ -204,10 +232,6 @@ fn point2(a: P, b: P) -> i128 {
 /// Twice the squared Euclidean distance between two edges, either possibly a
 /// point.
 fn dist2(a: E, b: E) -> i128 {
-    let pt = |(x, y): P| Point {
-        x: Dbu::new_unchecked(x),
-        y: Dbu::new_unchecked(y),
-    };
     match (a.degenerate(), b.degenerate()) {
         (true, true) => point2(a.p1, b.p1),
         (true, false) => point_seg_near2(pt(a.p1), b.seg()).0,
@@ -266,13 +290,7 @@ fn near(metric: Metric, zero: Zero, e: E, other: E) -> Option<i128> {
         if num >= den {
             return g.p2;
         }
-        let (gx, gy) = g.d();
-        let step = |p: i64, d: i128| {
-            let v = d * num;
-            debug_assert_eq!(v % den, 0, "an octilinear foot is on the lattice");
-            p + i64::try_from(v / den).expect("on the edge")
-        };
-        (step(g.p1.0, gx), step(g.p1.1, gy))
+        along_lattice(g, num, den)
     };
     let (lo, hi) = (a1.min(a2), a1.max(a2));
     if lo.max(0) >= hi.min(span) {
@@ -280,6 +298,33 @@ fn near(metric: Metric, zero: Zero, e: E, other: E) -> Option<i128> {
     }
     let (p, q) = (at(0), at(span));
     Some(perp2(e, p).min(perp2(e, q)))
+}
+
+/// `a` and `b` turned so the side each is read from is its right, as the
+/// near-part functions take them.
+fn oriented(relation: Relation, a: E, b: E) -> (E, E) {
+    let a_turned = matches!(relation, Relation::Space | Relation::Inside);
+    let b_turned = matches!(relation, Relation::Space | Relation::Overlap);
+    (
+        if a_turned { a.swapped() } else { a },
+        if b_turned { b.swapped() } else { b },
+    )
+}
+
+/// [`oriented`], or `None` when the edges, both of positive length, run at
+/// 90 degrees or less to each other once `a` faces `b` under `relation`
+/// (`KLayout`'s default `angle_limit`): such a pair is never reported.
+fn facing(relation: Relation, a: Seg, b: Seg) -> Option<(E, E)> {
+    let (a, b) = (E::of(a), E::of(b));
+    let aa = if matches!(relation, Relation::Overlap | Relation::Inside) {
+        a.swapped()
+    } else {
+        a
+    };
+    if !a.degenerate() && !b.degenerate() && sprod(aa.d(), b.d()) >= 0 {
+        return None;
+    }
+    Some(oriented(relation, a, b))
 }
 
 /// The least distance, as twice its square, at which `KLayout` reports the
@@ -295,25 +340,7 @@ pub fn pair_threshold2(
     a: Seg,
     b: Seg,
 ) -> Option<i128> {
-    let (a, b) = (E::of(a), E::of(b));
-    let aa = if matches!(relation, Relation::Overlap | Relation::Inside) {
-        a.swapped()
-    } else {
-        a
-    };
-    if !a.degenerate() && !b.degenerate() && sprod(aa.d(), b.d()) >= 0 {
-        return None;
-    }
-    let an = if matches!(relation, Relation::Space | Relation::Inside) {
-        a.swapped()
-    } else {
-        a
-    };
-    let bn = if matches!(relation, Relation::Space | Relation::Overlap) {
-        b.swapped()
-    } else {
-        b
-    };
+    let (an, bn) = facing(relation, a, b)?;
     let second = near(metric, zero, an, bn)?;
     let first = near(metric, zero, bn, an)?;
     Some(first.max(second))
@@ -327,17 +354,7 @@ pub fn pair_threshold2(
 /// `second_edges` meeting at a corner).
 #[must_use]
 pub fn projected_reach2(relation: Relation, zero: Zero, a: Seg, b: Seg, v: Point) -> Option<i128> {
-    let (a, b) = (E::of(a), E::of(b));
-    let an = if matches!(relation, Relation::Space | Relation::Inside) {
-        a.swapped()
-    } else {
-        a
-    };
-    let bn = if matches!(relation, Relation::Space | Relation::Overlap) {
-        b.swapped()
-    } else {
-        b
-    };
+    let (an, bn) = oriented(relation, E::of(a), E::of(b));
     let v = (v.x.raw(), v.y.raw());
     let part = inner_part(zero, an, bn)?;
     if !segments_intersect(part.seg(), E { p1: v, p2: v }.seg()) {
@@ -346,13 +363,6 @@ pub fn projected_reach2(relation: Relation, zero: Zero, a: Seg, b: Seg, v: Point
     let d = an.d();
     let along = sprod((i128::from(v.0 - an.p1.0), i128::from(v.1 - an.p1.1)), d);
     (0..=sprod(d, d)).contains(&along).then(|| perp2(an, v))
-}
-
-fn pt(p: P) -> Point {
-    Point {
-        x: Dbu::new_unchecked(p.0),
-        y: Dbu::new_unchecked(p.1),
-    }
 }
 
 /// The Euclidean distance, twice squared as `(floor, inexact)`, from `e` to
@@ -413,24 +423,7 @@ fn near_any(zero: Zero, e: E, other: E) -> Option<(i128, bool)> {
 /// `e`'s line, as `(X, Y, W)` with `W > 0`.
 #[allow(clippy::type_complexity)]
 fn inner_part_any(zero: Zero, e: E, other: E) -> Option<Option<(P, (I256, I256, I256))>> {
-    let (s1, s2) = if e.degenerate() {
-        if segments_intersect(other.seg(), e.seg()) {
-            (0, 0)
-        } else {
-            (-1, -1)
-        }
-    } else {
-        (e.side_of(other.p1), e.side_of(other.p2))
-    };
-    let thr = if include_zero(zero, e, other) { 0 } else { -1 };
-    if s1 > thr && s2 > thr {
-        return None;
-    }
-    let keep = if s2 > thr {
-        other.p1
-    } else if s1 > thr {
-        other.p2
-    } else {
+    let Part::From(keep) = inner_end(zero, e, other)? else {
         return Some(None);
     };
     // other.p1 + t·od on e's line: t = cross(ed, e.p1 - other.p1) / cross(ed, od).
@@ -458,25 +451,7 @@ fn inner_part_any(zero: Zero, e: E, other: E) -> Option<Option<(P, (I256, I256, 
 /// edge is involved). On octilinear edges it is `(pair_threshold2(..), false)`.
 #[must_use]
 pub fn pair_threshold_any(relation: Relation, zero: Zero, a: Seg, b: Seg) -> Option<(i128, bool)> {
-    let (a, b) = (E::of(a), E::of(b));
-    let aa = if matches!(relation, Relation::Overlap | Relation::Inside) {
-        a.swapped()
-    } else {
-        a
-    };
-    if !a.degenerate() && !b.degenerate() && sprod(aa.d(), b.d()) >= 0 {
-        return None;
-    }
-    let an = if matches!(relation, Relation::Space | Relation::Inside) {
-        a.swapped()
-    } else {
-        a
-    };
-    let bn = if matches!(relation, Relation::Space | Relation::Overlap) {
-        b.swapped()
-    } else {
-        b
-    };
+    let (an, bn) = facing(relation, a, b)?;
     let second = near_any(zero, an, bn)?;
     let first = near_any(zero, bn, an)?;
     Some(first.max(second))
