@@ -985,7 +985,7 @@ pub struct Insertion {
 
 /// Where a second cut goes beside each single-cut via, as `gpurify
 /// enhance` adds them (catalog FLOW-009), in connector order: where
-/// [`via_redundancy`] finds room, the first neighbour it finds; for a dead
+/// `via_redundancy` finds room, the first neighbour it finds; for a dead
 /// via, the first neighbour at least `space` from every cut, with a patch
 /// of each metal that does not hold it: the box round both cuts, grown by
 /// the margin the metal already leaves round the via's cut (so the new cut
