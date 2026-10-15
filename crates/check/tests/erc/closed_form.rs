@@ -149,6 +149,8 @@ fn erc(
         )))
     });
     let inputs = Inputs {
+        antenna_pins: &[],
+        strings: &strings,
         design: Design {
             store: &store,
             nets: &nets,

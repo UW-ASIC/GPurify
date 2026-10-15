@@ -892,6 +892,7 @@ fn fixes(
     let (mut violations, mut runs) = report();
     check_antenna_electrical(
         design,
+        &[],
         common::manufacturing_grid(),
         &credit_row(id, model, table),
         &mut scratch,
@@ -1006,7 +1007,14 @@ fn an_antenna_fix_hint_is_ihp_note_4() {
         }
         let mut scratch = Scratch::default();
         let (mut violations, mut runs) = report();
-        check_antenna(design, &table, &mut scratch, &mut violations, &mut runs);
+        check_antenna(
+            design,
+            &[],
+            &table,
+            &mut scratch,
+            &mut violations,
+            &mut runs,
+        );
         assert_eq!(violations.len(), 1, "the ratio is over its limit");
         violations.fix[0]
     };

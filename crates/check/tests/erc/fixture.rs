@@ -371,6 +371,8 @@ pub fn run(fixture: &Fixture) -> Result<Ran, String> {
         .or(deck.temperature)
         .unwrap_or_else(|| celsius(85.0));
     let inputs = erc::Inputs {
+        antenna_pins: &[],
+        strings: &strings,
         design: Design {
             store: &store,
             nets: &nets,

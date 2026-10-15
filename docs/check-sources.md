@@ -62,11 +62,11 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 
 | Domain | implemented | expressible | partial | missing | verify | out of scope |
 |---|---:|---:|---:|---:|---:|---:|
-| DRC | 56 | 6 | 42 | 2 | 0 | 0 |
-| LVS | 31 | 1 | 12 | 4 | 0 | 0 |
-| ERC | 63 | 4 | 11 | 3 | 0 | 0 |
+| DRC | 56 | 6 | 44 | 0 | 0 | 0 |
+| LVS | 31 | 1 | 15 | 1 | 0 | 0 |
+| ERC | 64 | 4 | 13 | 0 | 0 | 0 |
 | PEX | 9 | 0 | 7 | 0 | 0 | 0 |
-| Flow | 2 | 0 | 5 | 3 | 0 | 0 |
+| Flow | 2 | 0 | 8 | 0 | 0 | 0 |
 
 These numbers come from the TSV. Once `tests/catalog.rs` exists, it computes
 them, so this table cannot go stale unnoticed (the plan's F5 problem).
@@ -330,16 +330,19 @@ single oracle is a named gap that ledger P1 closes.
 | DRC-113 | Litho / CMP simulation hotspots | partial | CAL:LFD,CMPAnalyzer; PEG; Ouma2002 | CF; MR; SY |
 | DRC-115 | Equation-based DRC | partial | CAL:eqDRC; patents P10,P11 | CF; SY |
 | DRC-124 | Layout input exceptions (missing cell reference, duplicate cell, magnified or angled placement, odd or zero path width, spike, vertex count) | partial | CAL:LAYOUT INPUT EXCEPTION SEVERITY,DRC MAXIMUM VERTEX | SY; MR |
+| DRC-128 | Self-aligned multiple patterning (SADP/SAQP mandrel, spacer, cut) legality | partial | US20150286764A1; Xu2015 (TCAD 34(5) Table II); Xiao ISPD 2012 slides; YuPan2016; A7:fin SAQP,M4-M7 SADP (Clark2016) | SE; SY; MR |
 | DRC-129 | Inter-die alignment and overlap (bump and pad alignment, rotation, cross-die spacing) | implemented | CAL:3DSTACK | SY; MR |
 | LVS-005 | Short isolation / localisation | partial | CAL:LVS ISOLATE SHORT,LVS ISOLATE OPENS; ICV:ShortFinder; PEG | SY; MR |
 | LVS-020 | Undeclared parameter | implemented | - | SY; MR |
 | LVS-047 | Logic-gate recognition | partial | CAL:LVS RECOGNIZE GATES; SubGemini; Silvaco Guardian LVS app note Logic Gate Recognition (2020) and example 4 | SY; MR |
+| LVS-048 | Filter unused devices | partial | CAL:LVS FILTER UNUSED; US8751985B1 (col. 7 ll. 44-62, Calibre's options quoted); US20100306720A1 [0162] | SY; NV |
 | LVS-066 | Device flavour (HVT/LVT) by implant marker | expressible | GF:App.A; IHP LVS decks | SY; MR |
 | LVS-071 | Spectre reader | implemented | - | SY; MR; fuzz |
 | LVS-074 | Layout-dependent-effect parameters (LOD SA/SB/SD, WPE SCA/SCB/SCC) | partial | BSIM4; SRC:datasheet; Silvaco SmartDRC/LVS app note Well Proximity and STI Stress Effect Parameters Extraction (2022) | CF; SE; SY |
 | ERC-A9 | Minimum protection-diode size | expressible | IHP:Ant.g | SE:IHP Ant.g; MR; SY |
 | ERC-A10 | Diode well legality | expressible | IHP:Ant.h,Ant.i | FR; SY |
 | ERC-A13 | Exemption for substrate-shorted nets | implemented | SKY:.ar.1 | SE:SKY .ar.1; MR; SY |
+| ERC-A15 | Fix hint: required diode area | partial | IHP:Ant.g Note 4; SKY:antenna EGAR; US9142556; LEF:ANTENNADIFFAREARATIO PWL | SE; CF |
 | ERC-B1 | Windowed density + CMP thickness | implemented | GF:13 | CF; MR; SY |
 | ERC-C1 | Pad ESD path to power and ground | implemented | TR18-01:4.5.2-4.5.4; Khazhinsky2012 | SY; NV; MR |
 | ERC-C2 | ESD device sizing (perimeter, clamp width) | implemented | TR18-01:Fig23,Fig24; Hogan2012:III; GF:14.5 | CF; SY; MR |
@@ -363,6 +366,7 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-D6 | HV latch-up between isolated pockets | expressible | TR18-02:3.3; GF:14.3.4 | SY; MR |
 | ERC-D7 | Native-device guard ring | implemented | GF:LU.5 | FR; SY; MR |
 | ERC-D8 | Forward-biased diode marked and ringed | implemented | GF:14.3.2,14.3.3 | SY; MR |
+| ERC-D9 | PMOS/NMOS devices sharing one well | implemented | US5638286; HoganMedhat2021 | SY; NV; MR |
 | ERC-E3 | Width-banded absolute current for narrow lines | implemented | IHP:2.15 | SE:IHP 2.15; FR; MR; SY |
 | ERC-E4 | Temperature derating (Black / Arrhenius) | implemented | GF:14.2.2; Black1969; JEP122; JESD63 | SE:GF formula vs table (1.6% rounding); MR; SY |
 | ERC-E5 | Lifetime target and percentile | implemented | GF:14.2; IHP:2.15; JESD202 | SE; MR; SY |
@@ -374,6 +378,7 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-F1 | Static voltage propagation, conditional on gate voltage | implemented | CAL:WP 81822; SKY:hv.X.1; patents P5,P9 | SE:Siemens WP; SY; NV |
 | ERC-F2 | Gate-oxide overstress | implemented | GF:14.1.4.2; SKY:hv; TR22:4.1; CAL | FR; CF; SY |
 | ERC-F3 | Junction / drain-source overstress | implemented | SKY:hv; IHP:process spec | FR; SY |
+| ERC-F4 | HCI susceptibility flag | partial | GF:14.1.4.1; CAL:WP 81822 Eq.1 | SY; NV; MR |
 | ERC-F5 | TDDB/BTI/HCI lifetime | implemented | JEP122; JESD263; JESD241; JESD28; JESD60 | CF; MR; SY |
 | ERC-F6 | Missing level shifter | implemented | CAL:WP 81822; IEEE1801 | SY; NV |
 | ERC-F7 | Missing isolation at switchable-domain outputs | implemented | IEEE1801; CPF | SY; NV |
@@ -390,7 +395,7 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-G9 | Path check: nets with no path to power or ground | implemented | CAL:ERC PATHCHK,LVS PATHCHK; ICsprout55; P12 | SY; NV; MR |
 | ERC-H1 | Static leakage / HiZ / floating in power-down | implemented | IA | SY; NV |
 | ERC-H2 | Analog constraints (symmetry, common centroid, matching, orientation, dummies, WPE, STI) | partial | CAL:PERC packaged; ICV:NDL; PEG:Constraint Validator; GF:10.6.2 MP.1-MP.13; Karmokar2022; Sarhan2019; P14 | SY; MR |
-| ERC-H3 | Netlist path checks (gate to ground within N devices; net types) | partial | CAL:patent P12; P9 | SY; NV; MR |
+| ERC-H3 | Netlist path checks (gate to ground within N devices; net types) | partial | CAL:patent P12; P9; US6367062 | SE; SY; NV; MR |
 | ERC-H4 | Fanout limits | implemented | ICV; GF:14.1.4.1 | SY; NV |
 | PEX-009 | PEX netlist diff / qualification | implemented | SIL:PEX Certify | CF; MR; SY |
 | PEX-010 | SPEF output | implemented | IEEE1481 | CF; SE; MR; golden |
@@ -403,6 +408,8 @@ single oracle is a named gap that ledger P1 closes.
 | FLOW-002 | Early / dirty-design staged runs | implemented | CAL:Recon; ICV:Explorer | SY; MR |
 | FLOW-003 | SoC integration (macro sync, ports off grid, fill outside boundary, block/pad-ring overlap) | partial | ICV | SY; CF |
 | FLOW-005 | In-design / live DRC | partial | CAL:RealTime; ICV:Live; PEG | FR; MR |
+| FLOW-008 | Incremental / ECO re-verification (changed regions or nets only) | partial | PEG; SRC:datasheet | MR; SY |
+| FLOW-009 | Automated DRC-clean layout enhancement (via and power-grid insertion) | partial | CAL:DesignEnhancer | SY; MR |
 | FLOW-010 | Clustering and triage of very large result sets | partial | CAL:Vision AI | SY; NV |
 
 <!-- end of generated block -->
