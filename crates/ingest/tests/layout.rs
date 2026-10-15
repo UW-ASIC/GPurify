@@ -2,36 +2,24 @@
 
 use gpurify_ingest::layout::{gds, read_gds_bytes, LayoutError};
 use gpurify_ingest::StrTable;
+use gpurify_testgen::gds::write_library;
+use gpurify_testgen::oracle;
 use std::io::Write;
 
-/// A scratch path unique to this process and this test.
-fn scratch(name: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("gpurify-ingest-{}-{name}", std::process::id()))
-}
-
+/// Writes `bytes` to a fresh scratch file named `name` and reads it as a layout.
 fn read(name: &str, bytes: &[u8]) -> Result<(), LayoutError> {
-    let path = scratch(name);
+    let dir = oracle::scratch("ingest-layout");
+    let path = dir.join(name);
     std::fs::write(&path, bytes).expect("scratch write");
     let result = read_gds_bytes(&path);
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&dir);
     gds::Library::parse(&result?, &mut StrTable::default()).map(|_| ())
 }
 
-/// An empty GDSII library, record by record from the stream format spec.
+/// An empty GDSII library: no structure, only the library records.
 fn empty_library() -> Vec<u8> {
     let mut out = Vec::new();
-    for (tag, payload) in [
-        (0x0002u16, &[0x02, 0x58][..]), // HEADER, version 600
-        (0x0102, &[0; 24]),             // BGNLIB
-        (0x0206, b"LIB\0"),             // LIBNAME
-        (0x0305, &[0; 16]),             // UNITS
-        (0x0400, &[]),                  // ENDLIB
-    ] {
-        let len = u16::try_from(payload.len() + 4).expect("a short record");
-        out.extend_from_slice(&len.to_be_bytes());
-        out.extend_from_slice(&tag.to_be_bytes());
-        out.extend_from_slice(payload);
-    }
+    write_library(&[], &mut out).expect("an empty library writes");
     out
 }
 
