@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 gpurify-geom = { workspace = true }
 thiserror = { workspace = true }
-fearless_simd = { workspace = true }
 flate2 = { workspace = true }
 # The design intent is JSON.
 serde = { workspace = true }
