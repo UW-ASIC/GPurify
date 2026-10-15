@@ -977,4 +977,179 @@ mod tests {
             (1, Measurement::Count(1))
         );
     }
+
+    /// The rows of one rule, as `(x, y, measured, limit, shape a, shape b)`.
+    fn rows(out: &Violations, rule: StrId) -> Vec<(i64, i64, Measurement, Measurement, u32, u32)> {
+        (0..out.len())
+            .filter(|&i| out.rule[i] == rule)
+            .map(|i| {
+                (
+                    out.at[i].x.raw(),
+                    out.at[i].y.raw(),
+                    out.measured[i],
+                    out.limit[i],
+                    out.shape_a[i].0,
+                    out.shape_b[i].map_or(u32::MAX, |p| p.0),
+                )
+            })
+            .collect()
+    }
+
+    /// Oracle: hand-derived from `check_alignment`'s rustdoc. Bonded bumps
+    /// `[0, 10]²` and `[3, 13] x [4, 14]` have centres (5, 5) and (8, 9), 5
+    /// apart (a 3-4-5 triangle): over a 4 offset that is one row at the
+    /// middle of the centres (6.5, 7) floored to (6, 7), measured 5; at a 5
+    /// offset, exactly the distance, none. A bond stating no offset adds
+    /// nothing and is not examined, and with no bond stating one there is
+    /// no row at all.
+    #[test]
+    fn a_bond_offset_over_its_limit_is_one_row_at_the_middle_of_the_centres() {
+        let mut strings = StrTable::default();
+        intern_rule_ids(&mut strings);
+        let rule = rule_id(&strings, "system.bump_offset");
+        let a = [bump(1, rect(0, 0, 10, 10))];
+        let b = [bump(2, rect(3, 4, 13, 14))];
+        let bonds: [[&[Bump]; 2]; 2] = [[&a, &b], [&a, &b]];
+        let pairs = [vec![(0, 0)], vec![(0, 0)]];
+        let length = |v: i64| Measurement::Length(d(v));
+        for (max, want) in [(4, vec![(6, 7, length(5), length(4), 1, 2)]), (5, vec![])] {
+            let (mut out, mut runs) = (Violations::default(), Vec::new());
+            let limits = [(Some(d(max)), None), (None, Some(d(1)))];
+            check_alignment(&bonds, &pairs, &limits, &strings, &mut out, &mut runs);
+            assert_eq!(rows(&out, rule), want, "max {max}");
+            let run = runs.iter().find(|r| r.rule == rule).expect("an offset row");
+            assert_eq!((run.examined, run.outcome), (1, Outcome::Ran), "max {max}");
+        }
+        let (mut out, mut runs) = (Violations::default(), Vec::new());
+        check_alignment(
+            &bonds[..1],
+            &pairs[..1],
+            &[(None, None)],
+            &strings,
+            &mut out,
+            &mut runs,
+        );
+        assert!(runs.is_empty() && out.is_empty(), "no limit, no row");
+    }
+
+    /// Oracle: hand-derived from `check_alignment`'s rustdoc and the box
+    /// gap. Bump `[0, 10]²` faces a bump it bonds (skipped), one at `[13,
+    /// 23] x [14, 24]` (gaps 3 and 4: 5 apart, middle (11.5, 12) floored to
+    /// (11, 12)) and one at `[-5, -2] x [2, 8]` (2 apart along x, overlapping
+    /// in y: middle (-1, 5), the middle of the overlap 2..8 in y). Under a
+    /// 6 space both are rows, in facing order; under 5 only the 2; every
+    /// bump of both faces is examined.
+    #[test]
+    fn a_facing_bump_closer_than_the_space_is_a_row_at_the_middle_of_the_gap() {
+        let mut strings = StrTable::default();
+        intern_rule_ids(&mut strings);
+        let rule = rule_id(&strings, "system.bump_space");
+        let a = [bump(1, rect(0, 0, 10, 10))];
+        let b = [
+            bump(2, rect(0, 0, 10, 10)),
+            bump(3, rect(13, 14, 23, 24)),
+            bump(4, rect(-5, 2, -2, 8)),
+        ];
+        let length = |v: i64| Measurement::Length(d(v));
+        for (min, want) in [
+            (
+                6,
+                vec![
+                    (11, 12, length(5), length(6), 1, 3),
+                    (-1, 5, length(2), length(6), 1, 4),
+                ],
+            ),
+            (5, vec![(-1, 5, length(2), length(5), 1, 4)]),
+        ] {
+            let (mut out, mut runs) = (Violations::default(), Vec::new());
+            check_alignment(
+                &[[&a, &b]],
+                &[vec![(0, 0)]],
+                &[(None, Some(d(min)))],
+                &strings,
+                &mut out,
+                &mut runs,
+            );
+            assert_eq!(rows(&out, rule), want, "min {min}");
+            assert_eq!(runs.len(), 1, "no offset stated, no offset row");
+            assert_eq!(runs[0].examined, 4);
+        }
+        // The gap and its middle are symmetric in the two boxes.
+        let (p, q) = (rect(0, 0, 10, 10), rect(13, 14, 23, 24));
+        assert_eq!(gap_middle(q, p), gap_middle(p, q));
+        assert_eq!(gap2(q, p).raw(), 25);
+        assert_eq!(gap2(rect(-5, 2, -2, 8), p).raw(), 4);
+        assert_eq!(gap2(p, rect(5, 5, 20, 20)).raw(), 0);
+    }
+
+    /// A one-layer face: a 10 x 20 rectangle on layer 0 and maybe one more
+    /// shape, layer 0 a conductor when `connected`, its bumps placed by
+    /// (100, 200), and what a layer past the store's gives.
+    fn face(
+        extra: Option<(Vec<i64>, Vec<i64>)>,
+        connected: bool,
+    ) -> (Result<(), BumpError>, Vec<Bump>, NetId) {
+        use crate::topology::{extract_nets_into, DeviceTable, NetTable};
+        use gpurify_ingest::deck::Connectivity;
+        use gpurify_testgen::LayoutBuilder;
+        let metal = LayerId(0);
+        let mut layout = LayoutBuilder::new(1);
+        layout.rect(metal, 0, 0, 10, 20);
+        if let Some((xs, ys)) = extra {
+            layout.push(metal, &xs, &ys);
+        }
+        let (store, _) = layout.finish();
+        let connectivity = Connectivity {
+            conductors: if connected { vec![metal] } else { Vec::new() },
+            intra_layer_touch: true,
+            ..Connectivity::default()
+        };
+        let mut nets = NetTable::default();
+        extract_nets_into(&store, &connectivity, &mut nets);
+        let devices = DeviceTable::default();
+        let design = Design {
+            store: &store,
+            nets: &nets,
+            devices: &devices,
+        };
+        let placement = Placement {
+            dx: d(100),
+            dy: d(200),
+            ..Placement::default()
+        };
+        let mut far = vec![bump(9, rect(0, 0, 1, 1))];
+        assert_eq!(bumps_into(design, LayerId(7), placement, &mut far), Ok(()));
+        assert!(far.is_empty(), "a layer the store does not have holds none");
+        let mut out = Vec::new();
+        let got = bumps_into(design, metal, placement, &mut out);
+        (got, out, nets.net_of(PolyId(0)))
+    }
+
+    /// Oracle: `bumps_into`'s rustdoc. On a conductor, a rectangle is a
+    /// bump on its net, placed by the placement; a quadrilateral that is no
+    /// rectangle (four vertices, half its box's area) and an L of six
+    /// vertices are refused as not rectangles; on a layer the deck does not
+    /// connect, the rectangle is on no net.
+    #[test]
+    fn a_face_is_its_rectangles_on_nets_and_nothing_else() {
+        let (got, out, net) = face(None, true);
+        assert_eq!(got, Ok(()));
+        assert_ne!(net, NetId::NONE);
+        assert_eq!(
+            out,
+            [Bump {
+                poly: PolyId(0),
+                net,
+                at: rect(100, 200, 110, 220),
+            }]
+        );
+        let diamond = (vec![30, 40, 30, 20], vec![0, 10, 20, 10]);
+        let (got, ..) = face(Some(diamond), true);
+        assert!(matches!(got, Err(BumpError::NotRectangle(_))), "{got:?}");
+        let l_shape = (vec![20, 40, 40, 30, 30, 20], vec![0, 0, 20, 20, 10, 10]);
+        let (got, ..) = face(Some(l_shape), true);
+        assert!(matches!(got, Err(BumpError::NotRectangle(_))), "{got:?}");
+        let (got, ..) = face(None, false);
+        assert_eq!(got, Err(BumpError::NoNet(PolyId(0))));
+    }
 }

@@ -136,3 +136,31 @@ fn a_cut_reports_only_pairs_spanning_the_two_layers_it_was_asked_about() {
         "only the cut at (100, 100) has material on both of the layers asked about"
     );
 }
+
+/// Oracle: construct-from-answer, `via_cuts_into`'s rustdoc. Two cuts over
+/// one lower and one upper shape are one row each, `(cut, lower, upper)`
+/// ascending by cut, where `via_edges_into` merges them into one edge; a
+/// third cut over the lower shape alone is no row.
+#[test]
+fn every_cut_of_a_stack_is_its_own_row() {
+    use gpurify_check::topology::net::via_cuts_into;
+    let (lower, upper, cut) = (LayerId(0), LayerId(1), LayerId(2));
+    let mut layout = LayoutBuilder::new(3);
+    let low = layout.rect(lower, 0, 0, 1_000, 1_000);
+    let high = layout.rect(upper, 0, 0, 1_000, 500);
+    let first = layout.rect(cut, 100, 100, 200, 200);
+    let second = layout.rect(cut, 300, 100, 400, 200);
+    layout.rect(cut, 600, 700, 700, 800);
+    let (store, ids) = layout.finish();
+
+    let mut cuts = vec![(9, 9, 9)];
+    via_cuts_into(&store, cut, (lower, upper), &mut cuts);
+    let row = |c: Handle| (ids.of(c).0, ids.of(low).0, ids.of(high).0);
+    let mut want = vec![row(first), row(second)];
+    want.sort_unstable();
+    assert_eq!(cuts, want);
+
+    let mut edges = Vec::new();
+    via_edges_into(&store, cut, (lower, upper), &mut edges);
+    assert_eq!(edge_set(&edges), vec![pair(&ids, low, high)]);
+}

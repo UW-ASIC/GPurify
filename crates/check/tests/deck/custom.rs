@@ -247,3 +247,25 @@ fn an_equation_based_limit_is_a_custom_rule() {
         assert_eq!(runs[0].outcome, Outcome::Ran);
     }
 }
+
+/// Oracle: `CustomRule`'s `PartialEq` contract: equal when id, inputs,
+/// severity and check function all are; a change of any one is unequal.
+#[test]
+fn custom_rules_are_equal_field_by_field() {
+    let rule = |id: u32, inputs: Vec<LayerId>, severity, check: CustomCheck| CustomRule {
+        id: gpurify_geom::StrId(id),
+        inputs,
+        severity,
+        check,
+    };
+    let base = rule(1, vec![FULL], Severity::Error, finds_nothing);
+    assert_eq!(base, rule(1, vec![FULL], Severity::Error, finds_nothing));
+    for other in [
+        rule(2, vec![FULL], Severity::Error, finds_nothing),
+        rule(1, vec![EMPTY], Severity::Error, finds_nothing),
+        rule(1, vec![FULL], Severity::Warning, finds_nothing),
+        rule(1, vec![FULL], Severity::Error, panics),
+    ] {
+        assert_ne!(base, other);
+    }
+}

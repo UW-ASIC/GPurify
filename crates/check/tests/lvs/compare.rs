@@ -663,6 +663,34 @@ fn symmetric_devices_pair_by_parameters_not_by_row_order() {
     );
 }
 
+/// Oracle: the `lvs` module docs' bounded symmetry search: a tie-break
+/// tries the parameter-closest reference node first and at most eight in
+/// all. Ten interchangeable dummies of ten different widths, written in
+/// opposite orders on the two sides: each layout dummy's exact twin is the
+/// closest, so they all pair and match, where trying candidates by row
+/// would run out of tries before reaching the twins at the far end.
+#[test]
+fn more_symmetric_devices_than_tries_pair_by_parameters() {
+    use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Source};
+    let dummies = |reversed: bool| {
+        let mut builder = GraphBuilder::new(2);
+        for k in 0..10u32 {
+            let k = if reversed { 9 - k } else { k };
+            builder.device_with_params(
+                DeviceKind::Mos,
+                NCH,
+                &[(Gate, 0), (Source, 0), (Drain, 1), (Bulk, 0)],
+                &[(WIDTH, f64::from(k + 1) * 1e-6)],
+            );
+        }
+        builder.finish()
+    };
+    assert_eq!(
+        compare(&dummies(false), &dummies(true), decisive()),
+        Verdict::Match
+    );
+}
+
 /// A two-terminal device of `kind` from net `first` to net `second`, beside a
 /// transistor whose gate sits on net 0: the gate gives net 0 a degree net 1
 /// lacks, so exchanging the two ends is not a relabelling (see
@@ -1020,4 +1048,33 @@ fn a_device_whose_model_alone_differs_is_one_model_mismatch() {
     assert!(found
         .iter()
         .any(|d| matches!(d, Discrepancy::UnpairedDevice { .. })));
+}
+
+/// Oracle: construct-from-answer, `ParameterMismatch`'s contract. The
+/// layout measures `W` and `L` on both devices of [`stacked_pair`], the
+/// reference states only `L`: the `W` it omits is not compared (it sorts
+/// before `L`, so it is passed over on the way to `L`), and `L` is. An
+/// equal `L` matches; the upper card's `L` doubled is one mismatch naming
+/// it with both values.
+#[test]
+fn a_measure_sorting_before_the_card_s_parameter_is_passed_over() {
+    let measured = [(WIDTH, 1.0), (LENGTH, 0.5)];
+    let layout = stacked_pair_with_params(&measured, &measured);
+    let card = [(LENGTH, 0.5)];
+    let verdict = compare(&layout, &stacked_pair_with_params(&card, &card), decisive());
+    assert_eq!(verdict, Verdict::Match);
+    assert_same_discrepancies(
+        discrepancies(&compare(
+            &layout,
+            &stacked_pair_with_params(&card, &[(LENGTH, 1.0)]),
+            decisive(),
+        )),
+        &[Discrepancy::ParameterMismatch {
+            layout_device: 1,
+            ref_device: 1,
+            param: LENGTH,
+            layout_value: 0.5,
+            ref_value: 1.0,
+        }],
+    );
 }

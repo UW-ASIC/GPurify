@@ -348,6 +348,117 @@ fn a_floating_net_and_a_split_label_are_located_on_their_shapes() {
             "{name}"
         );
     }
+
+    // `check_layout`'s rustdoc: the split label is an error, and a warning
+    // when the deck says the label's nets connect outside the layout (a
+    // `connect_implicit` pattern matching it, or a `connect_explicit` group
+    // naming it); a pattern that does not match changes nothing.
+    use gpurify_check::report::Severity;
+    let gnd = strings.intern("GND");
+    let conflict = strings.get("lvs.label_conflict").expect("interned");
+    for (controls, severity) in [
+        (LvsControls::default(), Severity::Error),
+        (
+            LvsControls {
+                connect_implicit: vec!["VD*".to_owned()],
+                ..LvsControls::default()
+            },
+            Severity::Warning,
+        ),
+        (
+            LvsControls {
+                connect_implicit: vec!["VSS*".to_owned()],
+                ..LvsControls::default()
+            },
+            Severity::Error,
+        ),
+        (
+            LvsControls {
+                connect_explicit: vec![vec![gnd, vdd]],
+                ..LvsControls::default()
+            },
+            Severity::Warning,
+        ),
+        (
+            LvsControls {
+                connect_explicit: vec![vec![gnd]],
+                ..LvsControls::default()
+            },
+            Severity::Error,
+        ),
+    ] {
+        let (mut out, mut runs) = (Violations::default(), Vec::new());
+        check_layout(
+            &graph,
+            design,
+            &ports,
+            (&strings, &controls),
+            &mut out,
+            &mut runs,
+        );
+        let severities: Vec<Severity> = (0..out.len())
+            .map(|row| out.get(row))
+            .filter(|row| row.rule == conflict)
+            .map(|row| row.severity)
+            .collect();
+        assert_eq!(severities, [severity], "{controls:?}");
+    }
+}
+
+/// Oracle: construct-from-answer, `check_layout`'s rustdoc: the substrate
+/// alone (a net of only global-layer shapes) does not float, a conductor
+/// with nothing on it does. One metal rectangle and one substrate
+/// rectangle, nothing labelled, no device: the metal's net is the one
+/// floating row, and the table says which net is the substrate's.
+#[test]
+fn the_substrate_alone_is_not_a_floating_net() {
+    use gpurify_check::lvs::graph::from_layout;
+    use gpurify_check::topology::extract_nets_into;
+    use gpurify_geom::LayerId;
+    use gpurify_ingest::deck::Connectivity;
+    use gpurify_testgen::LayoutBuilder;
+
+    let (metal, substrate) = (LayerId(0), LayerId(1));
+    let mut layout = LayoutBuilder::new(2);
+    let wire = layout.rect(metal, 0, 0, 100, 100);
+    let body = layout.rect(substrate, 500, 0, 600, 100);
+    let (store, ids) = layout.finish();
+    let (wire, body) = (ids.of(wire), ids.of(body));
+    let connectivity = Connectivity {
+        conductors: vec![metal],
+        global: vec![substrate],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+    assert!(!nets.is_global_only(nets.net_of(wire)));
+    assert!(nets.is_global_only(nets.net_of(body)));
+
+    let mut strings = StrTable::default();
+    intern_rule_ids(&mut strings);
+    let rule = strings.get("lvs.floating_net").expect("interned");
+    let (devices, ports) = (DeviceTable::default(), PortTable::default());
+    let graph = from_layout(&nets, &devices, &ports, &strings, None);
+    let (mut out, mut runs) = (Violations::default(), Vec::new());
+    check_layout(
+        &graph,
+        Design {
+            store: &store,
+            nets: &nets,
+            devices: &devices,
+        },
+        &ports,
+        (&strings, &LvsControls::default()),
+        &mut out,
+        &mut runs,
+    );
+    let floating: Vec<_> = (0..out.len())
+        .map(|row| out.get(row))
+        .filter(|row| row.rule == rule)
+        .map(|row| row.shapes)
+        .collect();
+    assert_eq!(floating, [(wire, None)]);
 }
 
 /// Oracle: construct-from-answer, testing-plan F32. A marker recognition

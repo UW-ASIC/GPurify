@@ -550,3 +550,115 @@ fn h4_layer_operation_refusals_have_builder_twins() {
         assert_eq!(at, Some(line), "{built}: reported at the wrong call");
     }
 }
+
+/// Oracle: `CompiledDeck::rules`' rustdoc and `DRC_KINDS`' naming (a deck
+/// row resolves to its constructor's name, `min_width` for `width(L) >=
+/// len`): [`BASE`]'s DRC rules in deck order, then its ERC antenna row,
+/// then a custom rule as `custom`; and a builder row names its kind the
+/// same way.
+#[test]
+fn a_deck_lists_its_rules_by_id_and_kind() {
+    use gpurify_check::deck::{CustomCtx, Findings};
+    use gpurify_check::report::Severity;
+    fn nothing(_: &CustomCtx<'_>, _: &mut Findings) {}
+
+    let mut strings = StrTable::default();
+    let base = compile(BASE, grid(), &mut strings).expect("the base deck compiles");
+    let mut d = DeckBuilder::from_deck(&base, &mut strings);
+    let met1 = d.get("met1");
+    assert_eq!(min_width(met1, nm(1)).kind(), "min_width");
+    assert_eq!(min_spacing(met1, nm(1)).kind(), "min_spacing");
+    d.custom("c.one", &[met1], Severity::Error, nothing);
+    let deck = d.finish().expect("builds");
+    let rules: Vec<(&str, &str)> = deck
+        .rules()
+        .map(|(id, kind)| (strings.resolve(id), kind))
+        .collect();
+    assert_eq!(
+        rules,
+        [
+            ("m1.1", "min_width"),
+            ("m1.2", "min_spacing"),
+            ("x.18", "forbidden"),
+            ("ar.met3.1", "antenna"),
+            ("c.one", "custom"),
+        ]
+    );
+    assert_eq!(deck.rule_count(), 5);
+}
+
+/// Oracle: `CompiledDeck::source`'s rustdoc: rules in provenance order,
+/// and a rule no provenance lists (a deck edited by hand) after them, DRC
+/// first. With [`BASE`]'s provenance cut to its last rule, that rule comes
+/// first and the rest follow in `rules()` order.
+#[test]
+fn a_rule_missing_from_the_provenance_is_still_written() {
+    let mut strings = StrTable::default();
+    let mut deck = compile(BASE, grid(), &mut strings).expect("the base deck compiles");
+    let last = deck.provenance.len() - 1;
+    deck.provenance.drain(..last);
+    let ids: Vec<String> = deck
+        .source(&strings)
+        .rules
+        .into_iter()
+        .map(|rule| rule.id)
+        .collect();
+    assert_eq!(ids, ["x.18", "m1.1", "m1.2", "ar.met3.1"]);
+}
+
+/// Oracle: unit arithmetic. On the 1 nm grid a square nanometre is one
+/// square unit, so 250000 nm² is 250000; on a 5 nm grid a unit is 25 nm²,
+/// so 250000 nm² is 10000, and 30 nm² is not whole and is refused.
+#[test]
+fn an_area_in_square_nanometres_is_whole_square_grid_units() {
+    let mut strings = StrTable::default();
+    let mut d = DeckBuilder::new(grid(), &mut strings);
+    assert_eq!(d.area(250_000.0), DbuArea::new(250_000));
+    let mut strings = StrTable::default();
+    let five = gpurify_geom::Grid::new(200).expect("a 5 nm grid");
+    let mut d = DeckBuilder::new(five, &mut strings);
+    assert_eq!(d.area(250_000.0), DbuArea::new(10_000));
+    assert_eq!(d.area(30.0), DbuArea::new(0));
+    assert!(d.finish().is_err(), "30 nm² on a 5 nm grid is refused");
+}
+
+/// Oracle: `remove_layer`'s and `remove`'s rustdoc. Removing a layer the
+/// deck does not have is refused, derived layers present or not; removing
+/// one it has is not. Removing the second of two custom rules keeps the
+/// first.
+#[test]
+fn removing_what_the_deck_lacks_is_refused_and_what_it_has_goes() {
+    use gpurify_check::deck::{CustomCtx, Findings};
+    use gpurify_check::report::Severity;
+    fn nothing(_: &CustomCtx<'_>, _: &mut Findings) {}
+
+    let mut strings = StrTable::default();
+    let base = compile(BASE, grid(), &mut strings).expect("the base deck compiles");
+    let mut d = DeckBuilder::from_deck(&base, &mut strings);
+    let met1 = d.get("met1");
+    d.derived("wide", met1.sized(nm(10)));
+    d.remove_layer("nope");
+    let BuildError::Invalid(refused) = d.finish().unwrap_err() else {
+        panic!("removing an absent layer is the builder's refusal");
+    };
+    let messages: Vec<&str> = refused.iter().map(|d| d.message.as_str()).collect();
+    assert_eq!(
+        messages,
+        ["remove of layer `nope`, which the deck does not have"]
+    );
+
+    let mut d = DeckBuilder::from_deck(&base, &mut strings);
+    let met1 = d.get("met1");
+    d.derived("wide", met1.sized(nm(10)));
+    d.remove_layer("wide");
+    d.custom("c.one", &[met1], Severity::Error, nothing);
+    d.custom("c.two", &[met1], Severity::Error, nothing);
+    d.remove("c.two");
+    let deck = d.finish().expect("removing present things builds");
+    let custom: Vec<&str> = deck
+        .custom
+        .iter()
+        .map(|rule| strings.resolve(rule.id))
+        .collect();
+    assert_eq!(custom, ["c.one"]);
+}
