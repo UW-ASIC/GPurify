@@ -11,7 +11,7 @@ use crate::erc::rules::{
 use crate::erc::voltage::NetVoltage;
 use crate::erc::{Design, ErcError, Scratch};
 use crate::report::{RuleRun, Severity, Violations};
-use crate::topology::{NetId, PortTable};
+use crate::topology::{narrow, NetId, PortTable};
 use gpurify_geom::{prefix, Dbu, DbuArea, Qty, Temperature, Voltage};
 use gpurify_geom::{Bbox, LayerId};
 use gpurify_ingest::deck::{Deck, DeviceKind, ParamValue, ProcessStack, RuleSpec, RuleTable};
@@ -239,10 +239,6 @@ fn vertical_gap(stack: &ProcessStack, a: LayerId, b: LayerId) -> Option<f64> {
     }
     let gap = upper.0 - (lower.0 + lower.1);
     (gap > 0.0).then_some(gap)
-}
-
-fn narrow(len: usize) -> u32 {
-    u32::try_from(len).expect("a deck's rule columns are far short of four billion entries")
 }
 
 /// Close one CSR row: the leading zero on the first row, then the running end.

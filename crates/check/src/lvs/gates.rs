@@ -40,8 +40,9 @@
 //! multi-gate device are not plain, so nesting (an AOI's parallel groups in
 //! series) is not reduced: a gate's stacks in another order still mismatch.
 
-use crate::lvs::graph::{narrow, transpose_into, Graph};
+use crate::lvs::graph::{groups_by_root, join, transpose_into, Graph};
 use crate::lvs::reduce::{MergeKind, ParamNames};
+use crate::topology::narrow;
 use crate::topology::TerminalRole;
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrId;
@@ -115,20 +116,6 @@ fn bits(graph: &Graph, device: u32) -> Vec<(StrId, u64)> {
 /// What a parallel group shares, then the member's gate and row: model,
 /// the source/drain pair low end first, bulk, signature, gate, row.
 type ParallelKey<'a> = (StrId, u32, u32, u32, &'a [(StrId, u64)], u32, u32);
-
-fn find(root: &mut [u32], mut at: u32) -> u32 {
-    while root[at as usize] != at {
-        let up = root[root[at as usize] as usize];
-        root[at as usize] = up;
-        at = up;
-    }
-    at
-}
-
-fn join(root: &mut [u32], a: u32, b: u32) {
-    let (a, b) = (find(root, a), find(root, b));
-    root[a.max(b) as usize] = a.min(b);
-}
 
 /// One pass of logic-gate reduction over `graph`, parallel groups first
 /// and, when there are none, series chains: `None` when nothing merges.
@@ -219,16 +206,7 @@ pub(crate) fn pass(graph: &Graph, names: ParamNames) -> Option<(Graph, MergeKind
     };
 
     // Groups, each checked; one that is not a sound chain falls apart.
-    let mut groups: Vec<Vec<u32>> = Vec::new();
-    let mut group_of = vec![u32::MAX; devices as usize];
-    for d in 0..devices {
-        let r = find(&mut root, d) as usize;
-        if group_of[r] == u32::MAX {
-            group_of[r] = narrow(groups.len());
-            groups.push(Vec::new());
-        }
-        groups[group_of[r] as usize].push(d);
-    }
+    let groups = groups_by_root(&mut root, 0..devices);
     let mut out_groups: Vec<Vec<u32>> = Vec::new();
     let mut merged_any = false;
     for group in groups {

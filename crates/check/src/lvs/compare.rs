@@ -9,10 +9,13 @@ use crate::lvs::controls::{
     assign_roles, bound, drop_ignored_devices, drop_ignored_params, filter_unused, port_names,
     port_seeds, report_roles, restore_rows,
 };
-use crate::lvs::graph::{channel_ends, drop_unextracted_bulk, keep_declared_params, narrow, Graph};
+use crate::lvs::graph::{
+    channel_ends, drop_unextracted_bulk, groups_by_root, join, keep_declared_params, Graph,
+};
 use crate::lvs::reduce::{reduce_with, Merge, ParamNames};
 use crate::lvs::refine::{refine_into, role_code, Partition};
 use crate::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
+use crate::topology::narrow;
 use crate::topology::TerminalRole;
 use gpurify_ingest::deck::LvsControls;
 use gpurify_ingest::StrId;
@@ -85,8 +88,8 @@ macro_rules! debug_assert_graph {
 /// How to run a comparison.
 ///
 /// The default is 1000 rounds, a 2% tolerance and no parameter names. The
-/// `gpurify` binary keeps the first two and names `w`, `l`, `nf`, `m`, `as`,
-/// `ad`, `ps` and `pd`.
+/// `gpurify` binary keeps the first two and names every field of
+/// [`ParamNames`] by its SPICE name (`w`, `l`, `nf`, `m`, `as`, ..., `sb`).
 #[derive(Debug, Clone, Copy)]
 pub struct CompareOptions {
     /// The most refinement passes in a row that may split a class without the
@@ -433,34 +436,15 @@ fn origin(devices: usize, kept: Option<&[u32]>, merges: &[Merge]) -> Vec<Vec<u32
     let all: Vec<u32> = (0..narrow(devices)).collect();
     let kept = kept.unwrap_or(&all);
     let mut root = all.clone();
-    let find = |root: &mut Vec<u32>, mut at: u32| {
-        while root[at as usize] != at {
-            let up = root[root[at as usize] as usize];
-            root[at as usize] = up;
-            at = up;
-        }
-        at
-    };
     for merge in merges {
         let Some((&head, rest)) = merge.devices.split_first() else {
             continue;
         };
         for &row in rest {
-            let (a, b) = (find(&mut root, head), find(&mut root, row));
-            root[a.max(b) as usize] = a.min(b);
+            join(&mut root, head, row);
         }
     }
-    let mut group_of = vec![u32::MAX; devices];
-    let mut out: Vec<Vec<u32>> = Vec::new();
-    for &row in kept {
-        let head = find(&mut root, row) as usize;
-        if group_of[head] == u32::MAX {
-            group_of[head] = narrow(out.len());
-            out.push(Vec::new());
-        }
-        out[group_of[head] as usize].push(row);
-    }
-    out
+    groups_by_root(&mut root, kept.iter().copied())
 }
 
 /// Whether `found` holds an unpaired device on each side: what a device
@@ -515,19 +499,13 @@ fn models_aside(
 /// devices merged into `m = 2` matched a card stating no `m` once any card
 /// named it.
 fn state_count(graph: &mut Graph, multiplier: StrId) {
-    let mut param = Vec::with_capacity(graph.param.len() + graph.device_count());
-    let mut start = Vec::with_capacity(graph.device_count() + 1);
-    start.push(0);
-    for device in 0..narrow(graph.device_count()) {
+    graph.rewrite_params(|graph, device, param| {
         let params = graph.params_of(device);
         param.extend_from_slice(params);
         if !params.iter().any(|&(name, _)| name == multiplier) {
             param.push((multiplier, 1.0));
         }
-        start.push(narrow(param.len()));
-    }
-    graph.param = param;
-    graph.device_param_start = start;
+    });
 }
 
 /// A node no class paired with anything.

@@ -39,7 +39,7 @@
 //! device of one channel and is not written. The candidate shapes come from
 //! a scan of each layer sorted by left edge.
 
-use crate::lvs::graph::{narrow, Graph};
+use crate::lvs::graph::Graph;
 use crate::Design;
 use gpurify_geom::{Bbox, GeometryStore, Grid, LayerId, PolyId};
 use gpurify_ingest::deck::{DeviceKind, LayerTable, LvsLde};
@@ -410,17 +410,10 @@ pub fn add_lde_params(
     if added.iter().all(Vec::is_empty) {
         return;
     }
-    let mut param =
-        Vec::with_capacity(graph.param.len() + added.iter().map(Vec::len).sum::<usize>());
-    let mut start = Vec::with_capacity(graph.device_count() + 1);
-    start.push(0);
-    for (device, extra) in added.iter().enumerate() {
-        param.extend_from_slice(graph.params_of(narrow(device)));
-        param.extend_from_slice(extra);
-        start.push(narrow(param.len()));
-    }
-    graph.param = param;
-    graph.device_param_start = start;
+    graph.rewrite_params(|graph, device, param| {
+        param.extend_from_slice(graph.params_of(device));
+        param.extend_from_slice(&added[device as usize]);
+    });
 }
 
 /// Sorts each reference device's `sa` and `sb`, smaller first, as

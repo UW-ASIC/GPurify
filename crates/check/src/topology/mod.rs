@@ -27,6 +27,15 @@ pub use device::{ChannelError, DeviceId, DeviceTable, TerminalRole};
 pub use net::{extract_nets_into, NetId, NetTable};
 pub use port::{bind_ports_into, PortTable};
 
+/// A row count as a `u32` id, the width every CSR column here is made of.
+///
+/// # Panics
+///
+/// When `value` does not fit a `u32`, rather than truncating.
+pub(crate) fn narrow(value: usize) -> u32 {
+    u32::try_from(value).expect("a table addresses its own rows with u32")
+}
+
 /// One row's run in a CSR offset column; a row past the table panics.
 pub(crate) fn csr_run(start: &[u32], row: usize) -> (usize, usize) {
     let (from, to) = (start[row] as usize, start[row + 1] as usize);
