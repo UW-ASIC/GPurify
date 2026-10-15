@@ -17,7 +17,9 @@ use gpurify_geom::ops::Point;
 use gpurify_geom::rects::decompose_into;
 use gpurify_geom::store::GeometryStoreBuilder;
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
-use gpurify_geom::width::{narrowest_facing, narrowest_neck, narrowest_pair2, narrowest_width2};
+use gpurify_geom::width::{
+    narrowest_facing, narrowest_neck, narrowest_pair2, narrowest_pair_any, narrowest_width2,
+};
 use gpurify_geom::{Bbox, Dbu, DbuArea, MAX_ABS_DBU};
 use gpurify_geom::{GeometryStore, LayerId};
 use gpurify_ingest::StrId;
@@ -31,8 +33,11 @@ use gpurify_ingest::StrId;
 /// A layer with edges at 45 degrees is measured by
 /// [`narrowest_pair2`](gpurify_geom::width::narrowest_pair2): facing edges at
 /// their perpendicular distance, necks corner to corner, an acute tip 0 wide
-/// (DRC-038; IHP SG13G2 M1.g, Mn.g, Gat.g). The figure is named by the
-/// lowest drawn row inside it.
+/// (DRC-038; IHP SG13G2 M1.g, Mn.g, Gat.g). A layer with an edge at any
+/// other angle is measured by
+/// [`narrowest_pair_any`](gpurify_geom::width::narrowest_pair_any), the same
+/// measure with its fractions compared exactly (DRC-116). The figure is
+/// named by the lowest drawn row inside it.
 pub(crate) fn facing(
     store: &GeometryStore,
     rule: StrId,
@@ -42,7 +47,7 @@ pub(crate) fn facing(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let Some(drawn) = s.validated.get_octilinear(store, layer) else {
+    let Some(drawn) = s.validated.get_any(store, layer) else {
         return REFUSED;
     };
     let polys = drawn.len() as u64;
@@ -50,10 +55,18 @@ pub(crate) fn facing(
         return REFUSED;
     }
     if !drawn.is_rectilinear() {
+        let octilinear = drawn.is_octilinear();
         let owners = owners_by_point(&s.layer_out, drawn);
         for (idx, owner) in (0..).zip(owners) {
             let poly = s.layer_out.get(idx);
-            if let Some((twice, at)) = narrowest_pair2(poly, material_between, limit) {
+            let narrowest = if octilinear {
+                narrowest_pair2(poly, material_between, limit)
+            } else {
+                // A fraction's floor compares and floors as the fraction does.
+                narrowest_pair_any(poly, material_between, limit)
+                    .map(|((floor, _), at)| (floor, at))
+            };
+            if let Some((twice, at)) = narrowest {
                 out.push(Violation {
                     rule,
                     layer,
@@ -353,8 +366,9 @@ pub(crate) fn protrusion_width(
 
 /// One violation per edge of the merged layer shorter than `limit`, at its
 /// midpoint, on the lowest drawn row under its figure. `examined` counts the
-/// merged figures' edges. A 45-degree edge `k` steps long is `k·√2` long,
-/// compared exactly and reported floored.
+/// merged figures' edges. A 45-degree edge `k` steps long is `k·√2` long, and
+/// one at any other angle `√(dx² + dy²)`, compared exactly and reported
+/// floored.
 pub(crate) fn min_edge_length(
     store: &GeometryStore,
     rule: StrId,
@@ -363,7 +377,7 @@ pub(crate) fn min_edge_length(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let Some(drawn) = s.validated.get_octilinear(store, layer) else {
+    let Some(drawn) = s.validated.get_any(store, layer) else {
         return REFUSED;
     };
     if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
@@ -465,9 +479,20 @@ fn straight_runs(poly: gpurify_geom::view::PolygonRef<'_>) -> Vec<(Point, Point)
     merged
 }
 
-/// The direction an axis-aligned edge runs, as signs along x and y.
+/// The direction an edge runs, as its primitive step: signs along x and y
+/// for an axis or 45-degree edge, the difference over its gcd at any angle.
 fn heading(a: Point, b: Point) -> (i64, i64) {
-    ((b.x - a.x).raw().signum(), (b.y - a.y).raw().signum())
+    let (dx, dy) = ((b.x - a.x).raw(), (b.y - a.y).raw());
+    let g = gcd(dx.unsigned_abs(), dy.unsigned_abs()).max(1);
+    let g = i64::try_from(g).expect("a coordinate difference fits an i64");
+    (dx / g, dy / g)
+}
+
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
 }
 
 /// LEF `MINSTEP` variants (DRC-020): runs of consecutive edges shorter than

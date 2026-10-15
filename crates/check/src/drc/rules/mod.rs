@@ -26,9 +26,9 @@ use fearless_simd::{dispatch, f64x4, Level, Simd, SimdBase};
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::derive::{contains_scaled, interior_point8};
-use gpurify_geom::ops::{seg_seg_dist2, seg_seg_near2, Point, Seg};
+use gpurify_geom::ops::{seg_seg_dist2, seg_seg_near2, seg_seg_twice2, Point, Seg};
 use gpurify_geom::rects::decompose_into;
-use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, ValidatedLayer};
+use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, PolygonRef, ValidatedLayer};
 use gpurify_geom::{Dbu, DbuArea};
 
 /// How one rule row ended, and how many of its primitives it examined.
@@ -195,6 +195,11 @@ pub(crate) fn figures_holding(
     figures: &ValidatedLayer,
     drawn: &ValidatedLayer,
 ) -> Vec<Option<u32>> {
+    if !(figures.is_octilinear() && drawn.is_octilinear()) {
+        // At any angle no point near a corner is safely inside at a small
+        // scale, and rounding moves boundaries: the figure sharing area.
+        return gpurify_geom::derive::holding_figures(figures, drawn);
+    }
     let mut by_xlo: Vec<(Bbox, u32)> = figures.bboxes().iter().copied().zip(0..).collect();
     by_xlo.sort_unstable_by_key(|&(b, _)| b.xlo);
     let widest = by_xlo
@@ -218,6 +223,29 @@ pub(crate) fn figures_holding(
                 .map(|&(_, figure)| figure)
         })
         .collect()
+}
+
+/// A point of a figure's material for its marker: one step inside it from
+/// its lowest convex corner, floored to the grid; for a figure with an edge
+/// at an angle other than a multiple of 45 degrees, that corner itself (on
+/// its boundary, so within the figure, closed).
+pub(crate) fn figure_point(poly: PolygonRef<'_>) -> Point {
+    let (xs, ys) = poly.outer().coords();
+    let skew = ring_segs(xs, ys).any(|e| {
+        let (dx, dy) = ((e.b.x - e.a.x).raw(), (e.b.y - e.a.y).raw());
+        dx != 0 && dy != 0 && dx.abs() != dy.abs()
+    });
+    if skew {
+        let v = (0..xs.len())
+            .min_by_key(|&i| (ys[i], xs[i]))
+            .expect("a ring has vertices");
+        return Point { x: xs[v], y: ys[v] };
+    }
+    let (x8, y8) = interior_point8(poly);
+    Point {
+        x: Dbu::new_unchecked(x8.div_euclid(8)),
+        y: Dbu::new_unchecked(y8.div_euclid(8)),
+    }
 }
 
 /// A layer validated and merged; `None` when it does not validate.
@@ -317,17 +345,26 @@ pub(crate) fn poly_dist2(store: &GeometryStore, a: PolyId, b: PolyId) -> DbuArea
 /// a half unit (`7/√2` is `√24.5`); it is then floored, which compares
 /// against any whole squared limit exactly as the true value does (`24.5 <
 /// 25` and `24 < 25`), and a gap of `1/√2` reads 1, so only touching reads
-/// 0. At any other angle, rounded up ([`seg_seg_dist2`]).
+/// 0. At any other angle, a fraction, floored the same way
+/// ([`seg_seg_twice2`]), with the same exact comparison.
 pub(crate) fn seg_dist2(p: Seg, q: Seg) -> DbuArea {
     let delta = |s: Seg| (s.b.x.raw() - s.a.x.raw(), s.b.y.raw() - s.a.y.raw());
     let axis = |(dx, dy): (i64, i64)| dx == 0 || dy == 0;
     let octilinear = |(dx, dy): (i64, i64)| dx == 0 || dy == 0 || dx.abs() == dy.abs();
     let (dp, dq) = (delta(p), delta(q));
-    if (axis(dp) && axis(dq)) || !(octilinear(dp) && octilinear(dq)) {
+    if axis(dp) && axis(dq) {
         return seg_seg_dist2(p, q);
     }
-    let twice = seg_seg_near2(p, q).0;
-    DbuArea::new(if twice == 0 { 0 } else { (twice / 2).max(1) })
+    let (twice, inexact) = if octilinear(dp) && octilinear(dq) {
+        (seg_seg_near2(p, q).0, false)
+    } else {
+        seg_seg_twice2(p, q)
+    };
+    DbuArea::new(if twice == 0 && !inexact {
+        0
+    } else {
+        (twice / 2).max(1)
+    })
 }
 
 /// Squared boundary distance for every pair, into `dists`: exact wherever it is

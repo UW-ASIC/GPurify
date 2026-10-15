@@ -7,15 +7,13 @@
 //! offending figure, hole or window.
 
 use super::width::rects_layer;
-use super::{centre, owners_by_point, owners_of, SortedRects, Verdict, REFUSED};
+use super::{centre, figure_point, owners_by_point, owners_of, SortedRects, Verdict, REFUSED};
 use crate::drc::ruleset::{CoverBands, DefectSizes};
 use crate::drc::Scratch;
 use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
 };
 use gpurify_geom::boolean::union_into;
-use gpurify_geom::derive::interior_point8;
-use gpurify_geom::ops::Point;
 use gpurify_geom::rects::{covered_area, decompose_into};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_geom::{Dbu, DbuArea};
@@ -24,11 +22,10 @@ use std::ops::Range;
 
 /// Merge a layer into `s.layer_out` and, when it is rectilinear, decompose
 /// it into `s.rects`, CSR by figure (else `s.rect_start` is empty). With
-/// `octilinear`, a layer with edges at 45 degrees is taken. `false` is
-/// `Refused`.
-fn merge_layer(store: &GeometryStore, layer: LayerId, s: &mut Scratch, octilinear: bool) -> bool {
-    let drawn = if octilinear {
-        s.validated.get_octilinear(store, layer)
+/// `any`, a layer with edges at any angle is taken. `false` is `Refused`.
+fn merge_layer(store: &GeometryStore, layer: LayerId, s: &mut Scratch, any: bool) -> bool {
+    let drawn = if any {
+        s.validated.get_any(store, layer)
     } else {
         s.validated.get(store, layer)
     };
@@ -53,7 +50,7 @@ fn merge_layer(store: &GeometryStore, layer: LayerId, s: &mut Scratch, octilinea
 fn figure_owners(store: &GeometryStore, layer: LayerId, s: &mut Scratch) -> Vec<PolyId> {
     let drawn = s
         .validated
-        .get_octilinear(store, layer)
+        .get_any(store, layer)
         .expect("merge_layer validated the layer");
     if !drawn.is_rectilinear() {
         return owners_by_point(&s.layer_out, drawn);
@@ -107,10 +104,10 @@ impl<'a> Owners<'a> {
 
 /// One violation per merged figure `violates(area, has_hole)` rejects, at the
 /// centre of its first decomposed rectangle (always inside the figure); on a
-/// layer with 45-degree edges, whose area can be a half unit, the area
+/// layer with slanted edges, whose area can be a half unit, the area
 /// floored (which compares against a whole minimum exactly as the true area
-/// does) at a point within half a unit of the figure's material. Returns the
-/// figure count.
+/// does) at a point within half a unit of the figure's material (on it, at
+/// any angle: [`figure_point`]). Returns the figure count.
 fn report_figures(
     store: &GeometryStore,
     layer: LayerId,
@@ -129,12 +126,7 @@ fn report_figures(
                 .chain(poly.holes())
                 .map(|ring| ring.area2().raw())
                 .sum();
-            let (x8, y8) = interior_point8(poly);
-            let at = Point {
-                x: Dbu::new_unchecked(x8.div_euclid(8)),
-                y: Dbu::new_unchecked(y8.div_euclid(8)),
-            };
-            (DbuArea::new(twice.div_euclid(2)), at)
+            (DbuArea::new(twice.div_euclid(2)), figure_point(poly))
         } else {
             let rects = &s.rects[s.rect_start[figure] as usize..s.rect_start[figure + 1] as usize];
             (covered_area(rects), centre(rects[0]))
@@ -156,8 +148,8 @@ fn report_figures(
     s.layer_out.len() as u64
 }
 
-/// Minimum area of each merged figure, 45-degree edges included (DRC-038
-/// scope: an area a half unit short of the limit is short). `examined`
+/// Minimum area of each merged figure, edges at any angle included (DRC-038,
+/// DRC-116: an area a half unit short of the limit is short). `examined`
 /// counts figures.
 pub(crate) fn min_area(
     store: &GeometryStore,
@@ -195,7 +187,7 @@ pub(crate) fn cheesing(
 }
 
 /// Minimum hole area of the merged figures, reported at the hole's box centre,
-/// 45-degree edges included (a hole's area floored, as `min_area`'s).
+/// edges at any angle included (a hole's area floored, as `min_area`'s).
 /// `examined` counts holes.
 pub(crate) fn min_enclosed_area(
     store: &GeometryStore,

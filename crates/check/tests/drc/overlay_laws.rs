@@ -46,7 +46,8 @@ const OVL_A: LayerId = LayerId(4);
 const OVL_B: LayerId = LayerId(5);
 const WELL: LayerId = LayerId(6);
 const TAP_LAYER: LayerId = LayerId(7);
-/// Holds one triangle, so every rule row naming it records `Outcome::Refused`.
+/// Holds one triangle with an edge at a slope of 2, so a rule row naming it
+/// with a kind that reads straight out from edges records `Outcome::Refused`.
 const BAD: LayerId = LayerId(8);
 /// Declared and never drawn on, so the tap rule records
 /// `Outcome::Skipped(EmptyLayer)` for a row naming it as the well.
@@ -116,9 +117,9 @@ fn fixture(t: impl Fn(i64, i64) -> (i64, i64)) -> GeometryStore {
     rect(&mut layout, WELL, [-1_000, -1_000, -900, -900]);
     rect(&mut layout, TAP_LAYER, [-600, -700, -500, -600]);
 
-    // Not rectilinear under any of the transforms below — a uniform scale and a
-    // translation both leave the slanted edge slanted — so `validate_layer_into`
-    // refuses it in every run.
+    // Not octilinear under any of the transforms below — a uniform scale and a
+    // translation both leave the slanted edge slanted — so a kind that reads
+    // straight out from edges refuses it in every run.
     let apex = t(-2_950, -2_900);
     let left = t(-3_000, -3_000);
     let right = t(-2_900, -3_000);
@@ -130,7 +131,9 @@ fn fixture(t: impl Fn(i64, i64) -> (i64, i64)) -> GeometryStore {
 
 /// Every overlay rule over one store, with every limit multiplied by `k`.
 ///
-/// `ENC_REFUSED` (against the triangle) is `Refused`; `TAP_EMPTY` (a layer with
+/// `ENC_REFUSED` (asymmetric enclosure, which reads straight out from an
+/// edge and so refuses a slanted one, against the triangle) is `Refused`;
+/// `TAP_EMPTY` (a layer with
 /// no geometry) is `Skipped(EmptyLayer)`.
 fn run_overlay(store: &GeometryStore, k: i64) -> (Violations, Vec<RuleRun>) {
     let mut sink = Sink::default();
@@ -148,10 +151,10 @@ fn run_overlay(store: &GeometryStore, k: i64) -> (Violations, Vec<RuleRun>) {
             ),
             (
                 ENC_REFUSED,
-                Rule::MinEnclosure {
+                Rule::AsymmetricEnclosure {
                     outer: BAD,
                     inner: ENC_INNER,
-                    limit: dbu(10 * k),
+                    min_one_side: dbu(30 * k),
                     wire: WireBand::ANY,
                 },
             ),

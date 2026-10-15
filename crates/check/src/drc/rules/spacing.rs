@@ -224,12 +224,12 @@ pub(super) fn spacing_violation(
 /// the layer's merged figures (pairs at distance zero). `false` is `Refused`,
 /// as is a layer with 45-degree edges.
 fn prepare(store: &GeometryStore, layer: LayerId, limit: Dbu, s: &mut Scratch) -> bool {
-    s.validated.get(store, layer).is_some() && prepare_octilinear(store, layer, limit, s)
+    s.validated.get(store, layer).is_some() && prepare_any(store, layer, limit, s)
 }
 
-/// [`prepare`] for a rule proved on 45-degree edges.
-fn prepare_octilinear(store: &GeometryStore, layer: LayerId, limit: Dbu, s: &mut Scratch) -> bool {
-    if s.validated.get_octilinear(store, layer).is_none() {
+/// [`prepare`] for a rule proved on edges at any angle.
+fn prepare_any(store: &GeometryStore, layer: LayerId, limit: Dbu, s: &mut Scratch) -> bool {
+    if s.validated.get_any(store, layer).is_none() {
         return false;
     }
     let rows = store.polys_on_layer(layer);
@@ -298,10 +298,10 @@ fn judged_pairs(
 
 /// Same-layer minimum spacing. `examined` counts every candidate pair.
 ///
-/// Euclidean between the two shapes' boundaries at any octilinear angle
-/// (DRC-038; IHP SG13G2 M1.i, Mn.i "space of lines of which at least one is
-/// bent by 45 degree", which the PDK's `KLayout` deck checks as a Euclidean
-/// `sep`): a gap to a 45-degree edge whose square is a half unit is compared
+/// Euclidean between the two shapes' boundaries at any angle (DRC-038; IHP
+/// SG13G2 M1.i, Mn.i "space of lines of which at least one is bent by 45
+/// degree", which the PDK's `KLayout` deck checks as a Euclidean `sep`;
+/// DRC-116): a gap to a slanted edge whose square is a fraction is compared
 /// exactly ([`super::seg_dist2`]) and reported floored.
 pub(crate) fn min_spacing(
     store: &GeometryStore,
@@ -311,7 +311,7 @@ pub(crate) fn min_spacing(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !prepare_octilinear(store, layer, limit, s) {
+    if !prepare_any(store, layer, limit, s) {
         return REFUSED;
     }
     judged_pairs(
@@ -329,7 +329,7 @@ pub(crate) fn min_spacing(
 
 /// Cross-layer minimum spacing, reported on layer `a`. No merged-figure
 /// exemption: overlap *is* the violation. `examined` counts candidate pairs.
-/// Euclidean at any octilinear angle, as [`min_spacing`].
+/// Euclidean at any angle, as [`min_spacing`].
 #[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
 pub(crate) fn min_spacing_diff(
     store: &GeometryStore,
@@ -340,8 +340,8 @@ pub(crate) fn min_spacing_diff(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if s.validated.get_octilinear(store, a_layer).is_none()
-        || s.validated.get_octilinear(store, b_layer).is_none()
+    if s.validated.get_any(store, a_layer).is_none()
+        || s.validated.get_any(store, b_layer).is_none()
     {
         return REFUSED;
     }

@@ -5,13 +5,13 @@
 //! Data out: one violation per offending shape, or per edge of an edge layer.
 
 use super::{
-    centre, figures_holding, merged, mid, owners_by_point, owners_of, seg_bbox, SortedRects,
-    Verdict, REFUSED,
+    centre, figure_point, figures_holding, merged, mid, owners_by_point, owners_of, seg_bbox,
+    SortedRects, Verdict, REFUSED,
 };
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::boolean::{subtraction_into, union_into};
-use gpurify_geom::derive::{inside_flags, interior_point8};
+use gpurify_geom::derive::inside_flags;
 use gpurify_geom::ops::{isqrt, Point};
 use gpurify_geom::rects::{covered_area, decompose_into};
 use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer};
@@ -19,8 +19,8 @@ use gpurify_ingest::StrId;
 
 /// Every shape on the layer, as drawn, and every edge of an edge layer.
 /// A shape reports its area, an edge its length. `examined` counts both.
-/// 45-degree shapes and edges included: a half-unit area and an edge's
-/// `k·√2` are reported floored.
+/// Shapes and edges at any angle included: a half-unit area and a slanted
+/// edge's length are reported floored.
 pub(crate) fn forbidden(
     store: &GeometryStore,
     rule: StrId,
@@ -28,7 +28,7 @@ pub(crate) fn forbidden(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let Some(drawn) = s.validated.get_octilinear(store, layer) else {
+    let Some(drawn) = s.validated.get_any(store, layer) else {
         return REFUSED;
     };
     let polys = u32::try_from(drawn.len()).expect("a layer indexes polygons with a u32");
@@ -249,16 +249,12 @@ fn count_broken(count: u32, (min_count, max_count): (u32, u32)) -> Option<u32> {
     }
 }
 
-/// A point inside figure `figure` of `figures`, floored to the grid.
+/// A point of figure `figure` of `figures` ([`figure_point`]).
 fn point_in(figures: &ValidatedLayer, figure: usize) -> Point {
-    let (x8, y8) = interior_point8(figures.get(u32::try_from(figure).expect("a u32 index")));
-    Point {
-        x: Dbu::new_unchecked(x8.div_euclid(8)),
-        y: Dbu::new_unchecked(y8.div_euclid(8)),
-    }
+    figure_point(figures.get(u32::try_from(figure).expect("a u32 index")))
 }
 
-/// Where either of two layers has a 45-degree edge (`Some`): both merged,
+/// Where either of two layers has a slanted edge (`Some`): both merged,
 /// with the lowest drawn row under each figure of the first, or `None`
 /// inside when either will not validate or merge (the rule is `Refused`).
 /// `None` when both are rectilinear, for the rectangle path.
@@ -268,7 +264,7 @@ fn octilinear_pair(
     (first, second): (LayerId, LayerId),
     s: &mut Scratch,
 ) -> Option<Option<(ValidatedLayer, ValidatedLayer, Vec<PolyId>)>> {
-    let Some((a, b)) = s.validated.pair_octilinear(store, first, second) else {
+    let Some((a, b)) = s.validated.pair_any(store, first, second) else {
         return Some(None);
     };
     if a.is_rectilinear() && b.is_rectilinear() {
@@ -317,7 +313,11 @@ pub(crate) fn inside_where(
             .into_iter()
             .enumerate()
         {
-            let home = home.expect("a part of an inner figure lies in it");
+            // At any angle a sliver the rounding left outside every inner
+            // figure holds no area of one.
+            let Some(home) = home else {
+                continue;
+            };
             outside2[home as usize] += area2(rest.get(u32::try_from(part).expect("a u32 index")));
         }
         let mut examined = 0u64;
