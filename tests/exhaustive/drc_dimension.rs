@@ -991,16 +991,19 @@ fn allowed_width(depth: Depth) -> Vec<Fixture> {
 /// side of its limit:
 /// - a bump 40 high on a bar, its top swept around 60: each 40 side offends
 ///   `adj` while the top is under 60, and `eol` always (the top is an end of
-///   line under 120); the side, the top and the other side are one
+///   line under 120); under 50 the top is short too and offends `adj`
+///   beside the 40 sides; the side, the top and the other side are one
 ///   `between` finding;
 /// - a bump 40 wide, its height swept around 50: its top (40) offends `adj`
-///   beside sides under 60; below 50 the sides are short too and offend
-///   `adj`, `eol` (beside the top's end of line) and `between`;
+///   only beside sides under 60, and `eol` beside sides under 30; below 50
+///   the sides are short too and offend `adj`, `eol` (beside the top's end
+///   of line) and `between`;
 /// - a 40 x 56 rectangle: its 40 ends offend `adj` beside 56 sides and `eol`
 ///   beside the sides' ends of line, `EXCEPTRECTANGLE` exempts it, and each
 ///   end starts a `between` row;
 /// - a tab 40 wide on a bar's end, its end of line swept around 120: the
-///   tab's 40 top offends `eol` only while that end is under 120;
+///   tab's 40 top offends `eol` only while that end is under 120, and `adj`
+///   once the tab's inner side (200 less the end) is under 60;
 /// - a tip 40 long on a bar's end, its end swept around 120: under 120 its
 ///   two 40 sides offend `eol` and make one `between` row.
 fn min_step_adjacent(depth: Depth) -> Vec<Fixture> {
@@ -1059,7 +1062,12 @@ fn min_step_adjacent(depth: Depth) -> Vec<Fixture> {
             pin(Finding::length(40), l + 1000, 440),
             pin(Finding::length(40), r, 440),
         ];
-        let adj = if t < 60 { sides.clone() } else { Vec::new() };
+        let mut adj = if t < 60 { sides.clone() } else { Vec::new() };
+        // Under 50 the top is a short edge too, beside 40 sides; its box is
+        // the top and both sides.
+        if t < 50 {
+            adj.push(pin(Finding::length(t), l + r, 440));
+        }
         case(
             format!("bump_top/{}", side(t, 60)),
             layout,
@@ -1073,8 +1081,13 @@ fn min_step_adjacent(depth: Depth) -> Vec<Fixture> {
     }
     for h in sweep(depth, 50).into_iter().filter(|&h| h > 0) {
         let (layout, l, r) = bump(40, h);
-        let mut adj = vec![pin(Finding::length(40), l + r, 400 + h)];
-        let (mut eol, mut between) = (Vec::new(), Vec::new());
+        // The top's box is the top and both sides.
+        let top = pin(Finding::length(40), l + r, 400 + h);
+        let mut adj = if h < 60 { vec![top] } else { Vec::new() };
+        // Under 30 the sides are short enough for the `eol` rule's own
+        // `MINADJACENTLENGTH 0.03`.
+        let mut eol = if h < 30 { vec![top] } else { Vec::new() };
+        let mut between = Vec::new();
         if h < 50 {
             let sides = [
                 pin(Finding::length(h), l + 1000, 400 + h),
@@ -1107,6 +1120,12 @@ fn min_step_adjacent(depth: Depth) -> Vec<Fixture> {
         } else {
             Vec::new()
         };
+        // Past 140 the tab's inner side, 200 - e, is under 60.
+        let adj = if e > 140 {
+            vec![Finding::length(40).at(1020, 100)]
+        } else {
+            Vec::new()
+        };
         case(
             format!("tab_end/{}", side(e, 120)),
             Layout::default().polygon(
@@ -1120,7 +1139,7 @@ fn min_step_adjacent(depth: Depth) -> Vec<Fixture> {
                     (0, 200),
                 ],
             ),
-            [vec![], vec![], eol, vec![]],
+            [adj.clone(), adj, eol, vec![]],
         );
     }
     for e in sweep(depth, 120) {
