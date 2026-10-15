@@ -9,7 +9,9 @@
 use crate::erc::facts::{IntentMap, NetFacts, RoleMask};
 use crate::erc::power::{feed_shape, Process};
 use crate::erc::ruleset::RuleHead;
-use crate::erc::{first_vertex, push_net_violations, record_run, skip_rows, Design, Scratch};
+use crate::erc::{
+    device_id, first_vertex, push_net_violations, record_run, skip_rows, Design, Scratch,
+};
 use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::{extract_nets_into, DeviceId, NetId, PortTable, TerminalRole};
 use gpurify_geom::ops::{isqrt, point_seg_dist2, winding_of, Point, Seg, Winding};
@@ -314,10 +316,7 @@ fn mark_nets_within(
     let inside = |poly: PolyId| {
         let Some(scope) = within else { return true };
         let b = design.store.poly_bbox(poly);
-        let centre = Point {
-            x: Dbu::new_unchecked(i64::midpoint(b.xlo.raw(), b.xhi.raw())),
-            y: Dbu::new_unchecked(i64::midpoint(b.ylo.raw(), b.yhi.raw())),
-        };
+        let centre = crate::erc::centre(b);
         design.store.polys_on_layer(scope).any(|s| {
             let s = PolyId(s);
             design.store.poly_bbox(s).overlaps(b) && design.store.poly_contains_point(s, centre)
@@ -399,7 +398,7 @@ pub fn check_mixed_tag(
         if devices.kind[device] != gpurify_ingest::deck::DeviceKind::Resistor {
             continue;
         }
-        let id = crate::topology::DeviceId(u32::try_from(device).expect("a device id is a u32"));
+        let id = device_id(device);
         let pins: Vec<u32> = devices
             .terminals_of(id)
             .0

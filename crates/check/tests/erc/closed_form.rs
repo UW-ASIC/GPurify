@@ -167,7 +167,7 @@ fn erc(
         temperature: Qty::new(T_SIGNOFF),
     };
     let (mut violations, mut runs) = (Violations::default(), Vec::new());
-    erc::check(&deck.erc, inputs, &mut violations, &mut runs).expect("ERC never refuses whole");
+    erc::check(&deck.erc, inputs, &mut violations, &mut runs);
     Report {
         layers,
         violations,

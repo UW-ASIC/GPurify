@@ -389,7 +389,7 @@ pub fn run(fixture: &Fixture) -> Result<Ran, String> {
         temperature,
     };
     let (mut out, mut runs): (Violations, Vec<RuleRun>) = (Violations::default(), Vec::new());
-    erc::check(&deck.erc, inputs, &mut out, &mut runs).map_err(|why| format!("erc: {why}"))?;
+    erc::check(&deck.erc, inputs, &mut out, &mut runs);
 
     let name = |id| strings.resolve(id).to_owned();
     Ok(Ran {

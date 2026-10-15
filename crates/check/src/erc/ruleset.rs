@@ -325,7 +325,8 @@ impl Row<'_> {
     fn opt_length(&self, param: &'static str) -> Result<Option<Dbu>, ErcError> {
         match self.find(param) {
             None => Ok(None),
-            Some(_) => self.length(param).map(Some),
+            Some(ParamValue::Length(value)) => Ok(Some(value)),
+            Some(_) => Err(self.wrong_type(param)),
         }
     }
 
@@ -366,17 +367,16 @@ impl Row<'_> {
     fn opt_area(&self, param: &'static str) -> Result<Option<DbuArea>, ErcError> {
         match self.find(param) {
             None => Ok(None),
-            Some(_) => match self.need(param)? {
-                ParamValue::Area(value) => Ok(Some(value)),
-                _ => Err(self.wrong_type(param)),
-            },
+            Some(ParamValue::Area(value)) => Ok(Some(value)),
+            Some(_) => Err(self.wrong_type(param)),
         }
     }
 
     fn opt_number(&self, param: &'static str) -> Result<Option<f64>, ErcError> {
         match self.find(param) {
             None => Ok(None),
-            Some(_) => self.number(param).map(Some),
+            Some(ParamValue::Ratio(value)) => Ok(Some(value)),
+            Some(_) => Err(self.wrong_type(param)),
         }
     }
 
@@ -395,57 +395,48 @@ impl Row<'_> {
         }
     }
 
-    /// Every length named by a repeated `param`, in deck order; empty when
-    /// absent.
+    /// Every value of a repeated `param`, in deck order, each read by `pick`;
+    /// empty when absent, [`ErcError::WrongParamType`] at the first value
+    /// `pick` refuses.
+    fn repeated<T>(
+        &self,
+        param: &'static str,
+        pick: impl Fn(ParamValue) -> Option<T>,
+    ) -> Result<Vec<T>, ErcError> {
+        let Some(name) = self.strings.get(param) else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for &(key, value) in self.rules.params_of(self.spec) {
+            if key == name {
+                out.push(pick(value).ok_or_else(|| self.wrong_type(param))?);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every length named by a repeated `param` ([`Self::repeated`]).
     fn lengths(&self, param: &'static str) -> Result<Vec<Dbu>, ErcError> {
-        let Some(name) = self.strings.get(param) else {
-            return Ok(Vec::new());
-        };
-        let mut out = Vec::new();
-        for &(key, value) in self.rules.params_of(self.spec) {
-            if key == name {
-                match value {
-                    ParamValue::Length(length) => out.push(length),
-                    _ => return Err(self.wrong_type(param)),
-                }
-            }
-        }
-        Ok(out)
+        self.repeated(param, |value| match value {
+            ParamValue::Length(length) => Some(length),
+            _ => None,
+        })
     }
 
-    /// Every number named by a repeated `param`, in deck order; empty when
-    /// absent.
+    /// Every finite number named by a repeated `param` ([`Self::repeated`]).
     fn numbers(&self, param: &'static str) -> Result<Vec<f64>, ErcError> {
-        let Some(name) = self.strings.get(param) else {
-            return Ok(Vec::new());
-        };
-        let mut out = Vec::new();
-        for &(key, value) in self.rules.params_of(self.spec) {
-            if key == name {
-                match value {
-                    ParamValue::Ratio(number) if number.is_finite() => out.push(number),
-                    _ => return Err(self.wrong_type(param)),
-                }
-            }
-        }
-        Ok(out)
+        self.repeated(param, |value| match value {
+            ParamValue::Ratio(number) if number.is_finite() => Some(number),
+            _ => None,
+        })
     }
 
-    /// Every model named by a repeated `param`, in deck order; empty when absent.
+    /// Every model named by a repeated `param` ([`Self::repeated`]).
     fn models(&self, param: &'static str) -> Result<Vec<StrId>, ErcError> {
-        let Some(name) = self.strings.get(param) else {
-            return Ok(Vec::new());
-        };
-        let mut out = Vec::new();
-        for &(key, value) in self.rules.params_of(self.spec) {
-            if key == name {
-                match value {
-                    ParamValue::Model(model) => out.push(model),
-                    _ => return Err(self.wrong_type(param)),
-                }
-            }
-        }
-        Ok(out)
+        self.repeated(param, |value| match value {
+            ParamValue::Model(model) => Some(model),
+            _ => None,
+        })
     }
 
     /// A net-type condition: the names before a `"!"` must all be present,
@@ -656,9 +647,9 @@ impl RuleSet {
                 Err(at) => seen.insert(at, spec.id),
             }
 
-            // Every arm reads its parameters before touching a table, so a row
-            // of the wrong shape leaves no half-written column; its values are
-            // checked once it is filed.
+            // A row of the wrong shape fails the whole deck, so a column it
+            // half wrote is never seen; its values are checked once it is
+            // filed.
             let kind = strings.resolve(spec.kind);
             match kind {
                 "antenna" => {
@@ -1907,68 +1898,7 @@ impl RuleSet {
     /// Configured rule rows across every table: the number of `RuleRun` rows a
     /// run produces.
     pub fn len(&self) -> usize {
-        [
-            &self.floating_gate.head,
-            &self.floating_well.head,
-            &self.multiple_drivers.head,
-            &self.unconnected_pin.head,
-            &self.fanout.head,
-            &self.supply_path.head,
-            &self.gate_path.head,
-            &self.net_type.head,
-            &self.combinational_loop.head,
-            &self.supply_short.head,
-            &self.soft_connection.head,
-            &self.missing_tie.head,
-            &self.tie_high_low.head,
-            &self.esd_topological.head,
-            &self.mixed_tag.head,
-            &self.floating_supply.head,
-            &self.matching.head,
-            &self.power_switch.head,
-            &self.hot_carrier.head,
-            &self.well_sharing.head,
-            &self.antenna.head,
-            &self.antenna_electrical.head,
-            &self.density_cmp.head,
-            &self.p2p_resistance.head,
-            &self.ir_drop.head,
-            &self.em_current_density.head,
-            &self.em_rms.head,
-            &self.em_peak.head,
-            &self.electromigration.head,
-            &self.dynamic_ir_drop.head,
-            &self.em_thermal.head,
-            &self.reliability.head,
-            &self.hv_domain.head,
-            &self.esd_latchup.head,
-            &self.gate_oxide.head,
-            &self.drain_source.head,
-            &self.well_bias.head,
-            &self.missing_level_shifter.head,
-            &self.domain_crossing.head,
-            &self.voltage_spacing.head,
-            &self.hv_tag.head,
-            &self.undriven_gate.head,
-            &self.missing_isolation.head,
-            &self.dielectric_field.head,
-            &self.esd_path.head,
-            &self.esd_clamp_resistance.head,
-            &self.esd_pin_pair.head,
-            &self.esd_ground_coupling.head,
-            &self.esd_cross_domain.head,
-            &self.esd_parasitic.head,
-            &self.esd_exposed.head,
-            &self.guard_ring_bias.head,
-            &self.tie_area.head,
-            &self.guard_ring.head,
-            &self.forward_diode.head,
-            &self.conditional_tie.head,
-            &self.latchup_victim.head,
-        ]
-        .iter()
-        .map(|head| head.len())
-        .sum()
+        KINDS.iter().map(|kind| self.head_of(kind).len()).sum()
     }
 
     /// True when the deck configures no ERC row.

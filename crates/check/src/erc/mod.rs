@@ -19,7 +19,7 @@ pub use power::{PowerError, Process};
 pub use ruleset::{RuleSet, KINDS};
 
 use crate::report::{Outcome, RuleRun, Violations};
-use crate::topology::{NetId, PortTable};
+use crate::topology::{DeviceId, NetId, PortTable};
 use facts::{classify_nets_into, resolve_intent_into, resolve_net_types_into};
 use facts::{IntentMap, NetFacts, NetTypes};
 use gpurify_geom::ops::Point;
@@ -64,18 +64,8 @@ pub struct Inputs<'a> {
 /// resistance the deck does not state: unknown, never zero) or a failed solve
 /// refuses only the rows that read it; the rest run. Rows that need intent
 /// record themselves skipped when `inputs.intent` is `None` or names nothing
-/// this layout has.
-///
-/// # Errors
-///
-/// Never returns `Err`: a network or solve failure is recorded as refused
-/// rows instead.
-pub fn check(
-    rules: &RuleSet,
-    inputs: Inputs<'_>,
-    out: &mut Violations,
-    runs: &mut Vec<RuleRun>,
-) -> Result<(), PowerError> {
+/// this layout has. Nothing refuses the whole run.
+pub fn check(rules: &RuleSet, inputs: Inputs<'_>, out: &mut Violations, runs: &mut Vec<RuleRun>) {
     let Inputs {
         design,
         ports,
@@ -218,7 +208,6 @@ pub fn check(
         out,
         runs,
     );
-    Ok(())
 }
 
 /// Boltzmann's constant in eV/K: activation energies are stated in eV.
@@ -309,6 +298,15 @@ pub struct Scratch {
     staged_nets: crate::topology::NetTable,
 }
 
+/// Device row `index` as a [`DeviceId`].
+///
+/// # Panics
+///
+/// When `index` does not fit a `u32`, which a device table never holds.
+pub(crate) fn device_id(index: usize) -> DeviceId {
+    DeviceId(u32::try_from(index).expect("a device table indexes with u32"))
+}
+
 /// A point on a polygon for a violation: vertex zero, which lies on the shape
 /// (a box corner of an L sits in the notch).
 pub(crate) fn first_vertex(store: &GeometryStore, poly: PolyId) -> Point {
@@ -316,7 +314,9 @@ pub(crate) fn first_vertex(store: &GeometryStore, poly: PolyId) -> Point {
     Point { x: xs[0], y: ys[0] }
 }
 
-/// The centre of a box, truncated toward its lower half.
+/// The centre of a box, each coordinate the midpoint rounded toward zero
+/// (`i64::midpoint`), so up for a negative odd sum: not
+/// `drc::rules::centre`, which floors.
 pub(crate) fn centre(box_: Bbox) -> Point {
     Point {
         x: Dbu::new_unchecked(i64::midpoint(box_.xlo.raw(), box_.xhi.raw())),

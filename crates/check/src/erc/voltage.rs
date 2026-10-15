@@ -34,8 +34,9 @@
 //! [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 //! [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
 
+use crate::erc::device_id;
 use crate::erc::facts::IntentMap;
-use crate::topology::{DeviceId, DeviceTable, NetId, NetTable, TerminalRole};
+use crate::topology::{DeviceTable, NetId, NetTable, TerminalRole};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::intent::SupplyRole;
 
@@ -220,10 +221,6 @@ impl Switch {
             voltage.lo[gate] <= self.at
         }
     }
-}
-
-fn device_id(index: usize) -> DeviceId {
-    DeviceId(u32::try_from(index).expect("a device table indexes with u32"))
 }
 
 /// What one propagation reads besides the voltages it writes.

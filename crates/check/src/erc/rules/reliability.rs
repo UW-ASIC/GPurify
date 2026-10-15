@@ -11,10 +11,10 @@ use crate::erc::rules::supply::clamp_rails;
 use crate::erc::ruleset::RuleHead;
 use crate::erc::voltage::NetVoltage;
 use crate::erc::{
-    fill_rows, first_vertex, record_run, skip_rows, Design, Scratch, BOLTZMANN_EV_PER_K,
+    device_id, fill_rows, first_vertex, record_run, skip_rows, Design, Scratch, BOLTZMANN_EV_PER_K,
 };
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Violation, Violations};
-use crate::topology::{DeviceId, NetId};
+use crate::topology::NetId;
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::rects::{clipped_area, decompose_into};
 use gpurify_geom::view::validate_layer_into;
@@ -332,7 +332,7 @@ pub fn check_hv_domain(
 
         let mut examined = 0u64;
         for index in 0..devices.len() {
-            let device = DeviceId(u32::try_from(index).expect("a device table indexes with u32"));
+            let device = device_id(index);
             let (terminal_nets, _) = devices.terminals_of(device);
             let Some(spread) = domain_spread(voltage, terminal_nets) else {
                 continue;
