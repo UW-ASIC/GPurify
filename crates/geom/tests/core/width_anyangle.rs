@@ -61,6 +61,42 @@ fn shrink(rings: &[Ring]) -> Vec<Vec<Ring>> {
 fn octilinear_agree(rings: &[Ring]) -> Result<(), String> {
     let merged = layer(rings, true);
     let far = Dbu::new_unchecked(FAR);
+    // The turned figures' widths and notches are 25 times the octilinear
+    // ones. Both at twice the scale, where every crossing of two 45-degree
+    // edges is a grid point, so neither merge moves a vertex.
+    let doubled_rings: Vec<Ring> = rings
+        .iter()
+        .map(|r| r.iter().map(|&(x, y)| (2 * x, 2 * y)).collect())
+        .collect();
+    let doubled = layer(&doubled_rings, true);
+    let turned_rings: Vec<Ring> = doubled_rings
+        .iter()
+        .map(|r| r.iter().map(|&p| turn(p)).collect())
+        .collect();
+    let turned = layer(&turned_rings, true);
+    let sorted = |layer: &ValidatedLayer, scale: i128, any: bool| {
+        let mut out: Vec<_> = (0..u32::try_from(layer.len()).expect("small"))
+            .map(|idx| {
+                let poly = layer.get(idx);
+                [true, false].map(|between| {
+                    if any {
+                        narrowest_pair_any(poly, between, far).map(|(d2, _)| d2)
+                    } else {
+                        narrowest_pair2(poly, between, far).map(|(d2, _)| (scale * d2, false))
+                    }
+                })
+            })
+            .collect();
+        out.sort_unstable();
+        out
+    };
+    if sorted(&doubled, 25, false) != sorted(&turned, 1, true) {
+        return Err(format!(
+            "turned widths and notches: {:?} vs 25 x {:?}",
+            sorted(&turned, 1, true),
+            sorted(&doubled, 1, false)
+        ));
+    }
     for idx in 0..u32::try_from(merged.len()).expect("small") {
         let poly = merged.get(idx);
         for between in [true, false] {
@@ -90,6 +126,16 @@ fn octilinear_agree(rings: &[Ring]) -> Result<(), String> {
                                 "{relation:?} {zero:?} {e:?} {f:?}: {octo:?} vs {any:?}"
                             ));
                         }
+                        // Turned, every edge is at an angle other than a
+                        // multiple of 45 degrees and every cut a rational
+                        // point: the threshold is the octilinear one times 25.
+                        let turned = pair_threshold_any(relation, zero, turn_seg(e), turn_seg(f));
+                        if turned != octo.map(|(d2, _)| (25 * d2, false)) {
+                            return Err(format!(
+                                "{relation:?} {zero:?} {e:?} {f:?} turned: {turned:?} vs \
+                                 25 x {octo:?}"
+                            ));
+                        }
                     }
                 }
             }
@@ -99,7 +145,12 @@ fn octilinear_agree(rings: &[Ring]) -> Result<(), String> {
 }
 
 /// Oracle: differential against `narrowest_pair2` and `pair_threshold2` on
-/// random merged octilinear shapes, over 200 named seeds.
+/// random merged octilinear shapes, over 200 named seeds; and the
+/// Pythagorean rotation law on the same shapes, whose 45-degree edges turn
+/// to directions such as (−1, 7) and (7, 1), so every cut of a 135-degree
+/// pair is a rational point the any-angle relation computes: every
+/// threshold, width and notch, twice squared, is 25 times the octilinear
+/// one.
 #[test]
 fn the_any_angle_measures_are_the_octilinear_ones_on_octilinear_figures() {
     check(
@@ -118,6 +169,20 @@ fn the_any_angle_measures_are_the_octilinear_ones_on_octilinear_figures() {
 /// The Pythagorean rotation: the grid into itself, every length times 5.
 fn turn((x, y): (i64, i64)) -> (i64, i64) {
     (3 * x - 4 * y, 4 * x + 3 * y)
+}
+
+fn turn_seg(s: Seg) -> Seg {
+    let p = |q: gpurify_geom::ops::Point| {
+        let (x, y) = turn((q.x.raw(), q.y.raw()));
+        gpurify_geom::ops::Point {
+            x: Dbu::new_unchecked(x),
+            y: Dbu::new_unchecked(y),
+        }
+    };
+    Seg {
+        a: p(s.a),
+        b: p(s.b),
+    }
 }
 
 fn rectangles(rng: &mut Rng) -> Vec<Ring> {
