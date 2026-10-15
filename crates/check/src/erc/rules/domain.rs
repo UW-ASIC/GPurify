@@ -1507,8 +1507,7 @@ pub fn check_well_sharing(
             examined += 1;
             let channel = ends[device];
             let on = |end: NetId| end != NetId::NONE && end == well;
-            let through_resistor =
-                |end: NetId| end != NetId::NONE && resistor_between(end, well);
+            let through_resistor = |end: NetId| end != NetId::NONE && resistor_between(end, well);
             if channel.into_iter().any(on)
                 || (table.resistors[row] && channel.into_iter().any(through_resistor))
                 || chained(channel, well, device)

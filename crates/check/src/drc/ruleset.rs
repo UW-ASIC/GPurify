@@ -4273,11 +4273,12 @@ impl RuleSet {
                 }
                 "sadp" => {
                     let layer = one(spec)?;
-                    let opt = |param: &'static str| {
-                        match strings.get(param).and_then(|p| rules.param(spec, p)) {
-                            Some(_) => length(spec, param).map(Some),
-                            None => Ok(None),
-                        }
+                    let opt = |param: &'static str| match strings
+                        .get(param)
+                        .and_then(|p| rules.param(spec, p))
+                    {
+                        Some(_) => length(spec, param).map(Some),
+                        None => Ok(None),
                     };
                     let different = length(spec, "different")?;
                     let same = length(spec, "same")?;

@@ -445,7 +445,9 @@ impl CompiledDeck {
                 same,
                 track,
             } => {
-                let row = one(layer).length("different", different).length("same", same);
+                let row = one(layer)
+                    .length("different", different)
+                    .length("same", same);
                 match track {
                     Some((w, s)) => row.length("track_width", w).length("track_space", s),
                     None => row,
@@ -1419,7 +1421,11 @@ impl CompiledDeck {
             for &id in &t.model[span(&t.model_start, r)] {
                 row.params.push(("model", model(id)));
             }
-            file(&t.head, r, row.value("resistors", ParamValue::Flag(t.resistors[r])));
+            file(
+                &t.head,
+                r,
+                row.value("resistors", ParamValue::Flag(t.resistors[r])),
+            );
         }
         let t = &erc.matching;
         for r in 0..t.head.len() {
@@ -1443,7 +1449,11 @@ impl CompiledDeck {
         let t = &erc.net_type;
         for r in 0..t.head.len() {
             let mut row = Row::new("net_type", &[]);
-            let conditions = [("net", &t.net[r]), ("path", &t.path[r]), ("break", &t.breaks[r])];
+            let conditions = [
+                ("net", &t.net[r]),
+                ("path", &t.path[r]),
+                ("break", &t.breaks[r]),
+            ];
             for (param, condition) in conditions {
                 for negated in [false, true] {
                     let names = condition.iter().filter(|&&(_, n)| n == negated);

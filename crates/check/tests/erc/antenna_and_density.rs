@@ -786,7 +786,10 @@ fn every_windows_density_is_a_fraction_between_zero_and_one() {
 /// wire on layer 0 made of `wire` rectangles, and, with `diode`, a diode
 /// (layer 3) of that many square nanometres (`(w, h)`) joined to the wire by
 /// a second cut. The ratio is the wire's area in square micrometres.
-fn gate_wire_diode(wire: &[(i64, i64, i64, i64)], diode: Option<(i64, i64)>) -> (GeometryStore, NetTable) {
+fn gate_wire_diode(
+    wire: &[(i64, i64, i64, i64)],
+    diode: Option<(i64, i64)>,
+) -> (GeometryStore, NetTable) {
     let mut layout = LayoutBuilder::new(4);
     for &(xlo, ylo, xhi, yhi) in wire {
         layout.rect(LayerId(0), xlo, ylo, xhi, yhi);
@@ -901,8 +904,14 @@ const SKY130_MET1_PWL: [(i128, f64); 4] = [
 /// the credit's unit (per µm², not per nm²).
 #[test]
 fn an_antenna_fix_hint_is_the_drm_rule_solved_for_the_diode_area() {
-    assert_eq!(fixes(&wire_of(2650), None, SKY130_MET1, &[]), vec![nm2(125_000)]);
-    assert_eq!(fixes(&wire_of(3000), None, SKY130_MET1, &[]), vec![nm2(1_000_000)]);
+    assert_eq!(
+        fixes(&wire_of(2650), None, SKY130_MET1, &[]),
+        vec![nm2(125_000)]
+    );
+    assert_eq!(
+        fixes(&wire_of(3000), None, SKY130_MET1, &[]),
+        vec![nm2(1_000_000)]
+    );
     assert_eq!(fixes(&wire_of(2500), None, SKY130_MET1, &[]), vec![nm2(1)]);
     assert_eq!(
         fixes(&wire_of(3000), Some((500, 1_000)), SKY130_MET1, &[]),
@@ -921,9 +930,18 @@ fn an_antenna_fix_hint_is_the_drm_rule_solved_for_the_diode_area() {
 #[test]
 fn an_antenna_fix_hint_reads_a_pwl_limit_table_backwards() {
     let pwl = (0.0, 0.0, 400.0);
-    assert_eq!(fixes(&wire_of(2500), None, pwl, &SKY130_MET1_PWL), vec![nm2(22_007)]);
-    assert_eq!(fixes(&wire_of(2650), None, pwl, &SKY130_MET1_PWL), vec![nm2(125_000)]);
-    assert_eq!(fixes(&wire_of(12_000), None, pwl, &SKY130_MET1_PWL), vec![None]);
+    assert_eq!(
+        fixes(&wire_of(2500), None, pwl, &SKY130_MET1_PWL),
+        vec![nm2(22_007)]
+    );
+    assert_eq!(
+        fixes(&wire_of(2650), None, pwl, &SKY130_MET1_PWL),
+        vec![nm2(125_000)]
+    );
+    assert_eq!(
+        fixes(&wire_of(12_000), None, pwl, &SKY130_MET1_PWL),
+        vec![None]
+    );
 }
 
 /// Oracle: spec example, US 9,142,556 B2 col. 6: an antenna ratio of
@@ -934,10 +952,7 @@ fn an_antenna_fix_hint_reads_a_pwl_limit_table_backwards() {
 /// or rounds down.
 #[test]
 fn an_antenna_fix_hint_matches_the_patents_worked_solve() {
-    let wire = [
-        (0, 0, 200_000, 127_392),
-        (0, 127_392, 19_873, 127_402),
-    ];
+    let wire = [(0, 0, 200_000, 127_392), (0, 127_392, 19_873, 127_402)];
     assert_eq!(
         fixes(&wire, None, (400.0, 0.0, 2200.0), &[]),
         vec![nm2(58_196_497)]

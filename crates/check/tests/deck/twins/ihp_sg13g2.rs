@@ -1786,10 +1786,21 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
         "Ant.a",
         antenna(l["gate"], &[l["gatpoly_c"]], 201.0, None, None, None, None),
     );
-    d.rule("Ant.c", antenna(l["gate"], &[l["cont"]], 20.0, None, None, None, None));
+    d.rule(
+        "Ant.c",
+        antenna(l["gate"], &[l["cont"]], 20.0, None, None, None, None),
+    );
     d.rule(
         "Ant.b_Metal1",
-        antenna(l["gate"], &[l["metal1"]], 200.0, None, Some(l["ant_diode"]), None, None),
+        antenna(
+            l["gate"],
+            &[l["metal1"]],
+            200.0,
+            None,
+            Some(l["ant_diode"]),
+            None,
+            None,
+        ),
     );
     d.rule(
         "Ant.b_Metal2",
@@ -1886,7 +1897,15 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     );
     d.rule(
         "Ant.d_Via1",
-        antenna(l["gate"], &[l["via1"]], 20.0, None, Some(l["ant_diode"]), Some(nm2(20_000)), Some(nm2(160_000))),
+        antenna(
+            l["gate"],
+            &[l["via1"]],
+            20.0,
+            None,
+            Some(l["ant_diode"]),
+            Some(nm2(20_000)),
+            Some(nm2(160_000)),
+        ),
     );
     d.rule(
         "Ant.d_Via2",

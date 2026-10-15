@@ -5953,10 +5953,30 @@ fn sadp_colours() -> Vec<Fixture> {
     };
     let wide = Finding::length;
     let mut cases = vec![
-        case("one_dc_edge", triangle(50, 100), vec![count(1)], vec![count(1), wide(500), wide(500), wide(500)]),
-        case("three_dc_edges", triangle(50, 50), vec![count(1)], vec![count(1), wide(500), wide(500), wide(500)]),
-        case("two_dc_edges", triangle(100, 50), vec![], vec![wide(500); 3]),
-        case("colour_free_pair", triangle(150, 50), vec![], vec![wide(500); 3]),
+        case(
+            "one_dc_edge",
+            triangle(50, 100),
+            vec![count(1)],
+            vec![count(1), wide(500), wide(500), wide(500)],
+        ),
+        case(
+            "three_dc_edges",
+            triangle(50, 50),
+            vec![count(1)],
+            vec![count(1), wide(500), wide(500), wide(500)],
+        ),
+        case(
+            "two_dc_edges",
+            triangle(100, 50),
+            vec![],
+            vec![wide(500); 3],
+        ),
+        case(
+            "colour_free_pair",
+            triangle(150, 50),
+            vec![],
+            vec![wide(500); 3],
+        ),
         case(
             "self_conflict",
             rects(
@@ -6004,7 +6024,13 @@ fn sadp_line_ends() -> Vec<Fixture> {
         )
     };
     let case = |name: &str, layout: Layout, le: Vec<Finding>| {
-        fixture(&format!("sadp_line_end/{name}"), &["DRC-128"], &deck, layout, &[("le", le)])
+        fixture(
+            &format!("sadp_line_end/{name}"),
+            &["DRC-128"],
+            &deck,
+            layout,
+            &[("le", le)],
+        )
     };
     let at = |n: i64, _limit: i64| Finding::length(n);
     every_placement(vec![

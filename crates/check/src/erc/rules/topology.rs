@@ -1029,9 +1029,8 @@ pub fn check_net_type(
         let before = out.len();
         let rule = table.head.rule[row];
         let breaks = condition_masks(types, &table.breaks[row]);
-        let breaking = |net: u32| {
-            !table.breaks[row].is_empty() && meets(types.of(NetId(net)), breaks)
-        };
+        let breaking =
+            |net: u32| !table.breaks[row].is_empty() && meets(types.of(NetId(net)), breaks);
         let exclude = table.exclude[row]
             .iter()
             .filter_map(|&name| types.bit(name))
@@ -1049,8 +1048,7 @@ pub fn check_net_type(
         for &(a, b) in &edges {
             for (from, to) in [(a, b), (b, a)] {
                 if breaking(to) && labels[from as usize] != labels[to as usize] {
-                    path_mask[labels[from as usize].0 as usize] |=
-                        types.of(NetId(to)) & !exclude;
+                    path_mask[labels[from as usize].0 as usize] |= types.of(NetId(to)) & !exclude;
                 }
             }
         }

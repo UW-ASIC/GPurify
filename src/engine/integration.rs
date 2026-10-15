@@ -550,7 +550,10 @@ END DESIGN
                 .iter()
                 .map(|line| {
                     let f: Vec<&str> = line.split_whitespace().collect();
-                    format!("- {} {} + PLACED ( {} {} ) {} ;", f[0], f[1], f[2], f[3], f[4])
+                    format!(
+                        "- {} {} + PLACED ( {} {} ) {} ;",
+                        f[0], f[1], f[2], f[3], f[4]
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join("\n")
