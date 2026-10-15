@@ -787,3 +787,85 @@ fn esd_topological_skips_without_intent() {
         gpurify_check::report::Outcome::Skipped(gpurify_check::report::SkipReason::NoDesignIntent)
     );
 }
+
+/// Two metal shapes that overlap are one conductor without the resistive
+/// body too, so a net of them and the body beside them is no bridge.
+///
+/// Oracle: construct-from-answer: layer-0 shapes `[0, 2000]` and
+/// `[1000, 4000]` overlap (touch within a layer is on), and the body on
+/// layer 2 is cut to both; removing the soft layer leaves one component,
+/// so the one net is examined and clean.
+#[test]
+fn two_overlapping_shapes_left_by_the_soft_layer_are_one_piece() {
+    let mut layout = LayoutBuilder::new(3);
+    layout.rect(LayerId(0), 0, 0, 2_000, 1_000);
+    layout.rect(LayerId(0), 1_000, 0, 4_000, 1_000);
+    layout.rect(LayerId(2), 0, 200, 4_000, 800);
+    layout.rect(LayerId(1), 400, 400, 600, 600);
+    layout.rect(LayerId(1), 3_400, 400, 3_600, 600);
+    let (store, _) = layout.finish();
+    let connectivity = Connectivity {
+        intra_layer_touch: true,
+        ..via_connectivity(LayerId(1), &[LayerId(2)])
+    };
+    let drawn = Drawn::new(store, &connectivity);
+    let id = rule(59);
+    let table = SoftConnectionTable {
+        connectivity,
+        ..soft_connection_table(id)
+    };
+    let mut scratch = Scratch::default();
+    let (mut violations, mut runs) = report();
+    check_soft_connection(
+        drawn.design(),
+        &table,
+        &mut scratch,
+        &mut violations,
+        &mut runs,
+    );
+    assert_clean(&runs, &violations, id);
+    assert_eq!(assert_rule_ran(&runs, id).examined, 1);
+}
+
+/// `mixed_tag` flags an untagged figure whose net holds a tagged one, and
+/// only that: a tagged figure on a net of its own or an untagged one alone
+/// is no mix, whatever other nets hold.
+///
+/// Oracle: construct-from-answer. Wells on layer 0: W1 and W2 strapped on
+/// layer 2 through cuts (one net), W2 under the tag on layer 3; W4 tagged
+/// alone; W3 untagged alone, drawn last. Four figures examined, one
+/// violation: W1, measuring 1 tagged figure on its net against 0, naming W2.
+#[test]
+fn mixed_tag_flags_only_an_untagged_figure_sharing_a_net_with_a_tagged_one() {
+    use gpurify_check::erc::rules::supply::{check_mixed_tag, MixedTagTable};
+    let mut layout = LayoutBuilder::new(4);
+    let w1 = layout.rect(LayerId(0), 0, 0, 1_000, 1_000);
+    let w2 = layout.rect(LayerId(0), 3_000, 0, 4_000, 1_000);
+    layout.rect(LayerId(0), 9_000, 0, 10_000, 1_000);
+    layout.rect(LayerId(0), 6_000, 0, 7_000, 1_000);
+    layout.rect(LayerId(2), 0, 300, 4_000, 700);
+    layout.rect(LayerId(1), 400, 400, 600, 600);
+    layout.rect(LayerId(1), 3_400, 400, 3_600, 600);
+    layout.rect(LayerId(3), 2_900, -100, 4_100, 1_100);
+    layout.rect(LayerId(3), 8_900, -100, 10_100, 1_100);
+    let (store, ids) = layout.finish();
+    let drawn = Drawn::new(store, &via_connectivity(LayerId(1), &[LayerId(2)]));
+    let id = rule(62);
+    let (mut violations, mut runs) = report();
+    check_mixed_tag(
+        drawn.design(),
+        &MixedTagTable {
+            head: head(id),
+            layer: vec![LayerId(0)],
+            tag: vec![LayerId(3)],
+        },
+        &mut violations,
+        &mut runs,
+    );
+    assert_eq!(assert_rule_ran(&runs, id).examined, 4);
+    assert_eq!(violations.rule, vec![id]);
+    assert_eq!(violations.shape_a, vec![ids.of(w1)]);
+    assert_eq!(violations.shape_b, vec![Some(ids.of(w2))]);
+    assert_eq!(violations.measured, vec![Measurement::Count(1)]);
+    assert_eq!(violations.limit, vec![Measurement::Count(0)]);
+}
