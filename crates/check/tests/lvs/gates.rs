@@ -31,7 +31,13 @@ const GATES: ParamNames = ParamNames {
     relaxed: false,
 };
 
-fn mos(model: StrId, gate: u32, source: u32, drain: u32, bulk: u32) -> (StrId, Vec<(TerminalRole, u32)>) {
+fn mos(
+    model: StrId,
+    gate: u32,
+    source: u32,
+    drain: u32,
+    bulk: u32,
+) -> (StrId, Vec<(TerminalRole, u32)>) {
     (
         model,
         vec![(Gate, gate), (Source, source), (Drain, drain), (Bulk, bulk)],
@@ -39,7 +45,11 @@ fn mos(model: StrId, gate: u32, source: u32, drain: u32, bulk: u32) -> (StrId, V
 }
 
 /// A graph of `nets` nets, MOS devices with parameters, and ports.
-fn graph(nets: u32, devices: &[((StrId, Vec<(TerminalRole, u32)>), &[(StrId, f64)])], ports: &[u32]) -> Graph {
+fn graph(
+    nets: u32,
+    devices: &[((StrId, Vec<(TerminalRole, u32)>), &[(StrId, f64)])],
+    ports: &[u32],
+) -> Graph {
     let mut builder = GraphBuilder::new(nets);
     for ((model, terminals), params) in devices {
         builder.device_with_params(DeviceKind::Mos, *model, terminals, params);
@@ -64,7 +74,11 @@ const SIZE: &[(StrId, f64)] = &[(WIDTH, 1e-6)];
 /// 3, 5 to 4). One series merge of rows 0 and 1.
 #[test]
 fn a_series_stack_on_two_gates_is_one_device_with_both_gates() {
-    let src = graph(6, &[(mos(NCH, 0, 2, 3, 5), SIZE), (mos(NCH, 1, 3, 4, 5), SIZE)], &[2]);
+    let src = graph(
+        6,
+        &[(mos(NCH, 0, 2, 3, 5), SIZE), (mos(NCH, 1, 3, 4, 5), SIZE)],
+        &[2],
+    );
     let (out, merges) = gated(&src);
     let mut want = GraphBuilder::new(5);
     want.device_with_params(
@@ -84,7 +98,13 @@ fn a_series_stack_on_two_gates_is_one_device_with_both_gates() {
         }]
     );
     // Without the control nothing merges: the gates are apart.
-    let (plain, none) = reduce_with(&src, ParamNames { gates: false, ..GATES });
+    let (plain, none) = reduce_with(
+        &src,
+        ParamNames {
+            gates: false,
+            ..GATES
+        },
+    );
     assert_eq!((plain, none), (src, Vec::new()));
 }
 
@@ -113,7 +133,14 @@ fn a_three_stack_drawn_out_of_order_is_one_device() {
     want.device(
         DeviceKind::Mos,
         NCH,
-        &[(Gate, 0), (Gate, 1), (Gate, 2), (Source, 3), (Drain, 5), (Bulk, 4)],
+        &[
+            (Gate, 0),
+            (Gate, 1),
+            (Gate, 2),
+            (Source, 3),
+            (Drain, 5),
+            (Bulk, 4),
+        ],
     );
     assert_eq!(out, want.finish());
     assert_eq!(merges.len(), 1);
@@ -128,7 +155,11 @@ fn a_three_stack_drawn_out_of_order_is_one_device() {
 /// make first and this law leaves apart.
 #[test]
 fn a_parallel_pair_on_two_gates_is_one_device_and_a_shared_gate_is_not() {
-    let src = graph(5, &[(mos(PCH, 0, 2, 3, 4), SIZE), (mos(PCH, 1, 3, 2, 4), SIZE)], &[]);
+    let src = graph(
+        5,
+        &[(mos(PCH, 0, 2, 3, 4), SIZE), (mos(PCH, 1, 3, 2, 4), SIZE)],
+        &[],
+    );
     let (out, merges) = gated(&src);
     let mut want = GraphBuilder::new(5);
     want.device_with_params(
@@ -172,31 +203,65 @@ fn a_stack_breaking_any_precondition_stays_as_drawn() {
     let cases: Vec<(&str, Graph)> = vec![
         (
             "model",
-            graph(6, &[(mos(NCH, 0, 2, 3, 5), SIZE), (mos(PCH, 1, 3, 4, 5), SIZE)], &[]),
+            graph(
+                6,
+                &[(mos(NCH, 0, 2, 3, 5), SIZE), (mos(PCH, 1, 3, 4, 5), SIZE)],
+                &[],
+            ),
         ),
         (
             "size",
-            graph(6, &[(mos(NCH, 0, 2, 3, 5), SIZE), (mos(NCH, 1, 3, 4, 5), other)], &[]),
+            graph(
+                6,
+                &[(mos(NCH, 0, 2, 3, 5), SIZE), (mos(NCH, 1, 3, 4, 5), other)],
+                &[],
+            ),
         ),
         (
             "diffusion",
-            graph(6, &[(mos(NCH, 0, 2, 3, 5), stated), (mos(NCH, 1, 3, 4, 5), stated)], &[]),
+            graph(
+                6,
+                &[
+                    (mos(NCH, 0, 2, 3, 5), stated),
+                    (mos(NCH, 1, 3, 4, 5), stated),
+                ],
+                &[],
+            ),
         ),
         (
             "stress",
-            graph(6, &[(mos(NCH, 0, 2, 3, 5), stress), (mos(NCH, 1, 3, 4, 5), stress)], &[]),
+            graph(
+                6,
+                &[
+                    (mos(NCH, 0, 2, 3, 5), stress),
+                    (mos(NCH, 1, 3, 4, 5), stress),
+                ],
+                &[],
+            ),
         ),
         (
             "bulk",
-            graph(7, &[(mos(NCH, 0, 2, 3, 5), SIZE), (mos(NCH, 1, 3, 4, 6), SIZE)], &[]),
+            graph(
+                7,
+                &[(mos(NCH, 0, 2, 3, 5), SIZE), (mos(NCH, 1, 3, 4, 6), SIZE)],
+                &[],
+            ),
         ),
         (
             "port",
-            graph(6, &[(mos(NCH, 0, 2, 3, 5), SIZE), (mos(NCH, 1, 3, 4, 5), SIZE)], &[3]),
+            graph(
+                6,
+                &[(mos(NCH, 0, 2, 3, 5), SIZE), (mos(NCH, 1, 3, 4, 5), SIZE)],
+                &[3],
+            ),
         ),
         (
             "same gate",
-            graph(6, &[(mos(NCH, 0, 2, 3, 5), SIZE), (mos(NCH, 0, 3, 4, 5), SIZE)], &[]),
+            graph(
+                6,
+                &[(mos(NCH, 0, 2, 3, 5), SIZE), (mos(NCH, 0, 3, 4, 5), SIZE)],
+                &[],
+            ),
         ),
         ("third terminal", {
             let mut b = GraphBuilder::new(6);
@@ -230,8 +295,16 @@ fn a_stack_breaking_any_precondition_stays_as_drawn() {
         }),
         ("not a transistor", {
             let mut b = GraphBuilder::new(6);
-            b.device(DeviceKind::Resistor, NCH, &[(Gate, 0), (Source, 2), (Drain, 3), (Bulk, 5)]);
-            b.device(DeviceKind::Resistor, NCH, &[(Gate, 1), (Source, 3), (Drain, 4), (Bulk, 5)]);
+            b.device(
+                DeviceKind::Resistor,
+                NCH,
+                &[(Gate, 0), (Source, 2), (Drain, 3), (Bulk, 5)],
+            );
+            b.device(
+                DeviceKind::Resistor,
+                NCH,
+                &[(Gate, 1), (Source, 3), (Drain, 4), (Bulk, 5)],
+            );
             b.finish()
         }),
     ];
@@ -242,7 +315,11 @@ fn a_stack_breaking_any_precondition_stays_as_drawn() {
     }
 
     // A gate on no net: the builder cannot draw one, so detach it by hand.
-    let mut floating = graph(6, &[(mos(NCH, 0, 2, 3, 5), SIZE), (mos(NCH, 1, 3, 4, 5), SIZE)], &[]);
+    let mut floating = graph(
+        6,
+        &[(mos(NCH, 0, 2, 3, 5), SIZE), (mos(NCH, 1, 3, 4, 5), SIZE)],
+        &[],
+    );
     floating.terminal_net[0] = u32::MAX;
     // Net 0 loses its only terminal, the first of the transpose.
     floating.net_terminal.remove(0);
@@ -290,7 +367,14 @@ fn a_three_way_parallel_group_is_one_device() {
     want.device_with_params(
         DeviceKind::Mos,
         PCH,
-        &[(Gate, 0), (Gate, 1), (Gate, 2), (Source, 3), (Drain, 4), (Bulk, 5)],
+        &[
+            (Gate, 0),
+            (Gate, 1),
+            (Gate, 2),
+            (Source, 3),
+            (Drain, 4),
+            (Bulk, 5),
+        ],
         SIZE,
     );
     assert_eq!(out, want.finish());
@@ -345,7 +429,11 @@ fn the_deck_s_recognize_gates_lets_a_stack_s_inputs_swap() {
     let (layout, reference) = (stack(0, 1), stack(1, 0));
     let options = CompareOptions::default();
     let plain = compare_traced(&layout, &reference, options, &LvsControls::default());
-    assert_ne!(plain.verdict, Verdict::Match, "the inputs are not interchangeable");
+    assert_ne!(
+        plain.verdict,
+        Verdict::Match,
+        "the inputs are not interchangeable"
+    );
     let controls = LvsControls {
         recognize_gates: true,
         ..LvsControls::default()
