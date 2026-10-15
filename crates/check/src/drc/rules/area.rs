@@ -122,10 +122,7 @@ fn report_figures(
         let index = u32::try_from(figure).expect("a merged layer's figure count fits a u32");
         let poly = s.layer_out.get(index);
         let (area, at) = if s.rect_start.is_empty() {
-            let twice: i128 = std::iter::once(poly.outer())
-                .chain(poly.holes())
-                .map(|ring| ring.area2().raw())
-                .sum();
+            let twice: i128 = poly.rings().map(|ring| ring.area2().raw()).sum();
             (DbuArea::new(twice.div_euclid(2)), figure_point(poly))
         } else {
             let rects = &s.rects[s.rect_start[figure] as usize..s.rect_start[figure + 1] as usize];

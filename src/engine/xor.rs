@@ -117,8 +117,8 @@ fn compare_into(loaded: &mut Loaded, other: &GeometryStore, out: &mut Outputs) {
                 0..u32::try_from(differ.len()).expect("a layer indexes polygons with a u32")
             {
                 let polygon = differ.get(piece);
-                let area2 = std::iter::once(polygon.outer())
-                    .chain(polygon.holes())
+                let area2 = polygon
+                    .rings()
                     .fold(0i128, |sum, ring| sum + ring.area2().raw());
                 let (xs, ys) = polygon.outer().coords();
                 out.violations.push(Violation {

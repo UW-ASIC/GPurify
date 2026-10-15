@@ -34,8 +34,8 @@ pub(crate) fn forbidden(
     let polys = u32::try_from(drawn.len()).expect("a layer indexes polygons with a u32");
     for idx in 0..polys {
         let poly = drawn.get(idx);
-        let area2 = std::iter::once(poly.outer())
-            .chain(poly.holes())
+        let area2 = poly
+            .rings()
             .fold(0i128, |sum, ring| sum + ring.area2().raw());
         let (xs, ys) = poly.outer().coords();
         out.push(Violation {
@@ -281,10 +281,7 @@ fn octilinear_pair(
 
 /// Twice the area of a polygon, holes subtracted: whole on the octilinear grid.
 fn area2(poly: gpurify_geom::PolygonRef<'_>) -> i128 {
-    std::iter::once(poly.outer())
-        .chain(poly.holes())
-        .map(|ring| ring.area2().raw())
-        .sum()
+    poly.rings().map(|ring| ring.area2().raw()).sum()
 }
 
 /// [`must_be_inside`] for the merged `inner` figures `judge` takes, each by

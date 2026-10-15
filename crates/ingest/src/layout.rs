@@ -486,7 +486,7 @@ fn derive_layers_into(
         for polygon in 0..crate::narrow(folded.len()) {
             let polygon = folded.get(polygon);
             // Outer first, then its holes: `validate_layer_into`'s ring order.
-            for ring in std::iter::once(polygon.outer()).chain(polygon.holes()) {
+            for ring in polygon.rings() {
                 let (ring_xs, ring_ys) = ring.coords();
                 start.push(crate::narrow(xs.len()));
                 len.push(crate::narrow(ring_xs.len()));
