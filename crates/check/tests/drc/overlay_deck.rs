@@ -313,6 +313,35 @@ fn noncoincident_enclosure_exempts_touching_edges() {
     );
 }
 
+/// `enclosure(via, met1, adjacent)` (sky130 li.5's "one of two adjacent
+/// sides"): the least, over the via's convex corners, of the better of the
+/// two edges meeting there, each read straight out from just inside that
+/// corner's end of the edge.
+///
+/// Oracle: readings by construction. The via is `[0, 100]²`; the host is
+/// `[-50, 200] x [0, 200]` over `[-10, 200] x [-20, 0]`, its left side
+/// stepping in from 50 to 10 exactly at the via's bottom. At (0, 0) the
+/// left edge reads 50 (the step's lower edge ends at y = 0 and covers none
+/// of the side) and the bottom edge 20: better 50. The other corners' better
+/// edges read 100. So `>= 51nm` finds 50 and `>= 50nm` nothing.
+#[test]
+fn adjacent_enclosure_reads_a_side_from_just_inside_its_end() {
+    let layout = Layout::default()
+        .rect("via", 0, 0, 100, 100)
+        .rect("met1", -50, 0, 200, 200)
+        .rect("met1", -10, -20, 200, 0);
+    check_everywhere(
+        "step_at_the_corner",
+        &new_deck(
+            &["via", "met1"],
+            "rule a51 enclosure(via, met1, adjacent) >= 51nm\n\
+             rule a50 enclosure(via, met1, adjacent) >= 50nm\n",
+        ),
+        &layout,
+        &[("a51", lengths(&[50])), ("a50", vec![])],
+    );
+}
+
 /// `full_width(v1, m2)` (DRC-053, ASAP7 V1.M2.AUX.2 "V1 must exactly be the
 /// same width as M2 along the direction perpendicular to the M2 length"):
 /// one finding per via that meets the wire's edges on neither axis,
