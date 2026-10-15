@@ -644,6 +644,38 @@ mod tests {
         }
     }
 
+    fn seg(ax: i64, ay: i64, bx: i64, by: i64) -> Seg {
+        let p = |x, y| Point {
+            x: Dbu::new_unchecked(x),
+            y: Dbu::new_unchecked(y),
+        };
+        Seg {
+            a: p(ax, ay),
+            b: p(bx, by),
+        }
+    }
+
+    /// Oracle: `seg_dist2`'s contract, hand values. Two 45-degree lines `y =
+    /// x` and `y = x + 7` are `7/√2` apart, squared 24.5, floored to 24 (a
+    /// rounding up would read 25); `y = x + 1` is squared 0.5, read 1;
+    /// touching reads 0; axis-aligned segments 3 along and 4 across read 16.
+    /// Segments of slope 1/2 on `y = x/2` and `y = x/2 + 3` are `3/√1.25`
+    /// apart, squared 7.2: any other angle takes `seg_seg_dist2`, rounded up
+    /// to 8.
+    #[test]
+    fn seg_dist2_floors_45_degree_half_units_and_rounds_other_angles_up() {
+        let diagonal = seg(0, 0, 10, 10);
+        let at = |p, q| seg_dist2(p, q).raw();
+        assert_eq!(at(diagonal, seg(0, 7, 10, 17)), 24);
+        assert_eq!(at(diagonal, seg(0, 1, 10, 11)), 1);
+        assert_eq!(at(diagonal, seg(10, 10, 20, 0)), 0);
+        assert_eq!(at(seg(0, 0, 10, 0), seg(13, 4, 23, 4)), 16 + 9);
+        assert_eq!(at(seg(0, 0, 10, 0), seg(3, 4, 13, 4)), 16);
+        let (p, q) = (seg(0, 0, 20, 10), seg(0, 3, 20, 13));
+        assert_eq!(at(p, q), 8);
+        assert_eq!(seg_dist2(p, q), seg_seg_dist2(p, q));
+    }
+
     /// Differential: the SIMD kernel equals its scalar oracle for every edge
     /// count `0 ..= 3 * 4 + 1` on either side.
     ///
