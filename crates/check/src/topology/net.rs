@@ -536,7 +536,6 @@ fn meets_any(edge: Seg, xs: &[Dbu], ys: &[Dbu], live: &[u32]) -> bool {
 #[derive(Debug, Default)]
 struct EdgeScratch {
     index: SpatialIndex,
-    cut_index: SpatialIndex,
     pairs: Vec<(PolyId, PolyId)>,
     touching: Vec<(PolyId, PolyId)>,
     on_lower: Vec<(PolyId, PolyId)>,
@@ -643,21 +642,19 @@ fn via_landings(
     scratch: &mut EdgeScratch,
     mut emit: impl FnMut(PolyId, PolyId, PolyId),
 ) {
-    SpatialIndex::build_into(store, cut, &mut scratch.cut_index);
-    if scratch.cut_index.is_empty() {
+    if store.polys_on_layer(cut).is_empty() {
         return;
     }
 
     let EdgeScratch {
-        cut_index,
         index,
         pairs,
         on_lower,
         on_upper,
         ..
     } = scratch;
-    cuts_landing_on(store, holes, cut_index, lower, index, pairs, on_lower);
-    cuts_landing_on(store, holes, cut_index, upper, index, pairs, on_upper);
+    cuts_landing_on(store, holes, cut, lower, index, pairs, on_lower);
+    cuts_landing_on(store, holes, cut, upper, index, pairs, on_upper);
 
     // Both lists ascend by `(cut, conductor)`: merge on the cut column.
     let (mut lo, mut hi) = (0usize, 0usize);
@@ -687,14 +684,14 @@ fn via_landings(
 fn cuts_landing_on(
     store: &GeometryStore,
     holes: &Holes,
-    cut_index: &SpatialIndex,
+    cut: LayerId,
     layer: LayerId,
     index: &mut SpatialIndex,
     pairs: &mut Vec<(PolyId, PolyId)>,
     out: &mut Vec<(PolyId, PolyId)>,
 ) {
     SpatialIndex::build_into(store, layer, index);
-    cross_layer_pairs_into(store, cut_index, index, Dbu::new_unchecked(0), pairs);
+    cross_layer_pairs_into(store, cut, index, Dbu::new_unchecked(0), pairs);
     retain_intersecting_into(store, holes, pairs, out);
 }
 

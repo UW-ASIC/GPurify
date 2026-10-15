@@ -90,18 +90,29 @@ pub fn sized_into(
     }
     // Erosion is the complement of growing the complement, within a frame far
     // enough out that its own border does not erode `a`.
-    let Some(extent) = a.bboxes().iter().copied().reduce(Bbox::union) else {
+    let Some(outside) = complement(a, -dx, -dy)? else {
         return merge_into(a, out);
     };
-    let mut frame = GeometryStoreBuilder::with_capacity(1, 4);
-    push_rect(&mut frame, grown(extent, -dx, -dy)?);
-    let mut frame_layer = ValidatedLayer::default();
-    merged(frame, &mut frame_layer)?;
-    let mut outside = ValidatedLayer::default();
-    subtraction_into(&frame_layer, a, &mut outside)?;
     let mut eaten = ValidatedLayer::default();
     grow_into(&outside, -dx, -dy, &mut eaten)?;
     subtraction_into(a, &eaten, out)
+}
+
+/// `a`'s bounding box grown by `dx` each way in x and `dy` in y, minus `a`:
+/// its complement as far as that frame reaches. `None` for an empty `a`.
+fn complement(
+    a: &ValidatedLayer,
+    dx: i64,
+    dy: i64,
+) -> Result<Option<ValidatedLayer>, BooleanError> {
+    let Some(extent) = a.bboxes().iter().copied().reduce(Bbox::union) else {
+        return Ok(None);
+    };
+    let mut frame = ValidatedLayer::default();
+    boxes_into(&[grown(extent, dx, dy)?], &mut frame)?;
+    let mut outside = ValidatedLayer::default();
+    subtraction_into(&frame, a, &mut outside)?;
+    Ok(Some(outside))
 }
 
 /// `a` grown by the box `[-dx, dx] x [-dy, dy]`, `dx, dy >= 0`: exact, since
@@ -218,13 +229,7 @@ pub fn holes_into(a: &ValidatedLayer, out: &mut ValidatedLayer) -> Result<(), Bo
 /// per box. Boxes that overlap stay apart, as `KLayout`'s do ("The boxes will
 /// not be merged"); a later operation merges them like any operand.
 pub fn extents_into(a: &ValidatedLayer, out: &mut ValidatedLayer) -> Result<(), BooleanError> {
-    let mut builder = GeometryStoreBuilder::with_capacity(a.len(), 4 * a.len());
-    for &b in a.bboxes() {
-        push_rect(&mut builder, b);
-    }
-    let (store, _) = builder.finish(1);
-    validate_layer_into(&store, ONLY, out)?;
-    Ok(())
+    boxes_into(a.bboxes(), out)
 }
 
 /// One rectangle per box of `boxes`, unmerged (overlapping boxes stay
@@ -376,15 +381,9 @@ fn room_into(
     h: i64,
     out: &mut ValidatedLayer,
 ) -> Result<(), BooleanError> {
-    let Some(extent) = a.bboxes().iter().copied().reduce(Bbox::union) else {
+    let Some(outside) = complement(a, w, h)? else {
         return merge_into(a, out);
     };
-    let mut frame = GeometryStoreBuilder::with_capacity(1, 4);
-    push_rect(&mut frame, grown(extent, w, h)?);
-    let mut frame_layer = ValidatedLayer::default();
-    merged(frame, &mut frame_layer)?;
-    let mut outside = ValidatedLayer::default();
-    subtraction_into(&frame_layer, a, &mut outside)?;
     let (mut rects, mut start) = (Vec::new(), Vec::new());
     decompose_into(&outside, &mut rects, &mut start);
     let mut builder = GeometryStoreBuilder::with_capacity(rects.len(), 4 * rects.len());
@@ -441,11 +440,16 @@ fn box_pairs(a: &[Bbox], b: &[Bbox], out: &mut Vec<(u32, u32)>) {
         }
     }
     let (store, _) = builder.finish(2);
-    let (mut ia, mut ib) = (SpatialIndex::default(), SpatialIndex::default());
-    SpatialIndex::build_into(&store, LayerId(0), &mut ia);
-    SpatialIndex::build_into(&store, LayerId(1), &mut ib);
+    let mut index = SpatialIndex::default();
+    SpatialIndex::build_into(&store, LayerId(1), &mut index);
     let mut pairs = Vec::new();
-    cross_layer_pairs_into(&store, &ia, &ib, Dbu::new_unchecked(0), &mut pairs);
+    cross_layer_pairs_into(
+        &store,
+        LayerId(0),
+        &index,
+        Dbu::new_unchecked(0),
+        &mut pairs,
+    );
     let first_b = narrow(a.len());
     out.extend(pairs.iter().map(|&(p, q)| (p.0, q.0 - first_b)));
 }
@@ -515,7 +519,7 @@ pub fn interior_point8(poly: PolygonRef<'_>) -> (i64, i64) {
             8 * xs[v].raw() + back.0 + on.0,
             8 * ys[v].raw() + back.1 + on.1,
         );
-        if inside_scaled(std::iter::once(poly), probe.0, probe.1, 8) {
+        if contains_scaled(poly, probe.0, probe.1, 8) {
             return probe;
         }
     }
@@ -542,7 +546,7 @@ fn polys_meet(p: PolygonRef<'_>, q: PolygonRef<'_>) -> bool {
     };
     let (px, py) = vertex(p);
     let (qx, qy) = vertex(q);
-    inside_scaled(std::iter::once(q), px, py, 2) || inside_scaled(std::iter::once(p), qx, qy, 2)
+    contains_scaled(q, px, py, 2) || contains_scaled(p, qx, qy, 2)
 }
 
 /// `KLayout` `interacting` (`keep`) / `not_interacting` (`!keep`): polygons of
@@ -581,7 +585,7 @@ fn free_of(a: &ValidatedLayer, parts: &ValidatedLayer) -> Vec<bool> {
     box_pairs(parts.bboxes(), a.bboxes(), &mut pairs);
     for &(r, p) in &pairs {
         let (x8, y8) = probes[r as usize];
-        if inside_scaled(std::iter::once(a.get(p)), x8, y8, 8) {
+        if contains_scaled(a.get(p), x8, y8, 8) {
             free[p as usize] = false;
         }
     }
@@ -603,7 +607,7 @@ fn free_of_any(a: &ValidatedLayer, parts: &ValidatedLayer) -> Vec<bool> {
 /// its rings.
 fn strictly_in(poly: PolygonRef<'_>, p: Point) -> bool {
     !poly_segs(poly).any(|s| segments_intersect(s, Seg { a: p, b: p }))
-        && inside_scaled(std::iter::once(poly), p.x.raw(), p.y.raw(), 1)
+        && contains_scaled(poly, p.x.raw(), p.y.raw(), 1)
 }
 
 /// Every `(i, j)` where polygon `i` of `a` and polygon `j` of `b` share
@@ -834,17 +838,7 @@ fn seg_of(r: Run) -> Seg {
 /// each, or `None` for parallel lines. Exact: twice a crossing of octilinear
 /// lines through grid points is an integer.
 fn crossing2(r: Run, t: Run) -> Option<(i64, i64)> {
-    // Each line as `a·x + b·y = c`.
-    let line = |run: Run| {
-        let c = run.pos;
-        match run.dir {
-            0 => (0, 1, c),
-            1 => (1, 0, c),
-            2 => (-1, 1, c),
-            _ => (1, 1, c),
-        }
-    };
-    let ((a1, b1, c1), (a2, b2, c2)) = (line(r), line(t));
+    let ((a1, b1, c1, _), (a2, b2, c2, _)) = (line_of(r), line_of(t));
     let det = a1 * b2 - a2 * b1;
     if det == 0 {
         return None;
@@ -1154,7 +1148,7 @@ pub fn edge_interacting_into(a: &[Seg], b: &ValidatedLayer, keep: bool, out: &mu
         let meets = polys.iter().any(|&p| {
             let poly = b.get(p);
             poly_segs(poly).any(|t| segments_intersect(s, t))
-                || inside_scaled(std::iter::once(poly), s.a.x.raw(), s.a.y.raw(), 1)
+                || contains_scaled(poly, s.a.x.raw(), s.a.y.raw(), 1)
         });
         if meets == keep {
             out.push(s);
@@ -1173,7 +1167,7 @@ pub fn extended_into(
     (begin, end, outside, inside): (Dbu, Dbu, Dbu, Dbu),
     out: &mut ValidatedLayer,
 ) -> Result<(), BooleanError> {
-    let mut builder = GeometryStoreBuilder::with_capacity(a.len(), 4 * a.len());
+    let mut boxes = Vec::with_capacity(a.len());
     for &s in a {
         let r = run_of(s);
         if r.dir > 1 {
@@ -1212,11 +1206,9 @@ pub fn extended_into(
                 yhi: at(across_hi)?,
             }
         };
-        push_rect(&mut builder, b);
+        boxes.push(b);
     }
-    let (store, _) = builder.finish(1);
-    validate_layer_into(&store, ONLY, out)?;
-    Ok(())
+    boxes_into(&boxes, out)
 }
 
 /// `KLayout` `with_length`: edges whose length in grid units is in `range`.

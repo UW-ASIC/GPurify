@@ -203,12 +203,11 @@ fn a_pair_at_exactly_the_distance_is_a_candidate() {
 #[test]
 fn every_cross_layer_pair_within_the_distance_survives_the_prune() {
     let store = two_layers(83);
-    let a_index = indexed(&store, A);
     let b_index = indexed(&store, B);
 
     let mut out = Vec::new();
     for distance in [0i64, 10, 200, 900] {
-        cross_layer_pairs_into(&store, &a_index, &b_index, dbu(distance), &mut out);
+        cross_layer_pairs_into(&store, A, &b_index, dbu(distance), &mut out);
         let exact = all_cross_pairs_within(&store, A, B, dbu(distance));
         for pair in &exact {
             assert!(
@@ -227,9 +226,9 @@ fn every_cross_layer_pair_within_the_distance_survives_the_prune() {
     }
     assert!(!out.is_empty(), "no cross-layer pair was ever found");
 
-    // Determinism, including a rebuild of both indices into reused buffers.
+    // Determinism, into a reused buffer.
     let first = out.clone();
-    cross_layer_pairs_into(&store, &a_index, &b_index, dbu(900), &mut out);
+    cross_layer_pairs_into(&store, A, &b_index, dbu(900), &mut out);
     assert_eq!(out, first, "cross-layer pairs are not reproducible");
 }
 
@@ -274,9 +273,9 @@ fn an_empty_or_single_polygon_layer_yields_no_pairs() {
     );
 
     // And a cross-layer query against the empty index is empty from either side.
-    cross_layer_pairs_into(&store, &occupied, &empty, dbu(1_000), &mut out);
+    cross_layer_pairs_into(&store, A, &empty, dbu(1_000), &mut out);
     assert!(out.is_empty());
-    cross_layer_pairs_into(&store, &empty, &occupied, dbu(1_000), &mut out);
+    cross_layer_pairs_into(&store, LayerId(2), &occupied, dbu(1_000), &mut out);
     assert!(out.is_empty());
 }
 

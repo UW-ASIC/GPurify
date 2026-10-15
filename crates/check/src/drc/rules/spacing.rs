@@ -231,9 +231,8 @@ pub(super) fn prepare(store: &GeometryStore, layer: LayerId, limit: Dbu, s: &mut
 /// exact squared distance into `s.dists` (zero for a hole and its outer).
 /// The caller has validated both layers.
 fn cross_pairs(store: &GeometryStore, (a, b): (LayerId, LayerId), limit: Dbu, s: &mut Scratch) {
-    SpatialIndex::build_into(store, a, &mut s.index_a);
     SpatialIndex::build_into(store, b, &mut s.index_b);
-    cross_layer_pairs_into(store, &s.index_a, &s.index_b, limit, &mut s.pairs);
+    cross_layer_pairs_into(store, a, &s.index_b, limit, &mut s.pairs);
     pair_distances_into(store, &s.pairs, limit, &mut s.dists);
     s.holes.build(store, [a, b]);
     join_nested(store, &s.holes, &s.pairs, &mut s.dists);

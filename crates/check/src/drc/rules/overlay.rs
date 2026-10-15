@@ -550,9 +550,8 @@ fn pair_layers(
     if s.validated.get(store, a).is_none() || s.validated.get(store, b).is_none() {
         return false;
     }
-    SpatialIndex::build_into(store, a, &mut s.index_a);
     SpatialIndex::build_into(store, b, &mut s.index_b);
-    cross_layer_pairs_into(store, &s.index_a, &s.index_b, distance, &mut s.pairs);
+    cross_layer_pairs_into(store, a, &s.index_b, distance, &mut s.pairs);
     true
 }
 
