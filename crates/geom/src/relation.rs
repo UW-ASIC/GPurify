@@ -210,15 +210,13 @@ fn inner_end(zero: Zero, e: E, other: E) -> Option<Part> {
 /// `other` cut to `e`'s inner (right) side, as both near-part functions do
 /// first; `None` when nothing of it is there.
 fn inner_part(zero: Zero, e: E, other: E) -> Option<E> {
+    // The kept end first: every reader of the part (distance, projection,
+    // touch) is blind to its direction.
     Some(match inner_end(zero, e, other)? {
         Part::Whole => other,
-        Part::From(end) if end == other.p1 => E {
+        Part::From(end) => E {
             p1: end,
             p2: cut_point(other, e),
-        },
-        Part::From(end) => E {
-            p1: cut_point(other, e),
-            p2: end,
         },
     })
 }

@@ -7,9 +7,10 @@
 //! geometric assertion in the tree still passes. That is the whole reason this
 //! file exists.
 
+use gpurify_geom::ops::Seg;
 use gpurify_geom::Dbu;
 use gpurify_geom::{Bbox, GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
-use gpurify_testgen::shapes::{dbu, l_shape, rect, u_shape, LayoutBuilder};
+use gpurify_testgen::shapes::{dbu, l_shape, point, rect, u_shape, LayoutBuilder};
 use gpurify_testgen::Rng;
 
 const LAYERS: usize = 5;
@@ -328,4 +329,44 @@ fn a_polygon_contains_the_points_on_its_boundary_as_well_as_its_interior() {
             "({x}, {y}) is {what}, and must not read as contained"
         );
     }
+}
+
+/// Oracle: construct-from-answer. Two rings appended after `finish` to an
+/// empty layer become that layer's rows, after every row already stored,
+/// with the vertices and boxes they were given; the layer after it stays
+/// empty. Segments appended to the last layer come back from it and from no
+/// other.
+#[test]
+fn appended_rings_and_edges_land_on_their_own_layer() {
+    let mut builder = GeometryStoreBuilder::default();
+    let base = columns(&rect(0, 0, 10, 10));
+    builder.push(LayerId(0), &base.0, &base.1);
+    let (mut store, _) = builder.finish(3);
+
+    // A box at `xs[0..4]` and a triangle at `xs[4..7]`.
+    let xs: Vec<Dbu> = [20, 30, 30, 20, 40, 50, 40].map(dbu).to_vec();
+    let ys: Vec<Dbu> = [0, 0, 5, 5, 0, 0, 8].map(dbu).to_vec();
+    store.append_layer(LayerId(1), &xs, &ys, &[0, 4], &[4, 3]);
+    assert_eq!(store.poly_count(), 3);
+    assert_eq!(store.polys_on_layer(LayerId(1)), 1..3);
+    assert_eq!(store.polys_on_layer(LayerId(2)), 3..3);
+    assert_eq!(store.poly_layer(PolyId(1)), LayerId(1));
+    assert_eq!(store.poly_verts(PolyId(2)), (&xs[4..], &ys[4..]));
+    assert_eq!(
+        store.poly_bbox(PolyId(2)),
+        Bbox {
+            xlo: dbu(40),
+            ylo: dbu(0),
+            xhi: dbu(50),
+            yhi: dbu(8)
+        }
+    );
+
+    let edge = Seg {
+        a: point(0, 0),
+        b: point(10, 0),
+    };
+    store.append_edges(LayerId(2), &[edge]);
+    assert_eq!(store.edges_on_layer(LayerId(2)), [edge]);
+    assert!(store.edges_on_layer(LayerId(1)).is_empty());
 }

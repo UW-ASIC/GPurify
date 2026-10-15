@@ -5,7 +5,7 @@ use gpurify_geom::derive::{
     covering_into, edge_boolean_into, edge_interacting_into, edge_part_into, edges_into,
     extended_into, extents_into, holes_into, inside_into, interacting_into, merge_into,
     outside_into, overlapping_into, rectangles_into, sized_into, with_area_into, with_length_into,
-    with_width_into, EdgeOp,
+    with_rect_into, with_width_into, EdgeOp,
 };
 use gpurify_geom::ops::{Point, Seg};
 use gpurify_geom::view::{validate_layer_into, validate_layer_with, Angles, ValidatedLayer};
@@ -425,6 +425,30 @@ fn rectangles_and_squares_select_holeless_boxes() {
     assert_eq!(boxes(&got), [(0, 0, 2, 2)]);
     rectangles_into(&l, true, false, &mut got);
     assert_eq!(got.len(), 6, "every shape but the square");
+}
+
+/// Oracle: hand-derived. A 60 x 20 box, either way round and its boundary
+/// allowed on the polygon's, fits the 100 x 50 box lying down, the 20 x 70
+/// box only stood up (exactly, side to side), and the L in its 20-wide,
+/// 100-long foot; it fits neither the 30 x 30 square nor the 19 x 70 box,
+/// one unit too narrow. `keep` takes the first three, `!keep` the others.
+#[test]
+fn with_rect_selects_the_shapes_a_box_fits_either_way_round() {
+    let l = layer(&[
+        (&[0, 100, 100, 0], &[0, 0, 50, 50]),
+        (&[200, 230, 230, 200], &[0, 0, 30, 30]),
+        (&[300, 320, 320, 300], &[0, 0, 70, 70]),
+        (&[400, 419, 419, 400], &[0, 0, 70, 70]),
+        (&[500, 600, 600, 520, 520, 500], &[0, 0, 20, 20, 100, 100]),
+    ]);
+    let mut got = ValidatedLayer::default();
+    with_rect_into(&l, d(60), d(20), true, &mut got).expect("rectilinear");
+    assert_eq!(
+        boxes(&got),
+        [(0, 0, 100, 50), (300, 0, 320, 70), (500, 0, 600, 100)]
+    );
+    with_rect_into(&l, d(60), d(20), false, &mut got).expect("rectilinear");
+    assert_eq!(boxes(&got), [(200, 0, 230, 30), (400, 0, 419, 70)]);
 }
 
 /// Oracle: hand-derived. The L's narrowest width is its 2-wide arm and the bar

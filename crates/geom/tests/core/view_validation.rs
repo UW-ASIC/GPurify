@@ -475,3 +475,49 @@ fn a_hole_stays_with_the_outer_stored_before_it() {
         );
     }
 }
+
+/// Oracle: construct-from-answer. From a layer holding a box, a triangle
+/// with a 45-degree edge and one with an edge at another angle, a selection
+/// is rectilinear exactly when it leaves out both triangles, and octilinear
+/// exactly when it leaves out the second.
+#[test]
+fn a_selection_reads_its_angles_from_the_polygons_it_keeps() {
+    let store = store_of(&[
+        (LAYER, vec![0, 10, 10, 0], vec![0, 0, 10, 10]),
+        (LAYER, vec![20, 30, 20], vec![0, 0, 10]),
+        (LAYER, vec![40, 50, 40], vec![0, 0, 20]),
+    ]);
+    let mut layer = ValidatedLayer::default();
+    validate_layer_with(&store, LAYER, Angles::Any, &mut layer).expect("valid rings");
+    let mut out = ValidatedLayer::default();
+    for (keep, rectilinear, octilinear) in [
+        ([true, false, false], true, true),
+        ([false, true, false], false, true),
+        ([false, false, true], false, false),
+    ] {
+        layer.select_into(&keep, &mut out);
+        assert_eq!(
+            (out.is_rectilinear(), out.is_octilinear()),
+            (rectilinear, octilinear),
+            "{keep:?}"
+        );
+    }
+}
+
+/// Oracle: hand-derived from the binding rule `validate_layer_with`
+/// documents: a hole stored right after an outer that contains it is that
+/// outer's, even where a smaller outer contains it too. Rows: a far square,
+/// a small square around the hole, a big square around both, then the hole.
+/// The big square holds it and the small one holds none.
+#[test]
+fn a_hole_stored_after_its_outer_stays_with_it_though_a_smaller_outer_holds_it_too() {
+    let store = store_of(&[
+        (LAYER, vec![100, 110, 110, 100], vec![0, 0, 10, 10]),
+        (LAYER, vec![-8, 8, 8, -8], vec![-8, -8, 8, 8]),
+        (LAYER, vec![-50, 50, 50, -50], vec![-50, -50, 50, 50]),
+        (LAYER, vec![-5, -5, 5, 5], vec![-5, 5, 5, -5]),
+    ]);
+    let layer = validate(&store, LAYER).expect("valid rings");
+    let holes: Vec<usize> = (0..3).map(|i| layer.get(i).holes().count()).collect();
+    assert_eq!(holes, [0, 0, 1]);
+}

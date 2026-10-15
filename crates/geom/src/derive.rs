@@ -607,7 +607,7 @@ fn free_of_any(a: &ValidatedLayer, parts: &ValidatedLayer) -> Vec<bool> {
 /// its rings.
 fn strictly_in(poly: PolygonRef<'_>, p: Point) -> bool {
     !poly_segs(poly).any(|s| segments_intersect(s, Seg { a: p, b: p }))
-        && contains_scaled(poly, p.x.raw(), p.y.raw(), 1)
+        && inside_scaled(std::iter::once(poly), p.x.raw(), p.y.raw(), 1)
 }
 
 /// Every `(i, j)` where polygon `i` of `a` and polygon `j` of `b` share
