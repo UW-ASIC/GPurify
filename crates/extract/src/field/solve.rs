@@ -6,6 +6,8 @@
 //! GMRES is Saad & Schultz (1986). The operator is any `Fn(x, y)` that writes
 //! `y = A x` for vectors of one length; it need not be symmetric.
 
+use gpurify_geom::linalg::{axpy, dot, nrm2};
+
 /// Convergence target and iteration budgets for [`gmres`] and [`refine`].
 ///
 /// The default (`1e-10`, restart 50, 1000 iterations) is what the field
@@ -117,7 +119,7 @@ pub fn gmres(
         .unwrap_or(usize::MAX)
         .min(n)
         .max(1);
-    let b_scale = scale_of(norm(b));
+    let b_scale = scale_of(nrm2(b));
 
     workspace.krylov.clear();
     workspace.krylov.resize((m + 1) * n, 0.0);
@@ -156,7 +158,7 @@ pub fn gmres(
         }
         cycles += 1;
 
-        let beta = norm(&workspace.residual[..]);
+        let beta = nrm2(&workspace.residual);
         let inv_beta = 1.0 / beta;
         for (v, &r) in workspace.krylov[..n].iter_mut().zip(&workspace.residual) {
             *v = r * inv_beta;
@@ -175,31 +177,20 @@ pub fn gmres(
             );
 
             // One finiteness check per matvec, before anything reaches `x`.
-            let mut av_sq = 0.0_f64;
-            for &w in &workspace.correction {
-                av_sq += w * w;
-            }
-            if !av_sq.is_finite() {
+            if !dot(&workspace.correction, &workspace.correction).is_finite() {
                 return Err(SolveError::NonFinite(iterations));
             }
 
             // Modified Gram-Schmidt.
             let col = k * (m + 1);
             for i in 0..=k {
-                let h = dot(
-                    &workspace.krylov[i * n..i * n + n],
-                    &workspace.correction[..],
-                );
+                let basis = &workspace.krylov[i * n..i * n + n];
+                let h = dot(basis, &workspace.correction);
                 workspace.hessenberg[col + i] = h;
-                for (w, &v) in workspace
-                    .correction
-                    .iter_mut()
-                    .zip(&workspace.krylov[i * n..i * n + n])
-                {
-                    *w -= h * v;
-                }
+                // `w + (−h)·v` is `w − h·v` to the bit: negation is exact.
+                axpy(-h, basis, &mut workspace.correction);
             }
-            let hk1 = norm(&workspace.correction[..]);
+            let hk1 = nrm2(&workspace.correction);
             workspace.hessenberg[col + k + 1] = hk1;
 
             // Replay earlier rotations, then annihilate the subdiagonal.
@@ -261,30 +252,13 @@ pub fn gmres(
 
         // `x += Σ y_i v_i`, ascending `i`.
         for i in 0..k {
-            let y = workspace.hessenberg[g0 + i];
-            for (xv, &v) in x.iter_mut().zip(&workspace.krylov[i * n..i * n + n]) {
-                *xv += y * v;
-            }
+            axpy(
+                workspace.hessenberg[g0 + i],
+                &workspace.krylov[i * n..i * n + n],
+                x,
+            );
         }
     }
-}
-
-/// `‖v‖₂` as a strict ascending fold.
-fn norm(v: &[f64]) -> f64 {
-    let mut sum = 0.0_f64;
-    for &value in v {
-        sum += value * value;
-    }
-    sum.sqrt()
-}
-
-/// `u · v` as a strict ascending fold.
-fn dot(u: &[f64], v: &[f64]) -> f64 {
-    let mut acc = 0.0_f64;
-    for (&a, &b) in u.iter().zip(v) {
-        acc += a * b;
-    }
-    acc
 }
 
 /// Denominator of a relative residual: `‖b‖`, or 1 for `b = 0` (absolute residual).
@@ -340,8 +314,7 @@ pub fn refine(
     while achieved > options.tolerance && iterations < options.max_iterations {
         // `scratch` already holds `b − A x`: the correction's right-hand side.
         let rhs = std::mem::take(&mut scratch);
-        correction.clear();
-        correction.resize(n, 0.0);
+        correction.fill(0.0);
 
         let inner = Options {
             tolerance: options.tolerance,
@@ -406,5 +379,5 @@ pub fn residual(
     for (ax, &bi) in scratch.iter_mut().zip(b) {
         *ax = bi - *ax;
     }
-    norm(&scratch[..]) / scale_of(norm(b))
+    nrm2(scratch) / scale_of(nrm2(b))
 }
