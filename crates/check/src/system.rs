@@ -83,7 +83,10 @@
 use crate::drc::rules::{bbox_gap2, gap_midpoint};
 use crate::erc::centre;
 use crate::lvs::graph::{transpose_into, Graph};
-use crate::report::{record_run, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
+use crate::report::{
+    record_run, rule_id, Measurement, Outcome, RuleRun, Severity, Violation, Violations, NO_LAYER,
+    NO_SHAPE,
+};
 use crate::topology::narrow;
 use crate::topology::NetId;
 use crate::Design;
@@ -115,20 +118,7 @@ pub fn intern_rule_ids(strings: &mut StrTable) {
     }
 }
 
-/// An id [`intern_rule_ids`] missed is `u32::MAX`, which `resolve` panics on.
-fn rule_id(strings: &StrTable, name: &str) -> StrId {
-    strings.get(name).unwrap_or(StrId(u32::MAX))
-}
-
-/// A system row has no layer: layer ids belong to one die's deck.
-const NO_LAYER: LayerId = LayerId(u16::MAX);
-/// No shape: a row about a net or a pin.
-const NO_SHAPE: PolyId = PolyId(u32::MAX);
-/// A pin with no bump has no place.
-pub const NOWHERE: Point = Point {
-    x: Dbu::new_unchecked(0),
-    y: Dbu::new_unchecked(0),
-};
+pub use crate::report::NOWHERE;
 
 /// Where one die sits in the assembly: reflected in its x axis (`y` to `-y`)
 /// when `mirror`, then turned counter-clockwise by `quarter_turns`, then

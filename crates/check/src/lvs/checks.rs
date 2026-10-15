@@ -10,14 +10,15 @@ use crate::erc::first_vertex;
 use crate::lvs::controls::must_connect;
 use crate::lvs::graph::{spice_param_name, Graph};
 use crate::lvs::verdict::Discrepancy;
-use crate::report::{record_run, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
+use crate::report::{
+    record_run, rule_id, Measurement, Outcome, RuleRun, Severity, Violation, Violations, NOWHERE,
+    NO_LAYER, NO_SHAPE,
+};
 use crate::topology::device::{DeviceMeasure, DeviceParam};
 use crate::topology::narrow;
 use crate::topology::{DeviceId, NetId, NetTable, PortTable};
 use crate::Design;
-use gpurify_geom::ops::Point;
-use gpurify_geom::Dbu;
-use gpurify_geom::{GeometryStore, LayerId, PolyId};
+use gpurify_geom::{GeometryStore, PolyId};
 use gpurify_ingest::deck::{LvsControls, LvsCount, LvsLimit, LvsRange};
 use gpurify_ingest::{StrId, StrTable};
 
@@ -66,20 +67,6 @@ pub fn intern_rule_ids(strings: &mut StrTable) {
         strings.intern(name);
     }
 }
-
-/// An id [`intern_rule_ids`] missed is `u32::MAX`, which `resolve` panics on
-/// rather than misattributing the row.
-fn rule_id(strings: &StrTable, name: &str) -> StrId {
-    strings.get(name).unwrap_or(StrId(u32::MAX))
-}
-
-/// An LVS finding has no layer, place or shape: past-the-end sentinels.
-const NOWHERE: Point = Point {
-    x: Dbu::new_unchecked(0),
-    y: Dbu::new_unchecked(0),
-};
-const NO_LAYER: LayerId = LayerId(u16::MAX);
-const NO_SHAPE: PolyId = PolyId(u32::MAX);
 
 /// Run the layout-only checks on the unreduced layout graph.
 ///

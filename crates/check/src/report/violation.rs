@@ -4,7 +4,7 @@ use crate::report::measure::Measurement;
 use gpurify_geom::ops::Point;
 use gpurify_geom::Dbu;
 use gpurify_geom::{LayerId, PolyId};
-use gpurify_ingest::StrId;
+use gpurify_ingest::{StrId, StrTable};
 
 /// How bad a finding is. Ordered, `Warning < Error`, so the `max` over a run
 /// is its worst.
@@ -16,6 +16,24 @@ pub enum Severity {
     Warning,
     /// A finding that fails the run.
     Error,
+}
+
+/// [`Violation::at`] of a finding with no place (an LVS row, a pin with no
+/// bump): the origin.
+pub const NOWHERE: Point = Point {
+    x: Dbu::new_unchecked(0),
+    y: Dbu::new_unchecked(0),
+};
+/// [`Violation::layer`] of a finding on no layer: an LVS or system row.
+pub(crate) const NO_LAYER: LayerId = LayerId(u16::MAX);
+/// [`Violation::shapes`]' first row when no shape can be named.
+pub(crate) const NO_SHAPE: PolyId = PolyId(u32::MAX);
+
+/// The interned id of rule `name`; one its engine's `intern_rule_ids` missed
+/// is `u32::MAX`, which `StrTable::resolve` panics on rather than
+/// misattributing the row.
+pub(crate) fn rule_id(strings: &StrTable, name: &str) -> StrId {
+    strings.get(name).unwrap_or(StrId(u32::MAX))
 }
 
 /// One violation.
