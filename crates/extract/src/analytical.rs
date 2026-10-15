@@ -617,30 +617,28 @@ fn region_into(
     let sheet_ohm_sq = stack.sheet_res_ohm_sq[regions.layer[region].idx()];
     let (area, perimeter) = (regions.area[region], regions.perimeter[region]);
 
-    {
-        // A rectilinear outline is never too fat for a rectangle:
-        // `(P/2)² ≥ 4A` holds for its bounding box and only grows from there.
-        let half = perimeter.raw() / 2;
-        let discriminant = i128::from(half) * i128::from(half) - 4 * area.raw();
-        let spread = ops::isqrt(DbuArea::new(discriminant.max(0))).raw();
-        let long = Dbu::new_unchecked(i64::midpoint(half, spread));
-        let short = Dbu::new_unchecked((half - spread) / 2);
+    // A rectilinear outline is never too fat for a rectangle:
+    // `(P/2)² ≥ 4A` holds for its bounding box and only grows from there.
+    let half = perimeter.raw() / 2;
+    let discriminant = i128::from(half) * i128::from(half) - 4 * area.raw();
+    let spread = ops::isqrt(DbuArea::new(discriminant.max(0))).raw();
+    let long = Dbu::new_unchecked(i64::midpoint(half, spread));
+    let short = Dbu::new_unchecked((half - spread) / 2);
 
-        let ohm = if short.raw() > 0 {
-            segment_resistance(sheet_ohm_sq, long, short).raw()
-        } else {
-            0.0
-        };
-        let femtofarads = region_ground_ff(regions, region, stack, grid);
+    let ohm = if short.raw() > 0 {
+        segment_resistance(sheet_ohm_sq, long, short).raw()
+    } else {
+        0.0
+    };
+    let femtofarads = region_ground_ff(regions, region, stack, grid);
 
-        // Ground first is canonical order. Zero values are dropped: a zero-ohm
-        // resistor is a short.
-        if femtofarads > 0.0 && femtofarads.is_finite() {
-            out.push(node, None, Parasitic::GroundCap(Qty::new(femtofarads)));
-        }
-        if ohm > 0.0 && ohm.is_finite() {
-            out.push(node, Some(next), Parasitic::Resistance(Qty::new(ohm)));
-        }
+    // Ground first is canonical order. Zero values are dropped: a zero-ohm
+    // resistor is a short.
+    if femtofarads > 0.0 && femtofarads.is_finite() {
+        out.push(node, None, Parasitic::GroundCap(Qty::new(femtofarads)));
+    }
+    if ohm > 0.0 && ohm.is_finite() {
+        out.push(node, Some(next), Parasitic::Resistance(Qty::new(ohm)));
     }
 }
 

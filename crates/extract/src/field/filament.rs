@@ -13,7 +13,7 @@ const MU0_OVER_4PI: f64 = 1e-7;
 ///
 /// `x` and `y` are the layout plane, `z` is height above the substrate.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Vec3 {
+pub(crate) struct Vec3 {
     /// Layout x.
     pub x: f64,
     /// Layout y.
@@ -95,7 +95,7 @@ impl Div<f64> for Vec3 {
 /// Current flows from `a` to `b`, uniform over the cross-section, which is
 /// what partial inductance assumes.
 #[derive(Debug, Clone, Copy)]
-pub struct Filament {
+pub(crate) struct Filament {
     /// Centre-line start point.
     pub a: Vec3,
     /// Centre-line end point.
@@ -121,7 +121,9 @@ pub(crate) fn default_wdir(axis: Vec3) -> Vec3 {
 impl Filament {
     /// Returns the filament from `a` to `b` with the canonical width
     /// direction: horizontal for any axis that is not near vertical, so `t`
-    /// is the vertical size of a wire in the layout plane.
+    /// is the vertical size of a wire in the layout plane. The tests' builder:
+    /// the solve frames its filaments with [`Self::with_frame`].
+    #[cfg(test)]
     pub fn new(a: Vec3, b: Vec3, w: f64, t: f64) -> Self {
         let axis = (b - a).normalized();
         Filament {

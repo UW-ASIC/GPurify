@@ -275,7 +275,7 @@ fn modes(lines: &[f64]) -> Option<(Vec<f64>, Vec<f64>)> {
 ///
 /// The grid's operator separates: with `σ` a function of depth alone it is
 /// `Kx⊗Dy⊗Bz + Dx⊗Ky⊗Bz + Dx⊗Dy⊗Kz`, so in the modes of the two lateral
-/// axes ([`modes`]) each mode `(a, b)` is a tridiagonal system in depth,
+/// axes (each axis's `K v = λ D v`) each mode `(a, b)` is a tridiagonal system in depth,
 /// `Kz + (λa + λb) Bz`, whose elimination down to the top face is one
 /// number `s_ab`: the top face's operator is `S = (Ux⊗Uy) diag(s) (Ux⊗Uy)ᵀ`
 /// exactly (the eigenfunction method of substrate solvers, here on a
