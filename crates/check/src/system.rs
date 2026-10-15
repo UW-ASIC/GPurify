@@ -82,8 +82,9 @@
 
 use crate::drc::rules::{bbox_gap2, gap_midpoint};
 use crate::erc::centre;
-use crate::lvs::graph::{narrow, transpose_into, Graph};
+use crate::lvs::graph::{transpose_into, Graph};
 use crate::report::{record_run, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
+use crate::topology::narrow;
 use crate::topology::NetId;
 use crate::Design;
 use gpurify_geom::ops::{area2, isqrt, Point};

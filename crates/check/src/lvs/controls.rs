@@ -5,10 +5,11 @@
 //! Data in: the controls and the two graphs. Data out: the graphs as the
 //! controls leave them, and the bound a paired parameter must meet.
 
-use crate::lvs::graph::{narrow, transpose_into, Graph};
+use crate::lvs::graph::{transpose_into, Graph};
 use crate::lvs::reduce::Merge;
 use crate::lvs::verdict::Discrepancy;
 use crate::topology::device::role_at;
+use crate::topology::narrow;
 use crate::topology::TerminalRole;
 use gpurify_ingest::deck::{DeviceKind, LvsControls, UnusedFilter};
 use gpurify_ingest::layout::glob_matches;
@@ -518,21 +519,15 @@ pub(crate) fn drop_ignored_params(graph: &mut Graph, controls: &LvsControls) {
     if controls.ignore_parameter.is_empty() {
         return;
     }
-    let mut param = Vec::with_capacity(graph.param.len());
-    let mut start = Vec::with_capacity(graph.device_count() + 1);
-    start.push(0);
-    for device in 0..graph.device_count() {
-        let model = graph.device_model[device];
+    graph.rewrite_params(|graph, device, param| {
+        let model = graph.device_model[device as usize];
         param.extend(
             graph
-                .params_of(narrow(device))
+                .params_of(device)
                 .iter()
                 .filter(|&&(name, _)| !controls.ignore_parameter.contains(&(model, name))),
         );
-        start.push(narrow(param.len()));
-    }
-    graph.param = param;
-    graph.device_param_start = start;
+    });
 }
 
 /// How far apart two values of one parameter may be and still agree.

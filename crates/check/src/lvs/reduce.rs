@@ -94,8 +94,9 @@
 use crate::topology::TerminalRole;
 use gpurify_ingest::StrId;
 
-/// Which interned parameter names mean width, length, fingers and multiplier.
-/// A name absent from both netlists is `None`.
+/// Which interned parameter names mean what to a merge: a MOS's size and
+/// diffusions, a passive's value, the stress distances, and the count of
+/// devices in parallel. A name absent from both netlists is `None`.
 ///
 /// The default names nothing, and then nothing merges: no device has a `W` to
 /// sum or a count to keep, and nothing merges in series.
@@ -315,8 +316,9 @@ fn signature(
     out
 }
 
-use crate::lvs::graph::{channel_ends, narrow, transpose_into, Graph};
+use crate::lvs::graph::{channel_ends, find, join, transpose_into, Graph};
 use crate::lvs::refine::{kind_code, role_code};
+use crate::topology::narrow;
 use gpurify_ingest::deck::DeviceKind;
 
 /// Whether a parallel merge sums this device's `W`: a MOS stating one, whose
@@ -455,25 +457,6 @@ fn parallel_key<'k>(
     )
 }
 
-/// The group root of `device`, with the path halved on the way.
-///
-/// The root is the set's **lowest** device index — [`join`] always points the
-/// higher root at the lower — so the emission order is a function of the input.
-fn find(root: &mut [u32], device: u32) -> u32 {
-    let mut at = device as usize;
-    while root[at] as usize != at {
-        let grand = root[root[at] as usize];
-        root[at] = grand;
-        at = grand as usize;
-    }
-    narrow(at)
-}
-
-fn join(root: &mut [u32], a: u32, b: u32) {
-    let (left, right) = (find(root, a), find(root, b));
-    root[left.max(right) as usize] = left.min(right);
-}
-
 /// [`reduce_with`] told no parameter names, which merges nothing: with no
 /// `W` name no MOS has a width to sum, with no `m` name no device a count to
 /// keep (testing-plan F83), and with no `L` name no series merge a length
@@ -583,10 +566,7 @@ fn fold_multiplier(src: &Graph, names: ParamNames) -> Graph {
         return src.clone();
     };
     let mut out = src.clone();
-    out.param.clear();
-    out.device_param_start.clear();
-    out.device_param_start.push(0);
-    for device in 0..narrow(src.device_count()) {
+    out.rewrite_params(|src, device, out| {
         let params = src.params_of(device);
         let m = count_of(params, multiplier);
         let kind = src.device_kind[device as usize];
@@ -597,20 +577,19 @@ fn fold_multiplier(src: &Graph, names: ParamNames) -> Graph {
                 // Folded, or a count of one: nothing left to say.
                 #[expect(clippy::float_cmp, reason = "1 is the count a card states exactly")]
                 if into.is_none() && law.is_none() && m != 1.0 {
-                    out.param.push((name, value));
+                    out.push((name, value));
                 }
             } else if into.is_some()
                 && (Some(name) == into || names.diffusion.contains(&Some(name)))
             {
-                out.param.push((name, value * m));
+                out.push((name, value * m));
             } else if let Some(law) = law.filter(|law| law.combines(name)) {
-                out.param.push((name, law.times(name, value, m)));
+                out.push((name, law.times(name, value, m)));
             } else {
-                out.param.push((name, value));
+                out.push((name, value));
             }
         }
-        out.device_param_start.push(narrow(out.param.len()));
-    }
+    });
     out
 }
 
@@ -1110,11 +1089,11 @@ fn emit_into(src: &Graph, plan: &Plan, names: ParamNames, out: &mut Graph) {
             // which states each of them on every member or on none.
             let head_kind = src.device_kind[head as usize];
             let wide = sums_width(head_kind, src.params_of(head), names);
-            let law = Law::of(head_kind, src.params_of(head), names)
-                .filter(|_| plan.mode == Some(MergeKind::Parallel));
+            let head_law = Law::of(head_kind, src.params_of(head), names);
+            let law = head_law.filter(|_| plan.mode == Some(MergeKind::Parallel));
             let group = &plan.order[at..end];
             // A relaxed passive's series law, where this group is one.
-            let series_law = Law::of(head_kind, src.params_of(head), names)
+            let series_law = head_law
                 .filter(|_| plan.mode == Some(MergeKind::Series))
                 .and_then(|law| Some((law, law.series_sums(head_kind, names)?)));
             let summed = match (plan.mode, law, series_law) {

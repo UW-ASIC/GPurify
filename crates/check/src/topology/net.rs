@@ -429,7 +429,7 @@ pub(crate) fn retain_intersecting_into(
 
 /// The closed segment from vertex `i` of a ring to the next one, wrapping.
 #[inline]
-fn ring_edge(xs: &[Dbu], ys: &[Dbu], i: usize) -> Seg {
+pub(crate) fn ring_edge(xs: &[Dbu], ys: &[Dbu], i: usize) -> Seg {
     let next = if i + 1 == xs.len() { 0 } else { i + 1 };
     Seg {
         a: Point { x: xs[i], y: ys[i] },

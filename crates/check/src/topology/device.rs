@@ -5,8 +5,8 @@
 //! Data in: `GeometryStore`, `NetTable`, `DeviceRecognition`. Data out: `DeviceTable`.
 
 use crate::drc::rules::{owners_of, LayerRects};
-use crate::topology::csr_run;
 use crate::topology::net::{polys_intersect, retain_intersecting_into, Holes, NetId, NetTable};
+use crate::topology::{csr_run, narrow};
 use gpurify_geom::boolean::{intersection_into, BooleanError};
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{area2, isqrt};
@@ -866,9 +866,4 @@ pub(crate) fn role_at(kind: DeviceKind, position: u8) -> TerminalRole {
         .get(usize::from(position))
         .copied()
         .unwrap_or(TerminalRole::Pin(position))
-}
-
-/// A count narrowed to the `u32` every CSR column here is made of.
-fn narrow(value: usize) -> u32 {
-    u32::try_from(value).expect("a device table addresses fewer than u32::MAX rows")
 }

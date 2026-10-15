@@ -5,15 +5,51 @@
 
 use crate::lvs::refine::kind_code;
 use crate::topology::device::{DeviceMeasure, DeviceParam};
-use crate::topology::{csr_run, DeviceTable, NetId, NetTable, PortTable, TerminalRole};
+use crate::topology::{csr_run, narrow, DeviceTable, NetId, NetTable, PortTable, TerminalRole};
 use gpurify_geom::Grid;
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::netlist::{Netlist, SubcktId};
 use gpurify_ingest::{StrId, StrTable};
 
-/// A row count as a `u32` id; panics rather than truncating.
-pub(crate) fn narrow(value: usize) -> u32 {
-    u32::try_from(value).expect("a table addresses its own rows with u32")
+/// The group root of `device` in the union-find forest `root`, with the
+/// path halved on the way.
+///
+/// The root is the set's **lowest** index — [`join`] always points the
+/// higher root at the lower — so any order derived from roots is a function
+/// of the input, not of the join order.
+pub(crate) fn find(root: &mut [u32], device: u32) -> u32 {
+    let mut at = device as usize;
+    while root[at] as usize != at {
+        let grand = root[root[at] as usize];
+        root[at] = grand;
+        at = grand as usize;
+    }
+    narrow(at)
+}
+
+/// Merges the sets of `a` and `b` under the lower root.
+pub(crate) fn join(root: &mut [u32], a: u32, b: u32) {
+    let (left, right) = (find(root, a), find(root, b));
+    root[left.max(right) as usize] = left.min(right);
+}
+
+/// `rows` grouped by their root in `root`, groups in the order their first
+/// row comes, rows in `rows` order within each.
+pub(crate) fn groups_by_root(
+    root: &mut [u32],
+    rows: impl IntoIterator<Item = u32>,
+) -> Vec<Vec<u32>> {
+    let mut group_of = vec![u32::MAX; root.len()];
+    let mut out: Vec<Vec<u32>> = Vec::new();
+    for row in rows {
+        let head = find(root, row) as usize;
+        if group_of[head] == u32::MAX {
+            group_of[head] = narrow(out.len());
+            out.push(Vec::new());
+        }
+        out[group_of[head] as usize].push(row);
+    }
+    out
 }
 
 /// A netlist reduced to what matching needs: `SoA` device and net columns with
@@ -71,6 +107,24 @@ pub struct Graph {
 }
 
 impl Graph {
+    /// Rebuilds the parameter column device by device: `rewrite(self,
+    /// device, out)` appends `device`'s new parameters to `out`, reading the
+    /// old ones from `self`.
+    pub(crate) fn rewrite_params(
+        &mut self,
+        mut rewrite: impl FnMut(&Graph, u32, &mut Vec<(StrId, f64)>),
+    ) {
+        let mut param = Vec::with_capacity(self.param.len());
+        let mut start = Vec::with_capacity(self.device_count() + 1);
+        start.push(0);
+        for device in 0..narrow(self.device_count()) {
+            rewrite(self, device, &mut param);
+            start.push(narrow(param.len()));
+        }
+        self.param = param;
+        self.device_param_start = start;
+    }
+
     /// The number of device rows.
     pub fn device_count(&self) -> usize {
         self.device_kind.len()
@@ -188,7 +242,6 @@ pub fn from_layout(
             graph.terminal_role[slot] = comparable(devices.kind[device], graph.terminal_role[slot]);
         }
     }
-    graph.terminal_net.clear();
     graph
         .terminal_net
         .extend(devices.terminal_net.iter().map(|net| net.0));
@@ -198,8 +251,6 @@ pub fn from_layout(
         reason = "grid resolutions are small integers; compared under a relative tolerance"
     )]
     let metre_per_dbu = grid.map(|grid| 1e-6 / grid.dbu_per_um() as f64);
-    graph.param.clear();
-    graph.device_param_start.clear();
     graph.device_param_start.push(0);
     #[expect(
         clippy::cast_precision_loss,
@@ -260,8 +311,6 @@ pub fn from_layout(
 
     // ponytail: O(nets · log ports) through `name_of`; a linear merge needs
     // `PortTable` to expose its columns.
-    graph.net_name.clear();
-    graph.port_net.clear();
     for net in 0..net_count {
         let id = narrow(net);
         let name = ports.name_of(NetId(id));
@@ -345,7 +394,6 @@ pub fn from_reference(netlist: &Netlist, subckt: SubcktId) -> Graph {
     // another subcircuit (so a terminal on one is filed on no net).
     let mut rank = Vec::with_capacity(netlist.net_subckt.len());
     let mut net_count = 0u32;
-    graph.net_name.clear();
     for (row, &owner) in netlist.net_subckt.iter().enumerate() {
         if owner == subckt {
             rank.push(net_count);
@@ -356,11 +404,9 @@ pub fn from_reference(netlist: &Netlist, subckt: SubcktId) -> Graph {
         }
     }
 
-    graph.device_kind.clear();
     graph
         .device_kind
         .extend_from_slice(&netlist.device_kind[first..last]);
-    graph.device_model.clear();
     graph
         .device_model
         .extend_from_slice(&netlist.device_model[first..last]);
@@ -383,16 +429,13 @@ pub fn from_reference(netlist: &Netlist, subckt: SubcktId) -> Graph {
     );
     let (qfirst, qlast) = rebase(&netlist.device_param_start, &mut graph.device_param_start);
 
-    graph.terminal_net.clear();
     graph.terminal_net.extend(
         netlist.terminal_net[tfirst..tlast]
             .iter()
             .map(|net| rank[net.0 as usize]),
     );
-    graph.param.clear();
     graph.param.extend_from_slice(&netlist.param[qfirst..qlast]);
 
-    graph.terminal_role.clear();
     for device in 0..last - first {
         let kind = netlist.device_kind[first + device];
         let (from, to) = csr_run(&graph.device_terminal_start, device);
@@ -402,7 +445,6 @@ pub fn from_reference(netlist: &Netlist, subckt: SubcktId) -> Graph {
     }
 
     let (pfirst, plast) = csr_run(&netlist.subckt_port_start, subckt.0 as usize);
-    graph.port_net.clear();
     graph.port_net.extend(
         netlist.port_net[pfirst..plast]
             .iter()
@@ -473,21 +515,15 @@ pub(crate) fn keep_declared_params(reference: &Graph, layout: &mut Graph) {
     declared.sort_unstable();
     declared.dedup();
 
-    let mut param = Vec::with_capacity(layout.param.len());
-    let mut start = Vec::with_capacity(layout.device_count() + 1);
-    start.push(0);
-    for device in 0..layout.device_count() {
-        let (kind, model) = identity(layout, device);
+    layout.rewrite_params(|graph, device, param| {
+        let (kind, model) = identity(graph, device as usize);
         param.extend(
-            layout
-                .params_of(narrow(device))
+            graph
+                .params_of(device)
                 .iter()
                 .filter(|&&(name, _)| declared.binary_search(&(kind, model, name)).is_ok()),
         );
-        start.push(narrow(param.len()));
-    }
-    layout.param = param;
-    layout.device_param_start = start;
+    });
 }
 
 /// The role LVS compares a terminal under: a resistor's two ends are

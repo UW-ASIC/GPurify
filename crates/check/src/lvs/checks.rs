@@ -1,16 +1,18 @@
 //! LVS rows for the report: the layout-only checks, which need no reference
 //! netlist, and the mapping of a comparison's discrepancies to violations.
 //!
-//! Data in: the extracted tables and the unreduced layout graph. Data out: five
-//! run rows and their violations, and a sixth when the deck states device
-//! parameter ranges.
+//! Data in: the extracted tables and the unreduced layout graph. Data out:
+//! [`check_layout`]'s five run rows and their violations, plus one row each
+//! for parameter ranges and device counts when the deck states them, net
+//! seed conflicts with their short paths, and unpaired instances.
 
 use crate::erc::first_vertex;
 use crate::lvs::controls::must_connect;
-use crate::lvs::graph::{narrow, spice_param_name, Graph};
+use crate::lvs::graph::{spice_param_name, Graph};
 use crate::lvs::verdict::Discrepancy;
 use crate::report::{record_run, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use crate::topology::device::{DeviceMeasure, DeviceParam};
+use crate::topology::narrow;
 use crate::topology::{DeviceId, NetId, NetTable, PortTable};
 use crate::Design;
 use gpurify_geom::ops::Point;
@@ -19,15 +21,12 @@ use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::{LvsControls, LvsCount, LvsLimit, LvsRange};
 use gpurify_ingest::{StrId, StrTable};
 
-/// Every rule id LVS reports under, in interning order: one per [`Discrepancy`]
-/// variant but the last, then the five check rows, then the parameter-range
-/// row, then the last variant's and the short-path row, each added after the
-/// rows it follows. Each is a
-/// row of the check catalog (`docs/check-catalog.tsv`), which a test keeps in
-/// step with this list.
+/// Every rule id LVS reports under, in interning order, each appended after
+/// the ones before it existed. Each is a row of the check catalog
+/// (`docs/check-catalog.tsv`), which a test keeps in step with this list.
 ///
-/// The first six and the last are defined on the [`Discrepancy`] variant that
-/// raises them (`lvs.unpaired_device` is [`Discrepancy::UnpairedDevice`],
+/// The first six and `lvs.model_mismatch` are defined on the [`Discrepancy`]
+/// variant that raises them (`lvs.unpaired_device` is [`Discrepancy::UnpairedDevice`],
 /// `lvs.model_mismatch` [`Discrepancy::ModelMismatch`], and so on), the five
 /// after the first six under [`check_layout`], and `lvs.param_range` under
 /// [`check_param_ranges`], `lvs.short_path` with `lvs.net_seed_conflict`

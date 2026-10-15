@@ -13,6 +13,7 @@ use crate::erc::{
     device_id, first_vertex, push_net_violations, record_run, skip_rows, Design, Scratch,
 };
 use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
+use crate::topology::net::ring_edge;
 use crate::topology::{extract_nets_into, DeviceId, NetId, PortTable, TerminalRole};
 use gpurify_geom::ops::{isqrt, point_seg_dist2, winding_of, Point, Seg, Winding};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
@@ -866,19 +867,6 @@ fn push_ring_edges(ring: RingRef<'_>, out: &mut Vec<Seg>) {
     out.reserve(xs.len());
     for vertex in 0..xs.len() {
         out.push(ring_edge(xs, ys, vertex));
-    }
-}
-
-/// The closed edge from vertex `i` of a ring to the next one, wrapping.
-#[inline]
-pub(crate) fn ring_edge(xs: &[Dbu], ys: &[Dbu], i: usize) -> Seg {
-    let next = (i + 1) - xs.len() * usize::from(i + 1 == xs.len());
-    Seg {
-        a: Point { x: xs[i], y: ys[i] },
-        b: Point {
-            x: xs[next],
-            y: ys[next],
-        },
     }
 }
 

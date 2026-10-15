@@ -15,7 +15,8 @@
 //! [`Netlist::black_box_ports`]: gpurify_ingest::netlist::Netlist::black_box_ports
 
 use crate::lvs::controls::retain_devices;
-use crate::lvs::graph::{narrow, transpose_into, Graph};
+use crate::lvs::graph::{transpose_into, Graph};
+use crate::topology::narrow;
 use crate::topology::TerminalRole;
 use crate::Design;
 use gpurify_ingest::deck::DeviceKind;

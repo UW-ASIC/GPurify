@@ -22,8 +22,9 @@
 //! and no later stall tries again, since a match is then out of reach.
 
 use crate::lvs::controls::bound;
-use crate::lvs::graph::{narrow, Graph};
+use crate::lvs::graph::Graph;
 use crate::lvs::reduce::ParamNames;
+use crate::topology::narrow;
 use crate::topology::TerminalRole;
 use gpurify_ingest::deck::{DeviceKind, LvsControls};
 use gpurify_ingest::StrId;
