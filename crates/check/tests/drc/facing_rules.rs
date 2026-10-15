@@ -386,6 +386,8 @@ const KEEP_OUT: Rule = Rule::EolKeepOut {
     backward: Dbu::new_unchecked(200),
     side: Dbu::new_unchecked(300),
     forward: Dbu::new_unchecked(1000),
+    except_within: None,
+    corner_only: false,
 };
 
 fn area(v: i128) -> Measurement {
@@ -806,6 +808,8 @@ fn the_deck_spells_each_kind_s_parameters() {
                 backward: dbu(0),
                 side: dbu(300),
                 forward: dbu(1000),
+                except_within: None,
+                corner_only: false,
             },
             Rule::ForbiddenSpacing {
                 layer: A,
