@@ -1016,3 +1016,45 @@ fn a_p_ring_belongs_on_a_ground() {
         ]
     );
 }
+
+/// A supply or terminal on no net, or on the first id past the extraction,
+/// is ignored by propagation, as its contract states: adding one changes
+/// no net's range.
+///
+/// Oracle: metamorphic: the same circuit (a resistor from a 1.8 V supply
+/// to a second net, which so reaches 1.8 V) propagated again with a
+/// resistor between `NetId(count)` and `NetId::NONE` appended and
+/// `NetId(count)` declared a supply gives the same ranges on every net.
+#[test]
+fn a_supply_or_terminal_past_the_extraction_is_ignored() {
+    let mut circuit = build(2, vec![two_pin(DeviceKind::Resistor, "r", 0, 1)]);
+    let intent = circuit.intent(&[(0, SupplyRole::Power, CORE, 1_800.0)]);
+    let before = circuit.voltage(&intent);
+    assert_eq!(
+        before.hi[circuit.net(1).idx()],
+        1_800.0,
+        "the resistor conducts"
+    );
+
+    let past = NetId(u32::try_from(circuit.nets.net_count()).expect("a few nets"));
+    let devices = &mut circuit.devices;
+    let first = *devices.terminal_start.last().expect("one device");
+    devices.kind.push(DeviceKind::Resistor);
+    devices.marker.push(devices.marker[0]);
+    devices.model.push(devices.model[0]);
+    devices.terminal_net.extend([past, NetId::NONE]);
+    devices
+        .terminal_role
+        .extend([TerminalRole::Pin(0), TerminalRole::Pin(1)]);
+    devices.terminal_start.push(first + 2);
+    let mut widened = intent;
+    widened.supply_net.push(past);
+    widened.supply_role.push(SupplyRole::Power);
+    widened.supply_domain.push(IO);
+    widened.supply_voltage.push(millivolts(5_000.0));
+    let after = circuit.voltage(&widened);
+    assert_eq!(after.lo, before.lo);
+    assert_eq!(after.hi, before.hi);
+    assert_eq!(after.nominal_lo, before.nominal_lo);
+    assert_eq!(after.nominal_hi, before.nominal_hi);
+}
