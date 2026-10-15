@@ -5,7 +5,7 @@
 
 #![allow(
     dead_code,
-    reason = "each test binary links only the fixtures it names"
+    reason = "the lvs suite and two examples each link only the fixtures they name"
 )]
 
 use gpurify_check::lvs::graph::Graph;

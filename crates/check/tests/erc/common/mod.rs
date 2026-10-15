@@ -6,11 +6,6 @@
 //! `NetNetworks`, `IntentMap` and the nineteen rule tables are all public
 //! columns with no builder of their own.
 
-#![allow(
-    dead_code,
-    reason = "each test binary links only the fixtures it names"
-)]
-
 use gpurify_check::erc::facts::IntentMap;
 use gpurify_check::erc::power;
 use gpurify_check::erc::power::{EdgeKind, NetNetworks, PowerGrid, PowerSolution};
