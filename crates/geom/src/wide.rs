@@ -18,7 +18,11 @@ impl I256 {
 
     pub(crate) fn from_i128(v: i128) -> Self {
         let fill = if v < 0 { u64::MAX } else { 0 };
-        #[expect(clippy::cast_possible_truncation, reason = "splitting into limbs")]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "splitting into limbs"
+        )]
         let (lo, hi) = (v as u64, (v >> 64) as u64);
         Self([lo, hi, fill, fill])
     }

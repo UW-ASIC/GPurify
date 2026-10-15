@@ -45,10 +45,10 @@ fn layer(rings: &[Ring], merge: bool) -> ValidatedLayer {
     out
 }
 
-fn shrink(rings: &Vec<Ring>) -> Vec<Vec<Ring>> {
+fn shrink(rings: &[Ring]) -> Vec<Vec<Ring>> {
     (0..rings.len())
         .map(|skip| {
-            let mut fewer = rings.clone();
+            let mut fewer = rings.to_vec();
             fewer.remove(skip);
             fewer
         })
@@ -110,7 +110,7 @@ fn the_any_angle_measures_are_the_octilinear_ones_on_octilinear_figures() {
                 .map(|_| crate::boolean_octilinear::random_shape(rng))
                 .collect::<Vec<_>>()
         },
-        shrink,
+        |rings: &Vec<Ring>| shrink(rings),
         |rings| octilinear_agree(rings),
     );
 }
@@ -130,8 +130,11 @@ fn rectangles(rng: &mut Rng) -> Vec<Ring> {
         .collect()
 }
 
+/// A twice-squared distance: its floor, and whether it is a fraction.
+type Twice = (i128, bool);
+
 /// Every figure's width and notch, twice squared, sorted.
-fn measures(merged: &ValidatedLayer, any: bool) -> Vec<((i128, bool), Option<(i128, bool)>)> {
+fn measures(merged: &ValidatedLayer, any: bool) -> Vec<(Twice, Option<Twice>)> {
     let mut scratch = FacingScratch::default();
     let far = Dbu::new_unchecked(FAR);
     let mut out: Vec<_> = (0..u32::try_from(merged.len()).expect("small"))
@@ -217,7 +220,7 @@ fn a_pythagorean_turn_scales_widths_and_commutes_with_booleans() {
         "width_anyangle_turn",
         seeds("width_anyangle_turn", 200),
         rectangles,
-        shrink,
+        |rings: &Vec<Ring>| shrink(rings),
         |rings| rotated(rings),
     );
 }
