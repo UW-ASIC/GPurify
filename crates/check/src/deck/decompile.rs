@@ -189,6 +189,18 @@ impl CompiledDeck {
             if let Some(below) = wire.below {
                 row = row.length("wire_below", below);
             }
+            if let Some(extra) = wire.extra_cut {
+                row = row
+                    .length("extra_cut_within", extra.within)
+                    .value("extra_cut_other", ParamValue::Layer(extra.other))
+                    .value("extra_cut_only", ParamValue::Flag(extra.only));
+            }
+            if let Some(least) = wire.length.0 {
+                row = row.length("length_from", least);
+            }
+            if let Some(short) = wire.length.1 {
+                row = row.length("length_below", short);
+            }
             row
         };
         match rule {

@@ -310,6 +310,81 @@ const WIRE: &[Param] = &[
     p("width", "wire_width", Dim::Length),
     p("below", "wire_below", Dim::Length),
 ];
+/// LEF `ENCLOSURE ... WIDTH minWidth EXCEPTEXTRACUT cutWithin`, the metal on
+/// the cuts' far side named: `except_extra_cut:` on the `WIDTH` row, which
+/// then holds no cut with a redundant one, and `extra_cut:` on the
+/// minimum-width rows written again for the excepted band, which then hold
+/// only such cuts (`extra_cut_only`).
+const EXCEPT_EXTRA: &[Param] = &[
+    p("width", "wire_width", Dim::Length),
+    p("except_extra_cut", "extra_cut_within", Dim::Length),
+    p("other", "extra_cut_other", Dim::Layer),
+];
+const EXCEPT_EXTRA_BELOW: &[Param] = &[
+    p("width", "wire_width", Dim::Length),
+    p("below", "wire_below", Dim::Length),
+    p("except_extra_cut", "extra_cut_within", Dim::Length),
+    p("other", "extra_cut_other", Dim::Layer),
+];
+const ONLY_EXTRA: &[Param] = &[
+    p("width", "wire_width", Dim::Length),
+    p("extra_cut", "extra_cut_within", Dim::Length),
+    p("other", "extra_cut_other", Dim::Layer),
+];
+const ONLY_EXTRA_BELOW: &[Param] = &[
+    p("width", "wire_width", Dim::Length),
+    p("below", "wire_below", Dim::Length),
+    p("extra_cut", "extra_cut_within", Dim::Length),
+    p("other", "extra_cut_other", Dim::Layer),
+];
+/// LEF `ENCLOSURE ... LENGTH minLength` (`length:`), and the vias whose
+/// overhang length falls short of it (`length_below:`), with or without a
+/// wire band's `below:`.
+const LENGTH: &[Param] = &[p("length", "length_from", Dim::Length)];
+const LENGTH_BELOW: &[Param] = &[
+    p("length", "length_from", Dim::Length),
+    p("below", "wire_below", Dim::Length),
+];
+const SHORT: &[Param] = &[p("length_below", "length_below", Dim::Length)];
+const SHORT_BELOW: &[Param] = &[
+    p("length_below", "length_below", Dim::Length),
+    p("below", "wire_below", Dim::Length),
+];
+/// The enclosure rows beyond the plain wire bands: `(params, fixed flags)`.
+const QUALIFIED: [(&[Param], &[(&str, bool)]); 8] = [
+    (EXCEPT_EXTRA, &[("extra_cut_only", false)]),
+    (EXCEPT_EXTRA_BELOW, &[("extra_cut_only", false)]),
+    (ONLY_EXTRA, &[("extra_cut_only", true)]),
+    (ONLY_EXTRA_BELOW, &[("extra_cut_only", true)]),
+    (LENGTH, &[]),
+    (LENGTH_BELOW, &[]),
+    (SHORT, &[]),
+    (SHORT_BELOW, &[]),
+];
+
+/// `enclosure(inner, outer) >= len` with the `n`th [`QUALIFIED`] row.
+const fn every_side(n: usize) -> Kind {
+    Kind {
+        fixed: QUALIFIED[n].1,
+        ..drc(
+            "enclosure",
+            Cmp::Ge,
+            "min_enclosure",
+            &[1, 0],
+            LIMIT,
+            QUALIFIED[n].0,
+        )
+    }
+}
+
+/// `enclosure(inner, outer, opposite) >= len` with the `n`th [`QUALIFIED`]
+/// row.
+const fn opposite_qualified(n: usize) -> Kind {
+    Kind {
+        fixed: QUALIFIED[n].1,
+        ..opposite(QUALIFIED[n].0)
+    }
+}
 
 /// `enclosure(inner, outer, opposite) >= len` with `params`.
 const fn opposite(params: &'static [Param]) -> Kind {
@@ -760,6 +835,14 @@ pub(crate) const KINDS: &[Kind] = &[
         WIRE_BELOW,
     ),
     drc("enclosure", Cmp::Ge, "min_enclosure", &[1, 0], LIMIT, WIRE),
+    every_side(0),
+    every_side(1),
+    every_side(2),
+    every_side(3),
+    every_side(4),
+    every_side(5),
+    every_side(6),
+    every_side(7),
     // Coincident edges exempt, `enclosure(lvtn, nwell, noncoincident)`
     // (sky130 lvtn.10).
     Kind {
@@ -782,6 +865,14 @@ pub(crate) const KINDS: &[Kind] = &[
     opposite(WIRE_WIDTH),
     opposite(WIRE_BELOW),
     opposite(WIRE),
+    opposite_qualified(0),
+    opposite_qualified(1),
+    opposite_qualified(2),
+    opposite_qualified(3),
+    opposite_qualified(4),
+    opposite_qualified(5),
+    opposite_qualified(6),
+    opposite_qualified(7),
     Kind {
         modifier: Some("adjacent"),
         ..drc(

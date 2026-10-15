@@ -11,10 +11,10 @@
 use super::presence::{hosts, inside_point, rects_of};
 use super::width::{rects_layer, wide_rects_into};
 use super::{
-    centre, figures_holding, gap_midpoint, merged, mid, owners_by_point, owners_of,
+    bbox_gap2, centre, figures_holding, gap_midpoint, merged, mid, owners_by_point, owners_of,
     rects_ring_dist2, ring_segs, SortedRects, Verdict, REFUSED,
 };
-use crate::drc::{Scratch, WireBand};
+use crate::drc::{ExtraCut, Scratch, WireBand};
 use crate::erc::rules::supply::untied_points;
 use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
@@ -442,6 +442,104 @@ pub(crate) fn metal_width_via(
     (Outcome::Ran, examined)
 }
 
+/// `EXCEPTEXTRACUT` ([`ExtraCut`], DRC-043): per polygon of the validated
+/// `inner` layer, whether another of them lies on the same merged figure of
+/// `outer` and of `extra.other` (the lowest figure its box overlaps with
+/// positive area) at most `extra.within` from it, box to box. `None` when a
+/// layer does not validate.
+fn redundant_cuts(
+    store: &GeometryStore,
+    (inner, outer): (LayerId, LayerId),
+    extra: ExtraCut,
+    s: &mut Scratch,
+) -> Option<Vec<bool>> {
+    let mut on = Vec::new();
+    for metal in [outer, extra.other] {
+        let figures = merged(store, metal, s)?;
+        let (mut rects, mut start) = (Vec::new(), Vec::new());
+        decompose_into(&figures, &mut rects, &mut start);
+        on.push(SortedRects::new(
+            start
+                .windows(2)
+                .zip(0u32..)
+                .flat_map(|(span, f)| {
+                    rects[span[0] as usize..span[1] as usize]
+                        .iter()
+                        .map(move |&r| (r, f))
+                })
+                .collect(),
+        ));
+    }
+    let boxes = s.validated.get(store, inner)?.bboxes();
+    let key: Vec<_> = boxes
+        .iter()
+        .map(|&b| {
+            let lowest = |k: usize| on[k].overlapping(b).map(|(_, f)| f).min();
+            lowest(0).zip(lowest(1))
+        })
+        .collect();
+    let near = SortedRects::new(boxes.iter().copied().zip(0u32..).collect());
+    let reach = extra.within.mul_wide(extra.within);
+    // A box grown one past `within` overlaps, with positive area, every box
+    // at most `within` from it.
+    let grow = extra.within + Dbu::new_unchecked(1);
+    Some(
+        boxes
+            .iter()
+            .zip(&key)
+            .zip(0u32..)
+            .map(|((&b, &k), i)| {
+                let grown = Bbox {
+                    xlo: b.xlo - grow,
+                    ylo: b.ylo - grow,
+                    xhi: b.xhi + grow,
+                    yhi: b.yhi + grow,
+                };
+                k.is_some()
+                    && near.overlapping(grown).any(|(_, j)| {
+                        j != i && key[j as usize] == k && bbox_gap2(b, boxes[j as usize]) <= reach
+                    })
+            })
+            .collect(),
+    )
+}
+
+/// LEF `ENCLOSURE ... LENGTH`'s overhang length of the box `b` on the merged
+/// figure rectangles `rects`: the longer of the runs of material along the
+/// horizontal and the vertical line through `b`'s centre, each the run that
+/// contains the centre, ends included; 0 when the centre is on no rectangle.
+/// A rectangle lies on a line when the line meets it, edges included.
+// ponytail: scans the host figure's rectangles per cut; index the runs if a
+// plate holds many cuts under a `length:` rule.
+fn overhang_length(rects: &[Bbox], b: Bbox) -> i64 {
+    // Twice the coordinates, so a half-unit centre is whole.
+    let (cx, cy) = (b.xlo.raw() + b.xhi.raw(), b.ylo.raw() + b.yhi.raw());
+    let run = |spans: &mut Vec<(i64, i64)>, at: i64| {
+        spans.sort_unstable();
+        let mut cur: Option<(i64, i64)> = None;
+        for &(lo, hi) in spans.iter() {
+            match cur {
+                Some((clo, chi)) if lo <= chi => cur = Some((clo, chi.max(hi))),
+                Some((clo, chi)) if clo <= at && at <= chi => break,
+                _ => cur = Some((lo, hi)),
+            }
+        }
+        cur.filter(|&(lo, hi)| lo <= at && at <= hi)
+            .map_or(0, |(lo, hi)| (hi - lo) / 2)
+    };
+    let mut across: Vec<(i64, i64)> = rects
+        .iter()
+        .filter(|r| 2 * r.ylo.raw() <= cy && cy <= 2 * r.yhi.raw())
+        .map(|r| (2 * r.xlo.raw(), 2 * r.xhi.raw()))
+        .collect();
+    let mut up: Vec<(i64, i64)> = rects
+        .iter()
+        .filter(|r| 2 * r.xlo.raw() <= cx && cx <= 2 * r.xhi.raw())
+        .map(|r| (2 * r.ylo.raw(), 2 * r.yhi.raw()))
+        .collect();
+    run(&mut across, cx).max(run(&mut up, cy))
+}
+
 /// Below the most negative real margin (`-2 * MAX_ABS_DBU`): seeds the host fold.
 const UNHOSTED: i64 = -(1 << 42);
 
@@ -500,6 +598,13 @@ pub(crate) fn enclosure(
         }
         Some(_) => {}
     }
+    let redundant = match wire.extra_cut {
+        None => Vec::new(),
+        Some(extra) => match redundant_cuts(store, (inner_layer, outer), extra, s) {
+            Some(redundant) => redundant,
+            None => return REFUSED,
+        },
+    };
     if !pair_layers(store, inner_layer, outer, Dbu::new_unchecked(0), s) {
         return REFUSED;
     }
@@ -560,6 +665,28 @@ pub(crate) fn enclosure(
         };
         if from.as_ref().is_some_and(|wide| !on(wide)) || below.as_ref().is_some_and(on) {
             continue;
+        }
+        if wire
+            .extra_cut
+            .is_some_and(|extra| redundant[poly as usize] != extra.only)
+        {
+            continue;
+        }
+        if wire.length != (None, None) {
+            let mut under: Vec<u32> = by_figure.overlapping(inner_box).map(|(_, f)| f).collect();
+            under.sort_unstable();
+            under.dedup();
+            let overhang = under
+                .into_iter()
+                .map(|f| overhang_length(figure_rects(f), inner_box))
+                .max()
+                .unwrap_or(0);
+            let (least, short) = wire.length;
+            if least.is_some_and(|least| overhang < least.raw())
+                || short.is_some_and(|short| overhang >= short.raw())
+            {
+                continue;
+            }
         }
         examined += 1;
         let lo = pairs.partition_point(|&(a, _)| a < inner);
@@ -672,8 +799,7 @@ fn enclosure_octilinear(
     let straight_out = matches!(mode, Mode::Opposite | Mode::Adjacent);
     let octilinear = hosts.is_octilinear() && drawn.is_octilinear();
     if mode == Mode::FullWidth
-        || wire.from.raw() > 0
-        || wire.below.is_some()
+        || wire != WireBand::ANY
         || (straight_out && !(drawn.is_rectilinear() && octilinear))
     {
         return REFUSED;

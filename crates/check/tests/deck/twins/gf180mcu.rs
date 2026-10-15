@@ -2357,6 +2357,7 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
     let narrow = || WireBand {
         from: nm(0),
         below: Some(nm(340)),
+        ..WireBand::ANY
     };
     d.rule(
         "CO.6a",

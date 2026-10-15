@@ -107,10 +107,57 @@ impl RuleRow {
             "{} has no wire band",
             self.kind
         );
+        assert!(
+            band.widths_only(),
+            "a band's extra cut and length are `extra_cut` and `overhang_length`"
+        );
         if band.from.raw() > 0 {
             band.from.put("wire_width", &mut self.params);
         }
         band.below.put("wire_below", &mut self.params);
+        self
+    }
+
+    /// An enclosure with LEF `EXCEPTEXTRACUT cutWithin`
+    /// ([`ExtraCut`](crate::drc::ExtraCut)), `other` the metal on the cuts'
+    /// far side: with `only` false, the `WIDTH` row that holds no cut with a
+    /// redundant one (the deck's `except_extra_cut:`); with `only` true, a
+    /// minimum-width row that holds only such cuts (`extra_cut:`). Give it a
+    /// [`wire`](Self::wire) band from a width.
+    ///
+    /// # Panics
+    ///
+    /// On a row of any other kind.
+    #[must_use]
+    pub fn extra_cut(mut self, within: Dbu, other: LayerRef, only: bool) -> Self {
+        assert!(
+            matches!(self.kind, "min_enclosure" | "asymmetric_enclosure"),
+            "{} has no extra-cut exception",
+            self.kind
+        );
+        within.put("extra_cut_within", &mut self.params);
+        other.put("extra_cut_other", &mut self.params);
+        only.put("extra_cut_only", &mut self.params);
+        self
+    }
+
+    /// An enclosure held only on vias whose overhang length
+    /// ([`WireBand::length`]) is at least `least` and below `short`: LEF
+    /// `ENCLOSURE ... LENGTH minLength` is `least`, and the vias it leaves to
+    /// the other rows `short` (the deck's `length:` and `length_below:`).
+    ///
+    /// # Panics
+    ///
+    /// On a row of any other kind.
+    #[must_use]
+    pub fn overhang_length(mut self, least: Option<Dbu>, short: Option<Dbu>) -> Self {
+        assert!(
+            matches!(self.kind, "min_enclosure" | "asymmetric_enclosure"),
+            "{} has no overhang length",
+            self.kind
+        );
+        least.put("length_from", &mut self.params);
+        short.put("length_below", &mut self.params);
         self
     }
 
