@@ -122,8 +122,6 @@ version = "0.1.0"
 dependencies = [
  "fearless_simd",
  "gpurify-testgen",
- "serde",
- "serde_json",
  "thiserror",
 ]
 
