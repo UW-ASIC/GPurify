@@ -415,18 +415,16 @@ pub fn random_rectilinear_layer(
             if rng.unit() >= grid.density.sqrt() {
                 continue;
             }
-            let jitter_x = if slack > 0 {
-                rng.range(0, slack + 1)
-            } else {
-                0
+            // x draws before y: the order is part of the seed stream.
+            let mut jitter = || {
+                if slack > 0 {
+                    rng.range(0, slack + 1)
+                } else {
+                    0
+                }
             };
-            let jitter_y = if slack > 0 {
-                rng.range(0, slack + 1)
-            } else {
-                0
-            };
-            let x = origin.0 + i64::from(col) * grid.cell + 1 + jitter_x;
-            let y = origin.1 + i64::from(row) * grid.cell + 1 + jitter_y;
+            let x = origin.0 + i64::from(col) * grid.cell + 1 + jitter();
+            let y = origin.1 + i64::from(row) * grid.cell + 1 + jitter();
             layout.rect(layer, x, y, x + side, y + side);
             shapes += 1;
         }
@@ -574,9 +572,9 @@ mod tests {
 
     /// A bounding box overstates every non-convex shape here.
     ///
-    /// Oracle: hand-derived. The L is 30 * 170 = 5100 against 100^2, the plus 4
-    /// * 100 * 30 - 900 = 11 100 against 200^2, the U 20 * 240 = 4800 against
-    /// 80 * 100.
+    /// Oracle: hand-derived. The L is 30 * 170 = 5100 against 100^2, the
+    /// plus 4 * 100 * 30 - 900 = 11 100 against 200^2, the U 20 * 240 = 4800
+    /// against 80 * 100.
     #[test]
     fn non_convex_shapes_are_smaller_than_their_bounding_box() {
         assert!(l_shape_area(100, 30) < 100 * 100);
