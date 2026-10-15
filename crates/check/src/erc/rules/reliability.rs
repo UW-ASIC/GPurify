@@ -558,3 +558,93 @@ fn separation(a: Bbox, b: Bbox) -> Dbu {
     let dy = (b.ylo - a.yhi).max(a.ylo - b.yhi).max(zero);
     dx.max(dy)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{domain_spread, encloses, separation, NetVoltage};
+    use crate::topology::NetId;
+    use gpurify_geom::{Bbox, Dbu};
+
+    fn b(xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> Bbox {
+        Bbox {
+            xlo: Dbu::new_unchecked(xlo),
+            ylo: Dbu::new_unchecked(ylo),
+            xhi: Dbu::new_unchecked(xhi),
+            yhi: Dbu::new_unchecked(yhi),
+        }
+    }
+
+    /// The separation of two boxes is the larger of their gaps along x and
+    /// along y, zero when they touch or overlap, the same either way round.
+    ///
+    /// Oracle: closed form, by hand: `[0,10]²` against `[13,20]×[0,10]`
+    /// is 3 apart along x, against `[0,10]×[-9,-4]` 4 along y, against
+    /// `[15,20]×[17,30]` max(5, 7) = 7, against a box touching its edge or
+    /// inside it 0.
+    #[test]
+    fn separation_is_the_larger_axis_gap_and_zero_on_contact() {
+        let a = b(0, 0, 10, 10);
+        for (other, gap) in [
+            (b(13, 0, 20, 10), 3),
+            (b(-8, 2, -5, 3), 5),
+            (b(0, -9, 10, -4), 4),
+            (b(2, 16, 3, 20), 6),
+            (b(15, 17, 20, 30), 7),
+            (b(-20, -30, -18, -2), 18),
+            (b(10, 3, 12, 4), 0),
+            (b(2, 2, 3, 3), 0),
+            (b(-5, -5, 20, 20), 0),
+        ] {
+            assert_eq!(separation(a, other).raw(), gap, "{other:?}");
+            assert_eq!(separation(other, a).raw(), gap, "{other:?} reversed");
+        }
+    }
+
+    /// A device's domain spread is the highest nominal any of its terminal
+    /// nets reaches less the lowest, and unknown when a terminal's net is
+    /// reached by no supply (or the device has no terminal).
+    ///
+    /// Oracle: closed form: nets at 1.8 V, 3.3 V and a 1.2..5 V net give
+    /// 3300 - 1800 = 1500 mV and 5000 - 1200 = 3800 mV; one net alone, 0.
+    #[test]
+    fn domain_spread_is_the_widest_nominal_gap_over_the_terminals() {
+        let voltage = NetVoltage {
+            lo: vec![1_800.0, 3_300.0, 1_200.0, f64::INFINITY],
+            hi: vec![1_800.0, 3_300.0, 5_000.0, f64::NEG_INFINITY],
+            nominal_lo: vec![1_800.0, 3_300.0, 1_200.0, f64::INFINITY],
+            nominal_hi: vec![1_800.0, 3_300.0, 5_000.0, f64::NEG_INFINITY],
+            power: vec![0; 4],
+            ground: vec![0; 4],
+        };
+        let spread = |nets: &[u32]| {
+            let nets: Vec<NetId> = nets.iter().map(|&n| NetId(n)).collect();
+            domain_spread(&voltage, &nets).map(|v| v.raw())
+        };
+        assert_eq!(spread(&[0, 1]), Some(1_500.0));
+        assert_eq!(spread(&[1, 0, 0]), Some(1_500.0));
+        assert_eq!(spread(&[0, 2, 1]), Some(3_800.0));
+        assert_eq!(spread(&[1]), Some(0.0));
+        assert_eq!(spread(&[0, 3]), None, "net 3 is reached by no supply");
+        assert_eq!(spread(&[]), None, "no terminal, no spread");
+    }
+
+    /// One isolation polygon must cover the whole of the device's box; two
+    /// that cover it only between them do not, and an edge-touching cover
+    /// does.
+    ///
+    /// Oracle: closed form: polygon 0 is `[0,10]²`, polygon 1 the two
+    /// halves `[20,25]×[0,10]` and `[25,30]×[0,10]`; `[2,8]²` lies in
+    /// polygon 0, `[21,29]×[1,9]` in polygon 1's halves, `[8,22]×[1,9]`
+    /// straddles both, `[0,10]²` is polygon 0 itself.
+    #[test]
+    fn encloses_needs_one_polygon_to_cover_the_whole_box() {
+        let rects = [b(0, 0, 10, 10), b(20, 0, 25, 10), b(25, 0, 30, 10)];
+        let start = [0u32, 1, 3];
+        assert!(encloses(&rects, &start, b(2, 2, 8, 8)));
+        assert!(encloses(&rects, &start, b(0, 0, 10, 10)));
+        assert!(encloses(&rects, &start, b(21, 1, 29, 9)));
+        assert!(!encloses(&rects, &start, b(8, 1, 22, 9)));
+        assert!(!encloses(&rects, &start, b(5, 5, 11, 9)));
+        assert!(!encloses(&rects, &[0], b(2, 2, 8, 8)), "no polygon");
+    }
+}
