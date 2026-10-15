@@ -11,8 +11,8 @@
 use super::presence::{hosts, inside_point, rects_of};
 use super::width::{rects_layer, wide_rects_into};
 use super::{
-    bbox_gap2, centre, figures_holding, gap_midpoint, merged, mid, owners_by_point, owners_of,
-    rects_ring_dist2, ring_segs, SortedRects, Verdict, REFUSED,
+    bbox_gap2, centre, figure_rects, figures_holding, gap_midpoint, merged, mid, owners_by_point,
+    owners_of, rects_ring_dist2, ring_segs, SortedRects, Verdict, REFUSED,
 };
 use crate::drc::{ExtraCut, Scratch, WireBand};
 use crate::erc::rules::supply::untied_points;
@@ -456,19 +456,7 @@ fn redundant_cuts(
     let mut on = Vec::new();
     for metal in [outer, extra.other] {
         let figures = merged(store, metal, s)?;
-        let (mut rects, mut start) = (Vec::new(), Vec::new());
-        decompose_into(&figures, &mut rects, &mut start);
-        on.push(SortedRects::new(
-            start
-                .windows(2)
-                .zip(0u32..)
-                .flat_map(|(span, f)| {
-                    rects[span[0] as usize..span[1] as usize]
-                        .iter()
-                        .map(move |&r| (r, f))
-                })
-                .collect(),
-        ));
+        on.push(figure_rects(&figures));
     }
     let boxes = s.validated.get(store, inner)?.bboxes();
     let key: Vec<_> = boxes
@@ -1184,19 +1172,7 @@ pub(crate) fn min_extension(
         ..
     } = s;
     // Each gate lies in exactly one line figure.
-    let (mut line_rects, mut line_start) = (Vec::new(), Vec::new());
-    decompose_into(&lines, &mut line_rects, &mut line_start);
-    let line_of = SortedRects::new(
-        line_start
-            .windows(2)
-            .zip(0u32..)
-            .flat_map(|(span, f)| {
-                line_rects[span[0] as usize..span[1] as usize]
-                    .iter()
-                    .map(move |&r| (r, f))
-            })
-            .collect(),
-    );
+    let line_of = figure_rects(&lines);
     let refs = SortedRects::new(rects_b.labelled());
     decompose_into(gates, rects, rect_start);
     let owners = owners_of(gates, rects_a)

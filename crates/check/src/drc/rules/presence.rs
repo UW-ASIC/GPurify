@@ -5,7 +5,7 @@
 //! Data out: one violation per offending shape, or per edge of an edge layer.
 
 use super::{
-    centre, figure_point, figures_holding, merged, mid, owners_by_point, owners_of, seg_bbox,
+    centre, figure_point, figures_holding, merged, owners_by_point, owners_of, seg_bbox,
     SortedRects, Verdict, REFUSED,
 };
 use crate::drc::Scratch;
@@ -110,10 +110,7 @@ pub(super) fn hosts(
 /// A point on figure `figure`'s material: the centre of its first rectangle.
 pub(super) fn inside_point(rects: &(Vec<Bbox>, Vec<u32>), figure: usize) -> Point {
     let r = rects.0[rects.1[figure] as usize];
-    Point {
-        x: mid(r.xlo, r.xhi),
-        y: mid(r.ylo, r.yhi),
-    }
+    centre(r)
 }
 
 /// Each merged `outer` figure must hold at least `min_count` and at most
@@ -175,11 +172,7 @@ pub(crate) fn must_contain(
     s.rects_a.build(store, outer, drawn);
     let owners = owners_of(&outer_figures, &s.rects_a);
     for (figure, &count) in held.iter().enumerate() {
-        let broken = if count < min_count {
-            min_count
-        } else if count > max_count {
-            max_count
-        } else {
+        let Some(broken) = count_broken(count, (min_count, max_count)) else {
             continue;
         };
         out.push(Violation {

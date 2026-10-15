@@ -6,6 +6,7 @@
 //! per offending merged figure (per edge of one for min edge length). Exact
 //! on the whole input domain.
 
+use super::facing::merged_owners;
 use super::{centre, mid, owners_by_point, owners_of, Verdict, REFUSED};
 use crate::drc::ruleset::{StepKind, StepNeighbour};
 use crate::drc::Scratch;
@@ -173,16 +174,12 @@ pub(crate) fn cut_size(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let Some(drawn) = s.validated.get(store, layer) else {
+    let Some(owners) = merged_owners(store, layer, s) else {
         return REFUSED;
     };
-    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
-        return REFUSED;
-    }
-    s.rects_a.build(store, layer, drawn);
     let (short, long) = (width.min(height), width.max(height));
     let figures = &s.layer_out;
-    for (idx, owner) in (0..).zip(owners_of(figures, &s.rects_a)) {
+    for (idx, owner) in (0..).zip(owners) {
         let poly = figures.get(idx);
         let b = poly.bbox();
         let (bs, bl) = (b.width().min(b.height()), b.width().max(b.height()));
@@ -207,10 +204,7 @@ pub(crate) fn cut_size(
             rule,
             layer,
             severity: Severity::Error,
-            at: Point {
-                x: mid(b.xlo, b.xhi),
-                y: mid(b.ylo, b.yhi),
-            },
+            at: centre(b),
             measured,
             limit,
             shapes: (owner, None),
@@ -231,15 +225,11 @@ pub(crate) fn cut_class(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let Some(drawn) = s.validated.get(store, layer) else {
+    let Some(owners) = merged_owners(store, layer, s) else {
         return REFUSED;
     };
-    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
-        return REFUSED;
-    }
-    s.rects_a.build(store, layer, drawn);
     let figures = &s.layer_out;
-    for (idx, owner) in (0..).zip(owners_of(figures, &s.rects_a)) {
+    for (idx, owner) in (0..).zip(owners) {
         let poly = figures.get(idx);
         let b = poly.bbox();
         let sides = (b.width().min(b.height()), b.width().max(b.height()));
@@ -251,10 +241,7 @@ pub(crate) fn cut_class(
             rule,
             layer,
             severity: Severity::Error,
-            at: Point {
-                x: mid(b.xlo, b.xhi),
-                y: mid(b.ylo, b.yhi),
-            },
+            at: centre(b),
             measured: Measurement::Count(0),
             limit: Measurement::Count(1),
             shapes: (owner, None),
@@ -277,14 +264,9 @@ pub(crate) fn allowed_width(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let Some(drawn) = s.validated.get(store, layer) else {
+    let Some(owners) = merged_owners(store, layer, s) else {
         return REFUSED;
     };
-    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
-        return REFUSED;
-    }
-    s.rects_a.build(store, layer, drawn);
-    let owners = owners_of(&s.layer_out, &s.rects_a);
     decompose_into(&s.layer_out, &mut s.rects, &mut s.rect_start);
     for (idx, owner) in (0u32..).zip(owners) {
         let width2 = narrowest_width2(s.layer_out.get(idx), &mut s.facing);
@@ -508,16 +490,12 @@ pub(crate) fn min_step(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let Some(drawn) = s.validated.get(store, layer) else {
+    let Some(owners) = merged_owners(store, layer, s) else {
         return REFUSED;
     };
-    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
-        return REFUSED;
-    }
-    s.rects_a.build(store, layer, drawn);
     let mut examined = 0u64;
     let (mut points, mut short) = (Vec::new(), Vec::new());
-    for (idx, owner) in (0u32..).zip(owners_of(&s.layer_out, &s.rects_a)) {
+    for (idx, owner) in (0u32..).zip(owners) {
         let poly = s.layer_out.get(idx);
         for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
             let (xs, ys) = ring.coords();
@@ -590,10 +568,7 @@ pub(crate) fn min_step(
                     rule,
                     layer,
                     severity: Severity::Error,
-                    at: Point {
-                        x: mid(bbox.xlo, bbox.xhi),
-                        y: mid(bbox.ylo, bbox.yhi),
-                    },
+                    at: centre(bbox),
                     measured,
                     limit,
                     shapes: (owner, None),
@@ -617,16 +592,12 @@ pub(crate) fn min_step_adjacent(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let Some(drawn) = s.validated.get(store, layer) else {
+    let Some(owners) = merged_owners(store, layer, s) else {
         return REFUSED;
     };
-    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
-        return REFUSED;
-    }
-    s.rects_a.build(store, layer, drawn);
     let mut examined = 0u64;
     let mut points = Vec::new();
-    for (idx, owner) in (0u32..).zip(owners_of(&s.layer_out, &s.rects_a)) {
+    for (idx, owner) in (0u32..).zip(owners) {
         let poly = s.layer_out.get(idx);
         if matches!(
             neighbour,
@@ -693,10 +664,7 @@ pub(crate) fn min_step_adjacent(
                     rule,
                     layer,
                     severity: Severity::Error,
-                    at: Point {
-                        x: mid(bbox.xlo, bbox.xhi),
-                        y: mid(bbox.ylo, bbox.yhi),
-                    },
+                    at: centre(bbox),
                     measured: Measurement::Length(length(e)),
                     limit: Measurement::Length(limit),
                     shapes: (owner, None),

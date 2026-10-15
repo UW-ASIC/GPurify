@@ -6,7 +6,7 @@
 //! counts as examined, is documented on its [`Rule`](crate::drc::Rule)
 //! variant. Input a kind cannot represent exactly (a layer that fails to
 //! validate, a failed boolean, a non-axis-aligned edge) is `Refused`, never a
-//! clean `Ran`. The via and grid kinds read raw rows and never refuse.
+//! clean `Ran`. The grid kinds read raw rows and never refuse.
 
 pub mod area;
 pub mod edge;
@@ -145,6 +145,23 @@ impl<T: Copy> SortedRects<T> {
                 (c.xlo < c.xhi && c.ylo < c.yhi).then_some((c, label))
             })
     }
+}
+
+/// A merged layer's rectangles, each labelled with its figure.
+pub(crate) fn figure_rects(figures: &ValidatedLayer) -> SortedRects<u32> {
+    let (mut rects, mut start) = (Vec::new(), Vec::new());
+    decompose_into(figures, &mut rects, &mut start);
+    SortedRects::new(
+        start
+            .windows(2)
+            .zip(0u32..)
+            .flat_map(|(span, f)| {
+                rects[span[0] as usize..span[1] as usize]
+                    .iter()
+                    .map(move |&r| (r, f))
+            })
+            .collect(),
+    )
 }
 
 /// The lowest drawn row under each figure of `figures`, a boolean result whose

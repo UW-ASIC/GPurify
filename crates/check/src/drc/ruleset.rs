@@ -5140,13 +5140,10 @@ impl RuleSet {
     /// # Panics
     ///
     /// When `nets` is not the extraction of `store` and misses a row a
-    /// [`Rule::NetSpacing`] layer holds, when a [`Rule::SpacingTable`] names a
-    /// table that is missing or fails [`SpacingTable::is_valid`], or when a
-    /// [`Rule::CutClass`] or [`Rule::AllowedWidth`] names a list that is
-    /// missing.
-    /// [`Rule::NetSpacing`] layer holds, or when a [`Rule::SpacingTable`] or
+    /// [`Rule::NetSpacing`] layer holds, when a [`Rule::SpacingTable`] or
     /// [`Rule::CutClassSpacing`] names a table that is missing or fails its
-    /// `is_valid`.
+    /// `is_valid`, or when a [`Rule::CutClass`] or [`Rule::AllowedWidth`]
+    /// names a list that is missing.
     pub fn run_with_nets(
         &self,
         store: &GeometryStore,
@@ -5946,7 +5943,8 @@ fn dfm_scored(
 impl Rule {
     /// The layers a rule reads past [`Self::layers`]: the anchors of
     /// [`Rule::AnchoredPatterning`], the boundary of
-    /// [`Rule::DensityBalance`].
+    /// [`Rule::DensityBalance`] and [`Rule::CoverDensity`], the upper layer
+    /// of [`Rule::CutAreaChange`].
     fn more_layers(&self) -> [Option<LayerId>; 4] {
         match *self {
             Rule::AnchoredPatterning { anchors, .. } => anchors,
