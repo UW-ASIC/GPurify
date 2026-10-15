@@ -37,13 +37,13 @@
 //!
 //! | Deck | Kind | Checked by | Flags | Catalog |
 //! |---|---|---|---|---|
-//! | `width(L) >= len` | `min_width` | [`drc::Rule::MinWidth`] | a shape narrower than the limit anywhere | DRC-010, DRC-037, DRC-038, DRC-073, DRC-090, DRC-095, DRC-096, ERC-C11 |
+//! | `width(L) >= len` | `min_width` | [`drc::Rule::MinWidth`] | a shape narrower than the limit anywhere | DRC-010, DRC-037, DRC-038, DRC-073, DRC-090, DRC-095, DRC-096, DRC-116, ERC-C11 |
 //! | `width(L) <= len` | `max_width` | [`drc::Rule::MaxWidth`] | a part of a shape wider than the limit in every direction | DRC-012 |
 //! | `size(L) == w x h` | `cut_size` | [`drc::Rule::CutSize`] | a cut that is not exactly that rectangle | DRC-013, DRC-014 |
-//! | `edge_length(L) >= len` | `min_edge_length` | [`drc::Rule::MinEdgeLength`] | an edge shorter than the limit | DRC-020, DRC-038 |
-//! | `notch(L) >= len` | `notch` | [`drc::Rule::Notch`] | a gap inside one shape narrower than the limit | DRC-024, DRC-038 |
-//! | `space(L) >= len` | `min_spacing` | [`drc::Rule::MinSpacing`] | two shapes on one layer closer than the limit | DRC-023, DRC-037, DRC-038, DRC-060, DRC-064 |
-//! | `space(A, B) >= len` | `min_spacing_diff` | [`drc::Rule::MinSpacingDiff`] | a shape on A closer than the limit to one on B | DRC-038, DRC-047, DRC-064, DRC-065, DRC-073, DRC-090, ERC-C11 |
+//! | `edge_length(L) >= len` | `min_edge_length` | [`drc::Rule::MinEdgeLength`] | an edge shorter than the limit | DRC-020, DRC-038, DRC-116 |
+//! | `notch(L) >= len` | `notch` | [`drc::Rule::Notch`] | a gap inside one shape narrower than the limit | DRC-024, DRC-038, DRC-116 |
+//! | `space(L) >= len` | `min_spacing` | [`drc::Rule::MinSpacing`] | two shapes on one layer closer than the limit | DRC-023, DRC-037, DRC-038, DRC-060, DRC-064, DRC-116 |
+//! | `space(A, B) >= len` | `min_spacing_diff` | [`drc::Rule::MinSpacingDiff`] | a shape on A closer than the limit to one on B | DRC-038, DRC-047, DRC-064, DRC-065, DRC-073, DRC-090, DRC-116, ERC-C11 |
 //! | `space(A, B, projection) >= len` | `projection_spacing` | [`drc::Rule::ProjectionSpacing`] | facing edges of A and B too close | DRC-055 |
 //! | `eol_space(L; eol_width: len) >= len` | `eol_spacing` | [`drc::Rule::EolSpacing`] | too little space at an end of line | DRC-029, DRC-031 |
 //! | `prl_space(L; prl: len) >= len` | `prl_spacing` | [`drc::Rule::PrlSpacing`] | shapes running side by side for `prl`, too close | DRC-026, DRC-064 |
@@ -52,17 +52,17 @@
 //! | `wide_space(L; width: len, attached: len) >= len` | `attached_wide_spacing` | [`drc::Rule::AttachedWideSpacing`] | the same, also from what is attached to the wide part | DRC-028 |
 //! | `space(L[, L2]; nets: same \| different) >= len` | `net_spacing` | [`drc::Rule::NetSpacing`] | same-net or different-net shapes too close, on one layer or two | DRC-080, DRC-081 |
 //! | `space_table(L; prl: [..], width: [..], space: [[..]])` | `spacing_table` | [`drc::Rule::SpacingTable`] | two shapes closer than their table cell | DRC-025, DRC-026, DRC-027 |
-//! | `area(L) >= area` | `min_area` | [`drc::Rule::MinArea`] | a shape smaller than the limit | DRC-017, ERC-A9 |
-//! | `hole_area(L) >= area` | `min_enclosed_area` | [`drc::Rule::MinEnclosedArea`] | a hole smaller than the limit | DRC-019 |
+//! | `area(L) >= area` | `min_area` | [`drc::Rule::MinArea`] | a shape smaller than the limit | DRC-017, DRC-116, ERC-A9 |
+//! | `hole_area(L) >= area` | `min_enclosed_area` | [`drc::Rule::MinEnclosedArea`] | a hole smaller than the limit | DRC-019, DRC-116 |
 //! | `cheesing(L) <= area` | `cheesing` | [`drc::Rule::Cheesing`] | a shape larger than the limit with no slot | DRC-075, ERC-E12 |
 //! | `density(L[, boundary]; window: len, step: len) >= frac` | `density` | [`drc::Rule::Density`] | a window with coverage outside the limit | DRC-071 |
 //! | `global_density(L[, boundary]) >= frac` | `global_density` | [`drc::Rule::GlobalDensity`] | coverage of the whole die outside the limit | DRC-070 |
 //! | `critical_area(L; radius: len) <= area` | `critical_area` | [`drc::Rule::CriticalArea`] | too much short-circuit critical area for one defect size | DRC-112 |
 //! | `density_balance(A, B[, boundary]; window: len, step: len) >= frac` | `density_balance` | [`drc::Rule::DensityBalance`] | a window where two masks' coverage is out of balance | DRC-104 |
-//! | `enclosure(inner, outer[; width: len, below: len]) >= len` | `min_enclosure` | [`drc::Rule::MinEnclosure`] | an inner shape not surrounded by the limit on every side | DRC-040, DRC-043, DRC-090, DRC-096 |
+//! | `enclosure(inner, outer[; width: len, below: len]) >= len` | `min_enclosure` | [`drc::Rule::MinEnclosure`] | an inner shape not surrounded by the limit on every side | DRC-040, DRC-043, DRC-090, DRC-096, DRC-116 |
 //! | `enclosure(inner, outer, opposite[; width: len, below: len]) >= len` | `asymmetric_enclosure` | [`drc::Rule::AsymmetricEnclosure`] | an inner shape without the limit on two opposite sides | DRC-041, DRC-042, DRC-043 |
 //! | `enclosure(inner, outer, adjacent) >= len` | `adjacent_enclosure` | [`drc::Rule::AdjacentEnclosure`] | an inner shape with a corner where neither edge meeting it has the limit | DRC-042 |
-//! | `enclosure(inner, outer, noncoincident) >= len` | `noncoincident_enclosure` | [`drc::Rule::NoncoincidentEnclosure`] | an inner shape too close to outer's edge where their edges do not coincide | DRC-054 |
+//! | `enclosure(inner, outer, noncoincident) >= len` | `noncoincident_enclosure` | [`drc::Rule::NoncoincidentEnclosure`] | an inner shape too close to outer's edge where their edges do not coincide | DRC-054, DRC-116 |
 //! | `full_width(inner, outer)` | `full_width` | [`drc::Rule::FullWidth`] | an inner shape not spanning its host along either axis | DRC-053 |
 //! | `enclosure(inner, outer) <= len` | `max_enclosure` | [`drc::Rule::MaxEnclosure`] | an outer shape reaching too far past what it holds | DRC-044 |
 //! | `extension(A, B) >= len` | `min_extension` | [`drc::Rule::MinExtension`] | A not extending past B by the limit | DRC-045 |
