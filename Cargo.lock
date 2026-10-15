@@ -98,7 +98,6 @@ dependencies = [
  "gpurify-geom",
  "gpurify-ingest",
  "gpurify-testgen",
- "serde",
  "thiserror",
 ]
 
