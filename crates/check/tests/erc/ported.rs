@@ -9,7 +9,6 @@
 //! shuffle): `cargo mutants` runs this suite once per mutant.
 
 #![allow(
-    dead_code,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_precision_loss,

@@ -1,16 +1,10 @@
 //! Fixtures shared by the DRC suite: ids, layers, and a one-call rule runner.
 
-#![allow(
-    dead_code,
-    reason = "each test binary links only the fixtures it names"
-)]
-
 pub mod deck;
 
 use gpurify_check::drc::{Rule, RuleSet};
 use gpurify_check::report::{RuleRun, Violations};
-use gpurify_geom::view::validate_layer_into;
-use gpurify_geom::{GeometryStore, LayerId, ValidatedLayer};
+use gpurify_geom::{GeometryStore, LayerId};
 use gpurify_ingest::StrId;
 
 pub const RULE: StrId = StrId(0);
@@ -36,13 +30,4 @@ impl Sink {
         };
         set.run(store, &mut self.out, &mut self.runs);
     }
-}
-
-/// Validate one layer, panicking with the reason if it will not.
-#[must_use]
-pub fn validated(store: &GeometryStore, layer: LayerId) -> ValidatedLayer {
-    let mut out = ValidatedLayer::default();
-    validate_layer_into(store, layer, &mut out)
-        .unwrap_or_else(|error| panic!("the fixture layer {layer:?} did not validate: {error}"));
-    out
 }

@@ -9,11 +9,6 @@
 //! `Checks` argument. The point of having it here: `cargo mutants` runs only
 //! this crate's tests against this crate's code.
 
-#![allow(
-    dead_code,
-    reason = "each test binary links only the fixtures it names"
-)]
-
 use gpurify_check::deck::CompiledDeck;
 use gpurify_check::erc::{self, Process};
 use gpurify_check::report::{Measurement, Outcome, RuleRun, Violations};
@@ -226,6 +221,10 @@ pub struct Fixture {
     /// Unique and path-like.
     pub name: String,
     /// The catalog rows (`docs/check-catalog.tsv`) this fixture proves.
+    #[expect(
+        dead_code,
+        reason = "read by the root harness's catalog test; kept so a fixture moves unchanged"
+    )]
     pub catalog: Vec<&'static str>,
     /// The whole deck.
     pub deck: String,
