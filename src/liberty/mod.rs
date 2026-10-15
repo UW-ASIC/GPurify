@@ -1287,7 +1287,10 @@ fn merge_overlaps(
             gpurify_geom::view::validate_layer_into(&scratch, LayerId(0), &mut alone).ok()?;
             gpurify_geom::boolean::union_into(&alone, &empty, &mut merged).ok()?;
             for i in 0..merged.len() {
-                for ring in merged.poly_rings(u32::try_from(i).expect("a polygon index is a u32")) {
+                for ring in merged
+                    .get(u32::try_from(i).expect("a polygon index is a u32"))
+                    .rings()
+                {
                     let (xs, ys) = ring.coords();
                     builder.push(*layer, xs, ys);
                     owners.push(owner);

@@ -66,7 +66,7 @@ fn segs(edges: &[Seg], map: impl Fn(Pt) -> Pt) -> Vec<(Pt, Pt)> {
 fn rings(layer: &ValidatedLayer, map: impl Fn(Pt) -> Pt) -> Vec<(Pt, Pt)> {
     let mut out = Vec::new();
     for idx in 0..u32::try_from(layer.len()).expect("small") {
-        for ring in layer.poly_rings(idx) {
+        for ring in layer.get(idx).rings() {
             let (xs, ys) = ring.coords();
             let n = xs.len();
             for i in 0..n {

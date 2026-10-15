@@ -49,7 +49,7 @@ fn hole(x0: i64, y0: i64, x1: i64, y1: i64) -> ([i64; 4], [i64; 4]) {
 
 fn area(l: &ValidatedLayer) -> i128 {
     (0..u32::try_from(l.len()).expect("small"))
-        .flat_map(|i| l.poly_rings(i))
+        .flat_map(|i| l.get(i).rings())
         .map(|r| r.area2().raw())
         .sum::<i128>()
         / 2

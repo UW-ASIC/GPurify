@@ -102,7 +102,7 @@ fn validated(store: &GeometryStore, layer: u16) -> ValidatedLayer {
 fn rings(layer: &ValidatedLayer) -> Vec<Ring> {
     let mut out = Vec::new();
     for idx in 0..u32::try_from(layer.len()).expect("small") {
-        for ring in layer.poly_rings(idx) {
+        for ring in layer.get(idx).rings() {
             let (xs, ys) = ring.coords();
             out.push(xs.iter().zip(ys).map(|(x, y)| (x.raw(), y.raw())).collect());
         }
@@ -356,12 +356,7 @@ fn layer_of(rings_in: &[Ring]) -> ValidatedLayer {
 
 fn twice_area(layer: &ValidatedLayer) -> i128 {
     (0..u32::try_from(layer.len()).expect("small"))
-        .flat_map(|i| {
-            layer
-                .poly_rings(i)
-                .map(|r| r.area2().raw())
-                .collect::<Vec<_>>()
-        })
+        .flat_map(|i| layer.get(i).rings().map(|r| r.area2().raw()))
         .sum()
 }
 

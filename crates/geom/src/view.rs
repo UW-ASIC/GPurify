@@ -148,51 +148,35 @@ impl ValidatedLayer {
     pub fn select_into(&self, keep: &[bool], out: &mut ValidatedLayer) {
         assert_eq!(keep.len(), self.len(), "one flag per polygon");
         out.reset();
-        for (idx, _) in keep.iter().enumerate().filter(|(_, &k)| k) {
-            let span_start = crate::narrow(out.ring_vert_start.len());
-            let (start, len) = (self.poly_ring_start[idx], self.poly_ring_len[idx]);
-            for ring in start..start + len {
-                let RingRef { xs, ys } = self.ring(ring);
-                let (diagonal, skew) = angle_flags(xs, ys);
-                out.diagonal |= diagonal;
-                out.skew |= skew;
-                out.push_ring(xs, ys, self.ring_poly[ring as usize]);
-            }
-            out.poly_ring_start.push(span_start);
-            out.poly_ring_len.push(len);
-            out.poly_bbox.push(self.poly_bbox[idx]);
+        for (idx, _) in (0..).zip(keep).filter(|&(_, &k)| k) {
+            out.append_polygon(self, idx);
         }
     }
 
     /// Copies polygon `idx` alone into `out` (cleared and refilled), keeping
     /// its store rows: [`ValidatedLayer::select_into`] of one polygon, at the
-    /// cost of that polygon.
-    ///
-    /// # Panics
-    ///
-    /// On `idx >= len()`.
-    pub fn copy_polygon_into(&self, idx: u32, out: &mut ValidatedLayer) {
+    /// cost of that polygon. Panics on `idx >= len()`.
+    pub(crate) fn copy_polygon_into(&self, idx: u32, out: &mut ValidatedLayer) {
         out.reset();
-        let idx = idx as usize;
-        let (start, len) = (self.poly_ring_start[idx], self.poly_ring_len[idx]);
-        for ring in start..start + len {
-            let RingRef { xs, ys } = self.ring(ring);
-            let (diagonal, skew) = angle_flags(xs, ys);
-            out.diagonal |= diagonal;
-            out.skew |= skew;
-            out.push_ring(xs, ys, self.ring_poly[ring as usize]);
-        }
-        out.poly_ring_start.push(0);
-        out.poly_ring_len.push(len);
-        out.poly_bbox.push(self.poly_bbox[idx]);
+        out.append_polygon(self, idx);
     }
 
-    /// Every ring of polygon `idx`, outer first, then its holes ascending by
-    /// store row. Panics on `idx >= len()`.
-    pub fn poly_rings(&self, idx: u32) -> impl Iterator<Item = RingRef<'_>> + '_ {
-        let start = self.poly_ring_start[idx as usize];
-        let len = self.poly_ring_len[idx as usize];
-        (start..start + len).map(move |ring| self.ring(ring))
+    /// Appends polygon `idx` of `from`, its rings and store rows, recomputing
+    /// the angle flags from the rings it brings.
+    fn append_polygon(&mut self, from: &ValidatedLayer, idx: u32) {
+        let span_start = crate::narrow(self.ring_vert_start.len());
+        let idx = idx as usize;
+        let (start, len) = (from.poly_ring_start[idx], from.poly_ring_len[idx]);
+        for ring in start..start + len {
+            let RingRef { xs, ys } = from.ring(ring);
+            let (_, rectilinear, octilinear) = edge_flags_scalar(xs, ys, xs[0], ys[0]);
+            self.diagonal |= !rectilinear;
+            self.skew |= !octilinear;
+            self.push_ring(xs, ys, from.ring_poly[ring as usize]);
+        }
+        self.poly_ring_start.push(span_start);
+        self.poly_ring_len.push(len);
+        self.poly_bbox.push(from.poly_bbox[idx]);
     }
 
     fn ring(&self, ring: u32) -> RingRef<'_> {
@@ -220,12 +204,17 @@ impl<'a> PolygonRef<'a> {
             .ring(self.layer.poly_ring_start[self.idx as usize])
     }
 
-    /// The holes, wound CW, ascending by store row.
-    pub fn holes(self) -> impl Iterator<Item = RingRef<'a>> + 'a {
+    /// Every ring, the outer first, then the holes ascending by store row.
+    pub fn rings(self) -> impl Iterator<Item = RingRef<'a>> + 'a {
         let layer = self.layer;
         let start = layer.poly_ring_start[self.idx as usize];
         let len = layer.poly_ring_len[self.idx as usize];
-        (start + 1..start + len).map(move |ring| layer.ring(ring))
+        (start..start + len).map(move |ring| layer.ring(ring))
+    }
+
+    /// The holes, wound CW, ascending by store row.
+    pub fn holes(self) -> impl Iterator<Item = RingRef<'a>> + 'a {
+        self.rings().skip(1)
     }
 
     /// Returns the outer ring's bounding box, which holds every hole too.
@@ -339,7 +328,7 @@ pub fn validate_layer_with(
             out.skew |= skew;
             match winding {
                 Winding::CounterClockwise => {
-                    outer_slot.push(u32::try_from(outers.len()).expect("outers fit a u32"));
+                    outer_slot.push(crate::narrow(outers.len()));
                     outers.push(poly);
                 }
                 Winding::Clockwise => {
@@ -376,10 +365,7 @@ pub fn validate_layer_with(
         for row in 0..rows_len {
             if outer_slot[row] == NOT_OUTER {
                 if before != NOT_OUTER
-                    && contains(
-                        outers[before as usize],
-                        PolyId(u32::try_from(first + row).expect("a row id")),
-                    )
+                    && contains(outers[before as usize], PolyId(crate::narrow(first + row)))
                 {
                     own_slot[row] = before;
                 }
@@ -449,7 +435,7 @@ pub fn validate_layer_with(
     // Pass three: emit, one contiguous ring span per polygon, outer first.
     let mut cursor = 0usize;
     for (slot, &outer) in outers.iter().enumerate() {
-        let span_start = u32::try_from(out.ring_vert_start.len()).expect("rings fit a u32");
+        let span_start = crate::narrow(out.ring_vert_start.len());
         let (outer_xs, outer_ys) = store.poly_verts(outer);
         out.push_ring(outer_xs, outer_ys, outer);
         while cursor < owned.len() && owned[cursor].0 == slot {
@@ -462,7 +448,7 @@ pub fn validate_layer_with(
             out.push_ring(hole_xs, hole_ys, hole);
             cursor += 1;
         }
-        let span_len = u32::try_from(out.ring_vert_start.len()).expect("rings fit a u32");
+        let span_len = crate::narrow(out.ring_vert_start.len());
         out.poly_ring_start.push(span_start);
         out.poly_ring_len.push(span_len - span_start);
         out.poly_bbox.push(store.poly_bbox(outer));
@@ -493,8 +479,8 @@ impl ValidatedLayer {
 
     /// Copy one ring's coordinates in and append its ring row.
     fn push_ring(&mut self, xs: &[Dbu], ys: &[Dbu], poly: PolyId) {
-        let start = u32::try_from(self.verts_x.len()).expect("a layer's vertices fit a u32");
-        let len = u32::try_from(xs.len()).expect("a ring's vertices fit a u32");
+        let start = crate::narrow(self.verts_x.len());
+        let len = crate::narrow(xs.len());
         self.verts_x.extend_from_slice(xs);
         self.verts_y.extend_from_slice(ys);
         self.ring_vert_start.push(start);
@@ -511,15 +497,7 @@ impl ValidatedLayer {
 /// Rectilinearity is not asked, so a 45-degree ring is valid here, and a hole
 /// with no outer is a property of the layer, not of the ring.
 pub fn ring_defect(xs: &[Dbu], ys: &[Dbu], poly: PolyId) -> Option<ValidityError> {
-    if xs.len() < 3 || !edge_flags_scalar(xs, ys, xs[0], ys[0]).0 {
-        return Some(ValidityError::Degenerate(poly));
-    }
-    if !is_rectangle(xs, ys) && self_intersects_with(xs, ys, true, &mut Vec::new()) {
-        return Some(ValidityError::SelfIntersecting(poly));
-    }
-    winding_of(xs, ys)
-        .is_none()
-        .then_some(ValidityError::Degenerate(poly))
+    dispatch!(Level::new(), s => classify_ring(s, xs, ys, poly, Angles::Any, &mut Vec::new())).err()
 }
 
 /// Validate one coordinate run and report its winding, whether it has an
@@ -553,13 +531,6 @@ fn classify_ring<S: Simd>(
     // A run doubling back on itself has zero area: degenerate.
     let winding = winding_of(xs, ys).ok_or(ValidityError::Degenerate(poly))?;
     Ok((winding, !rectilinear, !octilinear))
-}
-
-/// Whether some edge of a closed run is neither horizontal nor vertical, and
-/// whether some edge is at an angle other than a multiple of 45 degrees.
-fn angle_flags(xs: &[Dbu], ys: &[Dbu]) -> (bool, bool) {
-    let (_, rectilinear, octilinear) = edge_flags_scalar(xs, ys, xs[0], ys[0]);
-    (!rectilinear, !octilinear)
 }
 
 /// Four distinct vertices alternating vertical and horizontal edges: an axis
