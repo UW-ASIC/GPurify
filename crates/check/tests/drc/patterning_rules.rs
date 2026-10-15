@@ -180,6 +180,45 @@ fn a_graph_with_a_four_clique_is_never_reported_three_colourable() {
     assert!(colours.is_empty());
 }
 
+/// Oracle: construct-from-answer, at a size the search's bucketed queue
+/// spreads over many words. 5000 nodes, each joined to three random nodes of
+/// the other parity (so the parity is a 2-colouring) plus 300 disjoint
+/// triangles on 900 more nodes, each
+/// triangle needing all three masks. The graph is 3-colourable by
+/// construction, and DSATUR colours a bipartite part with two masks and a
+/// triangle with three without backtracking, so the answer is `Complete`
+/// and proper. More than 4096 nodes puts the queue's buckets past one
+/// summary word, the layout a wrong bucket offset scrambles.
+#[test]
+fn a_large_sparse_graph_is_coloured_completely_and_properly() {
+    let mut rng = Rng::new(21);
+    let n = 5000u32;
+    let mut edges = Vec::new();
+    for a in 0..n {
+        for _ in 0..3 {
+            let mut b = u32::try_from(rng.below(u64::from(n))).expect("below n");
+            if b % 2 == a % 2 {
+                b = (b + 1) % n;
+            }
+            edges.push((a.min(b), a.max(b)));
+        }
+    }
+    let base = n;
+    for t in 0..300 {
+        let (x, y, z) = (base + 3 * t, base + 3 * t + 1, base + 3 * t + 2);
+        edges.extend([(x, y), (y, z), (x, z)]);
+    }
+    let total = n + 900;
+    rng.shuffle(&mut edges);
+    let mut colours = Vec::new();
+    assert_eq!(
+        color_into(total, &edges, 3, &mut colours),
+        Coloring::Complete
+    );
+    assert_eq!(colours.len(), total as usize);
+    assert_proper(&colours, &edges, 3);
+}
+
 // --------------------------------------------------- check_multi_patterning
 
 /// Three squares, pairwise in conflict at a colour spacing of 71.
