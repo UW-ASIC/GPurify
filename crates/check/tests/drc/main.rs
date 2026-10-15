@@ -8,6 +8,7 @@ mod density_rules;
 mod deck_fixture;
 mod determinism;
 mod edge_rules;
+mod dfm_deck;
 mod facing_rules;
 mod grid_rules;
 mod min_step_rules;
