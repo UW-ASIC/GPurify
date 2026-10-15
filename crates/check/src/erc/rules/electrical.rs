@@ -1493,4 +1493,120 @@ mod tests {
             assert!((got - z).abs() <= 1e-12, "Φ⁻¹({p}) = {got}, the table {z}");
         }
     }
+
+    /// Linear interpolation over rising points, held at the end values.
+    ///
+    /// Oracle: closed form: over points 10, 20, 40 with values 1, 3, -5,
+    /// the line through (10, 1) and (20, 3) gives 2 at 15 and 1.4 at 12;
+    /// through (20, 3) and (40, -5) gives -1 at 30; the ends hold 1 below
+    /// 10 and -5 above 40; each point gives its own value.
+    #[test]
+    fn interpolate_is_piecewise_linear_and_held_at_the_ends() {
+        let (points, values) = ([10.0, 20.0, 40.0], [1.0, 3.0, -5.0]);
+        for (at, want) in [
+            (15.0, 2.0),
+            (12.0, 1.4),
+            (30.0, -1.0),
+            (35.0, -3.0),
+            (10.0, 1.0),
+            (20.0, 3.0),
+            (40.0, -5.0),
+            (0.0, 1.0),
+            (-7.0, 1.0),
+            (41.0, -5.0),
+            (1e9, -5.0),
+        ] {
+            let got = super::interpolate(&points, &values, at);
+            assert!((got - want).abs() < 1e-12, "at {at}: {got}, want {want}");
+        }
+        assert_eq!(super::interpolate(&[5.0], &[7.0], 99.0), 7.0);
+        assert_eq!(super::interpolate(&[5.0], &[7.0], -1.0), 7.0);
+    }
+
+    /// A two-dimensional AC table is bilinear between its four corners.
+    ///
+    /// Oracle: closed form: frequencies 100 and 300, widths 500 and 1500,
+    /// densities 1 and 2 at 100, 3 and 4 at 300: at (200, 1000) the four
+    /// average to 2.5; at (100, 1000) 1.5; at (300, 750) 3.25; beyond the
+    /// table each axis holds its end.
+    #[test]
+    fn an_ac_table_is_bilinear_between_its_corners() {
+        use gpurify_geom::Dbu;
+        let (f, w, d) = (
+            [100.0, 300.0],
+            [Dbu::new_unchecked(500), Dbu::new_unchecked(1_500)],
+            [1.0, 2.0, 3.0, 4.0],
+        );
+        for (freq, width, want) in [
+            (200.0, 1_000, 2.5),
+            (100.0, 1_000, 1.5),
+            (300.0, 750, 3.25),
+            (150.0, 500, 1.5),
+            (50.0, 2_000, 2.0),
+            (900.0, 0, 3.0),
+        ] {
+            let got = super::table_density(&f, &w, &d, freq, Dbu::new_unchecked(width));
+            assert!(
+                (got - want).abs() < 1e-12,
+                "({freq}, {width}): {got}, want {want}"
+            );
+        }
+    }
+
+    /// The Blech product of each edge: `|I| · L / W`, `L` the whole line's
+    /// length between diffusion barriers (pads, loaded taps, via landings),
+    /// and a line's product its largest edge's; a via its own line, `L` its
+    /// height; a zero width infinite.
+    ///
+    /// Oracle: closed form, by hand. Metal 0-1-2-3 (lengths 100, 200, 300,
+    /// widths 10, 20, 10) is one line, 600 long, between the pad at 0 and
+    /// the loaded tap at 3: products 2·600/10 = 120, 3·600/20 = 90 and
+    /// 1·600/10 = 60, so 120 for all three. The via 3-4 (height 50, width
+    /// 5) is 4·50/5 = 40. Metal 4-5 (400 by 40) is its own line from the via
+    /// landing, 0.5·400/40 = 5; metal 5-6 beside it, width 0, makes that
+    /// line infinite.
+    #[test]
+    fn blech_products_are_current_times_line_length_over_width() {
+        use crate::erc::power::{EdgeKind, PowerGrid, PowerSolution};
+        use gpurify_geom::{Dbu, Qty};
+        let mut grid = PowerGrid::default();
+        for node in 0..6 {
+            grid.node_net.push(crate::topology::NetId(0));
+            grid.node_load
+                .push(Qty::new(if node == 3 { 5.0 } else { 0.0 }));
+        }
+        grid.source_node.push(0);
+        let edges = [
+            (0, 1, 100, 10, EdgeKind::Metal, 2.0),
+            (1, 2, 200, 20, EdgeKind::Metal, -3.0),
+            (2, 3, 300, 10, EdgeKind::Metal, 1.0),
+            (3, 4, 50, 5, EdgeKind::Via, 4.0),
+            (4, 5, 400, 40, EdgeKind::Metal, 0.5),
+        ];
+        let mut solution = PowerSolution::default();
+        for (from, to, length, width, kind, current) in edges {
+            grid.edge_from.push(from);
+            grid.edge_to.push(to);
+            grid.edge_length.push(Dbu::new_unchecked(length));
+            grid.edge_width.push(Dbu::new_unchecked(width));
+            grid.edge_kind.push(kind);
+            solution.branch_current.push(Qty::new(current));
+        }
+        assert_eq!(
+            super::blech_products(&grid, &solution),
+            [120.0, 120.0, 120.0, 40.0, 5.0]
+        );
+
+        grid.node_net.push(crate::topology::NetId(0));
+        grid.node_load.push(Qty::new(0.0));
+        grid.edge_from.push(5);
+        grid.edge_to.push(6);
+        grid.edge_length.push(Dbu::new_unchecked(10));
+        grid.edge_width.push(Dbu::new_unchecked(0));
+        grid.edge_kind.push(EdgeKind::Metal);
+        solution.branch_current.push(Qty::new(1.0));
+        let products = super::blech_products(&grid, &solution);
+        assert_eq!(products[..4], [120.0, 120.0, 120.0, 40.0]);
+        assert_eq!(products[4..], [f64::INFINITY, f64::INFINITY]);
+    }
 }

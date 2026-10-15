@@ -1,6 +1,7 @@
 //! Integration tests for `erc`, one module each.
 
 mod antenna_and_density;
+mod closed_form;
 mod common;
 mod dispatch;
 mod dynamic_and_thermal;

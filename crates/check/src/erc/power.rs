@@ -3073,4 +3073,275 @@ mod tests {
             assert_eq!(discarded_budget(&grid, &intent), naive);
         }
     }
+
+    /// A xorshift draw in `lo ..= hi`.
+    fn draws(seed: u64) -> impl FnMut(i64, i64) -> i64 {
+        let mut state = seed;
+        move |lo, hi| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let span = u64::try_from(hi - lo + 1).expect("a non-empty range");
+            lo + i64::try_from(state % span).expect("a draw below the span fits an i64")
+        }
+    }
+
+    /// The ring search stays exact for markers inside the grid's extent,
+    /// where its stop test (the scanned block's slack) decides, over grids
+    /// of large cells (few taps, wide spans) and small ones.
+    ///
+    /// Oracle: differential against `brute_force`, the exhaustive scan.
+    #[test]
+    fn the_ring_search_agrees_with_an_exhaustive_scan_inside_the_extent() {
+        let mut draw = draws(0x5851_F42D_4C95_7F2D);
+        for taps in [2usize, 4, 9, 30, 150] {
+            for (span_x, span_y) in [(40i64, 40i64), (3000, 200), (200, 3000), (5000, 5000)] {
+                let at: Vec<Point> = (0..taps)
+                    .map(|_| Point {
+                        x: Dbu::new_unchecked(draw(-span_x, span_x)),
+                        y: Dbu::new_unchecked(draw(-span_y, span_y)),
+                    })
+                    .collect();
+                let index = index_of(&at);
+                for _ in 0..200 {
+                    let marker = Point {
+                        x: Dbu::new_unchecked(draw(-span_x, span_x)),
+                        y: Dbu::new_unchecked(draw(-span_y, span_y)),
+                    };
+                    assert_eq!(
+                        index.nearest(marker),
+                        brute_force(&at, marker),
+                        "{taps} taps over {span_x}x{span_y}, marker {marker:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// [`TapIndex::host`] over random boxes: of the boxes touching the
+    /// marker's box (edges and corners count), the one whose centre is
+    /// nearest the marker's centre, the lower index on a tie; touching
+    /// none, the nearest centre of all.
+    ///
+    /// Oracle: differential against that definition evaluated over every
+    /// box, with markers of every size, some touching nothing.
+    #[test]
+    fn host_agrees_with_an_exhaustive_scan_of_the_touching_boxes() {
+        let mut draw = draws(0x9E6C_63D0_676A_9A99);
+        let mut index = TapIndex::default();
+        for count in [1usize, 2, 5, 12, 60] {
+            for _ in 0..20 {
+                let boxes: Vec<Bbox> = (0..count)
+                    .map(|_| {
+                        let (x, y) = (draw(-500, 500), draw(-500, 500));
+                        Bbox {
+                            xlo: Dbu::new_unchecked(x),
+                            ylo: Dbu::new_unchecked(y),
+                            xhi: Dbu::new_unchecked(x + draw(0, 300)),
+                            yhi: Dbu::new_unchecked(y + draw(0, 300)),
+                        }
+                    })
+                    .collect();
+                index.boxes.clone_from(&boxes);
+                index.at = boxes.iter().map(|&b| super::centre(b)).collect();
+                index.grid();
+                for _ in 0..40 {
+                    let (x, y) = (draw(-700, 700), draw(-700, 700));
+                    let marker = Bbox {
+                        xlo: Dbu::new_unchecked(x),
+                        ylo: Dbu::new_unchecked(y),
+                        xhi: Dbu::new_unchecked(x + draw(0, 120)),
+                        yhi: Dbu::new_unchecked(y + draw(0, 120)),
+                    };
+                    let c = super::centre(marker);
+                    let d2 = |p: Point| {
+                        let (dx, dy) = (
+                            i128::from(p.x.raw() - c.x.raw()),
+                            i128::from(p.y.raw() - c.y.raw()),
+                        );
+                        dx * dx + dy * dy
+                    };
+                    let want = (0u32..)
+                        .zip(&boxes)
+                        .filter(|(_, b)| {
+                            b.xlo <= marker.xhi
+                                && marker.xlo <= b.xhi
+                                && b.ylo <= marker.yhi
+                                && marker.ylo <= b.yhi
+                        })
+                        .map(|(i, &b)| (d2(super::centre(b)), i))
+                        .min()
+                        .map_or_else(|| brute_force(&index.at, c), |(_, i)| i);
+                    assert_eq!(index.host(marker), want, "{boxes:?} against {marker:?}");
+                }
+            }
+        }
+    }
+
+    /// Cholesky inversion of a symmetric positive definite matrix is its
+    /// inverse, and a matrix with a pivot that is not positive is refused.
+    ///
+    /// Oracle: law: `A · A⁻¹ = I` (to 1e-9) for `A = B Bᵀ + I` over random
+    /// `B`, sizes 1 to 6; hand-derived refusals: `[[1, 2], [2, 1]]` has
+    /// second pivot `1 - 2² = -3`, `[[0]]` a zero pivot, `[[NaN]]` none.
+    #[test]
+    fn cholesky_inversion_inverts_a_positive_definite_matrix_and_refuses_others() {
+        use super::cholesky_inverse_into;
+        let mut draw = draws(0x1234_5678_9ABC_DEF1);
+        let mut out = Vec::new();
+        for n in 1..=6usize {
+            for _ in 0..10 {
+                let b: Vec<f64> = (0..n * n)
+                    .map(|_| f64::from(i32::try_from(draw(-9, 9)).expect("small")) / 3.0)
+                    .collect();
+                let mut a = vec![0.0f64; n * n];
+                for i in 0..n {
+                    for j in 0..n {
+                        let s: f64 = (0..n).map(|k| b[i * n + k] * b[j * n + k]).sum();
+                        a[i * n + j] = s + if i == j { 1.0 } else { 0.0 };
+                    }
+                }
+                let keep = a.clone();
+                assert!(cholesky_inverse_into(&mut a, n, &mut out));
+                assert_eq!(out.len(), n * n);
+                for i in 0..n {
+                    for j in 0..n {
+                        let p: f64 = (0..n).map(|k| keep[i * n + k] * out[k * n + j]).sum();
+                        let want = if i == j { 1.0 } else { 0.0 };
+                        assert!((p - want).abs() < 1e-9, "n={n} ({i},{j}): {p}");
+                    }
+                }
+            }
+        }
+        assert!(!cholesky_inverse_into(
+            &mut [1.0, 2.0, 2.0, 1.0],
+            2,
+            &mut out
+        ));
+        assert!(!cholesky_inverse_into(&mut [0.0], 1, &mut out));
+        assert!(!cholesky_inverse_into(&mut [f64::NAN], 1, &mut out));
+        assert!(!cholesky_inverse_into(&mut [f64::INFINITY], 1, &mut out));
+        // A 2 x 2 by hand: [[4, 2], [2, 3]] has inverse [[3, -2], [-2, 4]] / 8.
+        let mut a = [4.0, 2.0, 2.0, 3.0];
+        assert!(cholesky_inverse_into(&mut a, 2, &mut out));
+        for (got, want) in out
+            .iter()
+            .zip([3.0 / 8.0, -2.0 / 8.0, -2.0 / 8.0, 4.0 / 8.0])
+        {
+            assert!((got - want).abs() < 1e-12, "{out:?}");
+        }
+    }
+
+    /// A run between two taps is their Manhattan distance, at least one
+    /// unit; a via's length is the height between its layers in database
+    /// units, at least one; squares are length over width; a conductor's
+    /// width is the narrower shape's narrow side, at least one.
+    ///
+    /// Oracle: closed form, by hand: (0,0) to (30,-40) is 70; a point to
+    /// itself floors at 1; layers at 100 nm and 450 nm are 350 apart, 350
+    /// units on a 1 nm grid and 70 on a 5 nm one, either way round; a layer
+    /// with no height row sits at 0 (450 apart); two at one height floor at
+    /// 1; 30 / 4 is 7.5 squares; boxes 10 x 50 and 30 x 6 are 6 wide.
+    #[test]
+    fn run_and_via_lengths_squares_and_widths_are_their_closed_forms() {
+        use super::{conductor_width, run_length, squares, via_length, Process};
+        use gpurify_geom::Grid;
+        use gpurify_ingest::deck::{Connectivity, ProcessStack};
+        let p = |x: i64, y: i64| Point {
+            x: Dbu::new_unchecked(x),
+            y: Dbu::new_unchecked(y),
+        };
+        assert_eq!(run_length(p(0, 0), p(30, -40)).raw(), 70);
+        assert_eq!(run_length(p(30, -40), p(0, 0)).raw(), 70);
+        assert_eq!(run_length(p(5, 5), p(5, 5)).raw(), 1);
+
+        let stack = ProcessStack {
+            height_nm: vec![100.0, 450.0, 100.0],
+            ..ProcessStack::default()
+        };
+        let connectivity = Connectivity::default();
+        // `Grid::new` takes database units per micrometre.
+        let process = |nm: i64| Process {
+            grid: Grid::new(1000 / nm).expect("a grid"),
+            stack: &stack,
+            connectivity: &connectivity,
+        };
+        let (a, b, c, none) = (LayerId(0), LayerId(1), LayerId(2), LayerId(7));
+        assert_eq!(via_length(process(1), a, b).raw(), 350);
+        assert_eq!(via_length(process(1), b, a).raw(), 350);
+        assert_eq!(via_length(process(5), a, b).raw(), 70);
+        assert_eq!(via_length(process(1), none, b).raw(), 450);
+        assert_eq!(via_length(process(1), a, c).raw(), 1);
+
+        assert!((squares(Dbu::new_unchecked(30), Dbu::new_unchecked(4)) - 7.5).abs() < 1e-15);
+        let b = |xlo, ylo, xhi, yhi| Bbox {
+            xlo: Dbu::new_unchecked(xlo),
+            ylo: Dbu::new_unchecked(ylo),
+            xhi: Dbu::new_unchecked(xhi),
+            yhi: Dbu::new_unchecked(yhi),
+        };
+        assert_eq!(conductor_width(b(0, 0, 10, 50), b(0, 0, 30, 6)).raw(), 6);
+        assert_eq!(conductor_width(b(0, 0, 30, 6), b(0, 0, 10, 50)).raw(), 6);
+        assert_eq!(conductor_width(b(0, 0, 0, 50), b(0, 0, 30, 6)).raw(), 1);
+    }
+
+    /// Every layer that carries current needs a positive finite sheet
+    /// resistance: each conductor, and each cut between two conductors
+    /// neither of which is global; a cut into a global layer needs none.
+    ///
+    /// Oracle: the documented contract, construct-from-answer: conductors 0
+    /// and 2 at 0.1 and 0.2 Ω/sq and cut 1 at 5 Ω read back by layer; each
+    /// carrying layer's value made zero, negative, infinite or missing is
+    /// refused naming that layer; cut 3 into global layer 4 needs no row.
+    #[test]
+    fn sheet_resistances_refuse_a_carrying_layer_without_one() {
+        use super::{sheet_resistances, PowerError, Process};
+        use gpurify_geom::Grid;
+        use gpurify_ingest::deck::{Connectivity, ProcessStack};
+        let connectivity = Connectivity {
+            conductors: vec![LayerId(0), LayerId(2), LayerId(4)],
+            via_cut: vec![LayerId(1), LayerId(3)],
+            via_connects: vec![(LayerId(0), LayerId(2)), (LayerId(2), LayerId(4))],
+            global: vec![LayerId(4)],
+            ..Connectivity::default()
+        };
+        let read = |sheet: Vec<f64>, layers: usize| {
+            let stack = ProcessStack {
+                sheet_res_ohm_sq: sheet,
+                ..ProcessStack::default()
+            };
+            sheet_resistances(
+                Process {
+                    grid: Grid::new(1000).expect("a grid"),
+                    stack: &stack,
+                    connectivity: &connectivity,
+                },
+                layers,
+            )
+        };
+        assert_eq!(
+            read(vec![0.1, 5.0, 0.2, f64::NAN, 0.3], 6),
+            Ok(vec![0.1, 5.0, 0.2, 0.0, 0.3, 0.0])
+        );
+        assert_eq!(
+            read(vec![0.1, 5.0, 0.2, 0.0, 0.3], 2).map(|s| s.len()),
+            Ok(5),
+            "sized to the highest carrying layer"
+        );
+        for (layer, bad) in [(0, 0.0), (1, -1.0), (2, f64::INFINITY), (4, f64::NAN)] {
+            let mut sheet = vec![0.1, 5.0, 0.2, 0.0, 0.3];
+            sheet[layer] = bad;
+            let layer = u16::try_from(layer).expect("small");
+            assert_eq!(
+                read(sheet, 5),
+                Err(PowerError::NoSheetResistance(LayerId(layer))),
+                "layer {layer} at {bad}"
+            );
+        }
+        assert_eq!(
+            read(vec![0.1, 5.0], 5),
+            Err(PowerError::NoSheetResistance(LayerId(2))),
+            "no row for layer 2"
+        );
+    }
 }

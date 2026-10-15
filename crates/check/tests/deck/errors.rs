@@ -572,3 +572,427 @@ fn every_positive_erc_value_written_as_zero_is_refused() {
         }
     }
 }
+
+/// Every value check of the ERC kinds the zero sweep above does not reach,
+/// one broken value per deck, each refused with the error and parameter
+/// its kind documents: a limit that must be positive written as zero or
+/// below, a fraction outside `0..=1`, a list a row cannot be without left
+/// out, an AC table out of order or short of a density, a conditional-tie
+/// table with a limit too few or thresholds out of order.
+///
+/// Oracle: construct-from-answer, as above: each deck differs from a legal
+/// row (compiled first) in the one value the kind's documentation forbids,
+/// so the error is known before anything runs.
+#[test]
+fn every_erc_value_check_refuses_its_one_broken_value() {
+    const PATH: &str = "esd_path(a; clamps: [\"nfet\"], current: 1330mA, clamp_resistance: 1ohm, \
+        max_resistance: 2ohm, clamp_it2: 9.25mA/um, max_density: 1mA/um, max_current_per_cut: 10mA, \
+        max_voltage: 5V, min_width: 7nm, clamp_voltage: 700mV)";
+    const CROSS: &str =
+        "esd_cross_domain(; diodes: [\"nfet\"], local: [\"nfet\"], resistors: [\"nfet\"], \
+        min_series: 100ohm, max_ground_resistance: 2ohm, coupling_resistance: 1ohm)";
+    const PIN_PAIR: &str =
+        "esd_pin_pair(a; clamps: [\"nfet\"], current: 1330mA, clamp_resistance: 1ohm, \
+        max_resistance: 5ohm)";
+    const RMS: &str = "em_rms(a; frequency: [100MHz, 300MHz], width: [500nm, 1500nm], \
+        density: [[1mA/um, 2mA/um], [3mA/um, 4mA/um]], max_current_per_cut: 1mA)";
+    const THERMAL: &str = "em_thermal(a; max_density: 10mA/um, max_current_per_cut: 1mA, \
+        blech_limit: 1nA, reference_temperature: 125C, activation_energy: 0.9eV, current_exponent: 2, \
+        thermal_conductivity: 0.05W/mK, spreading: 0.88, sigma: 0.5, limit_failure: 10%, max_failure: 20%)";
+    const GUARD: &str =
+        "guard_ring(a, b; max_space: 15um, min_width: 2um, pad: a, near: b, within: 50um, clear: none)";
+    const TIE: &str = "conditional_tie(a, b, a, b; within: 50um, spacing: [1um, 2um], \
+        max_distance: [15um, 30um, 50um])";
+    const SPACE: &str = "voltage_space(a; voltage: [0V, 3.3V, 5V], space: [140nm, 300nm, 600nm])";
+    const RELIABILITY: &str = "reliability(; required_lifetime: 1000h, reference_lifetime: 1000h, \
+        reference_stress: 1.8V, stress_exponent: 2, reference_temperature: 378K, \
+        activation_energy: 0.9eV, max_abs_voltage: 1.8V, duty_cycle: 0.5)";
+    const LATCHUP: &str = "esd_latchup(a, b; min_guard_ring_width: 10nm, max_tap_distance: 20nm, \
+        clamps: [\"nfet\"])";
+    const VICTIM: &str =
+        "latchup_victim(a, b, a; within: 15um, max_distance: 2um, pad: a, bias: none, \
+        forward: none)";
+    const CLAMP_R: &str = "esd_clamp_resistance(a; clamps: [\"nfet\"], max_resistance: 1ohm)";
+    const PEAK: &str = "em_peak(a; frequency: [1GHz], width: [0nm], density: [[6.1mA/um]], \
+        max_current_per_cut: 100uA)";
+    const NO_LIMIT: &str = "esd_path(a; clamps: [\"nfet\"], current: 1mA, clamp_resistance: 1ohm, \
+        max_resistance: none, clamp_it2: none, max_density: none, max_current_per_cut: none, \
+        max_voltage: none, min_width: 7nm, clamp_voltage: none)";
+    let antenna = format!("antenna_electrical(a, b; {ANTENNA_ELECTRICAL})");
+    let r = || "r".to_owned();
+    let zero = |param: &str| ErcError::NonPositiveLimit {
+        rule: r(),
+        limit: param.to_owned(),
+    };
+    let missing = |param: &'static str| ErcError::MissingParam { rule: r(), param };
+    let fraction = |param: &'static str| ErcError::NotAFraction { rule: r(), param };
+    let table = |why: &'static str| ErcError::BadTable { rule: r(), why };
+    let wrong = |param: &'static str| ErcError::WrongParamType { rule: r(), param };
+    let ac_order = table("an AC current table's frequencies and widths rise strictly");
+    let ac_shape = table("an AC current table has one density per frequency and width");
+    let rising = table("a voltage table's voltages start at 0 V or more and rise strictly");
+    let falling = table("a voltage table's spaces never fall as the voltage rises");
+    // (a legal row, the text to replace in it, its replacement, the error)
+    let cases: Vec<(&str, &str, &str, ErcError)> = vec![
+        (
+            "well_bias(; pmos: none, nmos: [\"nfet\"])",
+            "[\"nfet\"]",
+            "none",
+            missing("pmos"),
+        ),
+        (PATH, "current: 1330mA", "current: 0mA", zero("current")),
+        (
+            PATH,
+            "clamp_resistance: 1ohm",
+            "clamp_resistance: 0ohm",
+            zero("clamp_resistance"),
+        ),
+        (
+            PATH,
+            "max_resistance: 2ohm",
+            "max_resistance: 0ohm",
+            zero("max_resistance"),
+        ),
+        (PATH, "9.25mA/um", "0mA/um", zero("clamp_it2")),
+        (
+            PATH,
+            "max_density: 1mA/um",
+            "max_density: 0mA/um",
+            zero("max_density"),
+        ),
+        (
+            PATH,
+            "max_current_per_cut: 10mA",
+            "max_current_per_cut: 0mA",
+            zero("max_current_per_cut"),
+        ),
+        (
+            PATH,
+            "max_voltage: 5V",
+            "max_voltage: 0V",
+            zero("max_voltage"),
+        ),
+        (PATH, "min_width: 7nm", "min_width: 0nm", zero("min_width")),
+        (
+            PATH,
+            "clamp_voltage: 700mV",
+            "clamp_voltage: 0mV",
+            zero("clamp_voltage"),
+        ),
+        (
+            NO_LIMIT,
+            "min_width: 7nm",
+            "min_width: none",
+            missing("max_resistance"),
+        ),
+        (
+            CROSS,
+            "min_series: 100ohm",
+            "min_series: 0ohm",
+            zero("min_series"),
+        ),
+        (
+            CROSS,
+            "max_ground_resistance: 2ohm",
+            "max_ground_resistance: 0ohm",
+            zero("max_ground_resistance"),
+        ),
+        (
+            CROSS,
+            "coupling_resistance: 1ohm",
+            "coupling_resistance: 0ohm",
+            zero("coupling_resistance"),
+        ),
+        (
+            CROSS,
+            "resistors: [\"nfet\"]",
+            "resistors: none",
+            missing("resistor"),
+        ),
+        (
+            CROSS,
+            "coupling_resistance: 1ohm",
+            "coupling_resistance: none",
+            missing("coupling_resistance"),
+        ),
+        (
+            CROSS,
+            "max_ground_resistance: 2ohm",
+            "max_ground_resistance: none",
+            missing("max_ground_resistance"),
+        ),
+        (PIN_PAIR, "current: 1330mA", "current: 0mA", zero("current")),
+        (
+            PIN_PAIR,
+            "clamp_resistance: 1ohm",
+            "clamp_resistance: 0ohm",
+            zero("clamp_resistance"),
+        ),
+        (
+            PIN_PAIR,
+            "max_resistance: 5ohm",
+            "max_resistance: 0ohm",
+            zero("max_resistance"),
+        ),
+        (CLAMP_R, "1ohm", "0ohm", zero("max_resistance")),
+        (
+            "esd_parasitic(a, b; min_spacing: 5um)",
+            "5um",
+            "0um",
+            zero("min_spacing"),
+        ),
+        (LATCHUP, "10nm", "0nm", zero("min_guard_ring_width")),
+        (GUARD, "15um", "0um", zero("max_space")),
+        (GUARD, "2um", "0um", zero("min_width")),
+        (GUARD, "50um", "0um", zero("within")),
+        (TIE, "within: 50um", "within: 0um", zero("within")),
+        (TIE, "[1um, 2um]", "[0um, 2um]", zero("spacing")),
+        (TIE, "50um]", "0um]", zero("max_distance")),
+        (
+            TIE,
+            "[15um, 30um, 50um]",
+            "[15um, 30um]",
+            wrong("max_distance"),
+        ),
+        (TIE, "[1um, 2um]", "[2um, 2um]", wrong("max_distance")),
+        (VICTIM, "15um", "0um", zero("within")),
+        (VICTIM, "2um", "0um", zero("max_distance")),
+        ("fanout(; max: 2)", "2", "0", zero("max_gates")),
+        ("hv_tag(a, b; voltage: 3V)", "3V", "0V", zero("voltage")),
+        (
+            "dielectric_field(a; max_field: 10V/um)",
+            "10V/um",
+            "0V/um",
+            zero("max_field"),
+        ),
+        (
+            RELIABILITY,
+            "reference_lifetime: 1000h",
+            "reference_lifetime: 0h",
+            zero("reference_lifetime_hours"),
+        ),
+        (
+            RELIABILITY,
+            "1.8V, stress",
+            "0V, stress",
+            zero("reference_stress"),
+        ),
+        (RELIABILITY, "378K", "0K", zero("reference_temperature")),
+        (RELIABILITY, "0.9eV", "0eV", zero("activation_energy_ev")),
+        (
+            RELIABILITY,
+            "max_abs_voltage: 1.8V",
+            "max_abs_voltage: 0V",
+            zero("max_abs_voltage"),
+        ),
+        (RMS, "100MHz", "0MHz", zero("frequency")),
+        (RMS, "[[1mA/um", "[[0mA/um", zero("density")),
+        (
+            RMS,
+            "max_current_per_cut: 1mA",
+            "max_current_per_cut: 0mA",
+            zero("max_current_per_cut"),
+        ),
+        (RMS, "300MHz", "100MHz", ac_order.clone()),
+        (RMS, "1500nm", "500nm", ac_order.clone()),
+        (RMS, ", [3mA/um, 4mA/um]", "", ac_shape),
+        (PEAK, "[1GHz]", "[2GHz, 1GHz]", ac_order),
+        (THERMAL, "0.05W/mK", "0W/mK", zero("thermal_conductivity")),
+        (THERMAL, "sigma: 0.5", "sigma: 0", zero("sigma")),
+        (
+            THERMAL,
+            "spreading: 0.88",
+            "spreading: -1",
+            zero("heat_spreading"),
+        ),
+        (
+            THERMAL,
+            "limit_failure: 10%",
+            "limit_failure: 0%",
+            zero("limit_failure"),
+        ),
+        (
+            THERMAL,
+            "max_failure: 20%",
+            "max_failure: 0%",
+            zero("max_failure"),
+        ),
+        (
+            THERMAL,
+            "limit_failure: 10%",
+            "limit_failure: 100%",
+            fraction("limit_failure"),
+        ),
+        (
+            THERMAL,
+            "max_density: 10mA/um",
+            "max_density: 0mA/um",
+            zero("max_density"),
+        ),
+        (
+            THERMAL,
+            "max_current_per_cut: 1mA",
+            "max_current_per_cut: 0mA",
+            zero("max_current_per_cut"),
+        ),
+        (
+            THERMAL,
+            "blech_limit: 1nA",
+            "blech_limit: 0nA",
+            zero("blech_limit"),
+        ),
+        (THERMAL, "125C", "-273.15C", zero("reference_temperature")),
+        (THERMAL, "0.9eV", "0eV", zero("activation_energy_ev")),
+        (
+            THERMAL,
+            "current_exponent: 2",
+            "current_exponent: 0",
+            zero("current_exponent"),
+        ),
+        (SPACE, "[0V, 3.3V", "[-1V, 3.3V", rising.clone()),
+        (SPACE, "3.3V, 5V", "5V, 5V", rising),
+        (SPACE, "140nm", "0nm", zero("space")),
+        (SPACE, "300nm, 600nm", "600nm, 300nm", falling),
+        (
+            &antenna,
+            "area_minus_diode: 0",
+            "area_minus_diode: -1",
+            zero("area_minus_diode"),
+        ),
+        (
+            &antenna,
+            "gate_plus_diode: 0",
+            "gate_plus_diode: -1",
+            zero("gate_plus_diode"),
+        ),
+    ];
+    let deck = |text: &str| format!("{HEADER}rule r {text}\n");
+    let mut failures = Vec::new();
+    for (legal, from, to, want) in cases {
+        if let Err(why) = compile(&deck(legal), grid(), &mut StrTable::default()) {
+            failures.push(format!("legal {legal}: {why}"));
+            continue;
+        }
+        assert!(legal.contains(from), "{legal} holds {from}");
+        let broken = legal.replacen(from, to, 1);
+        match compile(&deck(&broken), grid(), &mut StrTable::default()) {
+            Err(CompileError::Erc(got)) if got == want => {}
+            other => failures.push(format!("{broken}: want {want:?}, got {other:?}")),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The value checks a deck's text cannot reach (the parser refuses an empty
+/// model list and a fraction over one first) still hold a table built or
+/// edited in code: each row, legal as compiled, refused once one column is
+/// broken, by its own id and the parameter its kind documents.
+///
+/// Oracle: construct-from-answer: every row of the deck compiles, then one
+/// row's model, clamp or diode list is emptied or one fraction set to 1.5,
+/// which the kind's documentation forbids.
+#[test]
+fn erc_validation_refuses_a_table_broken_in_code() {
+    let text = format!(
+        "{HEADER}\
+rule gc esd_ground_coupling(; diodes: [\"nfet\"])
+rule xd esd_cross_domain(; diodes: [\"nfet\"], local: none, resistors: none, min_series: none, \
+max_ground_resistance: none, coupling_resistance: none)
+rule ps power_switch(; models: [\"nfet\"])
+rule pp esd_pin_pair(a; clamps: [\"nfet\"], current: 1330mA, clamp_resistance: 1ohm, max_resistance: 5ohm)
+rule cr esd_clamp_resistance(a; clamps: [\"nfet\"], max_resistance: 1ohm)
+rule et esd_topological(a; clamps: [\"nfet\"])
+rule ex esd_exposed(a; clamps: [\"nfet\"], resistors: none, rated: [\"nfet\"], min_series: none)
+rule fd forward_diode(a; models: [\"nfet\"])
+rule el esd_latchup(a, b; min_guard_ring_width: 10nm, max_tap_distance: 20nm, clamps: [\"nfet\"])
+rule go gate_oxide(; models: [\"nfet\"], max: 1.8V)
+rule ds drain_source(; models: [\"nfet\"], max: 1.8V)
+rule ta tie_area(a, b, a; min_ratio: 3%)
+rule rl reliability(; required_lifetime: 1000h, reference_lifetime: 1000h, reference_stress: 1.8V, \
+stress_exponent: 2, reference_temperature: 378K, activation_energy: 0.9eV, max_abs_voltage: 1.8V, \
+duty_cycle: 0.5)
+rule th em_thermal(a; max_density: 10mA/um, max_current_per_cut: 1mA, blech_limit: 1nA, \
+reference_temperature: 125C, activation_energy: 0.9eV, current_exponent: 2, \
+thermal_conductivity: 0.05W/mK, spreading: 0.88, sigma: 0.5, limit_failure: 10%, max_failure: 20%)
+"
+    );
+    let mut strings = StrTable::default();
+    let deck = compile(&text, grid(), &mut strings).expect("every row is legal");
+    let legal = deck.erc;
+    assert_eq!(legal.validate(&strings), Ok(()));
+    // Each table holds one row, so `start[1] = 0` empties its CSR span.
+    let missing = |rule: &str, param: &'static str| ErcError::MissingParam {
+        rule: rule.to_owned(),
+        param,
+    };
+    let fraction = |rule: &str, param: &'static str| ErcError::NotAFraction {
+        rule: rule.to_owned(),
+        param,
+    };
+    type Break = fn(&mut ErcRules);
+    let cases: Vec<(Break, ErcError)> = vec![
+        (
+            |s| s.esd_ground_coupling.diode_start[1] = 0,
+            missing("gc", "diode"),
+        ),
+        (
+            |s| s.esd_cross_domain.diode_start[1] = 0,
+            missing("xd", "diode"),
+        ),
+        (
+            |s| s.power_switch.model_start[1] = 0,
+            missing("ps", "model"),
+        ),
+        (
+            |s| s.esd_pin_pair.clamp_start[1] = 0,
+            missing("pp", "clamp"),
+        ),
+        (
+            |s| s.esd_clamp_resistance.clamp_start[1] = 0,
+            missing("cr", "clamp"),
+        ),
+        (
+            |s| s.esd_topological.clamp_start[1] = 0,
+            missing("et", "clamp"),
+        ),
+        (|s| s.esd_exposed.clamp_start[1] = 0, missing("ex", "clamp")),
+        (
+            |s| s.forward_diode.model_start[1] = 0,
+            missing("fd", "model"),
+        ),
+        (|s| s.esd_latchup.clamp_start[1] = 0, missing("el", "clamp")),
+        (|s| s.gate_oxide.model_start[1] = 0, missing("go", "model")),
+        (
+            |s| s.drain_source.model_start[1] = 0,
+            missing("ds", "model"),
+        ),
+        (
+            |s| s.tie_area.min_ratio[0] = 1.5,
+            fraction("ta", "min_ratio"),
+        ),
+        (
+            |s| s.tie_area.min_ratio[0] = -0.5,
+            fraction("ta", "min_ratio"),
+        ),
+        (
+            |s| s.reliability.duty_cycle[0] = 1.5,
+            fraction("rl", "duty_cycle"),
+        ),
+        (
+            |s| s.em_thermal.max_failure[0] = 1.5,
+            fraction("th", "max_failure"),
+        ),
+        (
+            |s| s.em_thermal.limit_failure[0] = f64::NAN,
+            ErcError::WrongParamType {
+                rule: "th".to_owned(),
+                param: "limit_failure",
+            },
+        ),
+    ];
+    for (k, (break_it, want)) in cases.into_iter().enumerate() {
+        let mut set = legal.clone();
+        break_it(&mut set);
+        assert_eq!(set.validate(&strings), Err(want), "case {k}");
+    }
+}
