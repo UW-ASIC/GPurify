@@ -51,6 +51,8 @@ pub fn rect(layer: &'static str, xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> Shap
 pub struct Want {
     pub rule: &'static str,
     pub measured: Option<Measurement>,
+    /// The limit the finding states, when the case pins it.
+    pub limit: Option<Measurement>,
     pub at: Option<(i64, i64)>,
 }
 
@@ -59,6 +61,7 @@ pub fn len(rule: &'static str, nm: i64) -> Want {
     Want {
         rule,
         measured: Some(Measurement::Length(dbu(nm))),
+        limit: None,
         at: None,
     }
 }
@@ -68,6 +71,7 @@ pub fn area(rule: &'static str, nm2: i128) -> Want {
     Want {
         rule,
         measured: Some(Measurement::Area(gpurify_geom::DbuArea::new(nm2))),
+        limit: None,
         at: None,
     }
 }
@@ -77,6 +81,7 @@ pub fn ratio(rule: &'static str, value: f64) -> Want {
     Want {
         rule,
         measured: Some(Measurement::Ratio(value)),
+        limit: None,
         at: None,
     }
 }
@@ -86,6 +91,7 @@ pub fn any(rule: &'static str) -> Want {
     Want {
         rule,
         measured: None,
+        limit: None,
         at: None,
     }
 }
@@ -95,11 +101,18 @@ pub fn count(rule: &'static str, n: u32) -> Want {
     Want {
         rule,
         measured: Some(Measurement::Count(n)),
+        limit: None,
         at: None,
     }
 }
 
 impl Want {
+    /// Held to `limit`.
+    pub fn limit(mut self, limit: Measurement) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
     /// Pinned at `(x, y)`.
     pub fn at(mut self, x: i64, y: i64) -> Self {
         self.at = Some((x, y));
@@ -121,6 +134,8 @@ impl Want {
 /// rule's row as `(rule id, outcome, examined)`.
 pub struct Ran {
     pub found: Vec<(String, Measurement, (i64, i64))>,
+    /// The limit each of `found` was held to, in the same order.
+    pub limits: Vec<Measurement>,
     pub runs: Vec<(String, Outcome, u64)>,
 }
 
@@ -159,6 +174,7 @@ pub fn run(deck: &str, shapes: &[Shape]) -> Ran {
                 )
             })
             .collect(),
+        limits: (0..out.len()).map(|i| out.get(i).limit).collect(),
         runs: runs
             .iter()
             .map(|r| (strings.resolve(r.rule).to_owned(), r.outcome, r.examined))
@@ -235,22 +251,30 @@ pub fn check_under(
                     matches!(row, Some((_, Outcome::Ran, _))),
                     "{tag}: {rule} did not run: {row:?}"
                 );
-                let mut got: Vec<_> = ran.found.iter().filter(|f| f.0 == rule).collect();
+                let mut got: Vec<_> = ran
+                    .found
+                    .iter()
+                    .zip(&ran.limits)
+                    .filter(|(f, _)| f.0 == rule)
+                    .collect();
                 let mut wanted: Vec<_> = want.iter().filter(|w| w.rule == rule).collect();
                 // Pinned first, so an unpinned want cannot take a pinned one's match.
                 wanted.sort_by_key(|w| w.at.is_none());
                 for w in &wanted {
                     let at = w.at.map(map);
-                    let hit = got.iter().position(|f| {
-                        w.measured.is_none_or(|m| f.1 == m) && at.is_none_or(|at| f.2 == at)
+                    let hit = got.iter().position(|(f, &limit)| {
+                        w.measured.is_none_or(|m| f.1 == m)
+                            && w.limit.is_none_or(|l| l == limit)
+                            && at.is_none_or(|at| f.2 == at)
                     });
                     match hit {
                         Some(k) => {
                             got.swap_remove(k);
                         }
                         None => panic!(
-                            "{tag}: {rule} misses {:?} at {at:?}; it found {:?}",
+                            "{tag}: {rule} misses {:?} (limit {:?}) at {at:?}; it found {:?}",
                             w.measured,
+                            w.limit,
                             ran.found.iter().filter(|f| f.0 == rule).collect::<Vec<_>>()
                         ),
                     }

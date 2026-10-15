@@ -9,6 +9,7 @@ mod edge_rules;
 mod facing_rules;
 mod grid_rules;
 mod min_step_rules;
+mod octilinear;
 mod overlay_laws;
 mod overlay_rules;
 mod patterning_rules;
