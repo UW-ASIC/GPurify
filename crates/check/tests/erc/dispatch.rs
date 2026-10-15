@@ -14,7 +14,7 @@
 use crate::common;
 
 use common::{head, manufacturing_grid, operating_temperature, rule};
-use gpurify_check::erc::facts::{IntentMap, NetFacts};
+use gpurify_check::erc::facts::{IntentMap, NetFacts, NetTypes};
 use gpurify_check::erc::power::{NetNetworks, PowerError, Process};
 use gpurify_check::erc::rules::{
     antenna, domain, electrical, esd, latchup, matching, reliability, supply, topology,
@@ -44,7 +44,7 @@ fn id_of(kind: &str) -> StrId {
 }
 
 /// The kinds that cannot answer their question without design intent.
-const INTENT_GATED: [&str; 35] = [
+const INTENT_GATED: [&str; 37] = [
     "combinational_loop",
     "dielectric_field",
     "domain_crossing",
@@ -67,12 +67,14 @@ const INTENT_GATED: [&str; 35] = [
     "gate_oxide",
     "gate_path",
     "guard_ring_bias",
+    "hot_carrier",
     "hv_domain",
     "hv_tag",
     "ir_drop",
     "missing_isolation",
     "missing_level_shifter",
     "multiple_drivers",
+    "net_type",
     "power_switch",
     "reliability",
     "supply_path",
@@ -147,11 +149,24 @@ fn every_kind() -> RuleSet {
         supply_path: topology::SupplyPathTable {
             head: head(id_of("supply_path")),
             both: vec![true],
+            labels_are_ports: vec![true],
         },
         power_switch: domain::PowerSwitchTable {
             head: head(id_of("power_switch")),
             model_start: vec![0, 1],
             model: vec![rule(900)],
+        },
+        hot_carrier: domain::HotCarrierTable {
+            head: head(id_of("hot_carrier")),
+            model_start: vec![0, 1],
+            model: vec![rule(900)],
+            max_length: vec![dbu(150)],
+        },
+        well_sharing: domain::WellSharingTable {
+            head: head(id_of("well_sharing")),
+            model_start: vec![0, 1],
+            model: vec![rule(900)],
+            resistors: vec![true],
         },
         matching: matching::MatchingTable {
             head: head(id_of("matching")),
@@ -168,6 +183,13 @@ fn every_kind() -> RuleSet {
             head: head(id_of("gate_path")),
             ground: vec![true],
             max_devices: vec![3],
+        },
+        net_type: topology::NetTypeTable {
+            head: head(id_of("net_type")),
+            net: vec![vec![(rule(900), true)]],
+            path: vec![Vec::new()],
+            breaks: vec![Vec::new()],
+            exclude: vec![Vec::new()],
         },
         unconnected_pin: topology::UnconnectedPinTable {
             head: head(id_of("unconnected_pin")),
@@ -216,6 +238,8 @@ fn every_kind() -> RuleSet {
             collector_measure: vec![antenna::AntennaMeasure::Area],
             max_ratio: vec![50.0],
             diode: vec![None],
+            diode_area: vec![None],
+            diode_min: vec![None],
             stack: antenna::Stack::default(),
         },
         antenna_electrical: antenna::AntennaElectricalTable {
@@ -506,6 +530,7 @@ struct Cell {
     devices: DeviceTable,
     facts: NetFacts,
     ports: PortTable,
+    net_types: NetTypes,
     voltage: NetVoltage,
     networks: NetNetworks,
     stack: ProcessStack,
@@ -524,6 +549,7 @@ impl Cell {
             devices: DeviceTable::default(),
             facts: NetFacts::default(),
             ports: PortTable::default(),
+            net_types: NetTypes::default(),
             voltage: NetVoltage::default(),
             networks: NetNetworks::default(),
             stack: ProcessStack::default(),
@@ -541,6 +567,7 @@ impl Cell {
             facts: &self.facts,
             ports: &self.ports,
             intent,
+            net_types: &self.net_types,
             voltage: &self.voltage,
             states: &[],
             switched: &[],

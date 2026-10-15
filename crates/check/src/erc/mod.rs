@@ -20,12 +20,13 @@ pub use ruleset::{RuleSet, KINDS};
 
 use crate::report::{Outcome, RuleRun, Violations};
 use crate::topology::{NetId, PortTable};
-use facts::{classify_nets_into, resolve_intent_into, IntentMap, NetFacts};
+use facts::{classify_nets_into, resolve_intent_into, resolve_net_types_into};
+use facts::{IntentMap, NetFacts, NetTypes};
 use gpurify_geom::ops::Point;
 use gpurify_geom::{prefix, Dbu, DbuArea, Qty, Resistance, Temperature};
 use gpurify_geom::{Bbox, GeometryStore, PolyId, ValidatedLayer};
 use gpurify_ingest::intent::DesignIntent;
-use gpurify_ingest::StrId;
+use gpurify_ingest::{StrId, StrTable};
 use power::{NetNetworks, PowerGrid, PowerSolution, Solved};
 use ruleset::{RuleHead, RunInputs};
 
@@ -49,6 +50,9 @@ pub struct Inputs<'a> {
     /// The placed macro pins' LEF antenna data (a DEF layout's), which the
     /// antenna rows count on the pins' nets; empty for a GDS layout.
     pub antenna_pins: &'a [rules::antenna::MacroPinAntenna],
+    /// The run's names: label text, which the intent's net types match by
+    /// name.
+    pub strings: &'a StrTable,
 }
 
 /// Runs every row of `rules` over one extracted design, appending violations
@@ -80,11 +84,22 @@ pub fn check(
         die,
         temperature,
         antenna_pins,
+        strings,
     } = inputs;
     let mut facts = NetFacts::default();
     classify_nets_into(design.nets, design.devices, &mut facts);
     let mut intent_map = IntentMap::default();
     resolve_intent_into(intent, ports, design.nets, &mut intent_map);
+    let mut net_types = NetTypes::default();
+    resolve_net_types_into(
+        intent,
+        ports,
+        design.nets,
+        design.devices,
+        &intent_map,
+        strings,
+        &mut net_types,
+    );
     let mut voltage = voltage::NetVoltage::default();
     voltage::propagate_into(design.nets, design.devices, &intent_map, &mut voltage);
     // One propagation per declared power state, its supplies off and its
@@ -186,6 +201,7 @@ pub fn check(
             facts: &facts,
             ports,
             intent: &intent_map,
+            net_types: &net_types,
             voltage: &voltage,
             states: &state_voltage,
             switched: &switched,

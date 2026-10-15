@@ -341,7 +341,7 @@ fn hold_back_later_stages(loaded: &Loaded, out: &mut Outputs) {
     let mut kept = Violations::default();
     for row in 0..out.violations.len() {
         if !held(out.violations.rule[row]) {
-            kept.push(out.violations.get(row));
+            kept.push_row(&out.violations, row);
         }
     }
     out.violations = kept;
@@ -390,13 +390,13 @@ fn apply_waivers(loaded: &Loaded, out: &mut Outputs) {
             .iter()
             .any(|&(rule, layer)| rule == violation.rule && covers(layer, violation.at));
         if !waived {
-            kept.push(violation);
+            kept.push_row(&out.violations, row);
             continue;
         }
         if let Some(run) = out.runs.iter_mut().find(|run| run.rule == violation.rule) {
             run.violations = run.violations.saturating_sub(1);
         }
-        out.waived.push(violation);
+        out.waived.push_row(&out.violations, row);
     }
     out.violations = kept;
 }
@@ -528,6 +528,7 @@ fn run_erc(loaded: &Loaded, extracted: &Extracted, out: &mut Outputs) -> StageSt
         die,
         temperature: sign_off_temperature(loaded),
         antenna_pins: &pins,
+        strings: &loaded.strings,
     };
     let mut result = Ok(());
     append_stage(out, |violations, runs| {

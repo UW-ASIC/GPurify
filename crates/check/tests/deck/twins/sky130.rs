@@ -1141,6 +1141,8 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             50.0,
             Some(nm(180)),
             Some(l["pantenna_short"]),
+            None,
+            None,
         ),
     );
     d.rule(
@@ -1157,6 +1159,8 @@ pub fn build(strings: &mut StrTable) -> Result<CompiledDeck, BuildError> {
             3.0,
             None,
             Some(l["pantenna_short"]),
+            None,
+            None,
         ),
     );
     d.rule(

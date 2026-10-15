@@ -90,6 +90,10 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
     out.extend(topology_enumerations(depth));
     out.extend(topology_cases());
     out.extend(path_through_resistor());
+    out.extend(path_stops_at_port());
+    out.extend(well_sharing_cases());
+    out.extend(hot_carrier_cases());
+    out.extend(net_type_cases());
     out.extend(combinational_loop());
     out.extend(matching());
     out.extend(power_switch());
@@ -399,7 +403,7 @@ fn antenna_lef() -> Vec<Fixture> {
         for (n, &(value, _)) in row.nets.iter().enumerate() {
             for limit in sweep(value) {
                 let deck = antenna_deck(&format!(
-                    "rule {} antenna(gate, {}; max_ratio: {limit}, sidewall: none, diode: none)",
+                    "rule {} antenna(gate, {}; max_ratio: {limit}, sidewall: none, diode: none, diode_area: none, diode_min: none)",
                     row.id, row.collectors
                 ));
                 let fixture = Fixture::new(
@@ -484,7 +488,7 @@ fn antenna_sidewall() -> Vec<Fixture> {
                 &format!("erc/antenna/sidewall/{name}/{}", side(limit, value)),
                 &["ERC-A2"],
                 &antenna_deck(&format!(
-                    "rule ant.side antenna(gate, met1; max_ratio: {limit}, sidewall: 350nm, diode: none)"
+                    "rule ant.side antenna(gate, met1; max_ratio: {limit}, sidewall: 350nm, diode: none, diode_area: none, diode_min: none)"
                 )),
                 ERC,
             )
@@ -524,7 +528,7 @@ fn antenna_variants() -> Vec<Fixture> {
                 &format!("erc/antenna/derived_gate/{}", side(limit, 2.0)),
                 &["ERC-A1"],
                 &antenna_deck(&format!(
-                    "rule ant.d antenna(gated, met1; max_ratio: {limit}, sidewall: none, diode: none)"
+                    "rule ant.d antenna(gated, met1; max_ratio: {limit}, sidewall: none, diode: none, diode_area: none, diode_min: none)"
                 )),
                 ERC,
             )
@@ -556,7 +560,7 @@ fn antenna_variants() -> Vec<Fixture> {
                     &format!("erc/antenna/oxide/{id}/{}", side(limit, value)),
                     &["ERC-A12"],
                     &antenna_deck(&format!(
-                        "rule {id} antenna({layer}, met1; max_ratio: {limit}, sidewall: none, diode: none)"
+                        "rule {id} antenna({layer}, met1; max_ratio: {limit}, sidewall: none, diode: none, diode_area: none, diode_min: none)"
                     )),
                     ERC,
                 )
@@ -580,7 +584,7 @@ fn antenna_variants() -> Vec<Fixture> {
                 &format!("erc/antenna/mim/{}", side(limit, 2.0)),
                 &["ERC-A11"],
                 &antenna_deck(&format!(
-                    "rule ant.mim antenna(mim, met2; max_ratio: {limit}, sidewall: none, diode: none)"
+                    "rule ant.mim antenna(mim, met2; max_ratio: {limit}, sidewall: none, diode: none, diode_area: none, diode_min: none)"
                 )),
                 ERC,
             )
@@ -609,7 +613,7 @@ fn antenna_variants() -> Vec<Fixture> {
                 &format!("erc/antenna/car_single_gate/{}", side(limit, 10.0)),
                 &["ERC-A3"],
                 &antenna_deck(&format!(
-                    "rule car antenna(gate, met1, met2, met3; max_ratio: {limit}, sidewall: none, diode: none)"
+                    "rule car antenna(gate, met1, met2, met3; max_ratio: {limit}, sidewall: none, diode: none, diode_area: none, diode_min: none)"
                 )),
                 ERC,
             )
@@ -632,7 +636,7 @@ fn antenna_variants() -> Vec<Fixture> {
             "erc/antenna/f29/overlapping_collectors",
             &["ERC-A1"],
             &antenna_deck(
-                "rule ant antenna(gate, met1; max_ratio: 1.75, sidewall: none, diode: none)",
+                "rule ant antenna(gate, met1; max_ratio: 1.75, sidewall: none, diode: none, diode_area: none, diode_min: none)",
             ),
             ERC,
         )
@@ -653,7 +657,7 @@ fn antenna_variants() -> Vec<Fixture> {
             "erc/antenna/f29/overlapping_gate",
             &["ERC-A1"],
             &antenna_deck(
-                "rule ant antenna(gate, met1; max_ratio: 1.75, sidewall: none, diode: none)",
+                "rule ant antenna(gate, met1; max_ratio: 1.75, sidewall: none, diode: none, diode_area: none, diode_min: none)",
             ),
             ERC,
         )
@@ -686,7 +690,7 @@ fn gate_on_its_device_poly() -> Fixture {
 layer sd = diff not poly
 connect via bc [diff, poly]
 device mos gated model \"nfet\" terminals [poly, sd, sd]
-rule ant antenna(gated, met1; max_ratio: 1.0, sidewall: none, diode: none)",
+rule ant antenna(gated, met1; max_ratio: 1.0, sidewall: none, diode: none, diode_area: none, diode_min: none)",
     );
     Fixture::new(
         "erc/antenna/f81/direct_diff_poly_cut",
@@ -736,7 +740,7 @@ fn metal_over_a_gate() -> Vec<Fixture> {
                 &format!("erc/antenna/f72/{name}"),
                 &["ERC-A1"],
                 &antenna_deck(&format!(
-                    "rule ant antenna({gate}, met1; max_ratio: 1.0, sidewall: none, diode: none)"
+                    "rule ant antenna({gate}, met1; max_ratio: 1.0, sidewall: none, diode: none, diode_area: none, diode_min: none)"
                 )),
                 ERC,
             )
@@ -754,7 +758,7 @@ fn metal_over_a_gate() -> Vec<Fixture> {
             "erc/antenna/f72/cut_over_other_poly",
             &["ERC-A1", "ERC-A4"],
             &antenna_deck(
-                "rule ant antenna(gate, via1; max_ratio: 0.01, sidewall: none, diode: none)",
+                "rule ant antenna(gate, via1; max_ratio: 0.01, sidewall: none, diode: none, diode_area: none, diode_min: none)",
             ),
             ERC,
         )
@@ -805,7 +809,7 @@ fn ihp_area_ratio() -> Fixture {
     Fixture::new(
         "erc/antenna/ihp_fig7_1",
         &["ERC-A3"],
-        &antenna_deck("rule ant.b antenna(gate, met1, met2, met3; max_ratio: 100, sidewall: none, diode: none)"),
+        &antenna_deck("rule ant.b antenna(gate, met1, met2, met3; max_ratio: 100, sidewall: none, diode: none, diode_area: none, diode_min: none)"),
         ERC,
     )
     .layout(l)
@@ -889,7 +893,7 @@ fn antenna_electrical() -> Vec<Fixture> {
     out.extend(sky130_lef_agrees_with_egar());
     out.extend(sky130_ar1());
     out.extend(ihp_ant_g());
-    let ihp = "rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: diff)
+    let ihp = "rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: diff, diode_area: none, diode_min: none)
 rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)";
     out.push(
         Fixture::new(
@@ -1179,7 +1183,7 @@ fn lef_c20_cumulative() -> Vec<Fixture> {
         };
         for limit in limits {
             let rule = if name == "antenna" {
-                format!("rule ae antenna(gate, {collectors}; max_ratio: {limit}, sidewall: none, diode: none)")
+                format!("rule ae antenna(gate, {collectors}; max_ratio: {limit}, sidewall: none, diode: none, diode_area: none, diode_min: none)")
             } else {
                 format!(
                     "rule ae antenna_electrical(gate, {collectors}; max_ratio: {limit}, sidewall: none, cut_factor: {cut}, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: {minus}, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)"
@@ -1313,9 +1317,9 @@ connect touch_within_layer
 connect via via2 [metal2, metal3]
 connect via via2 [fusetop, metal3]
 connect via via3 [metal3, metal4]
-rule ant14.m3 antenna(fusetop, metal3; max_ratio: 400, sidewall: 540nm, diode: none)
-rule ant14.m2 antenna(fusetop, metal2; max_ratio: 400, sidewall: 540nm, diode: none)
-rule ant15.v3 antenna(fusetop, via3; max_ratio: 20, sidewall: none, diode: none)
+rule ant14.m3 antenna(fusetop, metal3; max_ratio: 400, sidewall: 540nm, diode: none, diode_area: none, diode_min: none)
+rule ant14.m2 antenna(fusetop, metal2; max_ratio: 400, sidewall: 540nm, diode: none, diode_area: none, diode_min: none)
+rule ant15.v3 antenna(fusetop, via3; max_ratio: 20, sidewall: none, diode: none, diode_area: none, diode_min: none)
 ";
     let plates = |l: &mut Layout| {
         rect(l, "metal2", (-500, -500, 1500, 1500));
@@ -1547,7 +1551,7 @@ fn sky130_ar1() -> Vec<Fixture> {
     let rules = "layer ptap = gds(13, 0)
 layer adiode = diff not ptap
 rule ae antenna_electrical(gate, met1; max_ratio: 400, sidewall: 350nm, cut_factor: 1, diode: adiode, diode_credit: 400, diode_bonus: 2200, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: ptap)
-rule an antenna(gate, met1; max_ratio: 400, sidewall: 350nm, diode: ptap)";
+rule an antenna(gate, met1; max_ratio: 400, sidewall: 350nm, diode: ptap, diode_area: none, diode_min: none)";
     let ratio_of = (2 * (4_286_000_i64 + 140) * 350) as f64 / 1e6;
     let mut out = Vec::new();
     for tap in [false, true] {
@@ -1596,7 +1600,7 @@ rule an antenna(gate, met1; max_ratio: 400, sidewall: 350nm, diode: ptap)";
 fn ihp_ant_g() -> Vec<Fixture> {
     let deck = antenna_deck(
         "layer prot = diff.with_area(>= 0.16um2)
-rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: prot)
+rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: prot, diode_area: none, diode_min: none)
 rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, sidewall: none, cut_factor: 1, diode: prot, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)
 rule Ant.g area(diff) >= 0.16um2",
     );
@@ -3369,7 +3373,7 @@ pex pad thickness 100nm height 500nm sheet 0.01ohm dielectric 3.9 area_cap 1aF/u
 ";
 
 /// Every rule a [`Board`] is checked against, and whether it needs intent.
-const TOPO_RULES: [(&str, &str, bool); 25] = [
+const TOPO_RULES: [(&str, &str, bool); 28] = [
     ("fg", "floating_gate(; labels_are_ports: false)", false),
     ("fgp", "floating_gate(; labels_are_ports: true)", false),
     ("md1", "multiple_drivers(; max: 1)", true),
@@ -3380,8 +3384,19 @@ const TOPO_RULES: [(&str, &str, bool); 25] = [
     ("ssw", "supply_short(ntap, ptap, nwpm)", false),
     ("soft", "soft_connection(well)", false),
     ("fo", "fanout(; max: 1)", false),
-    ("sp1", "supply_path(; both: false)", true),
-    ("sp2", "supply_path(; both: true)", true),
+    ("sp1", "supply_path(; both: false, labels_are_ports: false)", true),
+    ("sp2", "supply_path(; both: true, labels_are_ports: false)", true),
+    ("sp3", "supply_path(; both: true, labels_are_ports: true)", true),
+    (
+        "ws",
+        "well_sharing(; models: [\"nfet_b\", \"pfet_b\"], resistors: false)",
+        false,
+    ),
+    (
+        "hc",
+        "hot_carrier(; models: [\"nfet\", \"pfet\", \"nfet_b\", \"pfet_b\"], max_length: 200nm)",
+        true,
+    ),
     ("gp0", "gate_path(; ground: true, max_devices: 0)", true),
     ("gp1", "gate_path(; ground: false, max_devices: 1)", true),
     ("cl", "combinational_loop()", true),
@@ -3411,12 +3426,12 @@ const TOPO_RULES: [(&str, &str, bool); 25] = [
 
 /// The catalog rows every board proves: the intent-free connectivity kinds,
 /// which judge every net of every board.
-const TOPO_CATALOG: &[&str] = &["ERC-G1", "ERC-G6", "ERC-E9", "ERC-H4"];
+const TOPO_CATALOG: &[&str] = &["ERC-G1", "ERC-G6", "ERC-E9", "ERC-H4", "ERC-D9"];
 /// The rows a board with intent proves too: the kinds the rails orient,
 /// propagation and the voltage kinds.
 const VOLTAGE_CATALOG: &[&str] = &[
-    "ERC-G3", "ERC-G7", "ERC-G8", "ERC-G9", "ERC-H3", "ERC-F1", "ERC-F2", "ERC-F3", "ERC-F6",
-    "ERC-F9", "ERC-F10",
+    "ERC-G3", "ERC-G7", "ERC-G8", "ERC-G9", "ERC-H3", "ERC-F1", "ERC-F2", "ERC-F3", "ERC-F4",
+    "ERC-F6", "ERC-F9", "ERC-F10",
 ];
 
 /// The voltage limits of a board's `gate_oxide`, `drain_source` and
@@ -3867,6 +3882,35 @@ impl Board {
                 })
                 .collect(),
         ));
+        // well_sharing: a bulk transistor whose channel ends are not on its
+        // bulk net and do not reach it through a chain of other transistors'
+        // channels whose bulk is that net (US 5,638,286's conditions 1 and 3;
+        // a board has no resistors), measuring 0 against 1.
+        let mut ws = Vec::new();
+        for (i, m) in self.devs.iter().enumerate() {
+            let Some(well) = m.b.filter(|_| matches!(m.model, Model::NfetB | Model::PfetB)) else {
+                continue;
+            };
+            let (mut seen, mut walk, mut joined) = ([false; NETS], vec![m.s, m.d], false);
+            while let Some(at) = walk.pop() {
+                if at == well {
+                    joined = true;
+                    break;
+                }
+                if std::mem::replace(&mut seen[at], true) {
+                    continue;
+                }
+                for (j, u) in self.devs.iter().enumerate() {
+                    if j != i && u.b == Some(well) && (u.s == at || u.d == at) {
+                        walk.push(if u.s == at { u.d } else { u.s });
+                    }
+                }
+            }
+            if !joined {
+                ws.push(count(0));
+            }
+        }
+        out.push(Expect::rule("ws", ws));
         if !self.with_intent {
             for (id, _, needs) in TOPO_RULES {
                 if needs {
@@ -3876,6 +3920,44 @@ impl Board {
             return out;
         }
         out.extend(self.expect_states());
+        // hot_carrier: every board transistor is 200 nm long, the row's
+        // limit. One with neither channel end a rail is used both ways when
+        // each end, through every transistor's channel but those joining the
+        // same two nets, stopping at rails, reaches a power and a ground
+        // rail; it measures its length.
+        let mut hc = Vec::new();
+        for m in &self.devs {
+            let listed = matches!(
+                m.model,
+                Model::Nfet | Model::Pfet | Model::NfetB | Model::PfetB
+            );
+            if !listed || m.s == m.d || self.supply(m.s).is_some() || self.supply(m.d).is_some() {
+                continue;
+            }
+            let pair = |u: &Dev| (u.s == m.s && u.d == m.d) || (u.s == m.d && u.d == m.s);
+            let both = |from: usize| {
+                let (mut seen, mut walk, mut roles) = ([false; NETS], vec![from], [false; 2]);
+                while let Some(at) = walk.pop() {
+                    if std::mem::replace(&mut seen[at], true) {
+                        continue;
+                    }
+                    if let Some(supply) = self.supply(at) {
+                        roles[usize::from(!supply.power)] = true;
+                        continue;
+                    }
+                    for u in self.devs.iter().filter(|u| !pair(u)) {
+                        if u.s == at || u.d == at {
+                            walk.push(if u.s == at { u.d } else { u.s });
+                        }
+                    }
+                }
+                roles == [true, true]
+            };
+            if both(m.s) && both(m.d) {
+                hc.push(length(200));
+            }
+        }
+        out.push(Expect::rule("hc", hc));
         // multiple_drivers: a transistor with either channel end on a net that
         // is not a rail pulls it when a walk from its other end, through every
         // transistor with a channel end on the nets reached, stopping at rails
@@ -3942,37 +4024,53 @@ impl Board {
         // walk source to drain through every transistor, stopping at rails
         // (a rail ends the path and gives it its role). `sp1` flags a net
         // that reaches no rail, measuring 0 against 1; `sp2` one that misses
-        // power or ground, measuring the roles reached against 2.
-        let (mut sp1, mut sp2) = (Vec::new(), Vec::new());
+        // power or ground, measuring the roles reached against 2. `sp3` is
+        // `sp2` with every labelled net a port where the walk stops (P12
+        // [0262]): a walk neither enters a port nor leaves one it starts at,
+        // except onto a rail.
+        let (mut sp1, mut sp2, mut sp3) = (Vec::new(), Vec::new(), Vec::new());
+        let port = |n: usize| self.labels[n].is_some() && self.supply(n).is_none();
         for n in 0..NETS {
             let (g, s, d, b) = terminals(n);
             if rail(n) || !(g || s || d || b) {
                 continue;
             }
-            let (mut seen, mut walk, mut roles) = ([false; NETS], vec![n], [false; 2]);
-            while let Some(at) = walk.pop() {
-                if seen[at] {
+            for ports in [false, true] {
+                let (mut seen, mut walk, mut roles) = ([false; NETS], vec![n], [false; 2]);
+                while let Some(at) = walk.pop() {
+                    if seen[at] {
+                        continue;
+                    }
+                    seen[at] = true;
+                    if let Some(supply) = self.supply(at) {
+                        roles[usize::from(!supply.power)] = true;
+                        continue;
+                    }
+                    if ports && at != n && (port(at) || port(n)) {
+                        continue;
+                    }
+                    for u in self.devs.iter().filter(|u| u.s == at || u.d == at) {
+                        walk.push(far(u, at));
+                    }
+                }
+                let found = roles.iter().filter(|&&r| r).count() as u32;
+                if ports {
+                    if found < 2 {
+                        sp3.push(count(found));
+                    }
                     continue;
                 }
-                seen[at] = true;
-                if let Some(supply) = self.supply(at) {
-                    roles[usize::from(!supply.power)] = true;
-                    continue;
+                if found == 0 {
+                    sp1.push(count(0));
                 }
-                for u in self.devs.iter().filter(|u| u.s == at || u.d == at) {
-                    walk.push(far(u, at));
+                if found < 2 {
+                    sp2.push(count(found));
                 }
-            }
-            let found = roles.iter().filter(|&&r| r).count() as u32;
-            if found == 0 {
-                sp1.push(count(0));
-            }
-            if found < 2 {
-                sp2.push(count(found));
             }
         }
         out.push(Expect::rule("sp1", sp1));
         out.push(Expect::rule("sp2", sp2));
+        out.push(Expect::rule("sp3", sp3));
         // gate_path: the fewest transistors a walk from a gate's net through
         // sources and drains passes to reach a rail of the asked role, rails
         // of the other role passed like any net. More than `max` measures
@@ -5757,6 +5855,10 @@ fn circuit_pins(labels: &[&str], devs: &[Dev], pins: &[(&str, usize, usize)]) ->
         riser(&mut l, x0 + 400, 400, dv.s);
         riser(&mut l, x0 + 1600, 400, dv.d);
         riser(&mut l, x0 + 1000, 1400, dv.g);
+        if let Some(b) = dv.b {
+            rect(&mut l, "well", (x0 + 1000, -600, x0 + 2700, 0));
+            riser(&mut l, x0 + 2400, -500, b);
+        }
     }
     for (j, &(marker, anode, cathode)) in pins.iter().enumerate() {
         let x0 = (devs.len() + j) as i64 * PITCH;
@@ -5771,9 +5873,233 @@ fn circuit_pins(labels: &[&str], devs: &[Dev], pins: &[(&str, usize, usize)]) ->
     for (net, name) in labels.iter().enumerate() {
         let ty = track_y(net);
         rect(&mut l, "met2", (-1000, ty, right, ty + TRACK_H));
-        l = l.label("m2txt", -900, ty + 200, name);
+        // An empty name leaves the net unlabelled.
+        if !name.is_empty() {
+            l = l.label("m2txt", -900, ty + 200, name);
+        }
     }
     l
+}
+
+/// A bulk transistor: `dev` with its bulk on net `b`.
+fn bulk(model: Model, g: usize, s: usize, d: usize, b: usize) -> Dev {
+    Dev {
+        model,
+        g,
+        s,
+        d,
+        b: Some(b),
+    }
+}
+
+/// `well_sharing` (ERC-D9), hand-derived from US 5,638,286's three
+/// conditions on the patent's own situations. Nets VDD1, VDD2, VSS, A, X,
+/// Y, Z, W; every pfet has its bulk (its well) on a stated net.
+///
+/// - `ok`: P1 (source VDD1, well VDD1) meets condition 1; P2, from X (P1's
+///   drain) to Y in the same well, meets condition 3 through P1. Clean.
+/// - `other_supply`: P1 and P2 as above, and P3 from VDD2 to Z in the VDD1
+///   well, Z reaching only an nfet to VSS: the patent's Q5, fed from a supply
+///   other than its well's. One finding (0 conditions against 1).
+/// - `resistor`: as `other_supply` with a resistor from VDD2 to VDD1: clean
+///   when resistors count (condition 2), one finding when they do not.
+/// - `other_well`: P4 in the VDD1 well fed at W by P5, whose well is VDD2;
+///   condition 3 needs the same well, so P4 is flagged, and so is P5 (its
+///   ends, VDD1 and W, reach its VDD2 well only through P4). Two findings.
+///
+/// Breaks if the chain may cross another well's transistors (P4 clears), a
+/// resistor counts when the deck says not (P3 clears), or a transistor's
+/// own channel counts as its chain (P3 and P4 clear).
+fn well_sharing_cases() -> Vec<Fixture> {
+    let labels = ["VDD1", "VDD2", "VSS", "A", "X", "Y", "Z", "W"];
+    let (vdd1, vdd2, vss, a, x, y, z, w) = (0, 1, 2, 3, 4, 5, 6, 7);
+    let base = [
+        bulk(Model::PfetB, a, vdd1, x, vdd1),
+        bulk(Model::PfetB, a, x, y, vdd1),
+    ];
+    let p3 = [
+        bulk(Model::PfetB, a, vdd2, z, vdd1),
+        dev(Model::Nfet, a, vss, z),
+    ];
+    let deck = format!(
+        "{}rule ws well_sharing(; models: [\"pfet_b\"], resistors: true)\n\
+         rule wsr well_sharing(; models: [\"pfet_b\"], resistors: false)\n",
+        diode_process()
+    );
+    let case = |name: &str, devs: &[Dev], pins: &[(&str, usize, usize)], ws: usize, wsr: usize| {
+        Fixture::new(&format!("erc/well_sharing/{name}"), &["ERC-D9"], &deck, ERC)
+            .layout(circuit_pins(&labels, devs, pins))
+            .expect(Expect::rule("ws", vec![count(0); ws]))
+            .expect(Expect::rule("wsr", vec![count(0); wsr]))
+    };
+    let other: Vec<Dev> = base.iter().chain(&p3).copied().collect();
+    let other_well = [
+        bulk(Model::PfetB, a, w, z, vdd1),
+        bulk(Model::PfetB, a, vdd1, w, vdd2),
+    ];
+    every_placement(&[
+        case("ok", &base, &[], 0, 0),
+        case("other_supply", &other, &[], 1, 1),
+        case("resistor", &other, &[("mkres", vdd2, vdd1)], 0, 1),
+        case("other_well", &other_well, &[], 2, 2),
+    ])
+}
+
+/// `hot_carrier` (ERC-F4), hand-derived from GF180MCU §14.1.4.1 (e) as the
+/// kind reads "bi-directional". Every transistor is 200 nm long. Nets VDD,
+/// VSS, A, B, X, Y, G, N1, OUT, Z, GB: inverters A->X and B->Y; an nfet and
+/// a pfet (a transmission gate, gates G and GB) between X and Y; a NAND of A
+/// and B onto OUT (its upper nfet between N1 and OUT); a second
+/// transmission gate passing OUT to Z, which nothing else reaches.
+///
+/// - The first transmission gate's nfet: X and Y each reach VDD and VSS
+///   through their own inverter, its pfet partner set aside: used both ways.
+/// - The NAND's upper nfet: N1 reaches VSS alone. The second transmission
+///   gate: Z reaches nothing once its partner is set aside. The inverters
+///   and the NAND's other devices: a supply end. None is flagged.
+/// - `hcn` (nfet, 200 nm): 1 finding, 200 nm. `hcnp` (nfet and pfet): the
+///   first gate's pfet too, 2. `short` (199 nm): no device is minimum, 0.
+///
+/// Breaks if a partner carries the walk (the second gate's devices are
+/// flagged, Z reaching OUT through each other), if a stack's inner node
+/// counts as driven both ways (the NAND's upper nfet is flagged), or if the
+/// length limit is not inclusive (`hcn` clears).
+fn hot_carrier_cases() -> Vec<Fixture> {
+    let labels = [
+        "VDD", "VSS", "A", "B", "X", "Y", "G", "N1", "OUT", "Z", "GB",
+    ];
+    let (vdd, vss, a, b, x, y, g, n1, out, z, gb) = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+    let devs = [
+        dev(Model::Pfet, a, vdd, x),
+        dev(Model::Nfet, a, vss, x),
+        dev(Model::Pfet, b, vdd, y),
+        dev(Model::Nfet, b, vss, y),
+        dev(Model::Nfet, g, x, y),
+        dev(Model::Pfet, gb, x, y),
+        dev(Model::Nfet, a, vss, n1),
+        dev(Model::Nfet, b, n1, out),
+        dev(Model::Pfet, a, vdd, out),
+        dev(Model::Pfet, b, vdd, out),
+        dev(Model::Nfet, g, out, z),
+        dev(Model::Pfet, gb, out, z),
+    ];
+    let deck = format!(
+        "{TOPO_PROCESS}rule hcn warning hot_carrier(; models: [\"nfet\"], max_length: 200nm)\n\
+         rule hcnp warning hot_carrier(; models: [\"nfet\", \"pfet\"], max_length: 200nm)\n\
+         rule short warning hot_carrier(; models: [\"nfet\", \"pfet\"], max_length: 199nm)\n"
+    );
+    let mut f = Fixture::new("erc/hot_carrier/pass_gates", &["ERC-F4"], &deck, ERC)
+        .layout(circuit(&labels, &devs, &[]))
+        .expect(Expect::rule("hcn", vec![length(200)]))
+        .expect(Expect::rule("hcnp", vec![length(200), length(200)]))
+        .expect(Expect::clean("short"));
+    f.intent = Some(intent(
+        &[("d", 1800.0)],
+        &[("VDD", "d", "power"), ("VSS", "d", "ground")],
+        &[],
+    ));
+    every_placement(&[f])
+}
+
+/// `net_type` (ERC-H3), hand-derived from the PERC patent's own examples
+/// (US20100306720A1). Nets VDD, VSS, A, OUT, N1, N2: an inverter from A to
+/// OUT and a resistor (model `rs`) from N1 to N2. The intent types `VDD?`
+/// as `power`, `VSS?` as `ground` (a `?` matching no character), the set
+/// `supply` as either, `label_a` on the resistor's nets (\[0239\]), `gated`
+/// on nfet gates, and `pw` on `lvsPower`.
+///
+/// - `init5` (\[0267\]: break on `{power ground}`, which is AND, so nothing
+///   breaks; exclude power): one path VDD-OUT-VSS typed power and ground.
+///   `net: ! power ground, path: ! power ground` (`check_1`, \[0460\]) flags
+///   the nets with no path to either: A and the resistor's N1 and N2.
+/// - `init6` (break on the set `supply`, exclude power and ground): VDD and
+///   VSS break, so OUT is a path of its own with no type; `check_1` now
+///   reports OUT too: A, OUT, N1, N2.
+/// - `label`: `net: label_a` flags N1 and N2; `gate`: `net: gated`, A;
+///   `power`: `net: pw`, VDD.
+///
+/// Each measures 1 against 0. Breaks if an AND break splits paths
+/// (`init5` gains OUT), break nets lend excluded types (`init6` loses OUT),
+/// or a pattern, pin list or reserved name assigns the wrong nets.
+fn net_type_cases() -> Vec<Fixture> {
+    let labels = ["VDD", "VSS", "A", "OUT", "N1", "N2"];
+    let (vdd, vss, a, out, n1, n2) = (0, 1, 2, 3, 4, 5);
+    let devs = [dev(Model::Pfet, a, vdd, out), dev(Model::Nfet, a, vss, out)];
+    // (VSS and OUT are only the inverter's.)
+    let none = "\"!\", \"power\", \"ground\"";
+    let deck = format!(
+        "{}rule init5 net_type(; net: [{none}], path: [{none}], break: [\"power\", \"ground\"], \
+         exclude: [\"power\"])\n\
+         rule init6 net_type(; net: [{none}], path: [{none}], break: [\"supply\"], \
+         exclude: [\"power\", \"ground\"])\n\
+         rule label net_type(; net: [\"label_a\"], path: none, break: none, exclude: none)\n\
+         rule gate net_type(; net: [\"gated\"], path: none, break: none, exclude: none)\n\
+         rule power net_type(; net: [\"pw\"], path: none, break: none, exclude: none)\n",
+        diode_process()
+    );
+    let mut f = Fixture::new("erc/net_type/perc_examples", &["ERC-H3"], &deck, ERC)
+        .layout(circuit_pins(&labels, &devs, &[("mkres", n1, n2)]))
+        .expect(Expect::rule("init5", vec![count(1); 3]))
+        .expect(Expect::rule("init6", vec![count(1); 4]))
+        .expect(Expect::rule("label", vec![count(1); 2]))
+        .expect(Expect::rule("gate", vec![count(1)]))
+        .expect(Expect::rule("power", vec![count(1)]));
+    f.intent = Some(
+        r#"{"domains":{"d":{"voltage_mv":1800}},
+            "supplies":[{"net":"VDD","domain":"d","role":"power"},
+                        {"net":"VSS","domain":"d","role":"ground"}],
+            "net_types":[{"type":"power","nets":["VDD?"]},
+                         {"type":"ground","nets":["VSS?"]},
+                         {"type":"label_a","models":["rs"]},
+                         {"type":"gated","models":["nfet"],"pins":["g"]},
+                         {"type":"pw","nets":["lvsPower"]}],
+            "type_sets":[{"set":"supply","types":["power","ground"]}]}"#
+            .to_owned(),
+    );
+    every_placement(&[f])
+}
+
+/// `supply_path` (ERC-G9) stopping at a top-cell port, hand-derived from
+/// the PERC patent's "a path continues until it reaches an unqualified
+/// device or a port in the top cell" (US20100306720A1 \[0262\]). Nets VDD,
+/// VSS, A, Y, an unlabelled net Z and G: an inverter from A to Y, and an
+/// nfet passing Y to Z under gate G.
+///
+/// - Labels are names (`labels_are_ports: false`): Y and Z are one path,
+///   which reaches both rails; A and G are gates alone. `both: false`
+///   flags A and G (0 roles against 1); `both: true` the same, 0 against 2.
+/// - Labels are ports: the path stops at Y, so Z is a path of its own that
+///   reaches no rail. `both: false` flags A, G and Z; `both: true` the
+///   same three. Y keeps both rails through its own pull-up and pull-down.
+///
+/// Breaks if a port stops nothing (Z is clean under `labels_are_ports:
+/// true`) or if a port stops its own rails (Y is flagged).
+fn path_stops_at_port() -> Vec<Fixture> {
+    let labels = ["VDD", "VSS", "A", "Y", "", "G"];
+    let (vdd, vss, a, y, z, g) = (0, 1, 2, 3, 4, 5);
+    let devs = [
+        dev(Model::Pfet, a, vdd, y),
+        dev(Model::Nfet, a, vss, y),
+        dev(Model::Nfet, g, y, z),
+    ];
+    let deck = format!(
+        "{TOPO_PROCESS}rule names1 supply_path(; both: false, labels_are_ports: false)\n\
+         rule names2 supply_path(; both: true, labels_are_ports: false)\n\
+         rule ports1 supply_path(; both: false, labels_are_ports: true)\n\
+         rule ports2 supply_path(; both: true, labels_are_ports: true)\n"
+    );
+    let mut f = Fixture::new("erc/supply_path/stops_at_port", &["ERC-G9"], &deck, ERC)
+        .layout(circuit(&labels, &devs, &[]))
+        .expect(Expect::rule("names1", vec![count(0), count(0)]))
+        .expect(Expect::rule("names2", vec![count(0), count(0)]))
+        .expect(Expect::rule("ports1", vec![count(0); 3]))
+        .expect(Expect::rule("ports2", vec![count(0); 3]));
+    f.intent = Some(intent(
+        &[("d", 1800.0)],
+        &[("VDD", "d", "power"), ("VSS", "d", "ground")],
+        &[],
+    ));
+    every_placement(&[f])
 }
 
 /// `supply_path` (ERC-G9) and `gate_path` (ERC-H3) through a resistor and
@@ -5795,8 +6121,8 @@ fn path_through_resistor() -> Vec<Fixture> {
     let devs = [dev(Model::Nfet, g, vss, a), dev(Model::Nfet, b, vss, vss)];
     let layout = circuit_pins(&labels, &devs, &[("mkres", a, b), ("mkdi", b, c)]);
     let deck = format!(
-        "{}rule sp1 supply_path(; both: false)\n\
-         rule sp2 supply_path(; both: true)\n\
+        "{}rule sp1 supply_path(; both: false, labels_are_ports: false)\n\
+         rule sp2 supply_path(; both: true, labels_are_ports: false)\n\
          rule gp1 gate_path(; ground: true, max_devices: 1)\n\
          rule gp2 gate_path(; ground: true, max_devices: 2)\n",
         diode_process()

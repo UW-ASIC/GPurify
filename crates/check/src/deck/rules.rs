@@ -942,11 +942,14 @@ kinds! {
     /// field is named after. Disjoint from [`DRC_KINDS`].
     ERC_KINDS;
     /// [`AntennaTable`](crate::erc::rules::antenna::AntennaTable):
-    /// `antenna(gate, collectors..; max_ratio, sidewall: thickness | none, diode: layer | none)`.
+    /// `antenna(gate, collectors..; max_ratio, sidewall: thickness | none, diode: layer | none,
+    /// diode_area: area | none, diode_min: area | none)`.
     antenna(gate: one, collectors: many) [] {
         max_ratio: f64 = "max_ratio",
         sidewall: Option<Dbu> = "sidewall_thickness",
         diode: Option<LayerRef> = "diode_layer",
+        diode_area: Option<DbuArea> = "diode_area",
+        diode_min: Option<DbuArea> = "diode_min",
     }
     /// [`AntennaElectricalTable`](crate::erc::rules::antenna::AntennaElectricalTable):
     /// `antenna_electrical(gate, collectors..; max_ratio, sidewall, cut_factor,
@@ -1169,6 +1172,9 @@ kinds! {
     /// [`GuardRingBiasTable`](crate::erc::rules::latchup::GuardRingBiasTable):
     /// `guard_ring_bias(ring; power)`.
     guard_ring_bias(ring: one) [] { power: bool = "power" }
+    /// [`HotCarrierTable`](crate::erc::rules::domain::HotCarrierTable):
+    /// `hot_carrier(; models, max_length)`.
+    hot_carrier() [] { models: &[&str] = "model", max_length: Dbu = "max_length" }
     /// [`HvDomainTable`](crate::erc::rules::reliability::HvDomainTable):
     /// `hv_domain(; max_delta, isolation: layer | none)`, in mV.
     hv_domain() [] { max_domain_delta: f64 = "max_domain_delta", isolation: Option<LayerRef> = "isolation" }
@@ -1201,6 +1207,15 @@ kinds! {
     /// [`MultipleDriversTable`](crate::erc::rules::topology::MultipleDriversTable):
     /// `multiple_drivers(; max)`.
     multiple_drivers() [] { max_drivers: u32 = "max_drivers" }
+    /// [`NetTypeTable`](crate::erc::rules::topology::NetTypeTable):
+    /// `net_type(; net, path, break, exclude)`, each a list of type names
+    /// (`"!"` before those that must be absent), empty for `none`.
+    net_type() [] {
+        net: &[&str] = "net",
+        path: &[&str] = "path",
+        breaks: &[&str] = "break",
+        exclude: &[&str] = "exclude",
+    }
     /// [`P2pResistanceTable`](crate::erc::rules::electrical::P2pResistanceTable):
     /// `p2p_resistance(; max)`, in ohms.
     p2p_resistance() [] { max_resistance: f64 = "max_resistance" }
@@ -1224,8 +1239,8 @@ kinds! {
     /// `supply_short(tap_a, tap_b[, within])`.
     supply_short(tap_a: one, tap_b: one, within: opt) [] {}
     /// [`SupplyPathTable`](crate::erc::rules::topology::SupplyPathTable):
-    /// `supply_path(; both)`.
-    supply_path() [] { both: bool = "both" }
+    /// `supply_path(; both, labels_are_ports)`.
+    supply_path() [] { both: bool = "both", labels_are_ports: bool = "labels_are_ports" }
     /// [`TieAreaTable`](crate::erc::rules::latchup::TieAreaTable):
     /// `tie_area(region, contact, channel; min_ratio)`, a fraction.
     tie_area(region: one, contact: one, channel: one) [] { min_ratio: f64 = "min_ratio" }
@@ -1243,4 +1258,7 @@ kinds! {
     /// [`WellBiasTable`](crate::erc::rules::domain::WellBiasTable):
     /// `well_bias(; pmos: models | none, nmos: models | none)`.
     well_bias() [] { pmos: &[&str] = "pmos", nmos: &[&str] = "nmos" }
+    /// [`WellSharingTable`](crate::erc::rules::domain::WellSharingTable):
+    /// `well_sharing(; models, resistors)`.
+    well_sharing() [] { models: &[&str] = "model", resistors: bool = "resistors" }
 }

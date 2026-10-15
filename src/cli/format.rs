@@ -76,6 +76,10 @@ fn write_rows(
         if let Some(other) = violation.shapes.1 {
             let _ = write!(out, " and shape {}", other.0);
         }
+        if let Some(fix) = violations.fix[row] {
+            out.push_str(" fix ");
+            write_measurement(out, grid, fix);
+        }
         out.push('\n');
     }
 }

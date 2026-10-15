@@ -9,8 +9,10 @@
 //!   (a string or `null`).
 //! - `violations`: one object per row, with `rule`, `layer` (the deck's layer
 //!   id), `severity` (`"error"` or `"warning"`), `at` (`x` and `y` in nm),
-//!   `measured` and `limit` (each `kind`, `unit` and `value`), and `shapes`
-//!   (two polygon ids, the second `null` for a one-shape violation).
+//!   `measured` and `limit` (each `kind`, `unit` and `value`), `shapes`
+//!   (two polygon ids, the second `null` for a one-shape violation), and,
+//!   only where the finding carries a fix hint, `fix` (a measurement: for an
+//!   antenna finding the least protection-diode area that clears it).
 //! - `waived`, only when the deck's waivers cover any finding: those
 //!   findings, as `violations` writes them.
 //! - `runs`: one object per rule, with `rule`, `outcome` (`ran`, `refused`,
@@ -61,6 +63,7 @@ pub fn write_report(report: &Report<'_>, out: &mut String) -> Result<(), WriteEr
             .iter()
             .zip(&v.limit)
             .all(|(measured, limit)| measured.is_finite() && limit.is_finite())
+            && v.fix.iter().flatten().all(|fix| fix.is_finite())
     };
     if !finite(report.violations) || !finite(report.waived) {
         return Err(WriteError::Unrepresentable("a non-finite measurement"));
@@ -125,7 +128,12 @@ fn write_rows(v: &Violations, report: &Report<'_>, out: &mut String) {
             }
             None => out.push_str(",null"),
         }
-        out.push_str("]}");
+        out.push(']');
+        if let Some(fix) = v.fix[row] {
+            out.push_str(",\"fix\":");
+            write_measurement(fix, report.grid, out);
+        }
+        out.push('}');
     }
 }
 

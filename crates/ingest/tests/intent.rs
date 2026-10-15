@@ -246,3 +246,58 @@ fn a_dynamic_entry_that_cannot_be_simulated_is_refused() {
         assert_eq!(error.to_string(), message, "{source}");
     }
 }
+
+/// Oracle: spec example (US20100306720A1 \[0198\]-\[0246\]): a net type by
+/// name, one by device with a `!` model list and a pin, and a type set read
+/// back as written; a type stating both names and models, an unknown pin, a
+/// set naming an undeclared type, and a set reusing a type's name are each
+/// refused by name. Breaks if the `!` is kept as a model or a malformed
+/// type reads.
+#[test]
+fn net_types_read_back_and_a_malformed_one_is_refused() {
+    use gpurify_ingest::intent::NetTypeBy;
+    let mut strings = StrTable::default();
+    let intent = gpurify_ingest::intent::parse_intent(
+        r#"{"net_types":[{"type":"power","nets":["VDD?","lvsPower"]},
+                         {"type":"gated","models":["!","nfet"],"pins":["g"]}],
+            "type_sets":[{"set":"any","types":["power","gated"]}]}"#,
+        &mut strings,
+    )
+    .expect("well-formed net types");
+    assert!(!intent.is_empty());
+    let types = intent.net_types();
+    assert_eq!(strings.resolve(types[0].name), "power");
+    assert!(matches!(&types[0].by, NetTypeBy::Names(n) if n == &["VDD?", "lvsPower"]));
+    let NetTypeBy::Devices { models, negate, pins } = &types[1].by else {
+        panic!("gated is assigned by device");
+    };
+    assert!(*negate);
+    assert_eq!(models, &[strings.get("nfet").expect("interned")]);
+    assert_eq!(pins, &["g"]);
+    let set = &intent.type_sets()[0];
+    assert_eq!(strings.resolve(set.name), "any");
+    assert_eq!(set.types, [types[0].name, types[1].name]);
+
+    for (file, said) in [
+        (
+            r#"{"net_types":[{"type":"t","nets":["A"],"models":["m"]}]}"#,
+            "net type t: states either nets, or models with optional pins",
+        ),
+        (
+            r#"{"net_types":[{"type":"t","models":["m"],"pins":["x"]}]}"#,
+            "net type t: pin x is none of g, s, d, b, c, e, pos, neg",
+        ),
+        (
+            r#"{"net_types":[{"type":"t","nets":["A"]}],"type_sets":[{"set":"s","types":["u"]}]}"#,
+            "type set s names u, no type or earlier set",
+        ),
+        (
+            r#"{"net_types":[{"type":"t","nets":["A"]}],"type_sets":[{"set":"t","types":["t"]}]}"#,
+            "type set t repeats a type or set name",
+        ),
+    ] {
+        let error = gpurify_ingest::intent::parse_intent(file, &mut StrTable::default())
+            .expect_err("a malformed net type is refused");
+        assert_eq!(error.to_string(), format!("malformed intent file: {said}"));
+    }
+}

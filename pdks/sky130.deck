@@ -566,8 +566,8 @@ rule x.3a angle(; allowed: [0deg, 45deg, 90deg, 135deg])
 # `diode` an antenna row skips).
 layer pantenna_short = (tap not poly) not nwell
 layer antenna_diode = (diff or tap) not (poly or pantenna_short)
-rule ar.poly.1 antenna(gate, poly_c; max_ratio: 50, sidewall: 180nm, diode: pantenna_short)
-rule ar.licon.1 antenna(gate, licon_po, licon_nd, licon_pd, licon_nt, licon_pt; max_ratio: 3, sidewall: none, diode: pantenna_short)
+rule ar.poly.1 antenna(gate, poly_c; max_ratio: 50, sidewall: 180nm, diode: pantenna_short, diode_area: none, diode_min: none)
+rule ar.licon.1 antenna(gate, licon_po, licon_nd, licon_pd, licon_nt, licon_pt; max_ratio: 3, sidewall: none, diode: pantenna_short, diode_area: none, diode_min: none)
 rule ar.li.1 antenna_electrical(gate, li_c; max_ratio: 75, sidewall: 100nm, cut_factor: 1,
     diode: antenna_diode, diode_credit: 450, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
     diode_reduce: none, diode_max_ratio: none, exempt: pantenna_short)

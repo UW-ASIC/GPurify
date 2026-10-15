@@ -523,8 +523,8 @@ rule ACUTE angle(; allowed: [0deg, 45deg, 90deg, 135deg])
 # one, the COMP being any diode, drain or source on the node.
 layer gate_thin = gate not dualgate
 layer ant_comp = comp not poly2
-rule ANT.1 antenna(gate_thin, poly2_con; max_ratio: 200, sidewall: 200nm, diode: none)
-rule ANT.1.DG antenna(gate_hv, poly2_con; max_ratio: 200, sidewall: 200nm, diode: none)
+rule ANT.1 antenna(gate_thin, poly2_con; max_ratio: 200, sidewall: 200nm, diode: none, diode_area: none, diode_min: none)
+rule ANT.1.DG antenna(gate_hv, poly2_con; max_ratio: 200, sidewall: 200nm, diode: none, diode_area: none, diode_min: none)
 let ant_metals = [(ANT.2, ANT.2.DG, metal1_con), (ANT.3, ANT.3.DG, metal2_con),
                   (ANT.4, ANT.4.DG, metal3_con), (ANT.5, ANT.5.DG, metal4),
                   (ANT.6, ANT.6.DG, metal5)]
@@ -542,8 +542,8 @@ rule ANT.7 antenna_electrical(gate_thin, metaltop_con; max_ratio: 400, sidewall:
 rule ANT.7.DG antenna_electrical(gate_hv, metaltop_con; max_ratio: 400, sidewall: 990nm, cut_factor: 1,
         diode: ant_comp, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 15,
         diode_reduce: none, diode_max_ratio: none, exempt: none)
-rule ANT.8 antenna(gate_thin, contact; max_ratio: 10, sidewall: none, diode: none)
-rule ANT.8.DG antenna(gate_hv, contact; max_ratio: 10, sidewall: none, diode: none)
+rule ANT.8 antenna(gate_thin, contact; max_ratio: 10, sidewall: none, diode: none, diode_area: none, diode_min: none)
+rule ANT.8.DG antenna(gate_hv, contact; max_ratio: 10, sidewall: none, diode: none, diode_area: none, diode_min: none)
 let ant_vias = [(ANT.9, ANT.9.DG, via1), (ANT.10, ANT.10.DG, via2), (ANT.11, ANT.11.DG, via3),
                 (ANT.12, ANT.12.DG, via4), (ANT.13, ANT.13.DG, via5_nomim)]
 for (id, dg, v) in ant_vias {

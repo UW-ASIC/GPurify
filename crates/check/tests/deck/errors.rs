@@ -392,13 +392,13 @@ fn every_positive_erc_value_written_as_zero_is_refused() {
     // (the rule, the value to zero in it, that value's zero, the engine name)
     let cases: Vec<(String, &str, &str, &str)> = vec![
         (
-            "antenna(a, b; max_ratio: 400, sidewall: none, diode: none)".into(),
+            "antenna(a, b; max_ratio: 400, sidewall: none, diode: none, diode_area: none, diode_min: none)".into(),
             "400",
             "0",
             "max_ratio",
         ),
         (
-            "antenna(a, b; max_ratio: 400, sidewall: 10nm, diode: none)".into(),
+            "antenna(a, b; max_ratio: 400, sidewall: 10nm, diode: none, diode_area: none, diode_min: none)".into(),
             "10nm",
             "0nm",
             "sidewall_thickness",

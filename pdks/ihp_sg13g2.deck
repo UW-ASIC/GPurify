@@ -607,27 +607,33 @@ for (name, c) in cuts_90 {
 # 0.16 um2 (antenna.drc sums a net's diode area and counts it only above
 # 0.16; [LR] states the size per diode). Ant.g itself is the size of an
 # Activ under recog_diode (antenna.drc's dantenna and dpantenna).
+# The Ant.d rows carry Ant.g Note 4 as a fix hint: a finding names the diode
+# that clears it, "PDarea (um2) = 0.02 x (Vn_area / (GatPoly over
+# Activ)_area)" and at least Ant.g's 0.16 um2. Note 2's Vn_area is the
+# cumulative Cont and Via1-TopVia2 area; Ant.d's collectors, as antenna.drc
+# writes them, begin at Via1 (Cont is Ant.c's), so the hint leaves out the
+# contact area.
 layer ant_activ = (nact or pact) not gatpoly
 layer ant_diode = ant_activ.with_area(>= 0.16um2)
 layer ant_marked = ant_activ and recog_diode
 rule Ant.g area(ant_marked) >= 0.16um2
 # Ant.a: GatPoly over field over gate area; GatPoly here includes the gate
 # itself, so the limit is 200 + 1.
-rule Ant.a antenna(gate, gatpoly_c; max_ratio: 201, sidewall: none, diode: none)
-rule Ant.c antenna(gate, cont; max_ratio: 20, sidewall: none, diode: none)
-rule Ant.b_Metal1 antenna(gate, metal1; max_ratio: 200, sidewall: none, diode: ant_diode)
-rule Ant.b_Metal2 antenna(gate, metal1, metal2; max_ratio: 200, sidewall: none, diode: ant_diode)
-rule Ant.b_Metal3 antenna(gate, metal1, metal2, metal3; max_ratio: 200, sidewall: none, diode: ant_diode)
-rule Ant.b_Metal4 antenna(gate, metal1, metal2, metal3, metal4; max_ratio: 200, sidewall: none, diode: ant_diode)
-rule Ant.b_Metal5 antenna(gate, metal1, metal2, metal3, metal4, metal5; max_ratio: 200, sidewall: none, diode: ant_diode)
-rule Ant.b_TopMetal1 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1; max_ratio: 200, sidewall: none, diode: ant_diode)
-rule Ant.b_TopMetal2 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2; max_ratio: 200, sidewall: none, diode: ant_diode)
-rule Ant.d_Via1 antenna(gate, via1; max_ratio: 20, sidewall: none, diode: ant_diode)
-rule Ant.d_Via2 antenna(gate, via1, via2; max_ratio: 20, sidewall: none, diode: ant_diode)
-rule Ant.d_Via3 antenna(gate, via1, via2, via3; max_ratio: 20, sidewall: none, diode: ant_diode)
-rule Ant.d_Via4 antenna(gate, via1, via2, via3, via4; max_ratio: 20, sidewall: none, diode: ant_diode)
-rule Ant.d_TopVia1 antenna(gate, via1, via2, via3, via4, topvia1_m5; max_ratio: 20, sidewall: none, diode: ant_diode)
-rule Ant.d_TopVia2 antenna(gate, via1, via2, via3, via4, topvia1_m5, topvia2; max_ratio: 20, sidewall: none, diode: ant_diode)
+rule Ant.a antenna(gate, gatpoly_c; max_ratio: 201, sidewall: none, diode: none, diode_area: none, diode_min: none)
+rule Ant.c antenna(gate, cont; max_ratio: 20, sidewall: none, diode: none, diode_area: none, diode_min: none)
+rule Ant.b_Metal1 antenna(gate, metal1; max_ratio: 200, sidewall: none, diode: ant_diode, diode_area: none, diode_min: none)
+rule Ant.b_Metal2 antenna(gate, metal1, metal2; max_ratio: 200, sidewall: none, diode: ant_diode, diode_area: none, diode_min: none)
+rule Ant.b_Metal3 antenna(gate, metal1, metal2, metal3; max_ratio: 200, sidewall: none, diode: ant_diode, diode_area: none, diode_min: none)
+rule Ant.b_Metal4 antenna(gate, metal1, metal2, metal3, metal4; max_ratio: 200, sidewall: none, diode: ant_diode, diode_area: none, diode_min: none)
+rule Ant.b_Metal5 antenna(gate, metal1, metal2, metal3, metal4, metal5; max_ratio: 200, sidewall: none, diode: ant_diode, diode_area: none, diode_min: none)
+rule Ant.b_TopMetal1 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1; max_ratio: 200, sidewall: none, diode: ant_diode, diode_area: none, diode_min: none)
+rule Ant.b_TopMetal2 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2; max_ratio: 200, sidewall: none, diode: ant_diode, diode_area: none, diode_min: none)
+rule Ant.d_Via1 antenna(gate, via1; max_ratio: 20, sidewall: none, diode: ant_diode, diode_area: 0.02um2, diode_min: 0.16um2)
+rule Ant.d_Via2 antenna(gate, via1, via2; max_ratio: 20, sidewall: none, diode: ant_diode, diode_area: 0.02um2, diode_min: 0.16um2)
+rule Ant.d_Via3 antenna(gate, via1, via2, via3; max_ratio: 20, sidewall: none, diode: ant_diode, diode_area: 0.02um2, diode_min: 0.16um2)
+rule Ant.d_Via4 antenna(gate, via1, via2, via3, via4; max_ratio: 20, sidewall: none, diode: ant_diode, diode_area: 0.02um2, diode_min: 0.16um2)
+rule Ant.d_TopVia1 antenna(gate, via1, via2, via3, via4, topvia1_m5; max_ratio: 20, sidewall: none, diode: ant_diode, diode_area: 0.02um2, diode_min: 0.16um2)
+rule Ant.d_TopVia2 antenna(gate, via1, via2, via3, via4, topvia1_m5, topvia2; max_ratio: 20, sidewall: none, diode: ant_diode, diode_area: 0.02um2, diode_min: 0.16um2)
 rule Ant.e_Metal1 antenna_electrical(gate, metal1; max_ratio: 20000, sidewall: none, cut_factor: 1,
     diode: ant_diode, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
     diode_reduce: none, diode_max_ratio: none, exempt: none)

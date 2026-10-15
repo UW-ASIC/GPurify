@@ -7,7 +7,7 @@
 //! re-derives connectivity.
 
 use crate::drc::rules::{owners_of, LayerRects, SortedRects};
-use crate::erc::facts::{IntentMap, NetFacts, RoleMask};
+use crate::erc::facts::{IntentMap, NetFacts, NetTypes, RoleMask};
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{first_vertex, push_net_violations, record_run, skip_rows, Design, Scratch};
 use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
@@ -20,6 +20,7 @@ use gpurify_geom::DbuArea;
 use gpurify_geom::{LayerId, PolyId};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::intent::SupplyRole;
+use gpurify_ingest::StrId;
 
 /// A floating gate: deck kind `floating_gate`, written
 /// `floating_gate(; labels_are_ports: bool)`.
@@ -599,7 +600,7 @@ pub fn check_unconnected_pin(
 }
 
 /// A net with no path to the supplies: deck kind `supply_path`, written
-/// `supply_path(; both: bool)`.
+/// `supply_path(; both: bool, labels_are_ports: bool)`.
 ///
 /// A path is the set of nets joined through MOS source and drain pins and
 /// resistor pins, never through a gate, a bulk, a diode, a capacitor or a
@@ -615,8 +616,15 @@ pub fn check_unconnected_pin(
 /// `both: true`, one whose path misses power or misses ground (`check_2`,
 /// Calibre's `PATHCHK GROUND && !POWER` and `POWER && !GROUND` together).
 /// Supplies themselves are not examined, nor is a net no device terminal
-/// reaches (a stray shape is [`UnconnectedPinTable`]'s). Needs design intent,
-/// for which nets are power and ground.
+/// reaches (a stray shape is [`UnconnectedPinTable`]'s). With
+/// `labels_are_ports: true`, a labelled net is a port of the top cell, and a
+/// path stops there too: "a path continues until it reaches an unqualified
+/// device or a port in the top cell" (the patent, \[0262\]). A port ends a
+/// path as a supply does, joining nothing beyond it, but carries no role:
+/// it is its own path, which reaches a supply only through a device between
+/// them. The patent states no more of a port than that; reading a port as a
+/// break is this kind's. Needs design intent, for which nets are power and
+/// ground.
 ///
 /// # Limits
 ///
@@ -641,6 +649,8 @@ pub struct SupplyPathTable {
     pub head: RuleHead,
     /// Per row: a net needs a path to both power and ground, not just one.
     pub both: Vec<bool>,
+    /// Per row: a labelled net is a top-cell port, at which a path stops.
+    pub labels_are_ports: Vec<bool>,
 }
 
 /// A transistor gate too many devices from a rail: deck kind `gate_path`,
@@ -663,11 +673,17 @@ pub struct SupplyPathTable {
 /// # Limits
 ///
 /// The patent states the rule as an example and does not define how a
-/// device is counted; one per device a path passes is its plain reading.
-/// Net types beyond the intent's power and ground are not read.
+/// device is counted; one per device a path passes is its plain reading,
+/// and the convention HP's series pass-FET check states: it "increments a
+/// serial pass FET counter" for each FET a walk crosses ([US 6,367,062],
+/// col. 11-13; three in series give "a count of three"). Net types beyond
+/// the intent's power and ground are [`NetTypeTable`]'s.
 ///
-/// Catalog: ERC-H3 (partial) in the [check catalog]. Defined by
-/// [US20100306720A1]. Source tags are in [check-sources.md].
+/// Catalog: ERC-H3 in the [check catalog]. Defined by
+/// [US20100306720A1]; the count by [US 6,367,062]. Source tags are in
+/// [check-sources.md].
+///
+/// [US 6,367,062]: https://patents.google.com/patent/US6367062B1/en
 ///
 /// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
 /// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
@@ -724,6 +740,7 @@ fn path_edges(design: Design<'_>) -> Vec<(u32, u32)> {
 pub fn check_supply_path(
     design: Design<'_>,
     facts: &NetFacts,
+    ports: &PortTable,
     intent: &IntentMap,
     table: &SupplyPathTable,
     out: &mut Violations,
@@ -735,35 +752,40 @@ pub fn check_supply_path(
     }
     let count = u32::try_from(facts.len()).expect("a net count fits a u32");
     let role = |net: u32| intent.supply(NetId(net)).map(|(role, _)| role);
+    let port = |net: u32| role(net).is_none() && ports.name_of(NetId(net)).is_some();
     let edges: Vec<(u32, u32)> = path_edges(design)
         .into_iter()
         .filter(|&(a, b)| a < count && b < count)
         .collect();
-    // Paths joined away from the supplies; each edge onto a supply marks
-    // its path with that supply's role.
-    let inner: Vec<(u32, u32)> = edges
-        .iter()
-        .copied()
-        .filter(|&(a, b)| role(a).is_none() && role(b).is_none())
-        .collect();
-    let mut labels = Vec::new();
-    components_into(count, &inner, &mut labels);
-    // Per path: bit 0 a path to power, bit 1 a path to ground.
-    let mut reach = vec![0u8; count as usize];
-    for &(a, b) in &edges {
-        for (from, to) in [(a, b), (b, a)] {
-            let bit = match (role(from), role(to)) {
-                (None, Some(SupplyRole::Power)) => 1,
-                (None, Some(SupplyRole::Ground)) => 2,
-                _ => continue,
-            };
-            reach[labels[from as usize].0 as usize] |= bit;
-        }
-    }
     let examined: Vec<u32> = (0..count)
         .filter(|&net| role(net).is_none() && facts.is_device_connected(NetId(net)))
         .collect();
+    let mut labels = Vec::new();
+    let mut reach = vec![0u8; count as usize];
     for row in 0..table.head.len() {
+        // Paths joined away from the supplies (and, with ports, away from
+        // them); each edge onto a supply marks its path with that supply's
+        // role.
+        let stops = table.labels_are_ports[row];
+        let inner: Vec<(u32, u32)> = edges
+            .iter()
+            .copied()
+            .filter(|&(a, b)| role(a).is_none() && role(b).is_none())
+            .filter(|&(a, b)| !(stops && (port(a) || port(b))))
+            .collect();
+        components_into(count, &inner, &mut labels);
+        // Per path: bit 0 a path to power, bit 1 a path to ground.
+        reach.fill(0);
+        for &(a, b) in &edges {
+            for (from, to) in [(a, b), (b, a)] {
+                let bit = match (role(from), role(to)) {
+                    (None, Some(SupplyRole::Power)) => 1,
+                    (None, Some(SupplyRole::Ground)) => 2,
+                    _ => continue,
+                };
+                reach[labels[from as usize].0 as usize] |= bit;
+            }
+        }
         let before = out.len();
         let rule = table.head.rule[row];
         let need = if table.both[row] { 2 } else { 1 };
@@ -896,6 +918,162 @@ pub fn check_gate_path(
             );
         }
         record_run(runs, out, before, rule, Outcome::Ran, gates.len() as u64);
+    }
+}
+
+/// A net check over the design's net types: deck kind `net_type`, written
+/// `net_type(; net: types | none, path: types | none, break: types | none,
+/// exclude: types | none)`.
+///
+/// Mentor's programmable-ERC patent ([US20100306720A1]) gives nets types:
+/// by name or by the devices on them, declared in the design intent
+/// (`net_types`, `type_sets`; see [`NetTypes`]). It then joins nets into
+/// paths, "net paths that lead through pins of devices" (\[0248\]), here its
+/// default, "source/drain pins of MOS, and positive/negative pins of
+/// resistor devices" (`init_1`, \[0267\]). "If -break is specified, then a
+/// path also stops when it reaches a net that meets the criteria" (\[0262\]):
+/// a net meeting `break` is in no path but its own. A path's types are "the
+/// combined net types from all of the nets in the path, plus the net types
+/// of its break nets", less `exclude` from the break nets (\[0263\]). A row
+/// flags every net whose own types meet `net` and whose path's types meet
+/// `path`, the patent's net check `-netType` and `-pathType` (\[0450\]-\[0462\]):
+/// its `check_1`, "nets that have no path to Power and no path to Ground", is
+/// `net: ["!", "power", "ground"], path: ["!", "power", "ground"]` with
+/// supplies typed `power` and `ground` and broken at.
+///
+/// A condition is a list of type or set names: "all of the net types
+/// before the exclamation symbol, and ... not any of the net types after"
+/// (\[0262\]), written `["a", "b", "!", "c"]`; `none` is met by every net. A
+/// name the intent does not declare is a type no net has. Only nets a
+/// device terminal reaches are examined. Needs design intent that declares
+/// net types.
+///
+/// # Limits
+///
+/// The patent's path definition by device type and pin list (its
+/// `perc::commandc -type -pin`) is fixed to the default; its device-property
+/// constraints, per-cell (`-cell`) types and checks, and device checks
+/// (`-pinNetType`) are not read. Calibre PERC's own commands are not public;
+/// this is the patent's text.
+///
+/// Catalog: ERC-H3 in the [check catalog]. Defined by [US20100306720A1].
+/// Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [US20100306720A1]: https://patents.google.com/patent/US20100306720A1/en
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct NetTypeTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// Per row: the condition a net's own types meet, `(name, absent)`.
+    pub net: Vec<Vec<(StrId, bool)>>,
+    /// Per row: the condition its path's types meet.
+    pub path: Vec<Vec<(StrId, bool)>>,
+    /// Per row: the condition a net meets to break paths; empty for none.
+    pub breaks: Vec<Vec<(StrId, bool)>>,
+    /// Per row: types a path does not take from its break nets.
+    pub exclude: Vec<Vec<StrId>>,
+}
+
+/// A condition as masks: `(present, absent, satisfiable)`.
+fn condition_masks(types: &NetTypes, condition: &[(StrId, bool)]) -> (u64, u64, bool) {
+    let (mut present, mut absent, mut possible) = (0, 0, true);
+    for &(name, negated) in condition {
+        match (types.bit(name), negated) {
+            (Some(bit), false) => present |= bit,
+            (Some(bit), true) => absent |= bit,
+            (None, false) => possible = false,
+            (None, true) => {}
+        }
+    }
+    (present, absent, possible)
+}
+
+/// Runs every [`NetTypeTable`] row.
+///
+/// `examined` counts the nets a device terminal reaches. A violation sits
+/// at the first vertex of the net's lowest-numbered polygon, on its layer,
+/// measuring 1 (the net met the row's conditions) against 0. Every row is
+/// skipped when the design intent declares no net type.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_net_type(
+    design: Design<'_>,
+    facts: &NetFacts,
+    types: &NetTypes,
+    table: &NetTypeTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if types.name.is_empty() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
+    let count = u32::try_from(facts.len()).expect("a net count fits a u32");
+    let meets = |mask: u64, (present, absent, possible): (u64, u64, bool)| {
+        possible && mask & present == present && mask & absent == 0
+    };
+    let edges: Vec<(u32, u32)> = path_edges(design)
+        .into_iter()
+        .filter(|&(a, b)| a < count && b < count)
+        .collect();
+    let examined: Vec<u32> = (0..count)
+        .filter(|&net| facts.is_device_connected(NetId(net)))
+        .collect();
+    let mut labels = Vec::new();
+    let mut path_mask = vec![0u64; count as usize];
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let rule = table.head.rule[row];
+        let breaks = condition_masks(types, &table.breaks[row]);
+        let breaking = |net: u32| {
+            !table.breaks[row].is_empty() && meets(types.of(NetId(net)), breaks)
+        };
+        let exclude = table.exclude[row]
+            .iter()
+            .filter_map(|&name| types.bit(name))
+            .fold(0, |all, bit| all | bit);
+        let inner: Vec<(u32, u32)> = edges
+            .iter()
+            .copied()
+            .filter(|&(a, b)| !breaking(a) && !breaking(b))
+            .collect();
+        components_into(count, &inner, &mut labels);
+        path_mask.fill(0);
+        for net in 0..count {
+            path_mask[labels[net as usize].0 as usize] |= types.of(NetId(net));
+        }
+        for &(a, b) in &edges {
+            for (from, to) in [(a, b), (b, a)] {
+                if breaking(to) && labels[from as usize] != labels[to as usize] {
+                    path_mask[labels[from as usize].0 as usize] |=
+                        types.of(NetId(to)) & !exclude;
+                }
+            }
+        }
+        let (net_cond, path_cond) = (
+            condition_masks(types, &table.net[row]),
+            condition_masks(types, &table.path[row]),
+        );
+        let flagged: Vec<u32> = examined
+            .iter()
+            .copied()
+            .filter(|&net| meets(types.of(NetId(net)), net_cond))
+            .filter(|&net| meets(path_mask[labels[net as usize].0 as usize], path_cond))
+            .collect();
+        push_net_violations(
+            design,
+            &flagged,
+            rule,
+            table.head.severity[row],
+            Measurement::Count(1),
+            Measurement::Count(0),
+            out,
+        );
+        record_run(runs, out, before, rule, Outcome::Ran, examined.len() as u64);
     }
 }
 
