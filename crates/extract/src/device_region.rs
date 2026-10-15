@@ -21,7 +21,7 @@
 //! contact's position sets: the network has no node inside a device to
 //! put them between.
 
-use crate::network::{NodeId, Parasitic, ParasiticNetwork};
+use crate::network::{Parasitic, ParasiticNetwork};
 use gpurify_check::topology::device::{DeviceMeasure, DeviceParam, TerminalRole};
 use gpurify_check::topology::{DeviceTable, NetId};
 use gpurify_geom::{Grid, Qty, StrTable};
@@ -40,11 +40,7 @@ pub fn add_into(
     if models.is_empty() {
         return;
     }
-    let first_node = |net: NetId| {
-        let at = network.node_net.partition_point(|&n| n < net);
-        (network.node_net.get(at) == Some(&net))
-            .then(|| NodeId(u32::try_from(at).expect("a NodeId")))
-    };
+    let first_node = |net: NetId| network.first_node(net);
     let mut added = Vec::new();
     for d in 0..devices.kind.len() {
         if devices.kind[d] != DeviceKind::Mos {

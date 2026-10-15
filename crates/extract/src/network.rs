@@ -50,6 +50,17 @@ pub enum Parasitic {
 #[repr(transparent)]
 pub struct NodeId(pub u32);
 
+impl NodeId {
+    /// The node at row `index` of the node columns.
+    ///
+    /// # Panics
+    ///
+    /// If `index` does not fit a `u32`.
+    pub(crate) fn at(index: usize) -> Self {
+        Self(u32::try_from(index).expect("a node index is a u32"))
+    }
+}
+
 /// The extracted network, as parallel node and element columns.
 ///
 /// Invariant: every net's nodes occupy one contiguous range of `node_net`, in
@@ -130,11 +141,23 @@ impl ParasiticNetwork {
         self.from.len()
     }
 
+    /// Returns `net`'s first node, the one a writer attaches its terminals
+    /// to and [`compare`](crate::compare) drives from; `None` when no node
+    /// is on `net`.
+    ///
+    /// Binary search, so it relies on the invariant that each net's nodes
+    /// are one ascending run: *O*(log n).
+    pub fn first_node(&self, net: NetId) -> Option<NodeId> {
+        let at = self.node_net.partition_point(|&n| n < net);
+        (self.node_net.get(at) == Some(&net)).then(|| NodeId::at(at))
+    }
+
     /// Debug check of the type's invariant, where the `extract_into` entry
     /// points establish it: parallel columns, each net's nodes one ascending
-    /// run, every element's nodes in range, only a ground capacitance to
-    /// ground, canonical order, and every value finite (a `NaN` compares
-    /// false against every limit and every writer).
+    /// run, every element's nodes in range, only a ground capacitance or a
+    /// substrate resistance to ground (as [`Self::to`] states), canonical
+    /// order, and every value finite (a `NaN` compares false against every
+    /// limit and every writer).
     pub(crate) fn debug_check(&self) {
         if !cfg!(debug_assertions) {
             return;
@@ -154,11 +177,14 @@ impl ParasiticNetwork {
                 let near = (self.from[row].0 as usize) < nodes;
                 let far = match self.to[row] {
                     Some(node) => (node.0 as usize) < nodes,
-                    None => matches!(self.value[row], Parasitic::GroundCap(_)),
+                    None => matches!(
+                        self.value[row],
+                        Parasitic::GroundCap(_) | Parasitic::SubstrateResistance(_)
+                    ),
                 };
                 near && far
             }),
-            "every element's nodes exist, and only a ground capacitance has no far node"
+            "every element's nodes exist, and only a ground C or a substrate R has no far node"
         );
         debug_assert!(
             (1..self.element_count()).all(|row| {

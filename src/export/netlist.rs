@@ -292,13 +292,6 @@ pub fn write_spice(
     Ok(())
 }
 
-/// The first node of a net, or `None` where the network holds none for it.
-fn first_node_of(network: &ParasiticNetwork, net: NetId) -> Option<NodeId> {
-    let nets = &network.node_net[..];
-    let first = nets.partition_point(|&other| other < net);
-    (nets.get(first) == Some(&net)).then(|| NodeId(narrow(first)))
-}
-
 /// Append the SPICE node a device terminal sits on.
 ///
 /// Without parasitics this is the net's name. With them, the nodes of a net are
@@ -315,7 +308,7 @@ fn put_terminal_node(
 ) -> Result<(), WriteError> {
     // A net with no parasitics has no node to name; its terminals still meet
     // each other on the plain net name.
-    let node = spliced.and_then(|network| Some((network, first_node_of(network, net)?)));
+    let node = spliced.and_then(|network| Some((network, network.first_node(net)?)));
     if let Some((network, node)) = node {
         put_node(network, node, ports, strings, out)
     } else {

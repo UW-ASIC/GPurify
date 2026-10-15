@@ -28,6 +28,7 @@
 //! resistance plays no part. "Virtual fill" (fill a tool would insert, not
 //! drawn) is not modelled.
 
+use crate::cholesky;
 use crate::network::{NodeId, Parasitic, ParasiticNetwork};
 use gpurify_check::topology::NetId;
 use gpurify_geom::Qty;
@@ -115,7 +116,7 @@ pub fn treat(
     let mut out = ParasiticNetwork::default();
     for (old, &net) in network.node_net.iter().enumerate() {
         if !fill.contains_key(&net) {
-            new_id[old] = Some(NodeId(u32::try_from(out.node_net.len()).expect("a NodeId")));
+            new_id[old] = Some(NodeId::at(out.node_net.len()));
             out.node_net.push(net);
             out.node_layer.push(network.node_layer[old]);
         }
@@ -203,18 +204,24 @@ fn eliminate(
                 }
             }
         }
-        // X = Y_ff⁻¹ Y_fa; a cluster with no capacitance is singular and
-        // changes nothing.
-        let Some(x) = solve(yff, k, &yfa, m) else {
+        // X = Y_ff⁻¹ Y_fa, one column per node; a cluster with no
+        // capacitance is singular and changes nothing.
+        let Some(factor) = cholesky::factor(yff, k) else {
             continue;
         };
+        let x: Vec<Vec<f64>> = (0..m)
+            .map(|j| {
+                let column: Vec<f64> = (0..k).map(|a| yfa[a * m + j]).collect();
+                cholesky::solve(&factor, k, &column)
+            })
+            .collect();
         for i in 0..m {
             let to_cluster: f64 = (0..k).map(|a| -yfa[a * m + i]).sum();
             let mut through = 0.0_f64;
             for j in 0..m {
                 // M_ij = (Y_faᵀ X)_ij, the capacitance i sees to j through
                 // the cluster; positive.
-                let mij: f64 = (0..k).map(|a| -yfa[a * m + i] * -x[a * m + j]).sum();
+                let mij: f64 = (0..k).map(|a| -yfa[a * m + i] * -x[j][a]).sum();
                 through += mij;
                 if j > i && mij > 0.0 && net_of(nodes[i]) != net_of(nodes[j]) {
                     kept.push(
@@ -248,51 +255,6 @@ fn root(parent: &mut [usize], mut k: usize) -> usize {
 /// ponytail: dense per cluster; a sparse factorisation lifts it if a fill
 /// array ever couples into one cluster this large.
 pub const MAX_CLUSTER: usize = 2048;
-
-/// `X` with `A X = B`, `A` `k × k` symmetric positive definite, `B`
-/// `k × m`, by Cholesky; `None` when `A` is not positive definite.
-#[allow(
-    clippy::needless_range_loop,
-    reason = "the fold order is the index order"
-)]
-fn solve(mut a: Vec<f64>, k: usize, b: &[f64], m: usize) -> Option<Vec<f64>> {
-    for j in 0..k {
-        let mut pivot = a[j * k + j];
-        for p in 0..j {
-            pivot -= a[j * k + p] * a[j * k + p];
-        }
-        if !(pivot > 0.0) {
-            return None;
-        }
-        let pivot = pivot.sqrt();
-        a[j * k + j] = pivot;
-        for i in j + 1..k {
-            let mut value = a[i * k + j];
-            for p in 0..j {
-                value -= a[i * k + p] * a[j * k + p];
-            }
-            a[i * k + j] = value / pivot;
-        }
-    }
-    let mut x = b.to_vec();
-    for col in 0..m {
-        for i in 0..k {
-            let mut v = x[i * m + col];
-            for p in 0..i {
-                v -= a[i * k + p] * x[p * m + col];
-            }
-            x[i * m + col] = v / a[i * k + i];
-        }
-        for i in (0..k).rev() {
-            let mut v = x[i * m + col];
-            for p in i + 1..k {
-                v -= a[p * k + i] * x[p * m + col];
-            }
-            x[i * m + col] = v / a[i * k + i];
-        }
-    }
-    Some(x)
-}
 
 /// Why fill could not be folded in.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

@@ -31,6 +31,7 @@
 //! ([`foreign::Read::on_names`](crate::foreign::Read::on_names)), PEX
 //! Certify's "PEX Link".
 
+use crate::cholesky;
 use crate::network::{NodeId, Parasitic, ParasiticNetwork};
 use gpurify_check::topology::NetId;
 use std::collections::BTreeMap;
@@ -333,7 +334,7 @@ fn resistance_and_delay(
             }
         }
     }
-    let Some(factor) = cholesky(g, m) else {
+    let Some(factor) = cholesky::factor(g, m) else {
         return (f64::NAN, f64::NAN);
     };
     let mut caps = vec![0.0_f64; m];
@@ -342,64 +343,14 @@ fn resistance_and_delay(
             caps[index[node]] = node_cap[nodes.start + node];
         }
     }
-    let delays = solve(&factor, m, &caps);
+    let delays = cholesky::solve(&factor, m, &caps);
     let delay = delays.iter().copied().fold(0.0_f64, f64::max);
     let mut resistance = 0.0_f64;
     let mut unit = vec![0.0_f64; m];
     for j in 0..m {
         unit.fill(0.0);
         unit[j] = 1.0;
-        resistance = resistance.max(solve(&factor, m, &unit)[j]);
+        resistance = resistance.max(cholesky::solve(&factor, m, &unit)[j]);
     }
     (resistance, delay)
-}
-
-/// The lower Cholesky factor of a symmetric positive definite `m × m`
-/// matrix, row-major; `None` at a pivot that is not positive.
-#[allow(
-    clippy::needless_range_loop,
-    reason = "the fold order is the index order"
-)]
-fn cholesky(mut a: Vec<f64>, m: usize) -> Option<Vec<f64>> {
-    for j in 0..m {
-        let mut pivot = a[j * m + j];
-        for k in 0..j {
-            pivot -= a[j * m + k] * a[j * m + k];
-        }
-        if !(pivot > 0.0) {
-            return None;
-        }
-        let pivot = pivot.sqrt();
-        a[j * m + j] = pivot;
-        for i in j + 1..m {
-            let mut value = a[i * m + j];
-            for k in 0..j {
-                value -= a[i * m + k] * a[j * m + k];
-            }
-            a[i * m + j] = value / pivot;
-        }
-    }
-    Some(a)
-}
-
-/// `x` with `L Lᵀ x = b`, `L` from [`cholesky`].
-#[allow(
-    clippy::needless_range_loop,
-    reason = "the fold order is the index order"
-)]
-fn solve(factor: &[f64], m: usize, b: &[f64]) -> Vec<f64> {
-    let mut y = b.to_vec();
-    for i in 0..m {
-        for k in 0..i {
-            y[i] -= factor[i * m + k] * y[k];
-        }
-        y[i] /= factor[i * m + i];
-    }
-    for i in (0..m).rev() {
-        for k in i + 1..m {
-            y[i] -= factor[k * m + i] * y[k];
-        }
-        y[i] /= factor[i * m + i];
-    }
-    y
 }

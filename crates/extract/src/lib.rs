@@ -220,6 +220,7 @@
 //! says what each partial row lacks.
 
 pub mod analytical;
+mod cholesky;
 pub mod compare;
 mod conductor;
 pub mod device_region;

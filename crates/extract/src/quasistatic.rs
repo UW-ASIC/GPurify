@@ -60,7 +60,7 @@ pub fn extract_into(
     let n = matrix.net.len();
     push_anchors(store, nets, connectivity, &matrix.net, out);
     for row in 0..n {
-        let from = node(row);
+        let from = NodeId::at(row);
         // Strict left fold in ascending index order: a reported capacitance.
         let mut ground = 0.0_f64;
         for &c in &matrix.value[row * n..(row + 1) * n] {
@@ -77,7 +77,7 @@ pub fn extract_into(
             let coupling = 0.0 - matrix.value[row * n + other] * FEMTOFARADS_PER_FARAD;
             out.push(
                 from,
-                Some(node(other)),
+                Some(NodeId::at(other)),
                 Parasitic::CouplingCap(Qty::new(coupling)),
             );
         }
@@ -146,7 +146,7 @@ pub fn extract_inductance_into(
     }
 
     for row in 0..n {
-        let anchor = node(2 * row);
+        let anchor = NodeId::at(2 * row);
         let far = Some(NodeId(anchor.0 + 1));
         let henry = matrix.l_henry[row] * PICOHENRIES_PER_HENRY;
         out.push(anchor, far, Parasitic::Inductance(Qty::new(henry)));
@@ -165,8 +165,8 @@ pub fn extract_inductance_into(
             // `0 + x`, so no pair reads −0 (F80).
             let henry = 0.0 + there.midpoint(back) * PICOHENRIES_PER_HENRY;
             out.push(
-                node(2 * row),
-                Some(node(2 * other)),
+                NodeId::at(2 * row),
+                Some(NodeId::at(2 * other)),
                 Parasitic::MutualInductance(Qty::new(henry)),
             );
         }
@@ -212,7 +212,7 @@ pub fn overlay(network: &mut ParasiticNetwork, solved: &ParasiticNetwork) {
             (Some(left), Some(right)) => left < right,
             (left, _) => left.is_some(),
         };
-        let id = node(network.node_net.len()).0;
+        let id = NodeId::at(network.node_net.len()).0;
         let (source, row) = if take_coarse {
             coarse_map[coarse] = id;
             coarse += 1;
@@ -275,8 +275,4 @@ fn push_anchors(
             .min();
         out.node_layer.push(low.unwrap_or(LayerId(u16::MAX)));
     }
-}
-
-fn node(index: usize) -> NodeId {
-    NodeId(u32::try_from(index).expect("a node index is a u32"))
 }

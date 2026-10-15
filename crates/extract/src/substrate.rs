@@ -557,11 +557,7 @@ pub fn add_into(
     domain: gpurify_geom::Bbox,
     grid: Grid,
 ) -> Result<(), SubstrateError> {
-    let first_node = |net: NetId| {
-        let at = network.node_net.partition_point(|&n| n < net);
-        (network.node_net.get(at) == Some(&net))
-            .then(|| NodeId(u32::try_from(at).expect("a NodeId")))
-    };
+    let first_node = |net: NetId| network.first_node(net);
     // The ports: each net's polygons, nets ascending.
     let mut shapes: Vec<(NetId, PolyId)> = port_layers
         .iter()
