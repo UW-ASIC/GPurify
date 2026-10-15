@@ -149,7 +149,7 @@ impl GeometryStore {
             "a layer with edges after it cannot be appended to without moving them"
         );
         self.edges.extend_from_slice(edges);
-        let grown = u32::try_from(edges.len()).expect("edge count fits a u32");
+        let grown = crate::narrow(edges.len());
         for offset in &mut self.edge_layer_start[layer.idx() + 1..] {
             *offset += grown;
         }
@@ -189,9 +189,9 @@ impl GeometryStore {
             "a layer with rows after it cannot be appended to without moving them"
         );
 
-        let base = u32::try_from(self.verts_x.len()).expect("vertex count fits a u32");
+        let base = crate::narrow(self.verts_x.len());
         // A wrapped cursor would hand `poly_verts` another polygon's coordinates.
-        base.checked_add(u32::try_from(xs.len()).expect("vertex count fits a u32"))
+        base.checked_add(crate::narrow(xs.len()))
             .expect("total vertex count fits a u32");
         self.verts_x.extend_from_slice(xs);
         self.verts_y.extend_from_slice(ys);
@@ -213,7 +213,7 @@ impl GeometryStore {
         }
 
         // Every later layer was empty, so its offset moves by the same amount.
-        let grown = u32::try_from(rings).expect("appended ring count fits a u32");
+        let grown = crate::narrow(rings);
         for offset in &mut self.layer_start[layer.idx() + 1..] {
             *offset += grown;
         }
@@ -257,9 +257,9 @@ impl GeometryStoreBuilder {
         // Release assert: unequal columns would pair one polygon's X with the next's Y.
         assert_eq!(xs.len(), ys.len(), "coordinate columns disagree in length");
 
-        let row = u32::try_from(self.poly_layer.len()).expect("polygon count fits a u32");
-        let start = u32::try_from(self.verts_x.len()).expect("vertex count fits a u32");
-        let len = u32::try_from(xs.len()).expect("polygon vertex count fits a u32");
+        let row = crate::narrow(self.poly_layer.len());
+        let start = crate::narrow(self.verts_x.len());
+        let len = crate::narrow(xs.len());
         // The run's *end* must fit too, or `finish`'s u32 cursor wraps.
         start
             .checked_add(len)

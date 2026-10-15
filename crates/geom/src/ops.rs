@@ -3,6 +3,7 @@
 use core::cmp::Ordering;
 
 use crate::view::RingRef;
+use crate::wide::I256;
 use crate::{Dbu, DbuArea, MAX_ABS_DBU};
 
 /// A coordinate pair, passed by value to a predicate.
@@ -187,7 +188,7 @@ pub(crate) fn self_intersects_with(
     if n < 4 {
         return false;
     }
-    let last = u32::try_from(n - 1).expect("a coordinate run is under 2^32 vertices");
+    let last = crate::narrow(n - 1);
 
     edges.clear();
     for (i, id) in (0..n - 1).zip(0u32..) {
@@ -353,10 +354,17 @@ pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
     let drop = cross(seg.a, seg.b, p).unsigned_abs();
     let scale = len2.unsigned_abs();
 
-    let dist2 = match drop.checked_mul(drop) {
-        Some(num) => num / scale + u128::from(num % scale != 0),
+    let dist2 = if let Some(num) = drop.checked_mul(drop) {
+        num / scale + u128::from(num % scale != 0)
+    } else {
         // `cross²` reaches 166 bits at the domain corners: divide at 256 bits.
-        None => ceil_sq_div(drop, scale),
+        let wide = |v: u128| I256::from_i128(i128::try_from(v).expect("under 2^84"));
+        let (floor, inexact) = wide(drop).mul(wide(drop)).div_floor(wide(scale));
+        floor
+            .to_i128()
+            .expect("a squared distance in the domain fits an i128")
+            .unsigned_abs()
+            + u128::from(inexact)
     };
     // At most the squared diagonal of the `±2^40` domain, `2^83`.
     debug_assert!(
@@ -370,34 +378,6 @@ pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
     )]
     let dist2 = dist2 as i128;
     DbuArea::new(dist2)
-}
-
-/// `ceil(a² / d)` exactly, for `d > 0`: `a²` as a 256-bit pair, restoring division.
-fn ceil_sq_div(a: u128, d: u128) -> u128 {
-    const HALF: u128 = u64::MAX as u128;
-    debug_assert!(d > 0, "a divisor is positive");
-
-    // `a = h·2^64 + l`, so `a² = h²·2^128 + 2hl·2^64 + l²`.
-    let (l, h) = (a & HALF, a >> 64);
-    let (ll, hl, hh) = (l * l, l * h, h * h);
-    let mid = (ll >> 64) + (hl & HALF) + (hl & HALF);
-    let lo = (ll & HALF) | (mid << 64);
-    let hi = hh + (hl >> 64) + (hl >> 64) + (mid >> 64);
-
-    let mut rem: u128 = 0;
-    let mut quo: u128 = 0;
-    for word in [hi, lo] {
-        for bit in (0..128u32).rev() {
-            // A carried-out bit means rem >= d; the wrapping subtract is still exact.
-            let carried = rem >> 127;
-            rem = (rem << 1) | ((word >> bit) & 1);
-            let take = (carried != 0) | (rem >= d);
-            rem = rem.wrapping_sub(d * u128::from(take));
-            quo = (quo << 1) | u128::from(take);
-        }
-    }
-
-    quo + u128::from(rem != 0)
 }
 
 /// Integer square root, truncating; negatives give 0, results clamp to `MAX_ABS_DBU`.
@@ -501,8 +481,8 @@ pub fn point_seg_twice2(p: Point, seg: Seg) -> (i128, bool) {
     if along >= len2 {
         return to(seg.b.x, seg.b.y);
     }
-    let side = crate::wide::I256::from_i128(cross(seg.a, seg.b, p));
-    crate::wide::twice_ratio(side.mul(side), crate::wide::I256::from_i128(len2))
+    let side = I256::from_i128(cross(seg.a, seg.b, p));
+    crate::wide::twice_ratio(side.mul(side), I256::from_i128(len2))
 }
 
 /// [`point_seg_twice2`] between two closed segments: `(0, false)` when they
