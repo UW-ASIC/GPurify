@@ -112,11 +112,12 @@ pub fn apply((turns, mirror): Symmetry, (mut x, mut y): (i64, i64)) -> (i64, i64
     (x, y)
 }
 
-/// One finding a rule must report: its measurement and marker, each
-/// claimed only when set.
+/// One finding a rule must report: its measurement, the limit it was held
+/// to, and its marker, each claimed only when set.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Finding {
     pub measured: Option<Measurement>,
+    pub limit: Option<Measurement>,
     pub at: Option<(i64, i64)>,
 }
 
@@ -141,18 +142,25 @@ impl Finding {
     pub fn any() -> Self {
         Finding {
             measured: None,
+            limit: None,
             at: None,
         }
     }
     fn of(m: Measurement) -> Self {
         Finding {
             measured: Some(m),
+            limit: None,
             at: None,
         }
     }
     /// Pins the marker.
     pub fn at(mut self, x: i64, y: i64) -> Self {
         self.at = Some((x, y));
+        self
+    }
+    /// Claims the length limit it was held to.
+    pub fn held(mut self, nm: i64) -> Self {
+        self.limit = Some(Measurement::Length(Dbu::new_unchecked(nm)));
         self
     }
 }
@@ -240,8 +248,10 @@ pub fn check(name: &str, deck: &str, layout: &Layout, expect: &[(&str, Vec<Findi
         want.sort_by_key(|f| (f.at.is_none(), f.measured.is_none()));
         let mut free: Vec<_> = row.findings.iter().collect();
         for w in &want {
-            let hit = free.iter().position(|&&(m, _, at)| {
-                w.measured.is_none_or(|wm| same(wm, m)) && w.at.is_none_or(|wa| wa == at)
+            let hit = free.iter().position(|&&(m, l, at)| {
+                w.measured.is_none_or(|wm| same(wm, m))
+                    && w.limit.is_none_or(|wl| same(wl, l))
+                    && w.at.is_none_or(|wa| wa == at)
             });
             match hit {
                 Some(k) => {
