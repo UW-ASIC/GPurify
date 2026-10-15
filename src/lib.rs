@@ -62,7 +62,11 @@
 //! `lib` is the odd one out: it checks nothing, and writes a hard macro's
 //! Liberty timing model per corner from the extracted layout ([`liberty`]).
 //! `xor` compares two layouts layer by layer instead of checking one
-//! ([`engine::xor`]).
+//! ([`engine::xor`]). `fill` and `enhance` edit the layout as the deck
+//! configures them (density fill, redundant cuts and wider straps) and
+//! check what they wrote ([`engine::fill`], [`engine::enhance`]), and
+//! [`engine::incremental`] checks an edit of a layout held in memory again
+//! without a full run.
 //!
 //! The four decks in `pdks/` are compiled into the library as [`pdks`], so a
 //! consumer reads the deck the checker is tested with instead of a copy.

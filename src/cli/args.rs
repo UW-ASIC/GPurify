@@ -1,5 +1,6 @@
 //! Command line: `gpurify <drc|erc|lvs|pex|all|lib> <layout> --deck <deck> [options]`,
-//! `gpurify xor <layout> <other> --deck <deck> [--format text|json]`, or
+//! `gpurify xor <layout> <other> --deck <deck> [--format text|json]`,
+//! `gpurify <fill|enhance> <layout> <output.gds> --deck <deck> [--format text|json]`, or
 //! `gpurify system <system.json> --reference <netlist> [--format text|json]`.
 
 use crate::engine::{Checks, Inputs, RunOptions};
@@ -35,6 +36,18 @@ pub struct Cli {
     pub coupling: Vec<(String, String)>,
     /// `--cluster <µm>`: list the violations' clusters at this reach.
     pub cluster: Option<f64>,
+    /// `fill` or `enhance`: the edit the deck configures, and the GDSII file
+    /// to write the edited layout to; the report is DRC's on that file.
+    pub edit: Option<(Edit, PathBuf)>,
+}
+
+/// A layout edit the deck configures, written to a new GDSII file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edit {
+    /// `fill`: density fill on each `fill` line's layer (FLOW-007).
+    Fill,
+    /// `enhance`: redundant cuts and widened straps (FLOW-009).
+    Enhance,
 }
 
 /// What `lib` was asked for.
@@ -71,7 +84,8 @@ fn is_lib_or_compare(subcommand: &str) -> bool {
 pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     let Some((subcommand, rest)) = argv.split_first() else {
         return usage(
-            "expected a subcommand: drc, erc, lvs, pex, all, lib, xor, system or compare"
+            "expected a subcommand: drc, erc, lvs, pex, all, lib, xor, fill, enhance, system or \
+             compare"
                 .to_string(),
         );
     };
@@ -175,7 +189,8 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
     // (checks, takes --intent, takes --reference, takes --quasistatic*)
     let (checks, takes_intent, takes_reference, takes_quasistatic) = match subcommand.as_str() {
         // `xor` compares two layouts; its rows report as the DRC stage.
-        "drc" | "xor" => (Checks { drc: true, ..none }, false, false, false),
+        // `fill` and `enhance` report DRC on the layout they write.
+        "drc" | "xor" | "fill" | "enhance" => (Checks { drc: true, ..none }, false, false, false),
         "erc" => (Checks { erc: true, ..none }, true, false, false),
         "lvs" => (Checks { lvs: true, ..none }, false, true, false),
         "pex" => (Checks { pex: true, ..none }, false, false, true),
@@ -187,18 +202,29 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         "lib" | "system" => (none, false, true, false),
         other => {
             return usage(format!(
-                "unknown subcommand {other}; expected drc, erc, lvs, pex, all, lib, xor, system \
-                 or compare"
+                "unknown subcommand {other}; expected drc, erc, lvs, pex, all, lib, xor, fill, \
+                 enhance, system or compare"
             ))
         }
     };
-    let is_xor = subcommand == "xor";
-    match (is_xor, layouts.as_slice()) {
+    let edit = match subcommand.as_str() {
+        "fill" => Some(Edit::Fill),
+        "enhance" => Some(Edit::Enhance),
+        _ => None,
+    };
+    let two = subcommand == "xor" || edit.is_some();
+    match (two, layouts.as_slice()) {
         (false, [_, second, ..]) => {
             return usage(format!("one layout file, but a second was given: {second}"))
         }
         (true, [_, _, third, ..]) => {
             return usage(format!("two layout files, but a third was given: {third}"))
+        }
+        (true, [] | [_]) if edit.is_some() => {
+            return usage(format!(
+                "{subcommand} writes the edited layout to a new file: {subcommand} <layout> \
+                 <output.gds> --deck <deck>"
+            ))
         }
         (true, [] | [_]) => {
             return usage(
@@ -224,6 +250,9 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         .is_some_and(|l| crate::engine::pipeline::is_def(std::path::Path::new(l)));
     if is_lib && (def_layout || lef.len() > 1) {
         return usage("lib reads a GDS layout and at most one macro --lef".to_string());
+    }
+    if edit.is_some() && def_layout {
+        return usage(format!("{subcommand} edits a GDS layout, not a DEF"));
     }
     if !is_lib && !lef.is_empty() && !def_layout {
         return usage(format!(
@@ -324,6 +353,7 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
             p2p: Vec::new(),
             coupling: Vec::new(),
             cluster: None,
+            edit: None,
         });
     }
     let Some(&layout) = layouts.first() else {
@@ -354,11 +384,16 @@ pub fn parse(argv: &[String]) -> Result<Cli, ArgError> {
         },
         format,
         lib,
-        other: layouts.get(1).copied().map(PathBuf::from),
+        other: layouts
+            .get(1)
+            .filter(|_| edit.is_none())
+            .copied()
+            .map(PathBuf::from),
         system: None,
         p2p,
         coupling,
         cluster,
+        edit: edit.zip(layouts.get(1).copied().map(PathBuf::from)),
     })
 }
 
@@ -522,12 +557,13 @@ mod tests {
         let cases = [
             (
                 "",
-                "expected a subcommand: drc, erc, lvs, pex, all, lib, xor, system or compare",
+                "expected a subcommand: drc, erc, lvs, pex, all, lib, xor, fill, enhance, system \
+                 or compare",
             ),
             (
                 "dcr t --deck d",
-                "unknown subcommand dcr; expected drc, erc, lvs, pex, all, lib, xor, system or \
-                 compare",
+                "unknown subcommand dcr; expected drc, erc, lvs, pex, all, lib, xor, fill, \
+                 enhance, system or compare",
             ),
             (
                 "system s.json --deck d --reference r",
@@ -653,6 +689,32 @@ mod tests {
         ];
         for (argv, message) in cases {
             assert_eq!(parse_str(argv).err().as_deref(), Some(message), "{argv:?}");
+        }
+    }
+
+    /// Oracle: construct-from-answer, against `docs/usage.md`: `fill` and
+    /// `enhance` take the layout and the file to write, report DRC, and
+    /// take no option of their own; without the output, or on a DEF, they
+    /// are refused.
+    #[test]
+    fn an_edit_writes_its_second_file_and_reports_drc() {
+        use super::Edit;
+        for (word, edit) in [("fill", Edit::Fill), ("enhance", Edit::Enhance)] {
+            let cli =
+                parse_str(&format!("{word} a.gds b.gds --deck d --format json")).expect("legal");
+            assert_eq!(cli.edit, Some((edit, std::path::PathBuf::from("b.gds"))));
+            assert_eq!(cli.other, None);
+            let drc = Checks {
+                drc: true,
+                erc: false,
+                lvs: false,
+                pex: false,
+            };
+            assert_eq!(cli.options.checks, drc);
+            assert_eq!(cli.format, Format::Json);
+            assert!(parse_str(&format!("{word} a.gds --deck d")).is_err());
+            assert!(parse_str(&format!("{word} a.def b.gds --deck d")).is_err());
+            assert!(parse_str(&format!("{word} a.gds b.gds --deck d --quasistatic n")).is_err());
         }
     }
 }

@@ -885,6 +885,179 @@ pub(crate) fn cut_area_change(
     (Outcome::Ran, connectors.figures.len() as u64)
 }
 
+/// A via's cuts, figures and footprints, as [`via_redundancy`] reads them.
+struct Vias {
+    connectors: Connectors,
+    under: SortedRects<u32>,
+    over: SortedRects<u32>,
+    /// Every cut's box, by merged cut figure.
+    boxes: Vec<Bbox>,
+    /// Per connector, the cut figures on it.
+    held: Vec<Vec<u32>>,
+}
+
+impl Vias {
+    fn new(
+        store: &GeometryStore,
+        (cut, lower, upper): (LayerId, LayerId, LayerId),
+        s: &mut Scratch,
+    ) -> Option<Self> {
+        let under = merged(store, lower, s)?;
+        let over = merged(store, upper, s)?;
+        let cuts = merged(store, cut, s)?;
+        let connectors = Connectors::new(&under, &over).ok()?;
+        let held = connectors.cuts(&cuts);
+        Some(Self {
+            under: figure_rects(&under),
+            over: figure_rects(&over),
+            boxes: cuts.bboxes().to_vec(),
+            held,
+            connectors,
+        })
+    }
+
+    /// The first of a single-cut via's four neighbours ([`neighbours`])
+    /// wholly on both of its figures and at least `space` from every box
+    /// of `cuts`.
+    fn second_cut(&self, at: usize, (pitch, space): (Dbu, Dbu), cuts: &[Bbox]) -> Option<Bbox> {
+        let [only] = self.held[at][..] else {
+            return None;
+        };
+        let (lo, hi) = self.connectors.figures[at];
+        neighbours(self.boxes[only as usize], pitch).find(|&c| {
+            covers(&self.under, lo, c) && covers(&self.over, hi, c) && clear(c, cuts, space)
+        })
+    }
+}
+
+/// A cut's four neighbours, its box `b` moved `pitch` right, left, up and
+/// down, in that order.
+fn neighbours(b: Bbox, pitch: Dbu) -> impl Iterator<Item = Bbox> {
+    let p = pitch.raw();
+    [(p, 0), (-p, 0), (0, p), (0, -p)]
+        .into_iter()
+        .map(move |(dx, dy)| {
+            let shift = |v: Dbu, by: i64| Dbu::new_unchecked(v.raw() + by);
+            Bbox {
+                xlo: shift(b.xlo, dx),
+                ylo: shift(b.ylo, dy),
+                xhi: shift(b.xhi, dx),
+                yhi: shift(b.yhi, dy),
+            }
+        })
+}
+
+/// Whether figure `figure` of `sorted` covers all of `b`.
+fn covers(sorted: &SortedRects<u32>, figure: u32, b: Bbox) -> bool {
+    sorted
+        .overlapping(b)
+        .filter(|&(_, label)| label == figure)
+        .fold(DbuArea::new(0), |sum, (part, _)| sum + part.area())
+        == b.area()
+}
+
+/// Whether `c` is at least `space` from every box of `cuts`.
+fn clear(c: Bbox, cuts: &[Bbox], space: Dbu) -> bool {
+    let space2 = space.mul_wide(space);
+    cuts.iter().all(|&other| bbox_gap2(c, other) >= space2)
+}
+
+fn grown(b: Bbox, by: i64) -> Bbox {
+    let d = |v: Dbu, by: i64| Dbu::new_unchecked(v.raw() + by);
+    Bbox {
+        xlo: d(b.xlo, -by),
+        ylo: d(b.ylo, -by),
+        xhi: d(b.xhi, by),
+        yhi: d(b.yhi, by),
+    }
+}
+
+/// How far figure `figure` of `sorted` reaches past `b` on its nearest
+/// side: the largest margin, up to `cap`, by which `b` grown stays on it.
+/// `None` when `b` is not wholly on it.
+fn margin(sorted: &SortedRects<u32>, figure: u32, b: Bbox, cap: i64) -> Option<i64> {
+    if !covers(sorted, figure, b) {
+        return None;
+    }
+    let (mut lo, mut hi) = (0, cap);
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        if covers(sorted, figure, grown(b, mid)) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    Some(lo)
+}
+
+/// One redundant cut, and the metal it needs added below and above it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Insertion {
+    /// The new cut.
+    pub cut: Bbox,
+    /// A patch of the lower metal under the via's two cuts, when the cut is
+    /// not already wholly on it.
+    pub lower: Option<Bbox>,
+    /// The same for the upper metal.
+    pub upper: Option<Bbox>,
+}
+
+/// Where a second cut goes beside each single-cut via, as `gpurify
+/// enhance` adds them (catalog FLOW-009), in connector order: where
+/// [`via_redundancy`] finds room, the first neighbour it finds; for a dead
+/// via, the first neighbour at least `space` from every cut, with a patch
+/// of each metal that does not hold it: the box round both cuts, grown by
+/// the margin the metal already leaves round the via's cut (so the new cut
+/// is enclosed as the old one is, and the patch overlaps the metal it
+/// extends). Each cut is also `space` from every cut placed before it, so
+/// the added cuts keep the rule's spacing among themselves; each joins the
+/// two figures its via joins, and a patch touches its own figure. A dead
+/// via made redundant is no longer dead, so the rule's rate rises. `None`
+/// when a layer cannot be read (the rule's `Refused`).
+pub fn redundant_cuts(
+    store: &GeometryStore,
+    layers: (LayerId, LayerId, LayerId),
+    (pitch, space): (Dbu, Dbu),
+) -> Option<Vec<Insertion>> {
+    let vias = Vias::new(store, layers, &mut Scratch::default())?;
+    let mut cuts = vias.boxes.clone();
+    let mut added = Vec::new();
+    for at in 0..vias.held.len() {
+        let [only] = vias.held[at][..] else {
+            continue;
+        };
+        let insertion = if let Some(cut) = vias.second_cut(at, (pitch, space), &cuts) {
+            Insertion {
+                cut,
+                lower: None,
+                upper: None,
+            }
+        } else {
+            let b = vias.boxes[only as usize];
+            let (lo, hi) = vias.connectors.figures[at];
+            let (Some(below), Some(above)) = (
+                margin(&vias.under, lo, b, pitch.raw()),
+                margin(&vias.over, hi, b, pitch.raw()),
+            ) else {
+                continue;
+            };
+            let Some(cut) = neighbours(b, pitch).find(|&c| clear(c, &cuts, space)) else {
+                continue;
+            };
+            let both = b.union(cut);
+            Insertion {
+                cut,
+                lower: (!covers(&vias.under, lo, cut)).then(|| grown(both, below)),
+                upper: (!covers(&vias.over, hi, cut)).then(|| grown(both, above)),
+            }
+        };
+        cuts.push(insertion.cut);
+        added.push(insertion);
+    }
+    Some(added)
+}
+
 /// The redundant-via rate of Xu et al. (ASP-DAC 2005), `1 - dead / vias`: a
 /// via is a connector's cuts ([`Connectors`]); a single-cut via is dead when
 /// none of its cut's four neighbours (its box moved `pitch` along x or y)
@@ -901,52 +1074,15 @@ pub(crate) fn via_redundancy(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let (Some(under), Some(over), Some(cuts)) = (
-        merged(store, lower, s),
-        merged(store, upper, s),
-        merged(store, cut, s),
-    ) else {
+    let Some(found) = Vias::new(store, (cut, lower, upper), s) else {
         return REFUSED;
     };
-    let Ok(connectors) = Connectors::new(&under, &over) else {
-        return REFUSED;
-    };
-    let (under_rects, over_rects) = (figure_rects(&under), figure_rects(&over));
-    let boxes: Vec<Bbox> = cuts.bboxes().to_vec();
-    let space2 = space.mul_wide(space);
-    // Whether figure `figure` of `sorted` covers all of `b`.
-    let covers = |sorted: &SortedRects<u32>, figure: u32, b: Bbox| {
-        sorted
-            .overlapping(b)
-            .filter(|&(_, label)| label == figure)
-            .fold(DbuArea::new(0), |sum, (part, _)| sum + part.area())
-            == b.area()
-    };
-    let room = |b: Bbox, (lo, hi): (u32, u32)| {
-        let p = pitch.raw();
-        [(p, 0), (-p, 0), (0, p), (0, -p)]
-            .into_iter()
-            .any(|(dx, dy)| {
-                let shift = |v: Dbu, by: i64| Dbu::new_unchecked(v.raw() + by);
-                let c = Bbox {
-                    xlo: shift(b.xlo, dx),
-                    ylo: shift(b.ylo, dy),
-                    xhi: shift(b.xhi, dx),
-                    yhi: shift(b.yhi, dy),
-                };
-                covers(&under_rects, lo, c)
-                    && covers(&over_rects, hi, c)
-                    && boxes.iter().all(|&other| bbox_gap2(c, other) >= space2)
-            })
-    };
-    let held = connectors.cuts(&cuts);
+    let (held, boxes) = (&found.held, &found.boxes);
     let vias: Vec<usize> = (0..held.len()).filter(|&at| !held[at].is_empty()).collect();
     let dead: Vec<usize> = vias
         .iter()
         .copied()
-        .filter(|&at| {
-            held[at].len() == 1 && !room(boxes[held[at][0] as usize], connectors.figures[at])
-        })
+        .filter(|&at| held[at].len() == 1 && found.second_cut(at, (pitch, space), boxes).is_none())
         .collect();
     #[allow(clippy::cast_precision_loss, reason = "via counts are far below 2^52")]
     let rate = if vias.is_empty() {

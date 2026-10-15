@@ -13,6 +13,7 @@
 //! [`xor`] holds `gpurify xor` to `KLayout`'s XOR the same way.
 
 mod compare;
+mod fill;
 mod lefdef;
 mod translate;
 mod xor;

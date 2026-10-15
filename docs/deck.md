@@ -1125,6 +1125,59 @@ Both values are required; they come from the foundry's device
 cross-section, which no open PDK publishes. The model must be a
 `device mos` model, stated once.
 
+## Layout edits
+
+Two statements configure the layout edits `gpurify fill` and `gpurify
+enhance` make ([usage.md](usage.md#editing-a-layout)). Neither is a check:
+the deck's rules check what the edit drew.
+
+```
+layer met1_fill = gds(68, 28)
+layer nofill    = gds(68, 99)
+layer met1_all  = met1 or met1_fill
+rule m1.pd.min density(met1_all; window: 100um, step: 50um) >= 0.3
+rule m1.pd.max density(met1_all; window: 100um, step: 50um) <= 0.7
+rule m1.fill.d space(met1_fill, met1) >= 2um
+fill met1_fill for met1_all size 1um space 1um keep 2um avoid [met1, nofill]
+
+widen met4 net "VPWR" by 1um
+```
+
+`fill <layer> for <density layer> size <len> space <len> keep <len> avoid
+[<layer>, ..]` draws fill on `<layer>`, a drawn layer, for the `density`
+and `global_density` rules on `<density layer>` (usually the metal and its
+fill together): squares `size` on a side, on a grid `size + space` apart
+from the lower-left corner of the rules' die (their boundary layer, or the
+drawn layers' extent), wholly inside it. A square is drawn only at least
+`keep` from every shape of the `avoid` layers (square to them, so a
+corner keeps it diagonally too), `space` from fill already on the layer,
+and on nothing of the density layer. Squares are taken in rows from the
+bottom, left to right, each only while a window it lies in is below a
+minimum, and only if no window it lies in then passes a maximum: fill
+brings each window up to its minimum and never past a maximum. A window
+with no room left stays short, and its rule reports it. Every value is
+required; `size` and `space` are positive and `keep` is zero or more. A
+`fill` line whose density layer no `density` or `global_density` rule
+measures is refused when fill runs, since nothing says how much to draw.
+Fill does not read `density_balance`, `cover_density` or `density_cmp`
+rows, and two `fill` lines for one density layer each fill as if the
+other drew nothing.
+
+`widen <layer> net "<pattern>" by <len>` widens power straps: each
+rectangle on `<layer>` whose net carries a label matching the pattern (a
+glob, `*` any run and `?` one character) gains a strip `len` wide along
+each of its two long sides. A strip that would touch a shape of another
+net, on the layer or through a cut joining it, is never drawn; one that
+adds a DRC finding is taken back.
+
+`enhance` also adds redundant cuts, configured by the deck's
+`via_redundancy(cut, lower, upper; pitch: len, space: len)` rules rather
+than a statement: beside each single-cut via, the first of its cut's four
+neighbours one `pitch` away that the rule finds room for; or, for a dead
+via, the first neighbour at least `space` from every cut, with each metal
+that does not hold it extended by the box round both cuts, grown by the
+margin the metal leaves round the via's own cut.
+
 ## Errors
 
 Every problem is reported with its line, column and a marker under the
