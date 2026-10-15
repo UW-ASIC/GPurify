@@ -6,7 +6,8 @@
 
 use fearless_simd::{dispatch, f64x4, prelude::*, Level};
 
-/// Σ aᵢ·bᵢ.
+/// Returns Σ aᵢ·bᵢ, folded left to right in index order: the module's
+/// reproducibility contract.
 ///
 /// # Panics
 ///
@@ -21,13 +22,14 @@ pub fn dot(a: &[f64], b: &[f64]) -> f64 {
     s
 }
 
-/// ‖a‖₂.
+/// Returns ‖a‖₂, the square root of [`dot`]`(a, a)`.
 #[inline]
 pub fn nrm2(a: &[f64]) -> f64 {
     dot(a, a).sqrt()
 }
 
-/// y += α·x, element-wise, no FMA.
+/// Computes y += α·x, element-wise and without FMA, so every lane rounds as
+/// the scalar loop would.
 ///
 /// # Panics
 ///
@@ -39,8 +41,6 @@ pub fn axpy(alpha: f64, x: &[f64], y: &mut [f64]) {
 
 #[inline(always)]
 fn axpy_simd<S: Simd>(s: S, alpha: f64, x: &[f64], y: &mut [f64]) {
-    let n = x.len().min(y.len());
-    let (x, y) = (&x[..n], &mut y[..n]);
     let a = f64x4::splat(s, alpha);
     let (xc, xt) = x.as_chunks::<4>();
     let (yc, yt) = y.as_chunks_mut::<4>();
@@ -56,7 +56,8 @@ fn axpy_scalar(alpha: f64, x: &[f64], y: &mut [f64]) {
     }
 }
 
-/// p = z + β·p, element-wise, no FMA: CG's search-direction update.
+/// Computes p = z + β·p, element-wise and without FMA: CG's
+/// search-direction update.
 ///
 /// # Panics
 ///
@@ -68,8 +69,6 @@ pub fn xpay(z: &[f64], beta: f64, p: &mut [f64]) {
 
 #[inline(always)]
 fn xpay_simd<S: Simd>(s: S, z: &[f64], beta: f64, p: &mut [f64]) {
-    let n = z.len().min(p.len());
-    let (z, p) = (&z[..n], &mut p[..n]);
     let b = f64x4::splat(s, beta);
     let (zc, zt) = z.as_chunks::<4>();
     let (pc, pt) = p.as_chunks_mut::<4>();
@@ -85,7 +84,8 @@ fn xpay_scalar(z: &[f64], beta: f64, p: &mut [f64]) {
     }
 }
 
-/// One sparse mat-vec: `out[i]` is row `i` of a CSR matrix times `v`.
+/// Computes one sparse mat-vec: `out[i]` is row `i` of a CSR matrix times
+/// `v`, each row folded in stored order.
 ///
 /// # Panics
 ///
