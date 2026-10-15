@@ -13,6 +13,8 @@ gpurify <command> <layout.gds> --deck <process.deck> [options] > report
 | `all` | All four | a check whose input is missing is reported as skipped, never as passed |
 | `lib` | Nothing: writes a macro's Liberty files, see [liberty.md](liberty.md) | `--spec`, `--output-dir` |
 | `xor` | Two layouts against each other: every region where a layer differs, see [below](#comparing-two-layouts) | a second layout: `gpurify xor <layout> <other> --deck <deck>` |
+| `fill` | Nothing: writes the layout with density fill added, then reports DRC on it, see [below](#editing-a-layout) | the deck's `fill` lines; `gpurify fill <layout> <output.gds> --deck <deck>` |
+| `enhance` | Nothing: writes the layout with redundant cuts and widened straps added, then reports DRC on it, see [below](#editing-a-layout) | the deck's `via_redundancy` rules and `widen` lines; `gpurify enhance <layout> <output.gds> --deck <deck>` |
 | `system` | Several dies as one assembly: system LVS and package and system ESD, see [below](#multi-die-systems) | a system file in place of the layout, `--reference <system netlist>`; no `--deck` |
 | `compare` | Two parasitic netlists (SPEF or DSPF) against each other, net by net, see [below](#comparing-two-parasitic-netlists) | `gpurify compare <reference> <candidate>`; no layout or deck |
 
@@ -126,6 +128,42 @@ number of cuts, as those rules go on to do. The deck rule
 `cut_area_change(pre, post, lower, upper; cuts: [..], change: [..])` does,
 with both databases' cuts streamed into one layout on two layers, and the
 connector and the tolerances the deck's: their text leaves both unsettled.
+
+## Editing a layout
+
+```sh
+gpurify fill layout.gds filled.gds --deck <process.deck> > report
+gpurify enhance layout.gds enhanced.gds --deck <process.deck> > report
+```
+
+Two commands edit a GDS layout instead of only checking it, each as the
+deck configures it: no option changes what they do. Each writes the edited
+layout to the second file, the input's records unchanged and the new
+boundaries added to its top cell, says on standard error what it added,
+and then reports `drc` on the file it wrote, with `drc`'s exit code, so a
+run that exits 0 wrote a layout that passes the deck.
+
+`fill` draws density fill (dummy metal) for each `fill` line of the deck
+([deck.md](deck.md#layout-edits)): squares of the line's size and spacing
+on its fill layer, kept away from the layers it avoids, until every window
+of each `density` and `global_density` rule on its density layer is at its
+minimum, never over a maximum. A window with no room left stays short, and
+the report says so.
+
+`enhance` adds a second cut beside each single-cut via that a
+`via_redundancy` rule of the deck measures, where its definition finds
+room, and where it finds none, beside the cut with each metal extended
+under it by the margin it already leaves round the via; and it widens the
+straps each `widen` line names. A cut or patch, or a strap's side, that
+would touch another net is never tried, and one that adds a DRC finding
+the input did not have is taken back, so the output has no finding the
+input lacked and the redundant-via rate does not fall.
+
+A layout edited in memory, by a router or an editor, can be checked again
+after each edit without a full run: `gpurify::engine::incremental`
+re-checks only the clusters of shapes an edit reaches and keeps the rest
+of the previous findings, giving what a full run gives. It is a library
+interface; the command line has no saved state to start from.
 
 ## LVS reduction
 

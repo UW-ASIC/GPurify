@@ -125,6 +125,29 @@ pub fn load(inputs: &Inputs) -> Result<Loaded, LoadError> {
 ///
 /// As [`load`], and [`LoadError::Built`] when the named deck does not build.
 pub fn load_with(inputs: &Inputs, decks: &[(&str, DeckFn)]) -> Result<Loaded, LoadError> {
+    load_from(inputs, decks, None)
+}
+
+/// [`load_with`], with the layout given as GDSII bytes rather than read
+/// from [`Inputs::layout`] (which then only names it): what a layout edit
+/// (`gpurify fill`, `gpurify enhance`) checks before writing it.
+///
+/// # Errors
+///
+/// As [`load_with`].
+pub fn load_bytes(
+    inputs: &Inputs,
+    gds: &[u8],
+    decks: &[(&str, DeckFn)],
+) -> Result<Loaded, LoadError> {
+    load_from(inputs, decks, Some(gds))
+}
+
+fn load_from(
+    inputs: &Inputs,
+    decks: &[(&str, DeckFn)],
+    gds: Option<&[u8]>,
+) -> Result<Loaded, LoadError> {
     let builtin = decks
         .iter()
         .find(|(name, _)| inputs.deck.as_path() == std::path::Path::new(name))
@@ -146,7 +169,7 @@ pub fn load_with(inputs: &Inputs, decks: &[(&str, DeckFn)]) -> Result<Loaded, Lo
                 .map_err(|why| why.in_file(&inputs.deck.display().to_string()))?,
         })
     };
-    let (library, grid, deck, design) = if is_def(&inputs.layout) {
+    let (library, grid, deck, design) = if gds.is_none() && is_def(&inputs.layout) {
         // A DEF states its grid in its UNITS; its LEFs are read on it, and
         // the deck too, whose layers the design is then drawn on.
         let read = |path: &std::path::Path, file| {
@@ -182,9 +205,16 @@ pub fn load_with(inputs: &Inputs, decks: &[(&str, DeckFn)]) -> Result<Loaded, Lo
         let library = gpurify_ingest::layout::gds::Library::parse(&bytes, &mut strings)?;
         (library, grid, deck, Some(lefdef::Design { def, lef }))
     } else {
-        let bytes = gpurify_ingest::layout::read_gds_bytes(&inputs.layout)?;
+        let read;
+        let bytes = match gds {
+            Some(bytes) => bytes,
+            None => {
+                read = gpurify_ingest::layout::read_gds_bytes(&inputs.layout)?;
+                &read
+            }
+        };
         // Layout strings are interned before the deck's, which fixes every StrId.
-        let library = gpurify_ingest::layout::gds::Library::parse(&bytes, &mut strings)?;
+        let library = gpurify_ingest::layout::gds::Library::parse(bytes, &mut strings)?;
         // The deck's lengths are converted on the layout's grid, so the layout states it.
         let grid = library.grid()?;
         let deck = compile(grid, &mut strings)?;

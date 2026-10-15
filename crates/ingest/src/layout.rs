@@ -565,6 +565,76 @@ pub mod gds {
     use gpurify_geom::{GeometryStore, GeometryStoreBuilder};
     use gpurify_geom::{StrId, StrTable};
 
+    /// `bytes`, a GDSII stream as [`super::read_gds_bytes`] returns it, with
+    /// one `BOUNDARY` per box on its stream pair added to the first root
+    /// structure (the first in the file that no reference places): a layout
+    /// edit (density fill, a redundant cut) in the coordinates
+    /// [`Library::flatten`] reads, every other record left byte for byte.
+    /// Flattening places every root at the origin, so any root would do.
+    ///
+    /// # Errors
+    ///
+    /// [`LayoutError::Truncated`] for a stream that does not read to
+    /// `ENDLIB` (or has no structure to add to, at its end), and
+    /// [`LayoutError::CoordinateOutOfRange`] for a box past GDSII's 32-bit
+    /// coordinates.
+    pub fn with_boxes(
+        bytes: &[u8],
+        boxes: &[((u16, u16), gpurify_geom::Bbox)],
+    ) -> Result<Vec<u8>, LayoutError> {
+        let (mut at, mut name) = (0, String::new());
+        let mut ends: Vec<(String, usize)> = Vec::new();
+        let mut placed: Vec<String> = Vec::new();
+        loop {
+            let (tag, payload, next) = record(bytes, at)?;
+            match tag {
+                STRNAME => name = ascii(payload).into_owned(),
+                SNAME => placed.push(ascii(payload).into_owned()),
+                ENDSTR => ends.push((std::mem::take(&mut name), at)),
+                ENDLIB => break,
+                _ => {}
+            }
+            at = next;
+        }
+        let root = ends
+            .iter()
+            .find(|(name, _)| !placed.contains(name))
+            .ok_or(LayoutError::Truncated(at))?
+            .1;
+        let mut added = Vec::with_capacity(boxes.len() * 64);
+        let put = |out: &mut Vec<u8>, tag: u16, payload: &[u8]| {
+            let len = u16::try_from(payload.len() + 4).expect("a short record");
+            out.extend_from_slice(&len.to_be_bytes());
+            out.extend_from_slice(&tag.to_be_bytes());
+            out.extend_from_slice(payload);
+        };
+        for &((layer, datatype), b) in boxes {
+            let mut xy = Vec::with_capacity(40);
+            for (x, y) in [
+                (b.xlo, b.ylo),
+                (b.xhi, b.ylo),
+                (b.xhi, b.yhi),
+                (b.xlo, b.yhi),
+                (b.xlo, b.ylo),
+            ] {
+                for v in [x.raw(), y.raw()] {
+                    let v = i32::try_from(v).map_err(|_| LayoutError::CoordinateOutOfRange(v))?;
+                    xy.extend_from_slice(&v.to_be_bytes());
+                }
+            }
+            put(&mut added, BOUNDARY, &[]);
+            put(&mut added, LAYER, &layer.to_be_bytes());
+            put(&mut added, DATATYPE, &datatype.to_be_bytes());
+            put(&mut added, XY, &xy);
+            put(&mut added, ENDEL, &[]);
+        }
+        let mut out = Vec::with_capacity(bytes.len() + added.len());
+        out.extend_from_slice(&bytes[..root]);
+        out.extend_from_slice(&added);
+        out.extend_from_slice(&bytes[root..]);
+        Ok(out)
+    }
+
     // Record tags as on the wire: `(record type << 8) | data type`.
     const HEADER: u16 = 0x0002;
     const BGNLIB: u16 = 0x0102;

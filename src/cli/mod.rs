@@ -2,6 +2,8 @@
 //! a binary that carries its own decks runs ([`main_with`]).
 //!
 //! `gpurify <drc|erc|lvs|pex|all|lib> <layout> --deck <deck> [options]`,
+//! `gpurify <fill|enhance> <layout> <output.gds> --deck <deck>` for the
+//! layout edits the deck configures (each then reports DRC on its output),
 //! or `gpurify system <system.json> --reference <netlist>` for several dies;
 //! [usage.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/usage.md)
 //! documents every option, the reports and the exit codes. Every binary
@@ -51,10 +53,17 @@ pub fn main_with(decks: &[(&str, DeckFn)]) -> ExitCode {
     if argv.first().map(String::as_str) == Some("compare") {
         return compare::main(&argv[1..]);
     }
-    let cli = match args::parse(&argv) {
+    let mut cli = match args::parse(&argv) {
         Ok(cli) => cli,
         Err(error) => return fail(&error),
     };
+    // An edit writes its layout, then reports DRC on what it wrote.
+    if let Some((edit, output)) = cli.edit.clone() {
+        if let Err(code) = write_edit(&cli, edit, &output, decks) {
+            return code;
+        }
+        cli.inputs.layout = output;
+    }
     if let Some(lib) = &cli.lib {
         return liberty(&cli, lib, decks);
     }
@@ -70,6 +79,39 @@ pub fn main_with(decks: &[(&str, DeckFn)]) -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// `fill` or `enhance`: the edited layout, written to `output`, and what
+/// was added, on stderr (stdout carries the report).
+fn write_edit(
+    cli: &args::Cli,
+    edit: args::Edit,
+    output: &std::path::Path,
+    decks: &[(&str, DeckFn)],
+) -> Result<(), ExitCode> {
+    let (bytes, note) = match edit {
+        args::Edit::Fill => {
+            let (bytes, squares) =
+                crate::engine::fill::fill_gds(&cli.inputs, decks).map_err(|error| fail(&error))?;
+            let total: usize = squares.iter().sum();
+            (bytes, format!("{total} fill squares"))
+        }
+        args::Edit::Enhance => {
+            let (bytes, kept) = crate::engine::enhance::enhance_gds(&cli.inputs, decks)
+                .map_err(|error| fail(&error))?;
+            let note = format!(
+                "{} redundant cuts, {} strap sides widened",
+                kept.cuts, kept.sides
+            );
+            (bytes, note)
+        }
+    };
+    std::fs::write(output, bytes).map_err(|why| {
+        eprintln!("error: {}: {why}", output.display());
+        ExitCode::FAILURE
+    })?;
+    eprintln!("wrote {}: {note}", output.display());
+    Ok(())
 }
 
 /// One whole run, rendered in the requested format. An error has already been
