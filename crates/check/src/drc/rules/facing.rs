@@ -499,6 +499,7 @@ pub(crate) fn eol_keep_out(
     layer: LayerId,
     eol_width: Dbu,
     (backward, side, forward): (Dbu, Dbu, Dbu),
+    (except_within, corner_only): (Option<(Dbu, Dbu)>, bool),
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
@@ -506,6 +507,19 @@ pub(crate) fn eol_keep_out(
         return REFUSED;
     };
     let edges = figure_edges(&s.layer_out);
+    // CORNERONLY reads the figures' vertices, by x.
+    let mut vertices: Vec<(i64, i64, u32)> = Vec::new();
+    if corner_only {
+        for figure in
+            0..u32::try_from(s.layer_out.len()).expect("a layer indexes polygons with a u32")
+        {
+            for ring in s.layer_out.poly_rings(figure) {
+                let (xs, ys) = ring.coords();
+                vertices.extend(xs.iter().zip(ys).map(|(x, y)| (x.raw(), y.raw(), figure)));
+            }
+        }
+        vertices.sort_unstable();
+    }
     let (mut rects, mut start) = (Vec::new(), Vec::new());
     decompose_into(&s.layer_out, &mut rects, &mut start);
     let material = SortedRects::new(
@@ -526,34 +540,101 @@ pub(crate) fn eol_keep_out(
     {
         examined += 1;
         let zone = keep_out_box(end, (backward.raw(), side.raw(), forward.raw()));
-        let mut inside: Vec<(u32, Bbox)> = material
-            .overlapping(zone)
-            .filter(|&(_, figure)| figure != end.figure)
-            .map(|(part, figure)| (figure, part))
-            .collect();
-        inside.sort_unstable_by_key(|&(figure, _)| figure);
-        for intruder in inside.chunk_by(|a, b| a.0 == b.0) {
-            let area = intruder
+        // EXCEPTWITHIN: a figure reaching into a side zone is exempt.
+        let exempt = |figure: u32| {
+            except_within.is_some_and(|(low, high)| {
+                side_zones(
+                    end,
+                    (backward.raw(), forward.raw()),
+                    (low.raw(), high.raw()),
+                )
+                .into_iter()
+                .any(|z| material.overlapping(z).any(|(_, f)| f == figure))
+            })
+        };
+        // Per intruding figure: what it measures and the box of it inside.
+        let mut found: Vec<(u32, Measurement, Bbox)> = Vec::new();
+        if corner_only {
+            let first = vertices.partition_point(|v| v.0 <= zone.xlo.raw());
+            let mut inside: Vec<(u32, i64, i64)> = vertices[first..]
                 .iter()
-                .fold(DbuArea::new(0), |sum, &(_, part)| sum + part.area());
-            let bounds = intruder
-                .iter()
-                .fold(Bbox::EMPTY, |sum, &(_, part)| sum.union(part));
+                .take_while(|v| v.0 < zone.xhi.raw())
+                .filter(|v| zone.ylo.raw() < v.1 && v.1 < zone.yhi.raw() && v.2 != end.figure)
+                .map(|&(x, y, figure)| (figure, x, y))
+                .collect();
+            inside.sort_unstable();
+            for corners in inside.chunk_by(|a, b| a.0 == b.0) {
+                let bounds = corners.iter().fold(Bbox::EMPTY, |sum, &(_, x, y)| {
+                    sum.union(Bbox::point(Dbu::new_unchecked(x), Dbu::new_unchecked(y)))
+                });
+                let n = u32::try_from(corners.len()).unwrap_or(u32::MAX);
+                found.push((corners[0].0, Measurement::Count(n), bounds));
+            }
+        } else {
+            let mut inside: Vec<(u32, Bbox)> = material
+                .overlapping(zone)
+                .filter(|&(_, figure)| figure != end.figure)
+                .map(|(part, figure)| (figure, part))
+                .collect();
+            inside.sort_unstable_by_key(|&(figure, _)| figure);
+            for intruder in inside.chunk_by(|a, b| a.0 == b.0) {
+                let area = intruder
+                    .iter()
+                    .fold(DbuArea::new(0), |sum, &(_, part)| sum + part.area());
+                let bounds = intruder
+                    .iter()
+                    .fold(Bbox::EMPTY, |sum, &(_, part)| sum.union(part));
+                found.push((intruder[0].0, Measurement::Area(area), bounds));
+            }
+        }
+        for (figure, measured, bounds) in found {
+            if exempt(figure) {
+                continue;
+            }
+            let limit = match measured {
+                Measurement::Count(_) => Measurement::Count(0),
+                _ => Measurement::Area(DbuArea::new(0)),
+            };
             out.push(Violation {
                 rule,
                 layer,
                 severity: Severity::Error,
                 at: centre(bounds),
-                measured: Measurement::Area(area),
-                limit: Measurement::Area(DbuArea::new(0)),
-                shapes: (
-                    owners[end.figure as usize],
-                    Some(owners[intruder[0].0 as usize]),
-                ),
+                measured,
+                limit,
+                shapes: (owners[end.figure as usize], Some(owners[figure as usize])),
             });
         }
     }
     (Outcome::Ran, examined)
+}
+
+/// `EXCEPTWITHIN low high`'s side zones of the end `end`: beside each of
+/// its corners, from `low` to `high` past it along its line, and across from
+/// `backward` behind its line to `forward` past it
+/// (`getEolKeepOutExceptWithinRects`).
+fn side_zones(end: &Edge, (backward, forward): (i64, i64), (low, high): (i64, i64)) -> [Bbox; 2] {
+    let depth = keep_out_box(end, (backward, 0, forward));
+    let at = |v: i64| Dbu::new_unchecked(v.clamp(-MAX_ABS_DBU, MAX_ABS_DBU));
+    let along = |lo: i64, hi: i64| {
+        if end.vertical {
+            Bbox {
+                ylo: at(lo),
+                yhi: at(hi),
+                ..depth
+            }
+        } else {
+            Bbox {
+                xlo: at(lo),
+                xhi: at(hi),
+                ..depth
+            }
+        }
+    };
+    [
+        along(end.lo - high, end.lo - low),
+        along(end.hi + low, end.hi + high),
+    ]
 }
 
 /// The keep-out box of the end of line `end`: its span widened by `side` on

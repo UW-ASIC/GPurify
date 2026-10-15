@@ -161,6 +161,32 @@ impl RuleRow {
         self
     }
 
+    /// An [`eol_keep_out`] row with `EXCEPTWITHIN withinLow withinHigh`
+    /// (`except_within`) and `CORNERONLY` (`corner_only`), the deck's
+    /// `except_within: (low: .., high: ..)` and `corner_only:`.
+    ///
+    /// # Panics
+    ///
+    /// On a row of any other kind.
+    #[must_use]
+    pub fn keep_out_qualifiers(
+        mut self,
+        except_within: Option<(Dbu, Dbu)>,
+        corner_only: bool,
+    ) -> Self {
+        assert_eq!(
+            self.kind, "eol_keep_out",
+            "{} has no keep-out qualifiers",
+            self.kind
+        );
+        if let Some((low, high)) = except_within {
+            low.put("within_low", &mut self.params);
+            high.put("within_high", &mut self.params);
+        }
+        corner_only.put("corner_only", &mut self.params);
+        self
+    }
+
     /// An [`eol_within_spacing`] row with the `LEF58_SPACING ENDOFLINE`
     /// qualifiers of [`Eol58`](crate::drc::Eol58), the deck's `side_length:`,
     /// `end_prl:`, `wrong_dir:` and `extension:`, and `enclose_cut:` as

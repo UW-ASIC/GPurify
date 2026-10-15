@@ -880,11 +880,22 @@ impl CompiledDeck {
                 backward,
                 side,
                 forward,
-            } => one(layer)
-                .length("eol_width", eol_width)
-                .length("backward", backward)
-                .length("side", side)
-                .length("forward", forward),
+                except_within,
+                corner_only,
+            } => {
+                let mut row = one(layer)
+                    .length("eol_width", eol_width)
+                    .length("backward", backward)
+                    .length("side", side)
+                    .length("forward", forward);
+                if let Some((low, high)) = except_within {
+                    row = row.length("within_low", low).length("within_high", high);
+                }
+                if corner_only || except_within.is_some() {
+                    row = row.value("corner_only", ParamValue::Flag(corner_only));
+                }
+                row
+            }
             Rule::ConvexCornerSpacing {
                 layer,
                 corner_to_corner,

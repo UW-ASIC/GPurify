@@ -421,6 +421,11 @@ const EOL_PARALLEL_MORE: &[Param] = &[
     p("subtract_eol_width", "par_subtract_eol_width", Dim::Bool),
     opt("min_length", "par_min_length", Dim::Length),
 ];
+/// `LEF58_EOLKEEPOUT ... EXCEPTWITHIN withinLow withinHigh`.
+const KEEP_OUT_EXCEPT: &[Param] = &[
+    p("low", "within_low", Dim::Length),
+    p("high", "within_high", Dim::Length),
+];
 /// `ENDPRLSPACING endPrlSpace PRL endPrl`.
 const EOL_END_PRL: &[Param] = &[
     p("space", "end_prl_space", Dim::Length),
@@ -1370,6 +1375,22 @@ pub(crate) const KINDS: &[Kind] = &[
             p("backward", "backward", Dim::Length),
             p("side", "side", Dim::Length),
             p("forward", "forward", Dim::Length),
+        ],
+    ),
+    // With `EXCEPTWITHIN withinLow withinHigh` and `CORNERONLY`.
+    drc(
+        "eol_keep_out",
+        Cmp::Absent,
+        "eol_keep_out",
+        &[0],
+        None,
+        &[
+            p("eol_width", "eol_width", Dim::Length),
+            p("backward", "backward", Dim::Length),
+            p("side", "side", Dim::Length),
+            p("forward", "forward", Dim::Length),
+            opt("except_within", "", Dim::Group(KEEP_OUT_EXCEPT)),
+            p("corner_only", "corner_only", Dim::Bool),
         ],
     ),
     // Another cut inside a cut class's keep-out zones (`LEF58_KEEPOUTZONE

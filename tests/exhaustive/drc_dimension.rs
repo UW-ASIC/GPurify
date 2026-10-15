@@ -69,6 +69,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         eol_within_spacing(depth),
         eol58(depth),
         eol_keep_out(depth),
+        eol_keep_out_qualifiers(depth),
         prl_spacing(depth),
         corner_to_corner(depth),
         convex_corner_spacing(depth),
@@ -2631,6 +2632,80 @@ fn eol58(depth: Depth) -> Vec<Fixture> {
     let mut out = every_placement(cases);
     out.extend(every_axis_placement(&axis));
     out
+}
+
+/// `eol_keep_out(met1; eol_width: 1300nm, backward: 200nm, side: 300nm,
+/// forward: 1000nm, except_within: .., corner_only: ..)` (DRC-030):
+/// `LEF58_EOLKEEPOUT 1.3 EXTENSION 0.2 0.3 1.0` with `EXCEPTWITHIN` and
+/// `CORNERONLY` as `OpenROAD`'s `TritonRoute` reads them (no public text
+/// defines `LEF58_EOLKEEPOUT`). The line's end keeps out x = -300..1300, y
+/// = -200..1000.
+///
+/// Oracle: `TritonRoute`'s boxes (`getEolKeepOutQueryBox`,
+/// `getEolKeepOutExceptWithinRects`), shapes by construction:
+/// - `EXCEPTWITHIN 0.4 0.8`: the side zones are x = -800..-400 and
+///   1400..1800, y = -200..1000; a 1500 tall block from x = -250 to a right
+///   side swept around 1400 intrudes over 1550 x 500 and is exempt only once
+///   it reaches into the right zone with a positive area (1401);
+/// - `CORNERONLY`: a block's lower-left corner at (500, y), y swept around
+///   1000, intrudes (one vertex) only strictly inside the box; a bar crossing
+///   the whole box with no vertex in it is no intruder, though the plain rule
+///   flags its 1600 x 500 inside.
+fn eol_keep_out_qualifiers(depth: Depth) -> Vec<Fixture> {
+    let deck = |except: &str, corner: bool| {
+        one_layer_deck(&format!(
+            "rule k eol_keep_out(met1; eol_width: 1300nm, backward: 200nm, side: 300nm, \
+             forward: 1000nm, except_within: {except}, corner_only: {corner})"
+        ))
+    };
+    let mut cases = Vec::new();
+    let except = deck("(low: 400nm, high: 800nm)", false);
+    for w in sweep(depth, 1400) {
+        cases.push(fixture(
+            &format!("eol_keep_out_qualifiers/except_within/{}", side(w, 1400)),
+            &["DRC-030"],
+            &except,
+            met1(&[LINE, [-250, 500, w, 2000]]),
+            vec![(
+                "k",
+                if w <= 1400 {
+                    vec![pin(Finding::area(1550 * 500), 1050, 1500)]
+                } else {
+                    Vec::new()
+                },
+            )],
+        ));
+    }
+    let corner = deck("none", true);
+    for y in sweep(depth, 1000) {
+        cases.push(fixture(
+            &format!("eol_keep_out_qualifiers/corner_only/{}", side(y, 1000)),
+            &["DRC-030"],
+            &corner,
+            met1(&[LINE, [500, y, 3000, 3000]]),
+            vec![(
+                "k",
+                if y < 1000 {
+                    vec![pin(count(1), 1000, 2 * y)]
+                } else {
+                    Vec::new()
+                },
+            )],
+        ));
+    }
+    for (corner_only, findings) in [
+        (true, Vec::new()),
+        (false, vec![pin(Finding::area(1600 * 500), 1000, 1500)]),
+    ] {
+        cases.push(fixture(
+            &format!("eol_keep_out_qualifiers/crossing_bar/corner_only_{corner_only}"),
+            &["DRC-030"],
+            &deck("none", corner_only),
+            met1(&[LINE, [-3000, 500, 4000, 2000]]),
+            vec![("k", findings)],
+        ));
+    }
+    every_placement(cases)
 }
 
 // --------------------------------------------------------------- eol_keep_out

@@ -2667,11 +2667,25 @@ pub enum Rule {
     /// lowest drawn row under the end's figure, then under the intruder's.
     /// `examined` counts ends of line.
     ///
+    /// `.., except_within: (low: len, high: len), corner_only: bool` (or
+    /// `except_within: none`) adds `EXCEPTWITHIN withinLow withinHigh` and
+    /// `CORNERONLY` as `TritonRoute` reads them (no public text defines
+    /// `LEF58_EOLKEEPOUT`). `EXCEPTWITHIN`: an intruding figure is exempt
+    /// when its material overlaps, with a positive area, either side zone:
+    /// beside each of the end's corners, from `low` to `high` past it along
+    /// the end's line, and across the box's depth, from `backward` behind the
+    /// end's line to `forward` past it (`getEolKeepOutExceptWithinRects`).
+    /// `TritonRoute` exempts each maximal rectangle of the intruder on its
+    /// own; this rule exempts the whole figure, a documented difference.
+    /// `CORNERONLY`: only a figure with a vertex strictly inside the box
+    /// intrudes (`checkMetalEOLkeepout_helper`'s corner test), measured as
+    /// a count of those vertices against a limit of 0.
+    ///
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-030. Rules: `LEF58_EOLKEEPOUT`.
     ///
-    /// Limits: the `EXCEPTWITHIN`, `CORNERONLY` and `CLASS` qualifiers are
-    /// missing, and so is `LEF58_EOLEXTENSIONSPACING`.
+    /// Limits: `CLASS className` is missing: `OpenROAD` stores the name and
+    /// nothing reads it, and no public text says what the class is.
     EolKeepOut {
         /// The layer measured, drawn or derived.
         layer: LayerId,
@@ -2687,6 +2701,11 @@ pub enum Rule {
         /// How far the box reaches past the end's line, in grid units;
         /// positive.
         forward: Dbu,
+        /// `EXCEPTWITHIN withinLow withinHigh`, in grid units: the side
+        /// zones' reach past the end's corners, `0 <= low < high`.
+        except_within: Option<(Dbu, Dbu)>,
+        /// `CORNERONLY`.
+        corner_only: bool,
     },
     /// Another cut inside the keep-out zone of a cut of one class.
     ///
@@ -4935,6 +4954,14 @@ impl RuleSet {
                     backward: at_least_zero(spec, "backward")?,
                     side: at_least_zero(spec, "side")?,
                     forward: length(spec, "forward")?,
+                    except_within: match optional(spec, "within_low") {
+                        None => None,
+                        Some(_) => Some((
+                            at_least_zero(spec, "within_low")?,
+                            length(spec, "within_high")?,
+                        )),
+                    },
+                    corner_only: optional(spec, "corner_only") == Some(ParamValue::Flag(true)),
                 },
                 "forbidden_spacing" => {
                     let layer = one(spec)?;
@@ -5687,12 +5714,15 @@ impl RuleSet {
                         backward,
                         side,
                         forward,
+                        except_within,
+                        corner_only,
                     } => facing::eol_keep_out(
                         store,
                         id,
                         layer,
                         eol_width,
                         (backward, side, forward),
+                        (except_within, corner_only),
                         s,
                         out,
                     ),
@@ -6073,8 +6103,14 @@ impl Rule {
                     length(cut.within).and(length(cut.space))
                 })),
             Rule::EolKeepOut {
-                eol_width, forward, ..
-            } => length(eol_width).and(length(forward)),
+                eol_width,
+                forward,
+                except_within,
+                ..
+            } => length(eol_width).and(length(forward)).and(match except_within {
+                Some((low, high)) if high <= low => Err(refuse((high - low).raw())),
+                _ => Ok(()),
+            }),
             Rule::ProtrusionWidth { wide, limit, .. } => length(wide).and(length(limit)),
             Rule::KeepOutZone {
                 class: (short, long),

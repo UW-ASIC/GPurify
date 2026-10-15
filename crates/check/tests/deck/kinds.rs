@@ -75,6 +75,7 @@ rule eol.w eol_space(m; eol_width: 60nm, within: 20nm, parallel: none, end_to_en
 rule eol.p eol_space(m; eol_width: 60nm, within: 20nm, parallel: (space: 120nm, within: 50nm, two_edges: true), end_to_end: 70nm) >= 80nm
 rule eol.58 eol_space(m; eol_width: 60nm, within: 20nm, parallel: (space: 120nm, within: 50nm, two_edges: true), end_to_end: 70nm, side_length: (length: 100nm, maximum: false, two_sides: true), opposite_width: 80nm, parallel_more: (subtract_eol_width: true, min_length: 90nm), end_prl: (space: 100nm, prl: 30nm), wrong_dir: (space: 90nm, horizontal: true), extension: 10nm, enclose_cut: (cut: v, within: 40nm, space: 110nm, all_cuts: true)) >= 80nm
 rule ko eol_keep_out(m; eol_width: 60nm, backward: 0nm, side: 30nm, forward: 90nm)
+rule ko.q eol_keep_out(m; eol_width: 60nm, backward: 0nm, side: 30nm, forward: 90nm, except_within: (low: 10nm, high: 40nm), corner_only: true)
 rule or origin(r)
 rule mca critical_area(m; radii: [50nm, 100nm, 200nm], weights: [0.6, 0.3, 0.1]) <= 1um2
 rule vr via_redundancy(v, m, m2; pitch: 300nm, space: 100nm) >= 0.9
@@ -260,6 +261,11 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
         ),
     );
     d.rule("ko", eol_keep_out(m, nm(60), nm(0), nm(30), nm(90)));
+    d.rule(
+        "ko.q",
+        eol_keep_out(m, nm(60), nm(0), nm(30), nm(90))
+            .keep_out_qualifiers(Some((nm(10), nm(40))), true),
+    );
     d.rule("or", origin(r));
     d.rule(
         "mca",

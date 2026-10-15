@@ -1209,7 +1209,10 @@ reading where no text defines them, each swept one step either side (fixtures `e
 
 **GPurify** (`facing.rs` `eol_keep_out`): each end of line (as rule 49) owns a box, the end widened
 by `side` each way, from `backward` behind its line to `forward` past it; each other figure whose
-material overlaps the box with positive area is a finding, measuring that area.
+material overlaps the box with positive area is a finding, measuring that area. `except_within`
+exempts a figure reaching into a zone beside either corner; `corner_only` counts the figure's
+vertices strictly inside the box instead (`TritonRoute`'s reading; fixtures
+`eol_keep_out_qualifiers/*`, not mirrored either).
 
 **KLayout.** Not mirrored: picking the edges whose two corners are convex and testing each one's
 box against the other figures is a loop over polygons, not a KLayout check. `TritonRoute` defines
