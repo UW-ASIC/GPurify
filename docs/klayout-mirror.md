@@ -232,6 +232,46 @@ antiparallel-only width of the first runs missed.
 - **Edge length** is compared as the Euclidean length, floored (a 45-degree edge `k` steps
   long is `k·√2`); the harness read `|dx| + |dy|` before, which a 45-degree edge exceeds.
 
+### a9. Layouts at any angle (DRC-116)
+
+`random_anyangle_layouts_agree_with_the_klayout_mirror` runs 1500 random layouts of star-shaped
+polygons at any angle on a 10 nm lattice (3 to 8 vertices round a centre, so edges run along
+directions such as (3, 7) or (5, 1)) through the kinds that measure such shapes: `width`,
+`edge_length`, `notch`, `space` one layer and two, `area`, `hole_area`, `forbidden`, the
+booleans `and`, `not` and `or` feeding `area`, `hole_area`, `width`, `notch` and `space`, the
+enclosures `min_enclosure` and `noncoincident_enclosure` of met2 stars and via1 squares in met1
+stars, `must_be_inside` and `must_contain`. No two edges cross between grid points: each met1
+star sits in its own 600 nm cell, and each met2 star (a shrunk copy of its host) and via1 square
+lies strictly inside a met1 star, checked exactly, or alone. So nothing is rounded and the
+measures, each an exact fraction on GPurify's side, are compared alone, as each kind's verdict
+in (b) states. The merge tier's `the_anyangle_differential_layouts_run_every_rule` holds that no
+rule of the deck refuses on them.
+
+Its first release-tier run is the heavy tier of PR #69; until it reports, the any-angle kinds
+rest on the hand-derived, symmetry, rotation-law and brute-force oracles of DRC-116.
+
+Differences, documented and kept out of the deck or the lattice:
+
+- **Rounding.** Where edges at such angles cross between grid points both tools round the
+  crossing to the nearest grid point, a half away from zero, and bend nearby edges through it;
+  GPurify bends every edge passing the point's pixel (the half-open square of points rounding to
+  it) and, once an edge is bent, every edge end in its pixels (snap rounding, Hobby 1999), so no
+  crossing is created; KLayout cuts an edge at a rounded point within its fuzzy band of half a
+  unit (`dbEdgeProcessor.cc`, `is_point_on_fuzzy`) and makes an end an attractor of an edge
+  already cut. The bands differ at their borders and ties. The results agree away from the
+  rounded points and can differ within a unit of them. The booleans' rounding is held instead by an exact reference: at every point clear of
+  every operand edge's half-unit band the result is the exact set operation
+  (`crates/geom/tests/core/boolean_anyangle.rs`), and a boolean of layouts turned by the
+  Pythagorean rotation `(3x − 4y, 4x + 3y)` is the turned boolean.
+- **`sized` on a slanted edge.** As at 45 degrees (a8): the Minkowski sum with the square, not
+  KLayout's normal shift. The deck has no `sized` layer.
+- **`notch` near-antiparallel pairs.** The mirror's `notch` passes `angle_limit(1)` (a8), which
+  pairs edges within one degree of antiparallel; GPurify's notch pairs exactly antiparallel
+  edges. Two edges of one figure whose directions differ by under a degree, facing across its
+  void, are a notch to KLayout only.
+- **`enclosure` `opposite` and `adjacent`** read straight out from an edge (projection) and refuse
+  a layer with such an edge; the deck leaves them out.
+
 ## (b) Per kind
 
 Notation in the snippets:
