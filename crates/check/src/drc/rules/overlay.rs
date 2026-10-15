@@ -11,8 +11,8 @@
 use super::presence::{hosts, inside_point, rects_of};
 use super::width::{rects_layer, wide_rects_into};
 use super::{
-    bbox_gap2, centre, figure_rects, figures_holding, gap_midpoint, merged, mid, owners_by_point,
-    owners_of, rects_ring_dist2, ring_segs, SortedRects, Verdict, REFUSED,
+    bbox_gap2, centre, clamped, figure_rects, figures_holding, gap_midpoint, merged, mid,
+    owners_by_point, owners_of, rects_ring_dist2, ring_segs, SortedRects, Verdict, REFUSED,
 };
 use crate::drc::{ExtraCut, Scratch, WireBand};
 use crate::erc::rules::supply::untied_points;
@@ -974,7 +974,7 @@ fn octilinear_reading(
 /// The part of `host` (its rectangles) that `held` (rectangles) grown by
 /// `by` with square corners does not cover, or `Err` for a failed boolean.
 fn beyond(host: &[Bbox], held: &[Bbox], by: i64) -> Result<ValidatedLayer, BooleanError> {
-    let grow = |v: Dbu, d: i64| Dbu::new_unchecked((v.raw() + d).clamp(-MAX_ABS_DBU, MAX_ABS_DBU));
+    let grow = |v: Dbu, d: i64| clamped(v.raw() + d);
     let grown: Vec<Bbox> = held
         .iter()
         .map(|r| Bbox {

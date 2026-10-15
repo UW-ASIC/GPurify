@@ -5,13 +5,12 @@
 //! midpoint or the gap's. An edge has no store row, so a finding names none
 //! (`PolyId(u32::MAX)`). A non-axis-aligned edge is `Refused`.
 
-use super::{centre, gap_midpoint, seg_bbox, SortedRects, Verdict, REFUSED};
+use super::{centre, clamped, gap_midpoint, seg_bbox, SortedRects, Verdict, REFUSED};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::ops::{isqrt, seg_seg_dist2, Seg};
 use gpurify_geom::rects::decompose_into;
-use gpurify_geom::MAX_ABS_DBU;
 use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_ingest::StrId;
 
@@ -231,7 +230,6 @@ fn run(e: Seg, f: Seg) -> i64 {
 /// shape is on the left), and the axis its depth runs along: `(strip, along_y,
 /// sign)` with `sign` +1 when depth grows with the coordinate.
 fn strip(e: Seg, depth: Dbu) -> (Bbox, bool, i64) {
-    let clamp = |v: i64| Dbu::new_unchecked(v.clamp(-MAX_ABS_DBU, MAX_ABS_DBU));
     let b = seg_bbox(e);
     let d = depth.raw();
     if e.a.y == e.b.y {
@@ -240,8 +238,8 @@ fn strip(e: Seg, depth: Dbu) -> (Bbox, bool, i64) {
         let y = e.a.y.raw();
         let (ylo, yhi) = if sign < 0 { (y - d, y) } else { (y, y + d) };
         let r = Bbox {
-            ylo: clamp(ylo),
-            yhi: clamp(yhi),
+            ylo: clamped(ylo),
+            yhi: clamped(yhi),
             ..b
         };
         (r, true, sign)
@@ -251,8 +249,8 @@ fn strip(e: Seg, depth: Dbu) -> (Bbox, bool, i64) {
         let x = e.a.x.raw();
         let (xlo, xhi) = if sign < 0 { (x - d, x) } else { (x, x + d) };
         let r = Bbox {
-            xlo: clamp(xlo),
-            xhi: clamp(xhi),
+            xlo: clamped(xlo),
+            xhi: clamped(xhi),
             ..b
         };
         (r, false, sign)
