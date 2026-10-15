@@ -46,6 +46,63 @@ pub struct MacroPin {
     pub vias: Vec<(String, Pt)>,
 }
 
+/// One `EDGETYPE` entry of a library's `LEF58_CELLEDGESPACINGTABLE`
+/// property: the least spacing between a cell edge of one type and a cell
+/// edge of another (ISPD 2014 placement contest, Benchmark Suite A, slides
+/// 16 and 27; ICCAD 2017 Problem C).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CellEdgeSpacing {
+    /// The first edge type.
+    pub first: String,
+    /// The second; the spacing is the same either way round.
+    pub second: String,
+    /// The spacing, database units.
+    pub spacing: i64,
+    /// `EXCEPTABUTTED`: two edges that touch (no gap) are exempt.
+    pub except_abutted: bool,
+    /// Options no public text defines (`EXCEPTNONFILLERINBETWEEN`,
+    /// `OPTIONAL`, `SOFT`, `EXACT`), as written; an entry with any is not
+    /// checked.
+    pub undefined: Vec<String>,
+}
+
+/// The side of a cell an [`EdgeType`] types, in the macro's own frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeSide {
+    /// `LEFT`: the edge at x = 0.
+    Left,
+    /// `RIGHT`: at x = the cell's width.
+    Right,
+    /// `TOP`: at y = its height.
+    Top,
+    /// `BOTTOM`: at y = 0.
+    Bottom,
+}
+
+/// Which stretch of its side an [`EdgeType`] covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeSpan {
+    /// The whole side.
+    Whole,
+    /// `CELLROW n`: the `n`-th row the cell spans, from 1 at the bottom.
+    CellRow(u32),
+    /// `HALFROW n`: the `n`-th half row.
+    HalfRow(u32),
+    /// `RANGE b e`: from `b` to `e` along the side, database units.
+    Range(i64, i64),
+}
+
+/// One `EDGETYPE` statement of a macro's `LEF58_EDGETYPE` property.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EdgeType {
+    /// The side it types.
+    pub side: EdgeSide,
+    /// The edge type's name.
+    pub name: String,
+    /// The stretch of the side.
+    pub span: EdgeSpan,
+}
+
 /// One `MACRO`: a cell's abstract.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Macro {
@@ -53,6 +110,10 @@ pub struct Macro {
     pub name: String,
     /// `CLASS`'s first word (`CORE`, `BLOCK`, `PAD`, …); empty when none.
     pub class: String,
+    /// `CLASS CORE SPACER`: a filler cell.
+    pub spacer: bool,
+    /// The `LEF58_EDGETYPE` property's statements, in order.
+    pub edge_types: Vec<EdgeType>,
     /// `ORIGIN`, added to every shape before placement.
     pub origin: Pt,
     /// `SIZE width BY height`.
@@ -80,6 +141,9 @@ pub struct Lef {
     pub ndrs: Vec<(String, Vec<(String, i64)>)>,
     /// The cell abstracts.
     pub macros: Vec<Macro>,
+    /// The library's `LEF58_CELLEDGESPACINGTABLE` entries, in order, from
+    /// `PROPERTYDEFINITIONS` or a library `PROPERTY`.
+    pub cell_edge_spacing: Vec<CellEdgeSpacing>,
 }
 
 /// Reads one LEF file into `lef`, every length converted to `dbu` units per
@@ -101,7 +165,39 @@ pub fn read_lef_into(text: &str, dbu: i64, lef: &mut Lef) -> Result<(), LefDefEr
                 // `END LIBRARY`, the last statement.
                 lx.next()?;
             }
-            "UNITS" | "PROPERTYDEFINITIONS" | "SPACING" => skip_to_end(&mut lx, word)?,
+            "UNITS" | "SPACING" => skip_to_end(&mut lx, word)?,
+            "PROPERTYDEFINITIONS" => loop {
+                // `object name type [RANGE …] [value] ;`; a library string
+                // property may carry its value here.
+                let object = lx.next()?;
+                if object == "END" {
+                    lx.expect("PROPERTYDEFINITIONS")?;
+                    break;
+                }
+                let name = lx.next()?;
+                let mut value = None;
+                loop {
+                    let token = lx.next()?;
+                    if token == ";" {
+                        break;
+                    }
+                    if token.starts_with('"') {
+                        value = Some(token);
+                    }
+                }
+                if let (Some(value), "LIBRARY") = (value, object) {
+                    library_property(&mut lx, dbu, lef, name, value)?;
+                }
+            },
+            "PROPERTY" => loop {
+                // `PROPERTY name value [name value …] ;`.
+                let name = lx.next()?;
+                if name == ";" {
+                    break;
+                }
+                let value = lx.next()?;
+                library_property(&mut lx, dbu, lef, name, value)?;
+            },
             "MANUFACTURINGGRID" => {
                 lef.manufacturing_grid = Some(lx.microns(dbu)?);
                 lx.expect(";")?;
@@ -178,6 +274,114 @@ pub fn read_lef_into(text: &str, dbu: i64, lef: &mut Lef) -> Result<(), LefDefEr
         }
     }
     Ok(())
+}
+
+/// The text of a quoted LEF string, quotes removed.
+fn unquote(token: &str) -> &str {
+    token.trim_start_matches('"').trim_end_matches('"')
+}
+
+/// Reads a library property the reader keeps: `LEF58_CELLEDGESPACINGTABLE`,
+/// `CELLEDGESPACINGTABLE [NODEFAULT] { EDGETYPE type type [options]
+/// spacing }… ;` (the options as OpenROAD's parser orders them). Any other
+/// property is skipped.
+fn library_property(
+    lx: &mut Lexer<'_>,
+    dbu: i64,
+    lef: &mut Lef,
+    name: &str,
+    value: &str,
+) -> Result<(), LefDefError> {
+    if name != "LEF58_CELLEDGESPACINGTABLE" {
+        return Ok(());
+    }
+    let mut words = unquote(value)
+        .split(|c: char| c.is_whitespace() || c == ';')
+        .filter(|w| !w.is_empty())
+        .peekable();
+    if words.next() != Some("CELLEDGESPACINGTABLE") {
+        return Err(lx.err("LEF58_CELLEDGESPACINGTABLE does not start CELLEDGESPACINGTABLE"));
+    }
+    if words.peek() == Some(&"NODEFAULT") {
+        words.next();
+    }
+    while let Some(word) = words.next() {
+        if word != "EDGETYPE" {
+            return Err(lx.err(format!("LEF58_CELLEDGESPACINGTABLE: {word} where EDGETYPE belongs")));
+        }
+        let mut field = || {
+            words
+                .next()
+                .ok_or_else(|| lx.err("LEF58_CELLEDGESPACINGTABLE: an EDGETYPE entry ends early"))
+        };
+        let (first, second) = (field()?.to_owned(), field()?.to_owned());
+        let mut entry = CellEdgeSpacing {
+            first,
+            second,
+            spacing: 0,
+            except_abutted: false,
+            undefined: Vec::new(),
+        };
+        loop {
+            let word = field()?;
+            match word {
+                "EXCEPTABUTTED" => entry.except_abutted = true,
+                "EXCEPTNONFILLERINBETWEEN" | "OPTIONAL" | "SOFT" | "EXACT" => {
+                    entry.undefined.push(word.to_owned());
+                }
+                _ => {
+                    entry.spacing = super::lex::exact_units(word, dbu).ok_or_else(|| {
+                        lx.err(format!(
+                            "LEF58_CELLEDGESPACINGTABLE: spacing {word} is not a whole number of database units"
+                        ))
+                    })?;
+                    break;
+                }
+            }
+        }
+        lef.cell_edge_spacing.push(entry);
+    }
+    Ok(())
+}
+
+/// Reads a macro's `LEF58_EDGETYPE` value: `EDGETYPE {RIGHT | LEFT | TOP |
+/// BOTTOM} type [CELLROW n | HALFROW n | RANGE b e] ;`, one or more.
+fn edge_types(lx: &Lexer<'_>, dbu: i64, value: &str) -> Result<Vec<EdgeType>, LefDefError> {
+    let mut out = Vec::new();
+    for statement in unquote(value).split(';') {
+        let words: Vec<&str> = statement.split_whitespace().collect();
+        if words.is_empty() {
+            continue;
+        }
+        let bad = || lx.err(format!("LEF58_EDGETYPE: cannot read `{}`", statement.trim()));
+        let side = match words.get(1).copied() {
+            Some("LEFT") => EdgeSide::Left,
+            Some("RIGHT") => EdgeSide::Right,
+            Some("TOP") => EdgeSide::Top,
+            Some("BOTTOM") => EdgeSide::Bottom,
+            _ => return Err(bad()),
+        };
+        let (Some(&"EDGETYPE"), Some(name)) = (words.first(), words.get(2)) else {
+            return Err(bad());
+        };
+        let row = |text: &str| text.parse::<u32>().ok().filter(|&n| n > 0);
+        let span = match words[3..] {
+            [] => EdgeSpan::Whole,
+            ["CELLROW", n] => EdgeSpan::CellRow(row(n).ok_or_else(bad)?),
+            ["HALFROW", n] => EdgeSpan::HalfRow(row(n).ok_or_else(bad)?),
+            ["RANGE", b, e] => {
+                let at = |t: &str| super::lex::exact_units(t, dbu).ok_or_else(bad);
+                EdgeSpan::Range(at(b)?, at(e)?)
+            }
+            _ => return Err(bad()),
+        };
+        out.push(EdgeType {
+            side,
+            name: (*name).to_owned(),
+            span,
+        });
+    }
+    Ok(out)
 }
 
 /// Skips to just past `END name`.
@@ -450,8 +654,19 @@ fn macro_(lx: &mut Lexer<'_>, dbu: i64) -> Result<Macro, LefDefError> {
             }
             "CLASS" => {
                 lx.next()?.clone_into(&mut out.class);
+                out.spacer = out.class == "CORE" && lx.peek() == Some("SPACER");
                 lx.skip_statement()?;
             }
+            "PROPERTY" => loop {
+                let name = lx.next()?;
+                if name == ";" {
+                    break;
+                }
+                let value = lx.next()?;
+                if name == "LEF58_EDGETYPE" {
+                    out.edge_types.extend(edge_types(lx, dbu, value)?);
+                }
+            },
             "ORIGIN" => {
                 let bracketed = lx.eat("(");
                 out.origin = (lx.microns(dbu)?, lx.microns(dbu)?);

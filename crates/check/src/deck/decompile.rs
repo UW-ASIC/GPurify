@@ -426,6 +426,31 @@ impl CompiledDeck {
             } => one(layer)
                 .value("colors", ParamValue::Count(colors.into()))
                 .length("color_spacing", color_spacing),
+            Rule::SadpLineEnd {
+                layer,
+                adjacent,
+                tip,
+                overlap,
+                corner,
+                offset,
+            } => one(layer)
+                .length("adjacent", adjacent)
+                .length("tip", tip)
+                .length("overlap", overlap)
+                .length("corner", corner)
+                .length("offset", offset),
+            Rule::Sadp {
+                layer,
+                different,
+                same,
+                track,
+            } => {
+                let row = one(layer).length("different", different).length("same", same);
+                match track {
+                    Some((w, s)) => row.length("track_width", w).length("track_space", s),
+                    None => row,
+                }
+            }
             Rule::AnchoredPatterning {
                 layer,
                 anchors,

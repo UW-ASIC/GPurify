@@ -1074,6 +1074,39 @@ pub(crate) const KINDS: &[Kind] = &[
             &[p("colors", "colors", Dim::Count)],
         )
     },
+    // Self-aligned double patterning, US 2015/0286764 A1's colour bands and
+    // odd-track widths: `sadp(m4; different: 72nm, same: 120nm,
+    // track_width: 24nm, track_space: 24nm)`.
+    drc(
+        "sadp",
+        Cmp::Absent,
+        "sadp",
+        &[0],
+        None,
+        &[
+            p("different", "different", Dim::Length),
+            p("same", "same", Dim::Length),
+            opt("track_width", "track_width", Dim::Length),
+            opt("track_space", "track_space", Dim::Length),
+        ],
+    ),
+    // Gridded SADP line ends, Xu et al. (TCAD 2015) rules 1-4:
+    // `sadp_line_end(m4; adjacent: 24nm, tip: 32nm, overlap: 58nm,
+    // corner: 22nm, offset: 44nm)`.
+    drc(
+        "sadp_line_end",
+        Cmp::Absent,
+        "sadp_line_end",
+        &[0],
+        None,
+        &[
+            p("adjacent", "adjacent", Dim::Length),
+            p("tip", "tip", Dim::Length),
+            p("overlap", "overlap", Dim::Length),
+            p("corner", "corner", Dim::Length),
+            p("offset", "offset", Dim::Length),
+        ],
+    ),
     // Every shape (or edge) of the layer is a violation: `forbidden(licon and poly and diff)`.
     drc("forbidden", Cmp::Absent, "forbidden", &[0], None, &[]),
     // Each outer shape holds at least `count` inner shapes entirely: `contains(tap, licon) >= 1`.

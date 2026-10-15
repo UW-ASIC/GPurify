@@ -85,6 +85,8 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         drc_warning(),
         multi_patterning(depth),
         anchored_patterning(),
+        sadp_colours(),
+        sadp_line_ends(),
         colour_spacing(),
         density_balance(),
         cover_density(),
@@ -5894,6 +5896,128 @@ fn anchored_patterning() -> Vec<Fixture> {
             .expect(Expect::outcome("ap3", Want::Skipped)),
     );
     cases
+}
+
+/// `sadp` (DRC-128): US 2015/0286764 A1's bands on its own numbers, S_INT
+/// 72 nm and S_LRG 120 nm, with 24 nm tracks. A triangle of 500 nm squares
+/// whose bottom pair is `g01` apart and whose top bar is `g02` above both
+/// has one edge of the bottom gap's band and two of the top gap's, so its
+/// different-colour count is odd exactly when `g01` is under 72 nm
+/// (\[0015\]: a loop "is not decomposable due to the odd number of DC
+/// edges"): one finding, 1 odd cycle against 0, for 50/100 (one DC edge,
+/// FIG. 1N's kind) and 50/50 (three); none for 100/50 (two DC edges, even)
+/// and 150/50 (the bottom pair is colour-free, no cycle). A U whose arms are
+/// 50 nm apart is a different-colour edge to itself: one finding. FIG. 1R
+/// (\[0020\]): 24 nm lines 72 nm then 24 nm either side of a 72 nm line
+/// colour without a cycle, and the track row flags the 72 nm line (two
+/// tracks: 72 (the measured width; its limit is the legal 24 under it)); at 120 nm (three tracks) it is
+/// clean. Breaks if a same-colour edge counts as a different one (100/50
+/// flags), the bands are read inclusive at 72 (50/100 clears), or the width
+/// rule allows even track counts.
+fn sadp_colours() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["m", "o"],
+        "rule c sadp(m; different: 72nm, same: 120nm, track_width: none, track_space: none)\n\
+         rule t sadp(m; different: 72nm, same: 120nm, track_width: 24nm, track_space: 24nm)\n",
+    );
+    let triangle = |g01: i64, g02: i64| {
+        rects(
+            Layout::default(),
+            "m",
+            &[
+                (0, 0, 500, 500),
+                (500 + g01, 0, 1000 + g01, 500),
+                (0, 500 + g02, 1000 + g01, 1000 + g02),
+            ],
+        )
+    };
+    let fig_1r = |middle: i64| {
+        rects(
+            Layout::default(),
+            "m",
+            &[
+                (0, 0, 24, 500),
+                (96, 0, 96 + middle, 500),
+                (120 + middle, 0, 144 + middle, 500),
+            ],
+        )
+    };
+    let case = |name: &str, layout: Layout, c: Vec<Finding>, t: Vec<Finding>| {
+        fixture(
+            &format!("sadp/{name}"),
+            &["DRC-128"],
+            &deck,
+            layout,
+            &[("c", c), ("t", t)],
+        )
+    };
+    let wide = Finding::length;
+    let mut cases = vec![
+        case("one_dc_edge", triangle(50, 100), vec![count(1)], vec![count(1), wide(500), wide(500), wide(500)]),
+        case("three_dc_edges", triangle(50, 50), vec![count(1)], vec![count(1), wide(500), wide(500), wide(500)]),
+        case("two_dc_edges", triangle(100, 50), vec![], vec![wide(500); 3]),
+        case("colour_free_pair", triangle(150, 50), vec![], vec![wide(500); 3]),
+        case(
+            "self_conflict",
+            rects(
+                Layout::default(),
+                "m",
+                &[(0, 0, 24, 500), (74, 0, 98, 500), (0, 0, 98, 24)],
+            ),
+            vec![count(1)],
+            vec![count(1)],
+        ),
+        case("fig_1r/72", fig_1r(72), vec![], vec![wide(72)]),
+        case("fig_1r/120", fig_1r(120), vec![], vec![]),
+    ];
+    cases = every_placement(cases);
+    cases.push(
+        Fixture::new("sadp/empty", &["DRC-128"], &deck, DRC)
+            .layout(Layout::default().rect("o", 0, 0, 100, 100))
+            .expect(Expect::outcome("c", Want::Skipped))
+            .expect(Expect::outcome("t", Want::Skipped)),
+    );
+    cases
+}
+
+/// `sadp_line_end` (DRC-128): Xu et al. (TCAD 2015) Table II on its own
+/// example (w = s = 24, w_r = 44, s_r = 46, w_e = 6, w_sp = 24 nm, p. 703):
+/// tip 44 - 12 = 32, overlap 46 + 12 = 58, corner sqrt(32^2 - 24^2) = 21.2,
+/// stated 22, and offset 44 nm. Horizontal lines 24 nm tall on tracks 48 nm
+/// apart (24 nm between them, the `adjacent` gap). At one unit under each
+/// limit one finding measures the gap, overlap or offset; at the limit,
+/// none: one track, ends 31 / 32 apart; adjacent tracks, ends facing apart
+/// overlapping 57 / 58; not overlapping, 21 / 22 apart along the track;
+/// flush at one end and 43 / 44 apart at the other. Lines three tracks apart
+/// interact with nothing. Breaks if a rule is read inclusive, the tracks'
+/// gap is not the `adjacent` test, or flush ends count as an offset.
+fn sadp_line_ends() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["m"],
+        "rule le sadp_line_end(m; adjacent: 24nm, tip: 32nm, overlap: 58nm, corner: 22nm, offset: 44nm)\n",
+    );
+    let pair = |b: (i64, i64), track: i64| {
+        rects(
+            Layout::default(),
+            "m",
+            &[(0, 0, 500, 24), (b.0, 48 * track, b.1, 48 * track + 24)],
+        )
+    };
+    let case = |name: &str, layout: Layout, le: Vec<Finding>| {
+        fixture(&format!("sadp_line_end/{name}"), &["DRC-128"], &deck, layout, &[("le", le)])
+    };
+    let at = |n: i64, _limit: i64| Finding::length(n);
+    every_placement(vec![
+        case("tip/under", pair((531, 1000), 0), vec![at(31, 32)]),
+        case("tip/at", pair((532, 1000), 0), vec![]),
+        case("overlap/under", pair((443, 1000), 1), vec![at(57, 58)]),
+        case("overlap/at", pair((442, 1000), 1), vec![]),
+        case("corner/under", pair((521, 1000), 1), vec![at(21, 22)]),
+        case("corner/at", pair((522, 1000), 1), vec![]),
+        case("offset/under", pair((0, 543), 1), vec![at(43, 44)]),
+        case("offset/at", pair((0, 544), 1), vec![]),
+        case("three_tracks", pair((443, 1000), 3), vec![]),
+    ])
 }
 
 // --------------------------------------------------- derived-layer operations
