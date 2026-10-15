@@ -88,7 +88,7 @@ impl<'a> Lexer<'a> {
         let tok = self
             .toks
             .get(self.at)
-            .ok_or_else(|| fault(self.file, self.line(), "the file ends inside a statement"))?;
+            .ok_or_else(|| self.err("the file ends inside a statement"))?;
         self.at += 1;
         Ok(tok.text)
     }
@@ -117,6 +117,12 @@ impl<'a> Lexer<'a> {
     /// Skips to just past the next `;`.
     pub fn skip_statement(&mut self) -> Result<(), LefDefError> {
         while self.next()? != ";" {}
+        Ok(())
+    }
+
+    /// Skips to just past `END name`.
+    pub fn skip_to_end(&mut self, name: &str) -> Result<(), LefDefError> {
+        while !(self.next()? == "END" && self.eat(name)) {}
         Ok(())
     }
 
@@ -163,8 +169,7 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn coord(&mut self, prev: Option<i64>) -> Result<i64, LefDefError> {
-        if self.peek() == Some("*") {
-            self.at += 1;
+        if self.eat("*") {
             return prev.ok_or_else(|| self.err("* with no previous point"));
         }
         self.int()
