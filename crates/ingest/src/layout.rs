@@ -937,7 +937,7 @@ pub mod gds {
         /// names.
         pub fn parse(bytes: &[u8], strings: &mut StrTable) -> Result<Self, LayoutError> {
             let mut lib = Library::default();
-            let mut stroke = Stroke::default();
+            let mut scratch = Scratch::default();
             let mut open: Option<usize> = None;
             let mut at = 0usize;
 
@@ -986,12 +986,12 @@ pub mod gds {
                     }
                     BOUNDARY | BOX => {
                         in_cell()?;
-                        at = boundary(&mut lib, strings, bytes, next, at, tag)?;
+                        at = boundary(&mut lib, strings, &mut scratch, bytes, next, at, tag)?;
                         continue;
                     }
                     PATH => {
                         in_cell()?;
-                        at = path(&mut lib, strings, &mut stroke, bytes, next, at)?;
+                        at = path(&mut lib, strings, &mut scratch, bytes, next, at)?;
                         continue;
                     }
                     SREF | AREF => {
@@ -1148,12 +1148,14 @@ pub mod gds {
     /// The fewest vertices a keyhole ring can have: outer 4, hole 4, slit ends revisited.
     const KEYHOLE_MIN_VERTS: usize = 10;
 
-    /// Whether a ring revisits a vertex, which is how GDSII writes a hole. Sorts, so O(n log n).
-    fn ring_revisits_a_vertex(xs: &[i64], ys: &[i64]) -> bool {
+    /// Whether a ring revisits a vertex, which is how GDSII writes a hole.
+    /// Sorts, so O(n log n); `seen` is reused scratch.
+    fn ring_revisits_a_vertex(xs: &[i64], ys: &[i64], seen: &mut Vec<(i64, i64)>) -> bool {
         if xs.len() < KEYHOLE_MIN_VERTS {
             return false;
         }
-        let mut seen: Vec<(i64, i64)> = xs.iter().copied().zip(ys.iter().copied()).collect();
+        seen.clear();
+        seen.extend(xs.iter().copied().zip(ys.iter().copied()));
         seen.sort_unstable();
         seen.windows(2).any(|w| w[0] == w[1])
     }
@@ -1162,10 +1164,12 @@ pub mod gds {
     /// the ring folds back over itself. A keyhole whose way back out runs on
     /// along the hole's side, past where the way in started, does so without
     /// revisiting a vertex (`sky130_fd_sc_hd`'s level shifters draw poly this
-    /// way). Sorts, so O(n log n).
-    fn ring_overlaps_itself(xs: &[i64], ys: &[i64]) -> bool {
+    /// way). Sorts, so O(n log n); `lines` is reused scratch.
+    fn ring_overlaps_itself(xs: &[i64], ys: &[i64], lines: &mut [Vec<(i64, i64, i64)>; 2]) -> bool {
         let n = xs.len();
-        let (mut vertical, mut horizontal) = (Vec::new(), Vec::new());
+        let [vertical, horizontal] = &mut *lines;
+        vertical.clear();
+        horizontal.clear();
         for i in 0..n {
             let j = if i + 1 == n { 0 } else { i + 1 };
             let (x0, y0, x1, y1) = (xs[i], ys[i], xs[j], ys[j]);
@@ -1176,7 +1180,7 @@ pub mod gds {
             }
         }
         // Sorted by line, then start: an overlap shows between neighbours.
-        [vertical, horizontal].iter_mut().any(|edges| {
+        lines.iter_mut().any(|edges| {
             edges.sort_unstable();
             edges
                 .windows(2)
@@ -1209,9 +1213,16 @@ pub mod gds {
     /// and vertex 0 is a shape's report point (`erc::first_vertex`). A ring
     /// outside the domain, or one that fails to decompose or traces no ring, is
     /// left untouched for the plain path, where `geom::view` names what is wrong.
-    fn push_keyhole(lib: &mut Library, first: usize, layer: u16, datatype: u16) -> bool {
+    fn push_keyhole(
+        lib: &mut Library,
+        scratch: &mut Scratch,
+        first: usize,
+        layer: u16,
+        datatype: u16,
+    ) -> bool {
         let (xs, ys) = (&lib.xs[first..], &lib.ys[first..]);
-        if !((ring_revisits_a_vertex(xs, ys) || ring_overlaps_itself(xs, ys))
+        if !((ring_revisits_a_vertex(xs, ys, &mut scratch.seen)
+            || ring_overlaps_itself(xs, ys, &mut scratch.lines))
             && ring_is_in_domain(xs, ys))
         {
             return false;
@@ -1250,6 +1261,7 @@ pub mod gds {
     fn boundary(
         lib: &mut Library,
         strings: &mut StrTable,
+        scratch: &mut Scratch,
         bytes: &[u8],
         mut at: usize,
         start: usize,
@@ -1327,7 +1339,7 @@ pub mod gds {
             return Err(LayoutError::UnsupportedRecord(kind, start));
         }
 
-        if push_keyhole(lib, first, layer, datatype) {
+        if push_keyhole(lib, scratch, first, layer, datatype) {
             return Ok(end);
         }
 
@@ -1348,9 +1360,13 @@ pub mod gds {
         Ok(end)
     }
 
-    /// Per-`PATH` scratch.
+    /// Per-element scratch, reused across the stream.
     #[derive(Default)]
-    struct Stroke {
+    struct Scratch {
+        /// A ring's vertices, for [`ring_revisits_a_vertex`].
+        seen: Vec<(i64, i64)>,
+        /// A ring's vertical and horizontal edges, for [`ring_overlaps_itself`].
+        lines: [Vec<(i64, i64, i64)>; 2],
         /// The centreline, end caps applied.
         pts: Vec<(i64, i64)>,
         /// One unit direction per segment.
@@ -1369,7 +1385,7 @@ pub mod gds {
     fn path(
         lib: &mut Library,
         strings: &mut StrTable,
-        stroke: &mut Stroke,
+        stroke: &mut Scratch,
         bytes: &[u8],
         mut at: usize,
         start: usize,
@@ -1502,7 +1518,7 @@ pub mod gds {
         // A path that runs back over itself strokes an outline that revisits a
         // vertex: read it as a written keyhole is, the region it sweeps, so a
         // path and the boundary its outline is written as read back the same.
-        if push_keyhole(lib, first, layer, datatype) {
+        if push_keyhole(lib, stroke, first, layer, datatype) {
             return Ok(end);
         }
         lib.elems.push(Elem {
