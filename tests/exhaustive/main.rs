@@ -74,6 +74,14 @@ const PROVED_BY_TEST: &[(&str, &str)] = &[
         "tests/engine/def.rs::a_through_silicon_via_adds_its_liner_capacitance",
     ),
     (
+        "PEX-013",
+        "tests/engine/def.rs::a_tap_over_a_layered_substrate_is_its_series_resistance_in_spef_and_dspf",
+    ),
+    (
+        "ERC-A14",
+        "tests/engine/def.rs::macro_pin_antenna_data_follows_lef_appendix_c_examples_1_and_2",
+    ),
+    (
         "PEX-016",
         "tests/engine/def.rs::point_to_point_resistance_and_net_coupling_are_reported",
     ),

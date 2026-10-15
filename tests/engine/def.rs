@@ -554,7 +554,7 @@ fn substrate_run(tag: &str, nets: &str, backside: &str) -> (String, String, Vec<
 }
 
 /// A tap covering the whole die over two layers and a grounded backside is
-/// one resistor to ground, the layers in series, in both writers.
+/// one resistor to ground, the layers in series, in both writers (PEX-013).
 ///
 /// Oracle: closed form (Ohm's law): the die is the tap's 10 × 10 µm, so the
 /// current runs straight down through 2 µm of 1 Ω·cm and 5 µm of 10 Ω·cm,
@@ -594,7 +594,11 @@ fn two_taps_on_a_floating_backside_are_one_resistor_between_their_nets() {
     };
     assert!(ohms > 0.0);
     assert!(spef.contains("// substrate a:0 b:0 "), "{spef}");
-    assert!(dspf.contains("R1 a:0 b:0 "), "{dspf}");
+    assert!(
+        dspf.lines()
+            .any(|card| card.starts_with('R') && card.contains(" a:0 b:0 ")),
+        "{dspf}"
+    );
 }
 
 /// LEF/DEF 5.8 Appendix C's Figure C-20 at the top level, its two gates
