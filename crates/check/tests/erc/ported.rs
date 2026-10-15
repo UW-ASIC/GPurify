@@ -1907,7 +1907,7 @@ pex pad thickness 100nm height 500nm sheet 0.01ohm dielectric 3.9 area_cap 1aF/u
 ";
 
 /// Every rule a [`Board`] is checked against, and whether it needs intent.
-const TOPO_RULES: [(&str, &str, bool); 25] = [
+const TOPO_RULES: [(&str, &str, bool); 26] = [
     ("fg", "floating_gate(; labels_are_ports: false)", false),
     ("fgp", "floating_gate(; labels_are_ports: true)", false),
     ("md1", "multiple_drivers(; max: 1)", true),
@@ -1920,6 +1920,7 @@ const TOPO_RULES: [(&str, &str, bool); 25] = [
     ("fo", "fanout(; max: 1)", false),
     ("sp1", "supply_path(; both: false, labels_are_ports: false)", true),
     ("sp2", "supply_path(; both: true, labels_are_ports: false)", true),
+    ("sp3", "supply_path(; both: true, labels_are_ports: true)", true),
     ("gp0", "gate_path(; ground: true, max_devices: 0)", true),
     ("gp1", "gate_path(; ground: false, max_devices: 1)", true),
     ("cl", "combinational_loop()", true),
@@ -2480,13 +2481,15 @@ impl Board {
         // walk source to drain through every transistor, stopping at rails
         // (a rail ends the path and gives it its role). `sp1` flags a net
         // that reaches no rail, measuring 0 against 1; `sp2` one that misses
-        // power or ground, measuring the roles reached against 2.
-        let (mut sp1, mut sp2) = (Vec::new(), Vec::new());
-        for n in 0..NETS {
-            let (g, s, d, b) = terminals(n);
-            if rail(n) || !(g || s || d || b) {
-                continue;
-            }
+        // power or ground, measuring the roles reached against 2. `sp3` is
+        // `sp2` with every labelled net that is not a rail a top-cell port
+        // (P12 [0262]: "a path continues until it reaches ... a port in the
+        // top cell"): a port is a break like a rail but carries no role, so
+        // a walk never steps past a port it reaches, and a walk from a port
+        // takes one step only, a rail it lands on giving that rail's role.
+        let (mut sp1, mut sp2, mut sp3) = (Vec::new(), Vec::new(), Vec::new());
+        let is_port = |n: usize| self.labels[n].is_some() && self.supply(n).is_none();
+        let roles_from = |n: usize, ports: bool| -> u32 {
             let (mut seen, mut walk, mut roles) = ([false; NETS], vec![n], [false; 2]);
             while let Some(at) = walk.pop() {
                 if seen[at] {
@@ -2497,20 +2500,37 @@ impl Board {
                     roles[usize::from(!supply.power)] = true;
                     continue;
                 }
+                // A port ends the walk that reaches it, and a walk that
+                // starts at one ends one device out.
+                if ports && at != n && (is_port(at) || is_port(n)) {
+                    continue;
+                }
                 for u in self.devs.iter().filter(|u| u.s == at || u.d == at) {
                     walk.push(far(u, at));
                 }
             }
-            let found = roles.iter().filter(|&&r| r).count() as u32;
+            roles.iter().filter(|&&r| r).count() as u32
+        };
+        for n in 0..NETS {
+            let (g, s, d, b) = terminals(n);
+            if rail(n) || !(g || s || d || b) {
+                continue;
+            }
+            let found = roles_from(n, false);
             if found == 0 {
                 sp1.push(count(0));
             }
             if found < 2 {
                 sp2.push(count(found));
             }
+            let found = roles_from(n, true);
+            if found < 2 {
+                sp3.push(count(found));
+            }
         }
         out.push(Expect::rule("sp1", sp1));
         out.push(Expect::rule("sp2", sp2));
+        out.push(Expect::rule("sp3", sp3));
         // gate_path: the fewest transistors a walk from a gate's net through
         // sources and drains passes to reach a rail of the asked role, rails
         // of the other role passed like any net. More than `max` measures
@@ -2984,6 +3004,25 @@ fn topology_enumerations(depth: Depth) -> Vec<Fixture> {
             dev(Model::Nfet, a[6], a[7], a[8]),
         ];
         out.push(board.fixture(&format!("erc/topology/rails2/{}", assignment_name(&a))));
+    }
+    // The same with net 2 labelled: a top-cell port under `labels_are_ports`
+    // (`fgp`, `sp3`), between the rails and the unlabelled net 3, so a path
+    // through it is cut there.
+    let mut rng = Rng::new(0x7_000a);
+    let mut seen = std::collections::BTreeSet::new();
+    while seen.len() < three {
+        let a: Vec<usize> = (0..9).map(|_| rng.below(NETS as u64) as usize).collect();
+        if !seen.insert(a.clone()) {
+            continue;
+        }
+        let mut board = two_rails();
+        board.labels[2] = Some("P");
+        board.devs = vec![
+            dev(Model::Nfet, a[0], a[1], a[2]),
+            dev(Model::Pfet, a[3], a[4], a[5]),
+            dev(Model::Nfet, a[6], a[7], a[8]),
+        ];
+        out.push(board.fixture(&format!("erc/topology/port/{}", assignment_name(&a))));
     }
     // Gate-conditioned switches (ERC-F1): an nfet_c (on at 1 V or more) and a
     // pfet_c (on at 2.5 V or less), every 4^6 assignment against VDD, VSS and
@@ -4269,9 +4308,55 @@ pub(crate) fn circuit_pins(labels: &[&str], devs: &[Dev], pins: &[(&str, usize, 
     for (net, name) in labels.iter().enumerate() {
         let ty = track_y(net);
         rect(&mut l, "met2", (-1000, ty, right, ty + TRACK_H));
-        l = l.label("m2txt", -900, ty + 200, name);
+        // An empty name leaves the net unlabelled.
+        if !name.is_empty() {
+            l = l.label("m2txt", -900, ty + 200, name);
+        }
     }
     l
+}
+
+/// `supply_path` (ERC-G9) stopping at a top-cell port, hand-derived from
+/// the PERC patent's "a path continues until it reaches an unqualified
+/// device or a port in the top cell" (US20100306720A1 \[0262\]). Nets VDD,
+/// VSS, A, Y, an unlabelled net Z and G: an inverter from A to Y, and an
+/// nfet passing Y to Z under gate G.
+///
+/// - Labels are names (`labels_are_ports: false`): Y and Z are one path,
+///   which reaches both rails; A and G are gates alone. `both: false`
+///   flags A and G (0 roles against 1); `both: true` the same, 0 against 2.
+/// - Labels are ports: the path stops at Y, so Z is a path of its own that
+///   reaches no rail. `both: false` flags A, G and Z; `both: true` the
+///   same three. Y keeps both rails through its own pull-up and pull-down.
+///
+/// Breaks if a port stops nothing (Z is clean under `labels_are_ports:
+/// true`) or if a port stops its own rails (Y is flagged).
+fn path_stops_at_port() -> Vec<Fixture> {
+    let labels = ["VDD", "VSS", "A", "Y", "", "G"];
+    let (vdd, vss, a, y, z, g) = (0, 1, 2, 3, 4, 5);
+    let devs = [
+        dev(Model::Pfet, a, vdd, y),
+        dev(Model::Nfet, a, vss, y),
+        dev(Model::Nfet, g, y, z),
+    ];
+    let deck = format!(
+        "{TOPO_PROCESS}rule names1 supply_path(; both: false, labels_are_ports: false)\n\
+         rule names2 supply_path(; both: true, labels_are_ports: false)\n\
+         rule ports1 supply_path(; both: false, labels_are_ports: true)\n\
+         rule ports2 supply_path(; both: true, labels_are_ports: true)\n"
+    );
+    let mut f = Fixture::new("erc/supply_path/stops_at_port", &["ERC-G9"], &deck)
+        .layout(circuit(&labels, &devs, &[]))
+        .expect(Expect::rule("names1", vec![count(0), count(0)]))
+        .expect(Expect::rule("names2", vec![count(0), count(0)]))
+        .expect(Expect::rule("ports1", vec![count(0); 3]))
+        .expect(Expect::rule("ports2", vec![count(0); 3]));
+    f.intent = Some(intent(
+        &[("d", 1800.0)],
+        &[("VDD", "d", "power"), ("VSS", "d", "ground")],
+        &[],
+    ));
+    every_placement(&[f])
 }
 
 /// `supply_path` (ERC-G9) and `gate_path` (ERC-H3) through a resistor and
@@ -6312,6 +6397,7 @@ fn topology_boards_match_a_naive_judge_of_the_planted_circuit() {
 fn named_topology_circuits_report_their_derived_findings() {
     let mut all = topology_cases();
     all.extend(path_through_resistor());
+    all.extend(path_stops_at_port());
     all.extend(combinational_loop());
     all.extend(matching());
     all.extend(power_switch());
