@@ -349,35 +349,17 @@ trait Arg {
     fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>);
 }
 
-impl Arg for Dbu {
-    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
-        params.push((name, RowValue::Value(ParamValue::Length(self))));
-    }
+/// One parameter row per scalar, as the `ParamValue` variant its type is.
+macro_rules! scalar_args {
+    ($($ty:ty => $variant:ident),* $(,)?) => {$(
+        impl Arg for $ty {
+            fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
+                params.push((name, RowValue::Value(ParamValue::$variant(self))));
+            }
+        }
+    )*};
 }
-
-impl Arg for DbuArea {
-    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
-        params.push((name, RowValue::Value(ParamValue::Area(self))));
-    }
-}
-
-impl Arg for f64 {
-    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
-        params.push((name, RowValue::Value(ParamValue::Ratio(self))));
-    }
-}
-
-impl Arg for u32 {
-    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
-        params.push((name, RowValue::Value(ParamValue::Count(self))));
-    }
-}
-
-impl Arg for bool {
-    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
-        params.push((name, RowValue::Value(ParamValue::Flag(self))));
-    }
-}
+scalar_args!(Dbu => Length, DbuArea => Area, f64 => Ratio, u32 => Count, bool => Flag);
 
 impl Arg for LayerRef {
     fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
@@ -393,37 +375,19 @@ impl<T: Arg> Arg for Option<T> {
     }
 }
 
-impl Arg for &[u32] {
-    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
-        for &value in self {
-            value.put(name, params);
+/// One parameter row per element, in order, all under the same name.
+macro_rules! list_args {
+    ($($ty:ty),* $(,)?) => {$(
+        impl Arg for &[$ty] {
+            fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
+                for &value in self {
+                    value.put(name, params);
+                }
+            }
         }
-    }
+    )*};
 }
-
-impl Arg for &[DbuArea] {
-    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
-        for &value in self {
-            value.put(name, params);
-        }
-    }
-}
-
-impl Arg for &[f64] {
-    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
-        for &value in self {
-            value.put(name, params);
-        }
-    }
-}
-
-impl Arg for &[Dbu] {
-    fn put(self, name: &'static str, params: &mut Vec<(&'static str, RowValue)>) {
-        for &value in self {
-            value.put(name, params);
-        }
-    }
-}
+list_args!(u32, DbuArea, f64, Dbu);
 
 /// A list of cut sizes, `width x height` each: the `height` rows follow
 /// their `width` rows in the order given.

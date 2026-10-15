@@ -7,14 +7,12 @@
 
 use super::{centre, clamped, gap_midpoint, seg_bbox, SortedRects, Verdict, REFUSED};
 use crate::drc::Scratch;
-use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
+use crate::report::{Measurement, Outcome, Severity, Violation, Violations, NO_SHAPE};
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::ops::{isqrt, seg_seg_dist2, Seg};
 use gpurify_geom::rects::decompose_into;
-use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer};
+use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId, ValidatedLayer};
 use gpurify_ingest::StrId;
-
-const NO_SHAPE: PolyId = PolyId(u32::MAX);
 
 fn axis_aligned(edges: &[Seg]) -> bool {
     edges.iter().all(|e| e.a.x == e.b.x || e.a.y == e.b.y)

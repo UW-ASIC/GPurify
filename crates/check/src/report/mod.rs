@@ -10,5 +10,5 @@ pub mod measure;
 pub mod violation;
 
 pub use measure::{LimitSense, Measurement};
-pub(crate) use violation::record_run;
-pub use violation::{Outcome, RuleRun, Severity, SkipReason, Violation, Violations};
+pub(crate) use violation::{record_run, rule_id, NO_LAYER, NO_SHAPE};
+pub use violation::{Outcome, RuleRun, Severity, SkipReason, Violation, Violations, NOWHERE};
