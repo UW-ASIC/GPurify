@@ -82,6 +82,8 @@
 //! | `cut_class_space(L; short: [..], long: [..], space: [[..]])` | `cut_class_spacing` | [`drc::Rule::CutClassSpacing`] | two cuts closer than their cut-class cell | DRC-063, DRC-064 |
 //! | `patterning(L; colors: count) >= len` | `multi_patterning` | [`drc::Rule::MultiPatterning`] | shapes that cannot be split onto that many masks | DRC-100, DRC-101 |
 //! | `patterning(L, A1, ..; colors: count) >= len` | `anchored_patterning` | [`drc::Rule::AnchoredPatterning`] | pre-coloured shapes whose masks no split honours | DRC-101, DRC-102 |
+//! | `sadp(L; different, same, track_width, track_space)` | `sadp` | [`drc::Rule::Sadp`] | a self-aligned double patterning colour cycle with an odd number of different-colour pairs, or a line spanning an even number of tracks | DRC-128 |
+//! | `sadp_line_end(L; adjacent, tip, overlap, corner, offset)` | `sadp_line_end` | [`drc::Rule::SadpLineEnd`] | gridded SADP line ends too close on one track, or overlapping, apart or offset too little on adjacent tracks | DRC-128 |
 //! | `forbidden(L)` | `forbidden` | [`drc::Rule::Forbidden`] | every shape on `L` | DRC-005, DRC-006, DRC-018, DRC-050, DRC-074, DRC-090, DRC-095, DRC-097, ERC-A10 |
 //! | `contains(outer, inner) >= count` (or `<=`, `==`) | `must_contain` | [`drc::Rule::MustContain`] | an outer shape holding too few, or too many, inner shapes | DRC-048, DRC-049, DRC-085, DRC-090 |
 //! | `inside(inner, outer)` | `must_be_inside` | [`drc::Rule::MustBeInside`] | an inner shape not entirely inside outer | DRC-007, DRC-048 |
@@ -126,8 +128,8 @@
 //!
 //! | Deck | Kind | Checked by | Flags | Catalog |
 //! |---|---|---|---|---|
-//! | `antenna(gate, collectors..; max_ratio, sidewall, diode)` | `antenna` | [`erc::RuleSet::antenna`] | collector area above `max_ratio` times the gate area, a gate on a `diode` net skipped | ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A9, ERC-A11, ERC-A12, ERC-A13, ERC-A14 |
-//! | `antenna_electrical(gate, collectors..; ..)` | `antenna_electrical` | [`erc::RuleSet::antenna_electrical`] | the cumulative ratio, with diode credit | ERC-A4, ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A9, ERC-A12, ERC-A13, ERC-A14 |
+//! | `antenna(gate, collectors..; max_ratio, sidewall, diode, diode_area, diode_min)` | `antenna` | [`erc::RuleSet::antenna`] | collector area above `max_ratio` times the gate area, a gate on a `diode` net skipped; with `diode_area` a fix hint, the diode that clears it | ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A9, ERC-A11, ERC-A12, ERC-A13, ERC-A14, ERC-A15 |
+//! | `antenna_electrical(gate, collectors..; ..)` | `antenna_electrical` | [`erc::RuleSet::antenna_electrical`] | the cumulative ratio, with diode credit; a fix hint, the least diode that clears it | ERC-A4, ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A9, ERC-A12, ERC-A13, ERC-A14, ERC-A15 |
 //! | `conditional_tie(region, tap, well, other; within, spacing, max_distance)` | `conditional_tie` | [`erc::RuleSet::conditional_tie`] | a region too far from a tap for the band its neighbours' well spacing puts it in | ERC-D1a |
 //! | `density_cmp(L; window, step, ..)` | `density_cmp` | [`erc::RuleSet::density_cmp`] | metal density, or CMP thickness, out of range | DRC-071, DRC-113, ERC-B1 |
 //! | `electromigration(layers..; ..)` | `electromigration` | [`erc::RuleSet::electromigration`] | a wire or cut above its rated current at temperature | ERC-E4, ERC-E5, ERC-E6 |
@@ -158,12 +160,14 @@
 //! | `esd_clamp_resistance(pad; clamps, max_resistance)` | `esd_clamp_resistance` | [`erc::RuleSet::esd_clamp_resistance`] | a pin-to-clamp interconnect resistance above `max_resistance` (a clamp too far from its pad) | ERC-C14 |
 //! | `floating_gate(; labels_are_ports)` | `floating_gate` | [`erc::RuleSet::floating_gate`] | a net that only reaches gates | ERC-G1 |
 //! | `fanout(; max)` | `fanout` | [`erc::RuleSet::fanout`] | a net driving more than `max` transistor gates | ERC-H4 |
-//! | `supply_path(; both)` | `supply_path` | [`erc::RuleSet::supply_path`] | a net whose path through MOS channels and resistors reaches no supply, or with `both` misses power or ground | ERC-G9 |
+//! | `supply_path(; both, labels_are_ports)` | `supply_path` | [`erc::RuleSet::supply_path`] | a net whose path through MOS channels and resistors reaches no supply, or with `both` misses power or ground; with `labels_are_ports` a path stops at a labelled net | ERC-G9 |
 //! | `power_switch(; models)` | `power_switch` | [`erc::RuleSet::power_switch`] | a power switch not joining an always-on supply to a switched one, or whose control floats in a power state | ERC-F14 |
 //! | `matching(group; tolerance)` | `matching` | a matched group's unit of another model or size, a channel across the others, or a device off the group's common centroid | ERC-H2 |
 //! | `floating_supply()` | `floating_supply` | [`erc::RuleSet::floating_supply`] | a piece of a declared supply cut off from the piece its grid is fed through | ERC-E9 |
 //! | `combinational_loop()` | `combinational_loop` | [`erc::RuleSet::combinational_loop`] | a cycle of channel-connected components, each driving the next through a gate | ERC-G8 |
 //! | `gate_path(; ground, max_devices)` | `gate_path` | [`erc::RuleSet::gate_path`] | a transistor gate whose shortest path to ground (or power) passes more than `max_devices` devices | ERC-H3 |
+//! | `net_type(; net, path, break, exclude)` | `net_type` | [`erc::RuleSet::net_type`] | a net whose own net types meet `net` and whose path's types meet `path`, over the intent's net types | ERC-H3 |
+//! | `hot_carrier(; models, max_length)` | `hot_carrier` | [`erc::RuleSet::hot_carrier`] | a minimum-length transistor used in both directions, each side driven high and low without it | ERC-F4 |
 //! | `floating_well(well, tap)` | `floating_well` | [`erc::RuleSet::floating_well`] | a well with no tap | DRC-085, ERC-G2 |
 //! | `latchup_victim(aggressor, region, tap; within, max_distance, pad, bias, forward)` | `latchup_victim` | [`erc::RuleSet::latchup_victim`] | a region near an injecting (pad-connected) junction too far from a tap | ERC-D5 |
 //! | `missing_tie(region, tap; max_distance)` | `missing_tie` | [`erc::RuleSet::missing_tie`] | a region too far from a tap | ERC-D1 |
@@ -176,6 +180,7 @@
 //! | `gate_oxide(; models, max)` | `gate_oxide` | [`erc::RuleSet::gate_oxide`] | a gate that can differ from its channel by more than max | ERC-F2 |
 //! | `drain_source(; models, max)` | `drain_source` | [`erc::RuleSet::drain_source`] | a drain that can differ from its source by more than max | ERC-F3 |
 //! | `well_bias(; pmos, nmos)` | `well_bias` | [`erc::RuleSet::well_bias`] | a well that can forward-bias a junction | ERC-D3, ERC-F12 |
+//! | `well_sharing(; models, resistors)` | `well_sharing` | [`erc::RuleSet::well_sharing`] | a transistor whose channel reaches its well's net neither directly, through a resistor, nor through a chain of transistors in the same well | ERC-D9 |
 //! | `missing_level_shifter(; shifters)` | `missing_level_shifter` | [`erc::RuleSet::missing_level_shifter`] | a gate driven from another power domain | ERC-F6 |
 //! | `domain_crossing()` | `domain_crossing` | [`erc::RuleSet::domain_crossing`] | a channel joining two power domains | ERC-F9 |
 //! | `dielectric_field(L[, L2]; max_field)` | `dielectric_field` | [`erc::RuleSet::dielectric_field`] | two nets' shapes whose voltage over their separation exceeds the field limit | ERC-F13 |
