@@ -33,16 +33,12 @@ fn write(dir: &Path, name: &str, layout: Layout) -> PathBuf {
 
 /// `gpurify xor a b` through the real reader, as rows, and whether it passed.
 fn xor(tag: &str, a: Layout, b: Layout) -> (Report, bool) {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("xor").join(tag);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    let dir = gpurify_testgen::oracle::scratch(&format!("xor-{tag}"));
     let deck = dir.join("xor.deck");
     std::fs::write(&deck, DECK).expect("the target dir is writable");
     let inputs = Inputs {
         layout: write(&dir, "a", a),
         deck,
-        reference: Vec::new(),
-        intent: None,
         ..Inputs::default()
     };
     let (loaded, outputs, summary) =
@@ -69,6 +65,7 @@ fn xor(tag: &str, a: Layout, b: Layout) -> (Report, bool) {
     for (_, areas) in report.values_mut() {
         areas.sort_unstable();
     }
+    let _ = std::fs::remove_dir_all(&dir);
     (report, summary.passed())
 }
 

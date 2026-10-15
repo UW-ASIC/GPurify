@@ -41,8 +41,7 @@ pex met2 thickness 100nm height 1200nm sheet 0.05ohm dielectric 3.9 area_cap 20a
 
 /// Writes the LEF, the deck and `def` to a scratch directory named `tag`.
 pub fn inputs(tag: &str, def: &str) -> Inputs {
-    let dir = std::env::temp_dir().join(format!("gpurify-def-{tag}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let dir = gpurify_testgen::oracle::scratch(&format!("def-{tag}"));
     let write = |name: &str, text: &str| -> PathBuf {
         let path = dir.join(name);
         std::fs::write(&path, text).expect("writable");

@@ -24,7 +24,6 @@ use gpurify_ingest::StrId;
 use gpurify_testgen::LayoutBuilder;
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Database units per micrometre for every fixture here: a 1 nm grid.
 pub const DBU_PER_UM: i64 = 1000;
@@ -220,7 +219,7 @@ fn build(tag: &str, deck: &str, width_nm: i64) -> Run {
 /// Write a deck and a layout to a fresh directory, and describe the run over
 /// them.
 fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder, LayerId)) -> Run {
-    let dir = scratch_dir(tag);
+    let dir = gpurify_testgen::oracle::scratch(tag);
     let grid = Grid::new(DBU_PER_UM).expect("a thousand database units per micrometre is a grid");
 
     let deck_path = dir.join("rules.deck");
@@ -293,16 +292,6 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
         limit: Dbu::new_unchecked(LIMIT_NM),
         extreme: Dbu::new_unchecked(0),
     }
-}
-
-/// A directory no other fixture in this process will touch.
-fn scratch_dir(tag: &str) -> PathBuf {
-    static NEXT: AtomicU32 = AtomicU32::new(0);
-    let serial = NEXT.fetch_add(1, Ordering::Relaxed);
-    let dir =
-        std::env::temp_dir().join(format!("gpurify-e2e-{}-{tag}-{serial}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("a scratch directory can be created");
-    dir
 }
 
 /// The single violation in a table that must contain exactly one.
@@ -629,7 +618,7 @@ pub fn run_case_with_intent(
     checks: Checks,
     intent_source: &str,
 ) -> Result<CaseRun, String> {
-    let dir = scratch_dir(id);
+    let dir = gpurify_testgen::oracle::scratch(id);
     let path = dir.join("intent.json");
     std::fs::write(&path, intent_source).expect("the scratch directory is writable");
     let run = run_case_inputs(&case_inputs(domain, id, Some(path), None), checks);

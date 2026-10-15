@@ -189,8 +189,7 @@ fn a_waiver_drawn_in_a_cell_waives_at_every_placement() {
     };
     let mut bytes = Vec::new();
     write_library(&[ip, top], &mut bytes).expect("the library writes");
-    let dir = std::env::temp_dir().join(format!("gpurify-flow-waiver-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let dir = gpurify_testgen::oracle::scratch("flow-waiver");
     let layout = dir.join("waived.gds");
     std::fs::write(&layout, &bytes).expect("the layout writes");
     let counts = |waive: bool| {

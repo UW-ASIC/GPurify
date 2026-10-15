@@ -50,7 +50,7 @@ fn run(
 ) -> Result<gpurify::liberty::Generated, LibError> {
     let loaded = load(&inputs(reference)).expect("the corpus cell loads");
     let extracted = extract(&loaded).expect("and extracts");
-    let work = std::env::temp_dir().join(format!("gpurify-liberty-test-{}", std::process::id()));
+    let work = gpurify_testgen::oracle::scratch("liberty-test");
     let request = Request {
         spec,
         accuracy: Accuracy::Interface,
@@ -194,7 +194,7 @@ fn a_pex_refusal_names_the_deck_layer() {
             .idx();
         unstate(&mut loaded.deck.stack, poly);
         let extracted = extract(&loaded).expect("and extracts");
-        let work = std::env::temp_dir().join(format!("gpurify-liberty-pex-{}", std::process::id()));
+        let work = gpurify_testgen::oracle::scratch("liberty-pex");
         let spec = spec_with(PINS);
         let request = Request {
             spec: &spec,

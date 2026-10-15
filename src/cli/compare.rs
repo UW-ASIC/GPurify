@@ -174,8 +174,7 @@ mod tests {
     /// the tolerance. The flag that used to say it is refused.
     #[test]
     fn a_ground_cap_ten_percent_off_fails_at_five_and_passes_at_twenty() {
-        let dir = std::env::temp_dir().join(format!("gpurify-compare-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let dir = gpurify_testgen::oracle::scratch("compare");
         let spef = |b_cap: &str, extra: &str| {
             format!(
                 "*SPEF \"IEEE 1481-2009\"\n*C_UNIT 1 FF\n*R_UNIT 1 OHM\n\n\

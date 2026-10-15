@@ -39,6 +39,7 @@ use gpurify::engine::run::{run_checks, Checks, Outputs, RunOptions};
 use gpurify::geom::{Grid, PolyId};
 use gpurify_ingest::deck::parse_deck;
 use gpurify_ingest::StrTable;
+use gpurify_testgen::oracle;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -57,17 +58,6 @@ struct Job {
 
 fn repo() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-}
-
-/// An empty directory for one run's files, so nothing a previous run wrote
-/// can be read as this run's output.
-fn scratch(tag: &str) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("klayout-mirror")
-        .join(tag);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("the target temp dir is writable");
-    dir
 }
 
 /// `GPurify`'s report, per rule, with each finding's shapes as vertices.
@@ -177,7 +167,7 @@ const ROUND: usize = 1000;
 /// A fixture whose inputs are refused on purpose has no report to compare and
 /// is left out.
 fn jobs_of(fixtures: &[harness::Fixture], tag: &str) -> Vec<Job> {
-    let dir = scratch(&format!("{tag}-gds"));
+    let dir = oracle::scratch(&format!("{tag}-gds"));
     let per = fixtures.len().div_ceil(workers()).max(1);
     std::thread::scope(|scope| {
         let handles: Vec<_> = fixtures
@@ -216,14 +206,14 @@ fn jobs_of(fixtures: &[harness::Fixture], tag: &str) -> Vec<Job> {
 }
 
 /// Runs every job's mirror, a batch of jobs per `KLayout` process, and returns
-/// what each wrote.
-fn run_klayout(jobs: &[Job], tag: &str) -> Vec<Klayout> {
+/// what each wrote, and the directory its scripts and outputs are in.
+fn run_klayout(jobs: &[Job], tag: &str) -> (Vec<Klayout>, PathBuf) {
     let found = Command::new("klayout").arg("-v").output();
     assert!(
         found.is_ok_and(|o| o.status.success()),
         "klayout is not on PATH: run this test inside `nix develop .#oracles`"
     );
-    let dir = scratch(tag);
+    let dir = oracle::scratch(tag);
     let per = jobs.len().div_ceil(workers()).max(1);
     std::thread::scope(|scope| {
         for (b, batch) in jobs.chunks(per).enumerate() {
@@ -258,7 +248,7 @@ fn run_klayout(jobs: &[Job], tag: &str) -> Vec<Klayout> {
             });
         }
     });
-    (0..jobs.len())
+    let results = (0..jobs.len())
         .map(
             |i| match std::fs::read_to_string(dir.join(format!("{i}.jsonl"))) {
                 Ok(text) => Klayout::parse(&text),
@@ -268,7 +258,8 @@ fn run_klayout(jobs: &[Job], tag: &str) -> Vec<Klayout> {
                 },
             },
         )
-        .collect()
+        .collect();
+    (results, dir)
 }
 
 /// Per kind: agree, of which something was found, explained by a documented
@@ -326,7 +317,8 @@ fn differential(tag: &str, rounds: impl Iterator<Item = Vec<Job>>) {
 /// One round: `KLayout` on every job, then each rule compared into `tally`.
 fn compare_round(jobs: &[Job], tag: &str, tally: &mut Tally) {
     tally.layouts += jobs.len();
-    let results = run_klayout(jobs, tag);
+    let failed = tally.failures.len();
+    let (results, dir) = run_klayout(jobs, tag);
     for (job, kl) in jobs.iter().zip(&results) {
         if !kl.errors.is_empty() {
             tally
@@ -366,6 +358,15 @@ fn compare_round(jobs: &[Job], tag: &str, tally: &mut Tally) {
                     tally.failures.push(format!("{}: {why}", at()));
                 }
             }
+        }
+    }
+    // A round that agreed leaves no files; one that did not keeps its
+    // scripts, outputs and written layouts for a reader.
+    if tally.failures.len() == failed {
+        let _ = std::fs::remove_dir_all(dir);
+        let written = (jobs.iter()).filter_map(|job| job.gds.parent());
+        for gds in written.filter(|dir| dir.starts_with(std::env::temp_dir())) {
+            let _ = std::fs::remove_dir_all(gds);
         }
     }
 }

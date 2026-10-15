@@ -9,12 +9,7 @@ use gpurify_extract::Parasitic;
 fn coupling_and_widths(extra: &str) -> (f64, Vec<(f64, bool)>) {
     let fixtures = crate::gen_fixtures::fixtures();
     let deck = std::fs::read_to_string(fixtures.join("params.deck")).expect("the params deck");
-    let dir = std::env::temp_dir().join(format!(
-        "gpurify-device-region-{}-{}",
-        std::process::id(),
-        extra.len()
-    ));
-    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let dir = gpurify_testgen::oracle::scratch("device-region");
     let path = dir.join("params.deck");
     std::fs::write(&path, format!("{deck}\n{extra}\n")).expect("writable");
     let inputs = Inputs {
@@ -24,13 +19,10 @@ fn coupling_and_widths(extra: &str) -> (f64, Vec<(f64, bool)>) {
     };
     let options = RunOptions {
         checks: Checks {
-            drc: false,
-            erc: false,
-            lvs: false,
             pex: true,
+            ..Checks::default()
         },
-        lvs: gpurify_check::lvs::CompareOptions::default(),
-        quasistatic_nets: Vec::new(),
+        ..RunOptions::default()
     };
     let (loaded, extracted, outputs, _) = run(&inputs, &options).expect("the inverter runs");
     let network = outputs.parasitics.expect("PEX ran");

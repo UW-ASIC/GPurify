@@ -21,8 +21,7 @@ pub type Rect<'a> = (&'a str, i64, i64, i64, i64);
 /// Writes `deck` and a one-cell layout of `rects` and `labels` (layer,
 /// text, x, y) into a scratch directory named `tag`.
 pub fn layout(tag: &str, deck: &str, rects: &[Rect], labels: &[(&str, &str, i64, i64)]) -> Inputs {
-    let dir = std::env::temp_dir().join(format!("gpurify-edits-{tag}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let dir = gpurify_testgen::oracle::scratch(&format!("edits-{tag}"));
     let mut strings = StrTable::default();
     let grid = Grid::new(1000).expect("a 1 nm grid");
     let parsed = parse_deck(deck, grid, &mut strings).expect("the test deck parses");
