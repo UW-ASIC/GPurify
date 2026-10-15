@@ -11,7 +11,7 @@
 //! (`√24.5`, so 4.95), which a squared distance rounded up to 25 passes at a
 //! limit of 5; IHP SG13G2 M1.g/M1.i are the foundry rules these measure.
 
-use crate::common::deck;
+use crate::common::deck::{self, by_rule, Finding, Layout};
 use gpurify_check::report::{Measurement, Outcome};
 use gpurify_geom::{Dbu, DbuArea};
 
@@ -25,15 +25,21 @@ fn run(rules: &str, rings: &[Vec<(i64, i64)>]) -> Found {
 
 /// [`run`] with each ring drawn on the layer it names.
 fn run_on(rules: &str, rings: &[(&'static str, Vec<(i64, i64)>)]) -> Found {
-    let ran = deck::run(&deck::deck(rules), rings);
+    let layout = rings
+        .iter()
+        .fold(Layout::default(), |layout, (layer, ring)| {
+            layout.polygon(layer, ring)
+        });
+    let rows = deck::run(&deck::deck(rules), &layout);
     Found {
-        findings: ran
-            .found
+        findings: rows
             .iter()
-            .zip(&ran.limits)
-            .map(|(f, &limit)| (f.0.clone(), f.1, limit))
+            .flat_map(|row| row.findings.iter().map(|f| (row.id.clone(), f.0, f.1)))
             .collect(),
-        outcomes: ran.runs.iter().map(|r| (r.0.clone(), r.1)).collect(),
+        outcomes: rows
+            .iter()
+            .map(|row| (row.id.clone(), row.outcome))
+            .collect(),
     }
 }
 
@@ -517,14 +523,18 @@ fn contains_counts_45_degree_figures_against_each_bound() {
         )
     };
     let want = [
-        deck::count("three", 2).limit(Measurement::Count(3)),
-        deck::count("most", 2).limit(Measurement::Count(1)),
+        ("three", Finding::count(2).limit(Measurement::Count(3))),
+        ("most", Finding::count(2).limit(Measurement::Count(1))),
     ];
-    deck::check(
+    let layout = [octagon_host(), diamond(50, 25), diamond(50, 75)]
+        .iter()
+        .fold(Layout::default(), |layout, (layer, ring)| {
+            layout.polygon(layer, ring)
+        });
+    deck::check_everywhere(
         "two_diamonds",
         &deck::deck(rules),
-        &[octagon_host(), diamond(50, 25), diamond(50, 75)],
-        &["one", "two", "three", "most", "most2", "exact"],
-        &want,
+        &layout,
+        &by_rule(&["one", "two", "three", "most", "most2", "exact"], &want),
     );
 }

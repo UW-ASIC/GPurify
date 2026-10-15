@@ -4,7 +4,7 @@
 //! `tests/exhaustive/drc_overlay.rs` fixture of the same name, its oracle
 //! restated on the test.
 
-use crate::deck_fixture::{check_everywhere, new_deck, row, run, Finding, Layout};
+use crate::common::deck::{check_everywhere, new_deck, row, run, Finding, Layout};
 use gpurify_check::report::Measurement;
 
 /// DFM scoring (`dfm_score`, DRC-111, arXiv:1805.10016 with deck-supplied

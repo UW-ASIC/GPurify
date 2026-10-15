@@ -4,16 +4,9 @@
 //! level, with the same oracles; each finding also states its limit, the
 //! listed width nearest the measured one.
 
-use crate::common::deck::{check, deck, len, rect, Shape, Want};
+use crate::common::deck::{check_everywhere, deck, met1, Finding, Layout};
 use gpurify_check::report::Measurement;
 use gpurify_testgen::dbu;
-
-fn met1(boxes: &[[i64; 4]]) -> Vec<Shape> {
-    boxes
-        .iter()
-        .map(|&[xlo, ylo, xhi, yhi]| rect("met1", xlo, ylo, xhi, yhi))
-        .collect()
-}
 
 fn nearest(w: i64) -> Measurement {
     Measurement::Length(dbu(if w < 150 { 100 } else { 200 }))
@@ -31,25 +24,24 @@ fn only_the_listed_widths_are_legal() {
     let deck = deck("rule aw width(met1; allowed: [100nm, 200nm])");
     for listed in [100, 200] {
         for w in [listed - 1, listed, listed + 1] {
-            let want: Vec<Want> = if w == listed {
+            let want: Vec<Finding> = if w == listed {
                 vec![]
             } else {
-                vec![len("aw", w).at2(w, 1000).limit(nearest(w))]
+                vec![Finding::length(w).at_half(w, 1000).limit(nearest(w))]
             };
-            check(
+            check_everywhere(
                 &format!("bar/{w}"),
                 &deck,
                 &met1(&[[0, 0, w, 1000]]),
-                &["aw"],
-                &want,
+                &[("aw", want)],
             );
         }
     }
-    let cases: [(&str, Vec<Shape>, Vec<Want>); 4] = [
+    let cases: [(&str, Layout, Vec<Finding>); 4] = [
         (
             "between",
             met1(&[[0, 0, 150, 150]]),
-            vec![len("aw", 150).at(75, 75)],
+            vec![Finding::length(150).at(75, 75)],
         ),
         (
             "halves",
@@ -64,11 +56,11 @@ fn only_the_listed_widths_are_legal() {
         (
             "corner_neck",
             met1(&[[0, 0, 1000, 1000], [900, 900, 1900, 1900]]),
-            vec![len("aw", 141).limit(nearest(141))],
+            vec![Finding::length(141).limit(nearest(141))],
         ),
     ];
     for (name, shapes, want) in cases {
-        check(name, &deck, &shapes, &["aw"], &want);
+        check_everywhere(name, &deck, &shapes, &[("aw", want)]);
     }
 }
 
@@ -85,26 +77,25 @@ fn an_open_last_width_admits_everything_wider() {
     for listed in [100, 200] {
         for w in [listed - 1, listed, listed + 1] {
             let legal = w == 100 || w >= 200;
-            let want: Vec<Want> = if legal {
+            let want: Vec<Finding> = if legal {
                 vec![]
             } else {
-                vec![len("aw", w).at2(w, 1000).limit(nearest(w))]
+                vec![Finding::length(w).at_half(w, 1000).limit(nearest(w))]
             };
-            check(
+            check_everywhere(
                 &format!("open/{w}"),
                 &deck,
                 &met1(&[[0, 0, w, 1000]]),
-                &["aw"],
-                &want,
+                &[("aw", want)],
             );
         }
     }
-    let cases: [(&str, Vec<Shape>, Vec<Want>); 3] = [
+    let cases: [(&str, Layout, Vec<Finding>); 3] = [
         ("wide", met1(&[[0, 0, 1000, 1000]]), vec![]),
         (
             "between",
             met1(&[[0, 0, 150, 150]]),
-            vec![len("aw", 150).at(75, 75)],
+            vec![Finding::length(150).at(75, 75)],
         ),
         (
             "l_of_exact_and_wide",
@@ -113,6 +104,6 @@ fn an_open_last_width_admits_everything_wider() {
         ),
     ];
     for (name, shapes, want) in cases {
-        check(name, &deck, &shapes, &["aw"], &want);
+        check_everywhere(name, &deck, &shapes, &[("aw", want)]);
     }
 }

@@ -3,7 +3,7 @@
 //! the root suite's exhaustive fixtures (`tests/exhaustive/drc_dimension.rs`)
 //! at the crate level, with the same oracles.
 
-use crate::common::deck::{any, check, count, deck, len, rect, Shape, Want};
+use crate::common::deck::{by_rule, check_everywhere, deck, Finding, Layout};
 use gpurify_check::report::Measurement;
 use gpurify_testgen::dbu;
 
@@ -13,8 +13,8 @@ fn most(n: u32) -> Measurement {
 }
 
 /// One polygon on `met1`.
-fn met1(points: &[(i64, i64)]) -> Vec<Shape> {
-    vec![("met1", points.to_vec())]
+fn met1(points: &[(i64, i64)]) -> Layout {
+    Layout::default().polygon("met1", points)
 }
 
 const STEP: &str = "rule out min_step(met1; corner: outside, length_sum: none) >= 50nm\n\
@@ -51,19 +51,21 @@ fn an_outside_staircase_is_one_run_judged_by_count_and_by_length_sum() {
     for s in [39, 40, 41, 49, 50, 51] {
         let mut want = Vec::new();
         if s < 50 {
-            let at = |w: Want| w.at2(2000 - s, 2000 - s);
-            want.push(at(count("out", 2).limit(most(1))));
-            want.push(at(count("e1", 2).limit(most(1))));
+            let at = |(rule, f): (&'static str, Finding)| (rule, f.at_half(2000 - s, 2000 - s));
+            want.push(at(("out", Finding::count(2).limit(most(1)))));
+            want.push(at(("e1", Finding::count(2).limit(most(1)))));
             if 2 * s > 80 {
-                want.push(at(len("sum", 2 * s).limit(Measurement::Length(dbu(80)))));
+                want.push(at((
+                    "sum",
+                    Finding::length(2 * s).limit(Measurement::Length(dbu(80))),
+                )));
             }
         }
-        check(
+        check_everywhere(
             &format!("outside_two/{s}"),
             &deck,
             &met1(&outside_two(s)),
-            &STEP_IDS,
-            &want,
+            &by_rule(&STEP_IDS, &want),
         );
     }
 }
@@ -86,14 +88,22 @@ fn lef_figure_d_four_short_edges_break_every_outside_row() {
         (0, 1000),
     ]);
     let want = [
-        count("out", 4).at(960, 960).limit(most(1)),
-        len("sum", 160)
-            .at(960, 960)
-            .limit(Measurement::Length(dbu(80))),
-        count("e1", 4).at(960, 960).limit(most(1)),
-        count("e2", 4).at(960, 960).limit(most(2)),
+        ("out", Finding::count(4).at(960, 960).limit(most(1))),
+        (
+            "sum",
+            Finding::length(160)
+                .at(960, 960)
+                .limit(Measurement::Length(dbu(80))),
+        ),
+        ("e1", Finding::count(4).at(960, 960).limit(most(1))),
+        ("e2", Finding::count(4).at(960, 960).limit(most(2))),
     ];
-    check("lef_figure_d", &deck(STEP), &shape, &STEP_IDS, &want);
+    check_everywhere(
+        "lef_figure_d",
+        &deck(STEP),
+        &shape,
+        &by_rule(&STEP_IDS, &want),
+    );
 }
 
 /// Oracle: by construction. Two 40 nm edges where the long edges either side
@@ -112,10 +122,15 @@ fn an_inside_staircase_breaks_only_the_inside_row() {
         (0, 1000),
     ]);
     let want = [
-        count("in", 2).at(520, 520).limit(most(1)),
-        count("e1", 2).at(520, 520).limit(most(1)),
+        ("in", Finding::count(2).at(520, 520).limit(most(1))),
+        ("e1", Finding::count(2).at(520, 520).limit(most(1))),
     ];
-    check("inside_two", &deck(STEP), &shape, &STEP_IDS, &want);
+    check_everywhere(
+        "inside_two",
+        &deck(STEP),
+        &shape,
+        &by_rule(&STEP_IDS, &want),
+    );
 }
 
 /// The limits stated with each finding are the rule's: the most short
@@ -136,12 +151,14 @@ fn a_single_jog_is_a_step_and_nothing_else() {
         (500, 540),
         (0, 540),
     ]);
-    check(
+    check_everywhere(
         "step",
         &deck(STEP),
         &shape,
-        &STEP_IDS,
-        &[count("st", 1).at(500, 520).limit(most(0))],
+        &by_rule(
+            &STEP_IDS,
+            &[("st", Finding::count(1).at(500, 520).limit(most(0)))],
+        ),
     );
 }
 
@@ -150,12 +167,11 @@ fn a_single_jog_is_a_step_and_nothing_else() {
 /// short edge is within either `MAXEDGES`.
 #[test]
 fn a_narrow_line_end_is_no_corner_and_no_step() {
-    check(
+    check_everywhere(
         "line_end",
         &deck(STEP),
-        &[rect("met1", 0, 0, 1000, 40)],
-        &STEP_IDS,
-        &[],
+        &Layout::default().rect("met1", 0, 0, 1000, 40),
+        &by_rule(&STEP_IDS, &[]),
     );
 }
 
@@ -165,15 +181,17 @@ fn a_narrow_line_end_is_no_corner_and_no_step() {
 /// four, at the rectangle's centre.
 #[test]
 fn a_ring_of_only_short_edges_is_one_run_with_no_corner() {
-    check(
+    check_everywhere(
         "all_short",
         &deck(STEP),
-        &[rect("met1", 0, 0, 40, 30)],
-        &STEP_IDS,
-        &[
-            count("e1", 4).at(20, 15).limit(most(1)),
-            count("e2", 4).at(20, 15).limit(most(2)),
-        ],
+        &Layout::default().rect("met1", 0, 0, 40, 30),
+        &by_rule(
+            &STEP_IDS,
+            &[
+                ("e1", Finding::count(4).at(20, 15).limit(most(1))),
+                ("e2", Finding::count(4).at(20, 15).limit(most(2))),
+            ],
+        ),
     );
 }
 
@@ -185,7 +203,7 @@ const ADJ: &str = "rule adj min_step(met1; adjacent: 60nm, except_rectangle: fal
 const ADJ_IDS: [&str; 4] = ["adj", "adj.rect", "eol", "between"];
 
 /// A bump `w` wide and `h` high on a 1000 x 200 bar, from x = l to r.
-fn bump(w: i64, h: i64) -> (Vec<Shape>, i64, i64) {
+fn bump(w: i64, h: i64) -> (Layout, i64, i64) {
     let l = 500 - w / 2;
     let r = l + w;
     let shape = met1(&[
@@ -212,8 +230,8 @@ fn a_bump_s_short_sides_offend_adjacent_by_its_top_s_length() {
     for t in [59, 60, 61] {
         let (shape, l, r) = bump(t, 40);
         let sides = [
-            len("adj", 40).at2(l + 1000, 440),
-            len("adj", 40).at2(r, 440),
+            ("adj", Finding::length(40).at_half(l + 1000, 440)),
+            ("adj", Finding::length(40).at_half(r, 440)),
         ];
         let mut want = Vec::new();
         for rule in ["eol"].into_iter().chain(
@@ -222,15 +240,14 @@ fn a_bump_s_short_sides_offend_adjacent_by_its_top_s_length() {
                 .into_iter()
                 .flatten(),
         ) {
-            want.extend(sides.iter().map(|w| Want { rule, ..*w }));
+            want.extend(sides.iter().map(|w| (rule, w.1)));
         }
-        want.push(len("between", 40).at2(l + r, 440));
-        check(
+        want.push(("between", Finding::length(40).at_half(l + r, 440)));
+        check_everywhere(
             &format!("bump_top/{t}"),
             &deck(ADJ),
             &shape,
-            &ADJ_IDS,
-            &want,
+            &by_rule(&ADJ_IDS, &want),
         );
     }
 }
@@ -245,23 +262,22 @@ fn a_bump_s_top_offends_adjacent_and_its_sides_join_below_the_limit() {
         let (shape, l, r) = bump(40, h);
         let mut want = Vec::new();
         for rule in ["adj", "adj.rect"] {
-            want.push(len(rule, 40).at2(l + r, 400 + h));
+            want.push((rule, Finding::length(40).at_half(l + r, 400 + h)));
             if h < 50 {
-                want.push(len(rule, h).at2(l + 1000, 400 + h));
-                want.push(len(rule, h).at2(r, 400 + h));
+                want.push((rule, Finding::length(h).at_half(l + 1000, 400 + h)));
+                want.push((rule, Finding::length(h).at_half(r, 400 + h)));
             }
         }
         if h < 50 {
-            want.push(len("eol", h).at2(l + 1000, 400 + h));
-            want.push(len("eol", h).at2(r, 400 + h));
-            want.push(len("between", h).at2(l + r, 400 + h));
+            want.push(("eol", Finding::length(h).at_half(l + 1000, 400 + h)));
+            want.push(("eol", Finding::length(h).at_half(r, 400 + h)));
+            want.push(("between", Finding::length(h).at_half(l + r, 400 + h)));
         }
-        check(
+        check_everywhere(
             &format!("bump_height/{h}"),
             &deck(ADJ),
             &shape,
-            &ADJ_IDS,
-            &want,
+            &by_rule(&ADJ_IDS, &want),
         );
     }
 }
@@ -272,17 +288,21 @@ fn a_bump_s_top_offends_adjacent_and_its_sides_join_below_the_limit() {
 /// `between` row; every box is the whole rectangle, centred at (20, 28).
 #[test]
 fn a_small_rectangle_offends_unless_rectangles_are_excepted() {
-    let ends = |rule| [len(rule, 40).at(20, 28), len(rule, 40).at(20, 28)];
-    let want: Vec<Want> = ["adj", "eol", "between"]
+    let ends = |rule| {
+        [
+            (rule, Finding::length(40).at(20, 28)),
+            (rule, Finding::length(40).at(20, 28)),
+        ]
+    };
+    let want: Vec<(&str, Finding)> = ["adj", "eol", "between"]
         .into_iter()
         .flat_map(ends)
         .collect();
-    check(
+    check_everywhere(
         "rectangle",
         &deck(ADJ),
-        &[rect("met1", 0, 0, 40, 56)],
-        &ADJ_IDS,
-        &want,
+        &Layout::default().rect("met1", 0, 0, 40, 56),
+        &by_rule(&ADJ_IDS, &want),
     );
 }
 
@@ -300,12 +320,17 @@ fn a_tab_s_top_offends_adjacent_eol_by_the_end_of_line_beside_it() {
             (1000, 200),
             (0, 200),
         ]);
-        let want: Vec<Want> = if e < 120 {
-            vec![len("eol", 40).at(1020, 100)]
+        let want: Vec<(&str, Finding)> = if e < 120 {
+            vec![("eol", Finding::length(40).at(1020, 100))]
         } else {
             Vec::new()
         };
-        check(&format!("tab_end/{e}"), &deck(ADJ), &shape, &ADJ_IDS, &want);
+        check_everywhere(
+            &format!("tab_end/{e}"),
+            &deck(ADJ),
+            &shape,
+            &by_rule(&ADJ_IDS, &want),
+        );
     }
 }
 
@@ -327,14 +352,19 @@ fn a_tip_s_sides_offend_by_its_end_of_line() {
         ]);
         let want = if e < 120 {
             vec![
-                len("eol", 40).at2(2040, 100 + e),
-                len("eol", 40).at2(2040, 500),
-                len("between", 40).at2(2040, 200 + e),
+                ("eol", Finding::length(40).at_half(2040, 100 + e)),
+                ("eol", Finding::length(40).at_half(2040, 500)),
+                ("between", Finding::length(40).at_half(2040, 200 + e)),
             ]
         } else {
             Vec::new()
         };
-        check(&format!("tip/{e}"), &deck(ADJ), &shape, &ADJ_IDS, &want);
+        check_everywhere(
+            &format!("tip/{e}"),
+            &deck(ADJ),
+            &shape,
+            &by_rule(&ADJ_IDS, &want),
+        );
     }
 }
 
@@ -360,17 +390,16 @@ fn between_eol_needs_the_edge_after_the_end_of_line_to_be_short() {
             (x, 400),
             (0, 400),
         ]);
-        let want: Vec<Want> = if top < 50 {
-            vec![any("between").at2(x + 1040, 260)]
+        let want: Vec<(&str, Finding)> = if top < 50 {
+            vec![("between", Finding::any().at_half(x + 1040, 260))]
         } else {
             Vec::new()
         };
-        check(
+        check_everywhere(
             &format!("asymmetric_tip/{top}"),
             &deck(ADJ),
             &shape,
-            &["between"],
-            &want,
+            &by_rule(&["between"], &want),
         );
     }
 }
@@ -392,11 +421,10 @@ fn between_eol_s_marker_spans_all_three_edges() {
         (994, 400),
         (0, 400),
     ]);
-    check(
+    check_everywhere(
         "marker",
         &deck(ADJ),
         &shape,
-        &["between"],
-        &[any("between").at(1017, 130)],
+        &by_rule(&["between"], &[("between", Finding::any().at(1017, 130))]),
     );
 }

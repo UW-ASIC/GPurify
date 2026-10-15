@@ -6,10 +6,11 @@
 //! restated on the test, run through this crate's deck compiler and rule set
 //! under the eight symmetries of the square at two translations.
 
-use crate::deck_fixture::{
+use crate::common::deck::{
     areas, below, check_everywhere, lengths, new_deck, row, run, sweep, Finding, Layout,
 };
 use gpurify_check::report::{Measurement, Outcome};
+use gpurify_testgen::dbu;
 
 type Rect = (i64, i64, i64, i64);
 
@@ -315,13 +316,19 @@ fn cut_class_space_reads_squares_as_ends_and_touching_pairs_at_the_largest_cell(
         "squares_closer",
         &deck,
         &Layout::default().rects("cut", &[(0, 0, 100, 100), (0, 299, 100, 399)]),
-        &[("cs", vec![Finding::length(199).held(200)])],
+        &[(
+            "cs",
+            vec![Finding::length(199).limit(Measurement::Length(dbu(200)))],
+        )],
     );
     check_everywhere(
         "touching_slots",
         &deck,
         &Layout::default().rects("cut", &[(0, 0, 100, 300), (0, 300, 100, 600)]),
-        &[("cs", vec![Finding::length(0).held(500)])],
+        &[(
+            "cs",
+            vec![Finding::length(0).limit(Measurement::Length(dbu(500)))],
+        )],
     );
 }
 

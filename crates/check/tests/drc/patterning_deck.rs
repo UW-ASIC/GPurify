@@ -3,25 +3,13 @@
 //! fixtures (`tests/exhaustive/drc_overlay.rs`) at the crate level, with the
 //! same oracles.
 
-use crate::common::deck::{area, check, count, new_deck, rect, run, Shape, Want};
+use crate::common::deck::{by_rule, check_everywhere, new_deck, ring, run, Finding, Layout};
 use gpurify_check::report::Outcome;
-
-/// Four rectangles around the hole `hole` of `outer`, `[xlo, ylo, xhi, yhi]`.
-fn ring(layer: &'static str, outer: [i64; 4], hole: [i64; 4]) -> Vec<Shape> {
-    let [xlo, ylo, xhi, yhi] = outer;
-    let [hxlo, hylo, hxhi, hyhi] = hole;
-    vec![
-        rect(layer, xlo, ylo, xhi, hylo),
-        rect(layer, xlo, hyhi, xhi, yhi),
-        rect(layer, xlo, hylo, hxlo, hyhi),
-        rect(layer, hxhi, hylo, xhi, hyhi),
-    ]
-}
 
 /// A cycle of `n >= 4` bars around a 4000 square frame, each `gap` from the
 /// next and far from every other: the bottom side split into `(n - 1) / 2`
 /// bars, the top into the rest, and one bar up each side.
-fn bar_cycle(n: i64, gap: i64) -> Vec<Shape> {
+fn bar_cycle(n: i64, gap: i64) -> Layout {
     const S: i64 = 4000;
     const T: i64 = 100;
     let bottom = (n - 1) / 2;
@@ -35,15 +23,18 @@ fn bar_cycle(n: i64, gap: i64) -> Vec<Shape> {
             })
             .collect()
     };
-    let mut out = vec![
-        rect("met1", S - T, T + gap, S, S),
-        rect("met1", 0, T + gap, T, S - T - gap),
-    ];
+    let mut out = Layout::default().rect("met1", S - T, T + gap, S, S).rect(
+        "met1",
+        0,
+        T + gap,
+        T,
+        S - T - gap,
+    );
     for (lo, hi) in pieces(S, bottom) {
-        out.push(rect("met1", lo, 0, hi, T));
+        out = out.rect("met1", lo, 0, hi, T);
     }
     for (lo, hi) in pieces(S - T - gap, top) {
-        out.push(rect("met1", lo, S - T, hi, S));
+        out = out.rect("met1", lo, S - T, hi, S);
     }
     out
 }
@@ -54,18 +45,17 @@ const MP: &str = "rule mp1 patterning(met1; colors: 1) >= 100nm\n\
 
 /// `chromatic` masks needed: each row of k masks finds one count of k + 1
 /// when more are needed.
-fn needs(name: &str, shapes: &[Shape], chromatic: u32) {
-    let want: Vec<Want> = [("mp1", 1), ("mp2", 2), ("mp3", 3)]
+fn needs(name: &str, layout: &Layout, chromatic: u32) {
+    let want: Vec<(&str, Finding)> = [("mp1", 1), ("mp2", 2), ("mp3", 3)]
         .into_iter()
         .filter(|&(_, k)| chromatic > k)
-        .map(|(id, k)| count(id, k + 1))
+        .map(|(id, k)| (id, Finding::count(k + 1)))
         .collect();
-    check(
+    check_everywhere(
         name,
         &new_deck(&["met1", "other"], MP),
-        shapes,
-        &["mp1", "mp2", "mp3"],
-        &want,
+        layout,
+        &by_rule(&["mp1", "mp2", "mp3"], &want),
     );
 }
 
@@ -81,19 +71,18 @@ fn multi_patterning_counts_masks_either_side_of_the_colour_spacing() {
         let conflicts = g < 100;
         needs(
             &format!("triangle/{g}"),
-            &[
-                rect("met1", 0, 0, 500, 500),
-                rect("met1", 500 + g, 0, 1000 + g, 500),
-                rect("met1", 0, 500 + g, 1000 + g, 1000 + g),
-            ],
+            &Layout::default()
+                .rect("met1", 0, 0, 500, 500)
+                .rect("met1", 500 + g, 0, 1000 + g, 500)
+                .rect("met1", 0, 500 + g, 1000 + g, 1000 + g),
             if conflicts { 3 } else { 1 },
         );
         let notched = if conflicts { u32::MAX } else { 1 };
         needs(
             &format!("u_notch/{g}"),
-            &[(
+            &Layout::default().polygon(
                 "met1",
-                vec![
+                &[
                     (0, 0),
                     (1000 + g, 0),
                     (1000 + g, 2000),
@@ -103,20 +92,24 @@ fn multi_patterning_counts_masks_either_side_of_the_colour_spacing() {
                     (500, 2000),
                     (0, 2000),
                 ],
-            )],
+            ),
             notched,
         );
         needs(
             &format!("slot_hole/{g}"),
-            &ring("met1", [0, 0, 2000, 2000], [900, 500, 900 + g, 1500]),
+            &ring(
+                Layout::default(),
+                "met1",
+                [0, 0, 2000, 2000],
+                [900, 500, 900 + g, 1500],
+            ),
             notched,
         );
         needs(
             &format!("pair/{g}"),
-            &[
-                rect("met1", 0, 0, 500, 500),
-                rect("met1", 500 + g, 0, 1000 + g, 500),
-            ],
+            &Layout::default()
+                .rect("met1", 0, 0, 500, 500)
+                .rect("met1", 500 + g, 0, 1000 + g, 500),
             if conflicts { 2 } else { 1 },
         );
     }
@@ -140,51 +133,51 @@ fn multi_patterning_counts_masks_of_known_graphs() {
     }
     needs(
         "k4",
-        &[
-            rect("met1", 0, 0, 500, 500),
-            rect("met1", 550, 0, 1050, 500),
-            rect("met1", 0, 550, 500, 1050),
-            rect("met1", 550, 550, 1050, 1050),
-        ],
+        &Layout::default()
+            .rect("met1", 0, 0, 500, 500)
+            .rect("met1", 550, 0, 1050, 500)
+            .rect("met1", 0, 550, 500, 1050)
+            .rect("met1", 550, 550, 1050, 1050),
         4,
     );
     needs(
         "merged_triangle",
-        &[
-            rect("met1", 0, 0, 500, 500),
-            rect("met1", 500, 0, 1000, 500),
-            rect("met1", 0, 550, 1000, 1050),
-        ],
+        &Layout::default()
+            .rect("met1", 0, 0, 500, 500)
+            .rect("met1", 500, 0, 1000, 500)
+            .rect("met1", 0, 550, 1000, 1050),
         2,
     );
-    needs("single", &[rect("met1", 0, 0, 500, 500)], 1);
-    let mut island = ring("met1", [0, 0, 2000, 2000], [500, 500, 1500, 1500]);
-    island.push(rect("met1", 550, 550, 1450, 1450));
+    needs("single", &Layout::default().rect("met1", 0, 0, 500, 500), 1);
+    let island = ring(
+        Layout::default(),
+        "met1",
+        [0, 0, 2000, 2000],
+        [500, 500, 1500, 1500],
+    )
+    .rect("met1", 550, 550, 1450, 1450);
     needs("island_in_hole", &island, 2);
-    let inside = [
-        rect("met1", 0, 0, 2000, 2000),
-        rect("met1", 50, 50, 1950, 1950),
-    ];
+    let inside = Layout::default()
+        .rect("met1", 0, 0, 2000, 2000)
+        .rect("met1", 50, 50, 1950, 1950);
     needs("drawn_inside", &inside, 1);
     needs(
         "corner_touch",
-        &[
-            rect("met1", 0, 0, 500, 500),
-            rect("met1", 500, 500, 1000, 1000),
-        ],
+        &Layout::default()
+            .rect("met1", 0, 0, 500, 500)
+            .rect("met1", 500, 500, 1000, 1000),
         1,
     );
-    let mut beside = inside.to_vec();
-    beside.push(rect("met1", 2050, 0, 2550, 2000));
+    let beside = inside.clone().rect("met1", 2050, 0, 2550, 2000);
     needs("drawn_inside_beside_one", &beside, 2);
 
-    let ran = run(
+    let rows = run(
         &new_deck(&["met1", "other"], MP),
-        &[rect("other", 0, 0, 100, 100)],
+        &Layout::default().rect("other", 0, 0, 100, 100),
     );
-    assert!(ran.found.is_empty());
-    for row in &ran.runs {
-        assert!(matches!(row.1, Outcome::Skipped(_)), "{row:?}");
+    for row in &rows {
+        assert!(row.findings.is_empty(), "{row:?}");
+        assert!(matches!(row.outcome, Outcome::Skipped(_)), "{row:?}");
     }
 }
 
@@ -193,24 +186,24 @@ const AP: &str = "rule odd patterning(met1; colors: 2) >= 100nm\n\
                   rule ap3 patterning(met1, c1, c2, c3; colors: 3) >= 100nm";
 
 /// `n` bars 100 x 500, 150 apart in x (a 50 gap, a conflict), in a chain.
-fn chain(n: i64) -> Vec<Shape> {
-    (0..n)
-        .map(|i| rect("met1", 150 * i, 0, 150 * i + 100, 500))
-        .collect()
+fn chain(n: i64) -> Layout {
+    (0..n).fold(Layout::default(), |layout, i| {
+        layout.rect("met1", 150 * i, 0, 150 * i + 100, 500)
+    })
 }
 
-fn with(mut shapes: Vec<Shape>, more: &[Shape]) -> Vec<Shape> {
-    shapes.extend_from_slice(more);
-    shapes
+/// `layout` with `more`'s shapes added.
+fn with(mut layout: Layout, more: Layout) -> Layout {
+    layout.shapes.extend(more.shapes);
+    layout
 }
 
-fn anchored(name: &str, shapes: &[Shape], want: &[Want]) {
-    check(
+fn anchored(name: &str, layout: &Layout, want: &[(&str, Finding)]) {
+    check_everywhere(
         name,
         &new_deck(&["met1", "c1", "c2", "c3"], AP),
-        shapes,
-        &["odd", "ap", "ap3"],
-        want,
+        layout,
+        &by_rule(&["odd", "ap", "ap3"], want),
     );
 }
 
@@ -224,36 +217,47 @@ fn anchored(name: &str, shapes: &[Shape], want: &[Want]) {
 /// touches its bar does not.
 #[test]
 fn anchored_patterning_finds_anchor_paths_by_parity() {
-    let c = |layer, x| rect(layer, x, 0, x + 100, 500);
     anchored(
         "chain4/alike",
-        &with(chain(4), &[c("c1", 0), c("c1", 450)]),
-        &[count("ap", 3).at(275, 250)],
+        &chain(4)
+            .rect("c1", 0, 0, 100, 500)
+            .rect("c1", 450, 0, 550, 500),
+        &[("ap", Finding::count(3).at(275, 250))],
     );
     anchored(
         "chain4/apart",
-        &with(chain(4), &[c("c1", 0), c("c2", 450)]),
+        &chain(4)
+            .rect("c1", 0, 0, 100, 500)
+            .rect("c2", 450, 0, 550, 500),
         &[],
     );
     anchored(
         "chain5/alike",
-        &with(chain(5), &[c("c1", 0), c("c1", 600)]),
+        &chain(5)
+            .rect("c1", 0, 0, 100, 500)
+            .rect("c1", 600, 0, 700, 500),
         &[],
     );
     anchored(
         "chain5/apart",
-        &with(chain(5), &[c("c1", 0), c("c2", 600)]),
-        &[count("ap", 3).at(350, 250)],
+        &chain(5)
+            .rect("c1", 0, 0, 100, 500)
+            .rect("c2", 600, 0, 700, 500),
+        &[("ap", Finding::count(3).at(350, 250))],
     );
     anchored("chain4/unanchored", &chain(4), &[]);
     anchored(
         "chain4/partial_anchor",
-        &with(chain(4), &[rect("c1", 0, 0, 50, 50), c("c1", 450)]),
-        &[count("ap", 3).at(275, 250)],
+        &chain(4)
+            .rect("c1", 0, 0, 50, 50)
+            .rect("c1", 450, 0, 550, 500),
+        &[("ap", Finding::count(3).at(275, 250))],
     );
     anchored(
         "chain4/touching_anchor",
-        &with(chain(4), &[rect("c1", -100, 0, 0, 500), c("c1", 450)]),
+        &chain(4)
+            .rect("c1", -100, 0, 0, 500)
+            .rect("c1", 450, 0, 550, 500),
         &[],
     );
 }
@@ -267,62 +271,62 @@ fn anchored_patterning_finds_anchor_paths_by_parity() {
 #[test]
 fn anchored_patterning_self_conflicts_and_three_masks() {
     let triangle = || {
-        vec![
-            rect("met1", 0, 0, 500, 500),
-            rect("met1", 550, 0, 1050, 500),
-            rect("met1", 0, 550, 1050, 1050),
-        ]
+        Layout::default()
+            .rect("met1", 0, 0, 500, 500)
+            .rect("met1", 550, 0, 1050, 500)
+            .rect("met1", 0, 550, 1050, 1050)
     };
     anchored(
         "self_conflict",
-        &with(
-            chain(1),
-            &[rect("c1", 0, 0, 100, 500), rect("c2", 0, 0, 100, 500)],
-        ),
-        &[count("ap", 3).at(50, 250), count("ap3", 4).at(50, 250)],
+        &chain(1)
+            .rect("c1", 0, 0, 100, 500)
+            .rect("c2", 0, 0, 100, 500),
+        &[
+            ("ap", Finding::count(3).at(50, 250)),
+            ("ap3", Finding::count(4).at(50, 250)),
+        ],
     );
     anchored(
         "odd_cycle",
-        &with(triangle(), &[rect("c1", 0, 0, 500, 500)]),
-        &[count("odd", 3)],
+        &triangle().rect("c1", 0, 0, 500, 500),
+        &[("odd", Finding::count(3))],
     );
     anchored(
         "triangle/alike",
-        &with(
-            triangle(),
-            &[rect("c1", 0, 0, 500, 500), rect("c1", 550, 0, 1050, 500)],
-        ),
-        &[count("odd", 3), count("ap3", 4).at(250, 250)],
+        &triangle()
+            .rect("c1", 0, 0, 500, 500)
+            .rect("c1", 550, 0, 1050, 500),
+        &[
+            ("odd", Finding::count(3)),
+            ("ap3", Finding::count(4).at(250, 250)),
+        ],
     );
     anchored(
         "triangle/each",
-        &with(
-            triangle(),
-            &[
-                rect("c1", 0, 0, 500, 500),
-                rect("c2", 550, 0, 1050, 500),
-                rect("c3", 0, 550, 1050, 1050),
-            ],
-        ),
-        &[count("odd", 3)],
+        &triangle()
+            .rect("c1", 0, 0, 500, 500)
+            .rect("c2", 550, 0, 1050, 500)
+            .rect("c3", 0, 550, 1050, 1050),
+        &[("odd", Finding::count(3))],
     );
-    let ran = run(
+    let rows = run(
         &new_deck(&["met1", "c1", "c2", "c3"], AP),
-        &[rect("c1", 0, 0, 100, 100)],
+        &Layout::default().rect("c1", 0, 0, 100, 100),
     );
-    assert!(ran.found.is_empty());
-    for row in ran.runs.iter().filter(|r| r.0 != "odd") {
-        assert!(matches!(row.1, Outcome::Skipped(_)), "{row:?}");
+    for row in &rows {
+        assert!(row.findings.is_empty(), "{row:?}");
+    }
+    for row in rows.iter().filter(|r| r.id != "odd") {
+        assert!(matches!(row.outcome, Outcome::Skipped(_)), "{row:?}");
     }
 }
 
 /// An L whose horizontal arm is `arm` tall and both arms `run` long, from
 /// x = `x`.
-fn ell(x: i64, arm: i64, run: i64) -> Vec<Shape> {
-    vec![
-        rect("m", x, 0, x + run, arm),
-        rect("m", x, arm, x + 100, run),
-    ]
+fn ell(x: i64, arm: i64, run: i64) -> Layout {
+    Layout::default()
+        .rect("m", x, 0, x + run, arm)
+        .rect("m", x, arm, x + 100, run)
 }
 
 /// Oracle: the pattern's definition, by construction. The pattern is an L
@@ -343,11 +347,11 @@ fn pattern_matches_the_shapes_exactly_outside_the_dont_care_boxes() {
              rule pd pattern(m; window: 300nm x 300nm, {L}, ignore: [150nm x 150nm, 300nm x 300nm])"
         ),
     );
-    let case = |name: &str, shapes: &[Shape], (p, pd): (usize, usize)| {
-        let want: Vec<Want> = std::iter::repeat_n(area("p", 50_000), p)
-            .chain(std::iter::repeat_n(area("pd", 50_000), pd))
+    let case = |name: &str, layout: &Layout, (p, pd): (usize, usize)| {
+        let want: Vec<(&str, Finding)> = std::iter::repeat_n(("p", Finding::area(50_000)), p)
+            .chain(std::iter::repeat_n(("pd", Finding::area(50_000)), pd))
             .collect();
-        check(name, &deck, shapes, &["p", "pd"], &want);
+        check_everywhere(name, &deck, layout, &by_rule(&["p", "pd"], &want));
     };
     for arm in [99, 100, 101] {
         let n = usize::from(arm == 100);
@@ -356,14 +360,18 @@ fn pattern_matches_the_shapes_exactly_outside_the_dont_care_boxes() {
     case("long_arms", &ell(0, 100, 600), (1, 1));
     case(
         "square_in_the_dont_care",
-        &with(ell(0, 100, 300), &[rect("m", 200, 200, 250, 250)]),
+        &ell(0, 100, 300).rect("m", 200, 200, 250, 250),
         (0, 1),
     );
     case(
         "square_by_the_corner",
-        &with(ell(0, 100, 300), &[rect("m", 120, 120, 140, 140)]),
+        &ell(0, 100, 300).rect("m", 120, 120, 140, 140),
         (0, 0),
     );
-    case("two", &with(ell(0, 100, 300), &ell(2000, 100, 300)), (2, 2));
-    case("solid", &[rect("m", 0, 0, 300, 300)], (0, 0));
+    case("two", &with(ell(0, 100, 300), ell(2000, 100, 300)), (2, 2));
+    case(
+        "solid",
+        &Layout::default().rect("m", 0, 0, 300, 300),
+        (0, 0),
+    );
 }

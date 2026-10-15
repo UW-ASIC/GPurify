@@ -6,9 +6,9 @@
 //! fixture of the same name, its oracle restated on the test, run through
 //! this crate's deck compiler and rule set.
 
-use crate::deck_fixture::{
-    below, check_axes, check_everywhere, floor_sqrt, met1, new_deck, one_layer_deck, pin, ring,
-    row, run, sweep, Finding, Layout,
+use crate::common::deck::{
+    below, check_axes, check_everywhere, floor_sqrt, met1, new_deck, one_layer_deck, ring, row,
+    run, sweep, Finding, Layout,
 };
 use gpurify_check::report::Outcome;
 
@@ -40,7 +40,7 @@ fn eol_space_holds_each_line_end_keep_out() {
     };
     for g in steps(101) {
         let found = if g < 101 {
-            vec![pin(Finding::length(g), 100, 4000 + g)]
+            vec![Finding::length(g).at_half(100, 4000 + g)]
         } else {
             Vec::new()
         };
@@ -57,7 +57,7 @@ fn eol_space_holds_each_line_end_keep_out() {
     }
     for w in steps(200) {
         let found = if w < 200 {
-            vec![pin(Finding::length(50), w, 4050)]
+            vec![Finding::length(50).at_half(w, 4050)]
         } else {
             Vec::new()
         };
@@ -117,7 +117,7 @@ fn eol_space_holds_each_line_end_keep_out() {
             [450, 1050, 550, 1600],
             [100, 100, 900, 960],
         ]),
-        vec![pin(Finding::length(90), 450 + 550, 1050 + 960)],
+        vec![Finding::length(90).at_half(450 + 550, 1050 + 960)],
     );
     case(
         "hole_end_keeps_out_of_the_band",
@@ -170,10 +170,10 @@ fn eol_within_space_reads_lef_endofline() {
         check_everywhere(name, deck, &layout, &[("e", findings)]);
     };
     let bar_above = [-3000, 1000, 4000, 2000];
-    let at_1000 = || vec![pin(Finding::length(1000), 1000, 1000)];
+    let at_1000 = || vec![Finding::length(1000).at_half(1000, 1000)];
     for g in steps(1200) {
         let found = if g < 1200 {
-            vec![pin(Finding::length(g), 1000, g)]
+            vec![Finding::length(g).at_half(1000, g)]
         } else {
             vec![]
         };
@@ -186,7 +186,7 @@ fn eol_within_space_reads_lef_endofline() {
     }
     for d in steps(600) {
         let found = if d < 600 {
-            vec![pin(Finding::length(300), 2600 + d, 300)]
+            vec![Finding::length(300).at_half(2600 + d, 300)]
         } else {
             vec![]
         };
@@ -261,7 +261,7 @@ fn eol_within_space_reads_lef_endofline() {
     );
     for g in steps(1400) {
         let found = if g < 1400 {
-            vec![pin(Finding::length(g), 1000, g)]
+            vec![Finding::length(g).at_half(1000, g)]
         } else {
             vec![]
         };
@@ -303,11 +303,7 @@ fn eol_keep_out_measures_the_intruding_area() {
     };
     for g in steps(1000) {
         let found = if g < 1000 {
-            vec![pin(
-                Finding::area(i128::from(1600 * (1000 - g))),
-                1000,
-                g + 1000,
-            )]
+            vec![Finding::area(i128::from(1600 * (1000 - g))).at_half(1000, g + 1000)]
         } else {
             vec![]
         };
@@ -315,11 +311,7 @@ fn eol_keep_out_measures_the_intruding_area() {
     }
     for d in steps(300) {
         let found = if d < 300 {
-            vec![pin(
-                Finding::area(i128::from((300 - d) * 500)),
-                2300 + d,
-                1500,
-            )]
+            vec![Finding::area(i128::from((300 - d) * 500)).at_half(2300 + d, 1500)]
         } else {
             vec![]
         };
@@ -331,11 +323,7 @@ fn eol_keep_out_measures_the_intruding_area() {
     }
     for b in steps(-200) {
         let found = if b > -200 {
-            vec![pin(
-                Finding::area(i128::from(200 * (b + 200))),
-                2400,
-                b - 200,
-            )]
+            vec![Finding::area(i128::from(200 * (b + 200))).at_half(2400, b - 200)]
         } else {
             vec![]
         };
@@ -345,14 +333,14 @@ fn eol_keep_out_measures_the_intruding_area() {
         "two_figures",
         met1(&[LINE, [-2000, 300, 200, 1800], [700, 300, 2500, 1800]]),
         vec![
-            pin(Finding::area(350_000), -100, 1300),
-            pin(Finding::area(420_000), 2000, 1300),
+            Finding::area(350_000).at_half(-100, 1300),
+            Finding::area(420_000).at_half(2000, 1300),
         ],
     );
     case(
         "one_figure_drawn_twice",
         met1(&[LINE, [-2000, 500, 500, 1500], [500, 500, 3000, 1500]]),
-        vec![pin(Finding::area(800_000), 1000, 1500)],
+        vec![Finding::area(800_000).at_half(1000, 1500)],
     );
     case(
         "own_figure_in_the_box",
@@ -383,7 +371,7 @@ fn prl_space_holds_pairs_that_run_far_enough() {
     };
     for r in steps(500) {
         let found = if r >= 500 {
-            vec![pin(Finding::length(100), 300, 4000 - r)]
+            vec![Finding::length(100).at_half(300, 4000 - r)]
         } else {
             vec![]
         };
@@ -395,7 +383,7 @@ fn prl_space_holds_pairs_that_run_far_enough() {
     }
     for g in steps(101) {
         let found = if g < 101 {
-            vec![pin(Finding::length(g), 200 + g, 2000)]
+            vec![Finding::length(g).at_half(200 + g, 2000)]
         } else {
             vec![]
         };
@@ -460,7 +448,7 @@ fn diagonal_pair(d: i64) -> (Layout, Vec<Finding>) {
     let layout = met1(&[[0, 0, 1000, 1000], [1000 + d, 1000 + d, 2000 + d, 2000 + d]]);
     let gap2 = 2 * d * d;
     let found = if gap2 < 101 * 101 {
-        vec![pin(Finding::length(floor_sqrt(gap2)), 2000 + d, 2000 + d)]
+        vec![Finding::length(floor_sqrt(gap2)).at_half(2000 + d, 2000 + d)]
     } else {
         Vec::new()
     };
@@ -529,7 +517,7 @@ fn corner_space_measures_facing_convex_corners() {
                 ],
             )
             .rect("met1", 1050, 150, 1150, 250),
-        vec![pin(Finding::length(70), 1000 + 1050, 100 + 150)],
+        vec![Finding::length(70).at_half(1000 + 1050, 100 + 150)],
     );
     case(
         "corner_beside_an_edge_gap",
@@ -546,7 +534,7 @@ fn corner_space_measures_facing_convex_corners() {
                 (1050, 500),
             ],
         ),
-        vec![pin(Finding::length(84), 1000 + 1060, 1000 + 1060)],
+        vec![Finding::length(84).at_half(1000 + 1060, 1000 + 1060)],
     );
     case(
         "row_corner_inside_a_figure_edge",
@@ -589,7 +577,7 @@ fn convex_corner_space_reads_the_larger_axis_gap() {
     for d in [70, 71, 72, 100, 101] {
         let (layout, euclidean) = diagonal_pair(d);
         let larger = if d < 101 {
-            vec![pin(Finding::length(d), 2000 + d, 2000 + d)]
+            vec![Finding::length(d).at_half(2000 + d, 2000 + d)]
         } else {
             vec![]
         };
@@ -598,7 +586,7 @@ fn convex_corner_space_reads_the_larger_axis_gap() {
     }
     for d in steps(101) {
         let found = if d < 101 {
-            vec![pin(Finding::length(d), 2000 + d, 2050)]
+            vec![Finding::length(d).at_half(2000 + d, 2050)]
         } else {
             vec![]
         };
@@ -643,13 +631,13 @@ fn convex_corner_space_reads_the_larger_axis_gap() {
         "except_eol/wide_corners",
         &eol,
         met1(&[[0, 0, 1000, 1000], [1050, 1050, 2050, 2050]]),
-        vec![pin(Finding::length(50), 2050, 2050)],
+        vec![Finding::length(50).at_half(2050, 2050)],
     );
     case(
         "line_end_without_except",
         &square,
         met1(&[[0, 0, 100, 1000], [150, 1050, 1150, 2050]]),
-        vec![pin(Finding::length(50), 250, 2050)],
+        vec![Finding::length(50).at_half(250, 2050)],
     );
 }
 
@@ -676,7 +664,7 @@ fn wide_space_holds_pairs_beside_a_wide_part() {
     };
     for w in steps(1000) {
         let found = if w >= 1000 {
-            vec![pin(Finding::length(200), 2 * w + 200, 3000)]
+            vec![Finding::length(200).at_half(2 * w + 200, 3000)]
         } else {
             vec![]
         };
@@ -688,7 +676,7 @@ fn wide_space_holds_pairs_beside_a_wide_part() {
     }
     for g in steps(301) {
         let found = if g < 301 {
-            vec![pin(Finding::length(g), 4000 + g, 3000)]
+            vec![Finding::length(g).at_half(4000 + g, 3000)]
         } else {
             vec![]
         };
@@ -765,7 +753,7 @@ fn wide_space_holds_pairs_beside_a_wide_part() {
                 (2100, 4000),
             ],
         ),
-        vec![pin(Finding::length(100), 2000 + 2100, 1500 + 2000)],
+        vec![Finding::length(100).at_half(2000 + 2100, 1500 + 2000)],
     );
     case(
         "wide_side_cut_into_slabs",
@@ -784,7 +772,7 @@ fn wide_space_holds_pairs_beside_a_wide_part() {
                 ],
             )
             .rect("met1", 0, 2200, 3000, 2300),
-        vec![pin(Finding::length(200), 3000, 2000 + 2200)],
+        vec![Finding::length(200).at_half(3000, 2000 + 2200)],
     );
 }
 
@@ -871,7 +859,7 @@ fn net_space_tells_one_net_from_two() {
     );
     for g in steps(301) {
         let near = if g < 301 {
-            vec![pin(Finding::length(g), 1000 + g, 2000)]
+            vec![Finding::length(g).at_half(1000 + g, 2000)]
         } else {
             vec![]
         };
@@ -925,7 +913,7 @@ fn net_space_across_two_layers_reads_their_nets() {
     );
     for g in steps(301) {
         let near = if g < 301 {
-            vec![pin(Finding::length(g), 1000 + g, 2000)]
+            vec![Finding::length(g).at_half(1000 + g, 2000)]
         } else {
             vec![]
         };
@@ -1033,7 +1021,7 @@ fn space_table_picks_the_cell_of_width_and_run() {
         let column = usize::from(r > 1000);
         let need = if wa > 300 { [180, 220][column] } else { 180 };
         let found = if g < need {
-            vec![pin(Finding::length(g), 2 * wa + g, 4000 - r)]
+            vec![Finding::length(g).at_half(2 * wa + g, 4000 - r)]
         } else {
             vec![]
         };
@@ -1179,7 +1167,7 @@ fn two_width_table_reads_each_shapes_width_and_run() {
     ] {
         for g in steps(need) {
             let found = if g < need {
-                vec![pin(Finding::length(g), 2 * wa + g, 4000 - r)]
+                vec![Finding::length(g).at_half(2 * wa + g, 4000 - r)]
             } else {
                 vec![]
             };
@@ -1192,7 +1180,7 @@ fn two_width_table_reads_each_shapes_width_and_run() {
     }
     for r in steps(1500) {
         let found = if r > 1500 {
-            vec![pin(Finding::length(550), 3750, 6000 - r)]
+            vec![Finding::length(550).at_half(3750, 6000 - r)]
         } else {
             vec![]
         };
@@ -1257,7 +1245,7 @@ fn tip_space_table_classes_whole_edges_by_length() {
     let tips = |wa: i64, wb: i64, g: i64| met1(&[[0, 0, wa, 1000], [0, 1000 + g, wb, 2000 + g]]);
     let found = |g: i64, need: i64, x2: i64, y2: i64| {
         if g < need {
-            vec![pin(Finding::length(g), x2, y2)]
+            vec![Finding::length(g).at_half(x2, y2)]
         } else {
             vec![]
         }
@@ -1360,7 +1348,7 @@ fn forbidden_space_flags_gaps_inside_the_range() {
     for limit in [100, 150] {
         for g in steps(limit) {
             let found = if (100..=150).contains(&g) {
-                vec![pin(Finding::length(g), 200 + g, 1000)]
+                vec![Finding::length(g).at_half(200 + g, 1000)]
             } else {
                 vec![]
             };
@@ -1369,7 +1357,7 @@ fn forbidden_space_flags_gaps_inside_the_range() {
     }
     for r in steps(200) {
         let found = if r > 200 {
-            vec![pin(Finding::length(120), 320, 2000 - r)]
+            vec![Finding::length(120).at_half(320, 2000 - r)]
         } else {
             vec![]
         };
@@ -1423,8 +1411,8 @@ fn exact_pitch_wants_centre_lines_exactly_apart() {
             vec![]
         } else {
             vec![
-                pin(Finding::length(p), 1000, p + 7),
-                pin(Finding::length(p), 1000, 3 * p + 7),
+                Finding::length(p).at_half(1000, p + 7),
+                Finding::length(p).at_half(1000, 3 * p + 7),
             ]
         };
         check_axes(
@@ -1443,8 +1431,8 @@ fn exact_pitch_wants_centre_lines_exactly_apart() {
             vec![]
         } else {
             vec![
-                pin(Finding::length(p), p + 20, 1000),
-                pin(Finding::length(p), 3 * p + 20, 1000),
+                Finding::length(p).at_half(p + 20, 1000),
+                Finding::length(p).at_half(3 * p + 20, 1000),
             ]
         };
         check_axes(
@@ -1462,7 +1450,7 @@ fn exact_pitch_wants_centre_lines_exactly_apart() {
         "missing_fin",
         &fins,
         &met1(&[[0, 0, 1000, 7], [0, 27, 1000, 34], [0, 81, 1000, 88]]),
-        &[("p", vec![pin(Finding::length(54), 1000, 115)])],
+        &[("p", vec![Finding::length(54).at_half(1000, 115)])],
     );
     check_axes(
         "no_overlap_across",
@@ -1509,7 +1497,7 @@ fn span_length_reads_each_axis_list() {
         let found = if legal {
             vec![]
         } else {
-            vec![pin(Finding::length(w), w, 1000)]
+            vec![Finding::length(w).at_half(w, 1000)]
         };
         case("x", met1(&[[0, 0, w, 1000]]), found);
     }
@@ -1518,7 +1506,7 @@ fn span_length_reads_each_axis_list() {
         let found = if legal {
             vec![]
         } else {
-            vec![pin(Finding::length(h), 1000, h)]
+            vec![Finding::length(h).at_half(1000, h)]
         };
         case("y", met1(&[[0, 0, 1000, h]]), found);
     }
@@ -1531,10 +1519,10 @@ fn span_length_reads_each_axis_list() {
             [850, 500, 1000, 1000],
         ]),
         vec![
-            pin(Finding::length(100), 100, 1100),
-            pin(Finding::length(100), 1900, 600),
-            pin(Finding::length(150), 1850, 1500),
-            pin(Finding::length(100), 1000, 100),
+            Finding::length(100).at_half(100, 1100),
+            Finding::length(100).at_half(1900, 600),
+            Finding::length(150).at_half(1850, 1500),
+            Finding::length(100).at_half(1000, 100),
         ],
     );
     case(
@@ -1546,10 +1534,10 @@ fn span_length_reads_each_axis_list() {
             [100, 100, 900, 900],
         ),
         vec![
-            pin(Finding::length(100), 100, 1000),
-            pin(Finding::length(100), 1900, 1000),
-            pin(Finding::length(100), 1000, 100),
-            pin(Finding::length(100), 1000, 1900),
+            Finding::length(100).at_half(100, 1000),
+            Finding::length(100).at_half(1900, 1000),
+            Finding::length(100).at_half(1000, 100),
+            Finding::length(100).at_half(1000, 1900),
         ],
     );
     case(
@@ -1576,9 +1564,9 @@ fn span_length_except_skips_short_crosswise_spans() {
          y_except: none)",
     );
     for h in steps(200) {
-        let mut found = vec![pin(Finding::length(h), 150, h)];
+        let mut found = vec![Finding::length(h).at_half(150, h)];
         if h > 200 {
-            found.push(pin(Finding::length(150), 150, h));
+            found.push(Finding::length(150).at_half(150, h));
         }
         check_axes(
             "rectangle",
