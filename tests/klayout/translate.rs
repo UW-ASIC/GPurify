@@ -1837,6 +1837,22 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
                 Value::Ignore,
                 vec![],
             ),
+            Rule::SadpLineEnd { .. } => (
+                "sadp_line_end",
+                Verdict::None("not mirrored: a track model KLayout's edge checks do not state"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
+            Rule::Sadp { .. } => (
+                "sadp",
+                Verdict::None("KLayout has no mask colouring"),
+                Compare::Not,
+                Key::Point,
+                Value::Ignore,
+                vec![],
+            ),
             Rule::AnchoredPatterning { .. } => (
                 "anchored_patterning",
                 Verdict::None("KLayout has no mask colouring"),

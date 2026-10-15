@@ -1338,7 +1338,11 @@ pub fn check_antenna_electrical(
                 if diode_area.raw() == 0 {
                     return Some((ratio, table.max_ratio[row], fix));
                 }
-                Some((model.credited(diode_area.raw()), model.limit(diode_area.raw()), fix))
+                Some((
+                    model.credited(diode_area.raw()),
+                    model.limit(diode_area.raw()),
+                    fix,
+                ))
             },
             scratch,
             out,

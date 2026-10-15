@@ -426,7 +426,8 @@ pub fn resolve_net_types_into(
             out.name.push(net_type.name);
         }
     }
-    out.name.extend(intent.type_sets().iter().map(|set| set.name));
+    out.name
+        .extend(intent.type_sets().iter().map(|set| set.name));
     debug_assert!(out.name.len() <= 64, "the intent caps types and sets at 64");
     let count = nets.net_count();
     out.mask.resize(count, 0);

@@ -1482,6 +1482,85 @@ pub enum Rule {
         /// positive.
         color_spacing: Dbu,
     },
+    /// A layer self-aligned double patterning cannot decompose.
+    ///
+    /// Deck: `sadp(L; different: len, same: len, track_width: len | none,
+    /// track_space: len | none)`, kind `sadp`. Mandrel and non-mandrel
+    /// features are SADP's two "colors": two figures closer than `different`
+    /// must take different colours, two at least `different` but closer than
+    /// `same` apart the same colour, and farther ones either; a cycle with an
+    /// odd number of different-colour edges cannot be decomposed. With
+    /// `track_width` w and `track_space` s, a line wider than w must span an
+    /// odd number of tracks, a width of `(2k + 1) w + 2k s`.
+    /// See [`patterning::sadp`](crate::drc::rules::patterning) for what is
+    /// reported and where.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-128. Defined by US 2015/0286764 A1 (GLOBALFOUNDRIES, Yuan, Yang
+    /// and Kye): FIG. 1M's three spacing bands, \[0015\] ("a SADP polygon
+    /// loop ... is not decomposable due to the odd number of DC edges"), and
+    /// \[0020\]-\[0021\] ("a metal line must occupy an odd number of M2
+    /// tracks"). Xiao's ISPD 2012 slides ("A Polynomial Time Exact Algorithm
+    /// for Self-Aligned Double Patterning Layout Decomposition") state the
+    /// same two-colouring of the sidewall-spaced pairs as a necessary
+    /// condition.
+    ///
+    /// Limits: the colouring is necessary, not sufficient: the trim mask's own
+    /// width and space, and overlay on a feature's edge (Xiao's sidewall
+    /// ring), are not checked; nor are SAQP's colours, which no public rule
+    /// states beyond grid colouring. Line ends are [`Rule::SadpLineEnd`]'s.
+    Sadp {
+        /// The patterned layer.
+        layer: LayerId,
+        /// Closer than this, two figures take different colours; positive.
+        different: Dbu,
+        /// Closer than this (and not under `different`), the same colour; at
+        /// least `different`.
+        same: Dbu,
+        /// The minimum width and space of the track grid, both or neither;
+        /// positive.
+        track: Option<(Dbu, Dbu)>,
+    },
+    /// Line ends a gridded self-aligned double patterning layer cannot print.
+    ///
+    /// Deck: `sadp_line_end(L; adjacent: len, tip: len, overlap: len,
+    /// corner: len, offset: len)`, kind `sadp_line_end`. Each rectangle
+    /// longer than wide is a line on a track; lines whose sides are at most
+    /// `adjacent` apart are on adjacent tracks. Xu et al.'s rules: an
+    /// end-to-end gap on one track under `tip` (rule 1, OnTrackSpace); on
+    /// adjacent tracks, ends facing apart that overlap by less than `overlap`
+    /// (rule 2, OffTrackOverlap) or, not overlapping, are closer than
+    /// `corner` along the track (rule 3, OffTrackSpace); same-facing ends
+    /// offset by more than 0 and less than `offset` (rule 4,
+    /// OffTrackOffset). See
+    /// [`patterning::sadp_line_end`](crate::drc::rules::patterning) for what
+    /// is reported and where.
+    ///
+    /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
+    /// DRC-128. Defined by Xu, Yu, Gao, Hsu, Pan, "Self-Aligned Double
+    /// Patterning Aware Pin Access and Standard Cell Layout Co-Optimization",
+    /// IEEE TCAD 34(5), 2015, Table II, whose limits come from the trim
+    /// mask's resist width and space, the etch bias and the spacer width
+    /// (`tip = w_r - 2 w_e`, `overlap = s_r + 2 w_e`, `corner = sqrt((w_r -
+    /// 2 w_e)^2 - w_sp^2)`, `offset = w_r`); the deck states the results.
+    ///
+    /// Limits: a line is one rectangle; a bent or irregular figure is not
+    /// examined (gridded SADP has no bends, ASAP7 M4.AUX.3). Rule 0 (least
+    /// length) is a `length` or `area` rule.
+    SadpLineEnd {
+        /// The patterned layer.
+        layer: LayerId,
+        /// The gap between adjacent tracks' lines, at most; positive.
+        adjacent: Dbu,
+        /// Rule 1's least end-to-end gap; positive.
+        tip: Dbu,
+        /// Rule 2's least overlap; positive.
+        overlap: Dbu,
+        /// Rule 3's least along-track gap; positive.
+        corner: Dbu,
+        /// Rule 4's least offset; positive.
+        offset: Dbu,
+    },
     /// Every shape on the layer, and every edge of an edge layer.
     ///
     /// Deck: `forbidden(L)`, kind `forbidden`. Write what is forbidden as the
@@ -4450,6 +4529,48 @@ impl RuleSet {
                         color_spacing: length(spec, "color_spacing")?,
                     }
                 }
+                "sadp" => {
+                    let layer = one(spec)?;
+                    let opt = |param: &'static str| match strings
+                        .get(param)
+                        .and_then(|p| rules.param(spec, p))
+                    {
+                        Some(_) => length(spec, param).map(Some),
+                        None => Ok(None),
+                    };
+                    let different = length(spec, "different")?;
+                    let same = length(spec, "same")?;
+                    let track = match (opt("track_width")?, opt("track_space")?) {
+                        (Some(w), Some(s)) => Some((w, s)),
+                        (None, None) => None,
+                        (None, Some(_)) => {
+                            return Err(DrcError::MissingParam {
+                                rule: name_of(spec.id),
+                                param: "track_width",
+                            })
+                        }
+                        (Some(_), None) => {
+                            return Err(DrcError::MissingParam {
+                                rule: name_of(spec.id),
+                                param: "track_space",
+                            })
+                        }
+                    };
+                    Rule::Sadp {
+                        layer,
+                        different,
+                        same,
+                        track,
+                    }
+                }
+                "sadp_line_end" => Rule::SadpLineEnd {
+                    layer: one(spec)?,
+                    adjacent: length(spec, "adjacent")?,
+                    tip: length(spec, "tip")?,
+                    overlap: length(spec, "overlap")?,
+                    corner: length(spec, "corner")?,
+                    offset: length(spec, "offset")?,
+                },
                 "forbidden" => Rule::Forbidden { layer: one(spec)? },
                 "must_contain" => {
                     let (outer, inner) = two(spec)?;
@@ -5508,6 +5629,33 @@ impl RuleSet {
                             out,
                         )
                     }
+                    Rule::Sadp {
+                        layer,
+                        different,
+                        same,
+                        track,
+                    } => patterning::sadp(store, id, layer, (different, same), track, s, out),
+                    Rule::SadpLineEnd {
+                        layer,
+                        adjacent,
+                        tip,
+                        overlap,
+                        corner,
+                        offset,
+                    } => patterning::sadp_line_end(
+                        store,
+                        id,
+                        layer,
+                        patterning::LineEnds {
+                            adjacent,
+                            tip,
+                            overlap,
+                            corner,
+                            offset,
+                        },
+                        s,
+                        out,
+                    ),
                     Rule::Forbidden { layer } => presence::forbidden(store, id, layer, s, out),
                     Rule::MustContain {
                         outer,
@@ -6027,6 +6175,34 @@ impl Rule {
                 color_spacing,
                 ..
             } => count(colors.into()).and(length(color_spacing)),
+            Rule::SadpLineEnd {
+                adjacent,
+                tip,
+                overlap,
+                corner,
+                offset,
+                ..
+            } => length(adjacent)
+                .and(length(tip))
+                .and(length(overlap))
+                .and(length(corner))
+                .and(length(offset)),
+            Rule::Sadp {
+                different,
+                same,
+                track,
+                ..
+            } => length(different)
+                .and(length(same))
+                .and(track.map_or(Ok(()), |(w, s)| length(w).and(length(s))))
+                .and(if same < different {
+                    Err(DrcError::WrongParamType {
+                        rule: rule.to_owned(),
+                        param: "same",
+                    })
+                } else {
+                    Ok(())
+                }),
             Rule::CriticalArea { radius, limit, .. } => length(radius).and(area(limit)),
             Rule::MinimumCut {
                 width,
@@ -6264,6 +6440,8 @@ impl Rule {
             Rule::CutSpacing { .. } => "cut_spacing",
             Rule::CutClassSpacing { .. } => "cut_class_spacing",
             Rule::MultiPatterning { .. } => "multi_patterning",
+            Rule::Sadp { .. } => "sadp",
+            Rule::SadpLineEnd { .. } => "sadp_line_end",
             Rule::AnchoredPatterning { .. } => "anchored_patterning",
             Rule::CriticalArea { .. } => "critical_area",
             Rule::DensityBalance { .. } => "density_balance",
@@ -6334,6 +6512,8 @@ impl Rule {
             | Rule::CutClassSpacing { layer, .. }
             | Rule::MultiPatterning { layer, .. }
             | Rule::AnchoredPatterning { layer, .. }
+            | Rule::Sadp { layer, .. }
+            | Rule::SadpLineEnd { layer, .. }
             | Rule::Forbidden { layer }
             | Rule::SpacingTable { layer, .. }
             | Rule::AttachedWideSpacing { layer, .. }

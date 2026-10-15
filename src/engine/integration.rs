@@ -13,6 +13,27 @@
 //! | `def.off_site` | a placed `CORE` component whose placement point is no site of any `ROW` | DEF `ROW … DO … STEP` (p. 299): a row's sites are `origin + k·step`; LEF `CLASS CORE` cells are placed in rows |
 //! | `def.pin_off_track` | a placed DEF pin whose shape's centre is on no routing track of its layer | IC Validator's "ports off grid"; DEF `TRACKS` (p. 336) |
 //! | `def.off_manufacturing_grid` | a shape vertex that is not a multiple of the LEF `MANUFACTURINGGRID` | LEF `MANUFACTURINGGRID`: "shapes and cells are placed in locations that snap to the manufacturing grid" (p. 148) |
+//! | `def.cell_edge_spacing` | two placed cells' typed edges closer than the library's `LEF58_CELLEDGESPACINGTABLE` allows for their two types | the ISPD 2014 placement contest's Benchmark Suite A (slide 16: "Each vertical edge of a cell may have specified minimum spacings from any other vertical cell edge that can be placed right or left of it"; slide 27: the `LEF58_CELLEDGESPACINGTABLE` and `LEF58_EDGETYPE` properties); the ICCAD 2017 Problem C FAQ ("for a pair of edge types, the edge spacing rules are symmetric") |
+//!
+//! Cell edge spacing (catalog DRC-127). A macro's `LEF58_EDGETYPE` types
+//! a side of its `SIZE` box, or a stretch of it (`CELLROW n` the `n`-th row
+//! the cell spans, of the height of the first DEF row's site; `HALFROW n` a
+//! half row; `RANGE b e` along a top or bottom side); each typed edge is
+//! placed with its component, so a mirrored cell's `LEFT` edge lies on its
+//! right. Two parallel typed edges of different components, sharing a
+//! stretch of positive length, are held to the table's spacing for their
+//! types, the last entry naming the pair; the gap is the distance between
+//! their lines, and any two parallel edges count, a left against a left as
+//! the contest's slide states ("the left edge of every ao22s01 cell must be
+//! placed at least 0.400um away from the left edge of every other"), not
+//! only edges facing each other. `EXCEPTABUTTED` exempts two edges with no
+//! gap, which only its name defines. A filler (`CLASS CORE SPACER`) has no
+//! edges. Not checked, as no public text defines them: an entry carrying
+//! `EXCEPTNONFILLERINBETWEEN`, `OPTIONAL`, `SOFT` or `EXACT`; a `DEFAULT`
+//! type for a side no statement types. A `RANGE` on a vertical side or a
+//! `CELLROW` or `HALFROW` on a horizontal one types the whole side. Each
+//! finding sits at the middle of the shared stretch, between the two lines,
+//! measuring the gap against the spacing.
 //!
 //! A check with nothing to examine (no rows, no tracks for a pin's layer,
 //! no manufacturing grid) runs and examines nothing; one whose input is
@@ -24,16 +45,17 @@
 
 use gpurify_check::report::{Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use gpurify_geom::{ops::Point, Dbu, DbuArea, LayerId, PolyId, StrTable};
-use gpurify_ingest::lefdef::{flatten, Design, Origin, Pt};
+use gpurify_ingest::lefdef::{flatten, Design, EdgeSide, EdgeSpan, Origin, Pt};
 
 /// The checks' ids, in report order.
-pub const RULE_IDS: [&str; 6] = [
+pub const RULE_IDS: [&str; 7] = [
     "def.fill_outside_die",
     "def.component_outside_die",
     "def.component_overlap",
     "def.off_site",
     "def.pin_off_track",
     "def.off_manufacturing_grid",
+    "def.cell_edge_spacing",
 ];
 
 /// Interns [`RULE_IDS`], so [`check`] can run on a shared string table.
@@ -302,11 +324,311 @@ pub fn check(design: &Design, strings: &StrTable, out: &mut Violations, runs: &m
         }
     }
     row("def.off_manufacturing_grid", examined, found);
+
+    let (examined, found) = cell_edge_spacing(design);
+    row("def.cell_edge_spacing", examined, found);
+}
+
+/// One typed cell edge as placed: on the line `x = at` (vertical) or `y =
+/// at`, from `lo` to `hi` along it, of type `kind` (an index into the
+/// table's names), on component `comp`.
+#[derive(Debug, Clone, Copy)]
+struct PlacedEdge {
+    vertical: bool,
+    at: i64,
+    lo: i64,
+    hi: i64,
+    kind: usize,
+    comp: usize,
+}
+
+/// Every typed edge of every placed, non-filler component whose type the
+/// library's `LEF58_CELLEDGESPACINGTABLE` names, and the names.
+fn placed_edges(design: &Design) -> (Vec<PlacedEdge>, Vec<&str>) {
+    let lef = &design.lef;
+    let mut names: Vec<&str> = Vec::new();
+    for entry in &lef.cell_edge_spacing {
+        for name in [entry.first.as_str(), entry.second.as_str()] {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    // A cell spans whole rows of the first row's site.
+    let row_height = design
+        .def
+        .rows
+        .first()
+        .and_then(|row| lef.sites.iter().find(|(name, _)| *name == row.site))
+        .map_or(0, |(_, size)| size.1);
+    let mut edges = Vec::new();
+    for (comp, component) in design.def.components.iter().enumerate() {
+        let Some((at, orient)) = component.placement else {
+            continue;
+        };
+        let Some(cell) = lef.macros.iter().find(|m| m.name == component.model) else {
+            continue;
+        };
+        if cell.spacer {
+            continue;
+        }
+        let (w, h) = cell.size;
+        let rows = if row_height > 0 {
+            (h / row_height).max(1)
+        } else {
+            1
+        };
+        let per_row = h / rows;
+        let (a, b) = (orient.apply((0, 0)), orient.apply((w, h)));
+        let corner = (a.0.min(b.0), a.1.min(b.1));
+        let place = |p: Pt| {
+            let q = orient.apply(p);
+            (at.0 + q.0 - corner.0, at.1 + q.1 - corner.1)
+        };
+        for edge in &cell.edge_types {
+            let Some(kind) = names.iter().position(|&n| n == edge.name) else {
+                continue;
+            };
+            let vertical = matches!(edge.side, EdgeSide::Left | EdgeSide::Right);
+            let (lo, hi) = match (edge.span, vertical) {
+                (EdgeSpan::CellRow(k), true) => {
+                    let k = i64::from(k);
+                    ((k - 1) * per_row, (k * per_row).min(h))
+                }
+                (EdgeSpan::HalfRow(k), true) => {
+                    let k = i64::from(k);
+                    ((k - 1) * per_row / 2, (k * per_row / 2).min(h))
+                }
+                (EdgeSpan::Range(lo, hi), false) => (lo, hi),
+                _ if vertical => (0, h),
+                _ => (0, w),
+            };
+            let (p, q) = match edge.side {
+                EdgeSide::Left => ((0, lo), (0, hi)),
+                EdgeSide::Right => ((w, lo), (w, hi)),
+                EdgeSide::Bottom => ((lo, 0), (hi, 0)),
+                EdgeSide::Top => ((lo, h), (hi, h)),
+            };
+            let (p, q) = (place(p), place(q));
+            let vertical = p.0 == q.0;
+            let (at, lo, hi) = if vertical {
+                (p.0, p.1.min(q.1), p.1.max(q.1))
+            } else {
+                (p.1, p.0.min(q.0), p.0.max(q.0))
+            };
+            edges.push(PlacedEdge {
+                vertical,
+                at,
+                lo,
+                hi,
+                kind,
+                comp,
+            });
+        }
+    }
+    (edges, names)
+}
+
+/// The cell edge spacing check (`def.cell_edge_spacing`): `examined` typed
+/// edges, and per pair too close `(at, measured, limit)`.
+fn cell_edge_spacing(design: &Design) -> (u64, Vec<(Pt, Measurement, Measurement)>) {
+    let (mut edges, names) = placed_edges(design);
+    // The spacing between two types, either way round: the last entry that
+    // names the pair, unless it carries an undefined option.
+    let spacing = |a: usize, b: usize| {
+        design
+            .lef
+            .cell_edge_spacing
+            .iter()
+            .rev()
+            .find(|e| {
+                let (x, y) = (e.first.as_str(), e.second.as_str());
+                (x, y) == (names[a], names[b]) || (y, x) == (names[a], names[b])
+            })
+            .filter(|e| e.undefined.is_empty())
+    };
+    let reach = design
+        .lef
+        .cell_edge_spacing
+        .iter()
+        .map(|e| e.spacing)
+        .max()
+        .unwrap_or(0);
+    edges.sort_unstable_by_key(|e| (e.vertical, e.at, e.lo, e.hi, e.comp, e.kind));
+    let mut found = Vec::new();
+    for (i, a) in edges.iter().enumerate() {
+        for b in edges[i + 1..]
+            .iter()
+            .take_while(|b| b.vertical == a.vertical && b.at - a.at < reach)
+        {
+            let run = (a.lo.max(b.lo), a.hi.min(b.hi));
+            if a.comp == b.comp || run.0 >= run.1 {
+                continue;
+            }
+            let Some(entry) = spacing(a.kind, b.kind) else {
+                continue;
+            };
+            let gap = b.at - a.at;
+            if gap >= entry.spacing || (gap == 0 && entry.except_abutted) {
+                continue;
+            }
+            let along = run.0.midpoint(run.1);
+            let at = if a.vertical {
+                (a.at.midpoint(b.at), along)
+            } else {
+                (along, a.at.midpoint(b.at))
+            };
+            found.push((
+                at,
+                Measurement::Length(Dbu::new_unchecked(gap)),
+                Measurement::Length(Dbu::new_unchecked(entry.spacing)),
+            ));
+        }
+    }
+    (u64::try_from(edges.len()).expect("a count"), found)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{contained, inside};
+    use super::{cell_edge_spacing, contained, inside};
+    use gpurify_check::report::Measurement;
+    use gpurify_ingest::lefdef::{read_def, read_lef_into, Design, Lef};
+
+    /// A library at 2000 database units per micrometre with a 0.19 x 1.4 um
+    /// site, the edge-spacing `table`, and two cells: `ONE`, 0.76 um wide and
+    /// one row tall, typed `one`; `TWO`, as wide and two rows tall, typed
+    /// `two`; each `LEF58_EDGETYPE` statement as given.
+    fn library(table: &str, one: &str, two: &str) -> Lef {
+        let text = format!(
+            "VERSION 5.8 ;
+PROPERTYDEFINITIONS
+  LIBRARY LEF58_CELLEDGESPACINGTABLE STRING \"CELLEDGESPACINGTABLE {table} ;\" ;
+  MACRO LEF58_EDGETYPE STRING ;
+END PROPERTYDEFINITIONS
+SITE core
+  SIZE 0.19 BY 1.4 ;
+END core
+MACRO ONE
+  CLASS CORE ;
+  SIZE 0.76 BY 1.4 ;
+  PROPERTY LEF58_EDGETYPE \"{one}\" ;
+END ONE
+MACRO TWO
+  CLASS CORE ;
+  SIZE 0.76 BY 2.8 ;
+  PROPERTY LEF58_EDGETYPE \"{two}\" ;
+END TWO
+MACRO FILL
+  CLASS CORE SPACER ;
+  SIZE 0.38 BY 1.4 ;
+  PROPERTY LEF58_EDGETYPE \"EDGETYPE LEFT E2 ; EDGETYPE RIGHT E2 ;\" ;
+END FILL
+END LIBRARY
+"
+        );
+        let mut lef = Lef::default();
+        read_lef_into(&text, 2000, &mut lef).expect("the library reads");
+        lef
+    }
+
+    /// The `(gap, spacing)` of each finding on `components` (`name model x y
+    /// orient` lines) over `lef`, with rows of `core` sites from y = 0.
+    fn gaps(lef: Lef, components: &[&str]) -> Vec<(i64, i64)> {
+        let def = format!(
+            "VERSION 5.8 ;
+DESIGN top ;
+UNITS DISTANCE MICRONS 2000 ;
+DIEAREA ( 0 0 ) ( 40000 28000 ) ;
+ROW r0 core 0 0 N DO 100 BY 1 STEP 380 0 ;
+COMPONENTS {} ;
+{}
+END COMPONENTS
+END DESIGN
+",
+            components.len(),
+            components
+                .iter()
+                .map(|line| {
+                    let f: Vec<&str> = line.split_whitespace().collect();
+                    format!(
+                        "- {} {} + PLACED ( {} {} ) {} ;",
+                        f[0], f[1], f[2], f[3], f[4]
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let def = read_def(&def, &lef).expect("the design reads");
+        let (_, found) = cell_edge_spacing(&Design { def, lef });
+        found
+            .into_iter()
+            .map(|(_, gap, spacing)| match (gap, spacing) {
+                (Measurement::Length(g), Measurement::Length(s)) => (g.raw(), s.raw()),
+                other => panic!("a gap is a length, not {other:?}"),
+            })
+            .collect()
+    }
+
+    /// Catalog DRC-127. Oracle: hand-derived from OpenROAD's dpl test
+    /// `mirror_edge_spacing`
+    /// (its LEF and DEF, R4's reading): `E2 E2 0.5` (1000 units); `ONE` has
+    /// an untyped-in-the-table `E1` left and an `E2` right. At x 3800 and
+    /// 5320, both N, the `E2` edges are 1520 apart: clean. Mirrored (FN), the
+    /// second's `E2` lies on its left, at 5320, on the first's: one finding,
+    /// 0 against 1000; `EXCEPTABUTTED` exempts it; `SOFT` leaves the entry
+    /// unchecked. A filler between them is no cell. Breaks if mirroring does
+    /// not move the edge, a type absent from the table is held, or an
+    /// undefined option is read as a rule.
+    #[test]
+    fn a_mirrored_cell_brings_its_typed_edge_onto_its_neighbours() {
+        let one = "EDGETYPE LEFT E1 ; EDGETYPE RIGHT E2 ;";
+        let two = "EDGETYPE LEFT E2 ;";
+        let pair = |table: &str, orient: &str| {
+            gaps(
+                library(table, one, two),
+                &["u1 ONE 3800 0 N", &format!("u2 ONE 5320 0 {orient}")],
+            )
+        };
+        assert_eq!(pair("EDGETYPE E2 E2 0.5", "N"), []);
+        assert_eq!(pair("EDGETYPE E2 E2 0.5", "FN"), [(0, 1000)]);
+        assert_eq!(pair("EDGETYPE E2 E2 EXCEPTABUTTED 0.5", "FN"), []);
+        assert_eq!(pair("EDGETYPE E2 E2 SOFT 0.5", "FN"), []);
+        let filler = gaps(
+            library("EDGETYPE E2 E2 0.5", one, two),
+            &["u1 ONE 3800 0 N", "f FILL 5320 0 N"],
+        );
+        assert_eq!(filler, []);
+    }
+
+    /// Catalog DRC-127. Oracle: hand-derived from OpenROAD's dpl test
+    /// `edge_spacing`: a
+    /// two-row cell typed `E1` on its first row and `E2` on its second, both
+    /// sides, under `E1 E1 0.1 E2 E2 0.5` (200 and 1000 units). Two such
+    /// cells 1140 apart: clean (E1/E1 needs 200, E2/E2 1000). 760 apart: the
+    /// second rows' E2 edges, one finding 760 against 1000. A one-row `E1`
+    /// cell abutting the first on its second row meets an `E2` edge, a pair
+    /// the table does not name, and touches its first row's `E1` edge only
+    /// at a point: nothing. Breaks if `CELLROW` is not the row's stretch or
+    /// a point contact counts as a run.
+    #[test]
+    fn cellrow_types_one_row_of_a_tall_cells_side() {
+        let two = "EDGETYPE LEFT E1 CELLROW 1 ; EDGETYPE LEFT E2 CELLROW 2 ; \
+                   EDGETYPE RIGHT E1 CELLROW 1 ; EDGETYPE RIGHT E2 CELLROW 2 ;";
+        let one = "EDGETYPE LEFT E1 ; EDGETYPE RIGHT E1 ;";
+        let table = "EDGETYPE E1 E1 0.1 EDGETYPE E2 E2 0.5";
+        let run = |second: i64| {
+            gaps(
+                library(table, one, two),
+                &[
+                    "u2 TWO 7220 0 N",
+                    &format!("r3 TWO {second} 0 N"),
+                    "r2 ONE 5700 2800 N",
+                ],
+            )
+        };
+        assert_eq!(run(9880), []);
+        assert_eq!(run(9500), [(760, 1000)]);
+    }
 
     /// Oracle: hand-derived on an L-shaped die `(0,0)-(100,0)-(100,50)-
     /// (50,50)-(50,100)-(0,100)` and a U-shaped one with a notch from x =

@@ -13,7 +13,7 @@
 //!
 //! | File | Read | Skipped (no geometry, no connectivity) |
 //! |---|---|---|
-//! | LEF | `UNITS DATABASE MICRONS`, `MANUFACTURINGGRID`, `LAYER` (`TYPE`, `WIDTH`, `DIRECTION`, `PITCH`), `VIA` (fixed and `VIARULE`-generated), `SITE` (`SIZE`), `NONDEFAULTRULE` (`LAYER … WIDTH`), `MACRO` (`CLASS`, `ORIGIN`, `SIZE`, `PIN … PORT`, `OBS`: `LAYER`, `RECT`, `POLYGON`, `VIA`; a pin's `ANTENNA*` statements, [`PinAntenna`]) | every other statement: layer antenna rules, spacing, properties, `VIARULE`, `SPACING`, `PROPERTYDEFINITIONS` |
+//! | LEF | `UNITS DATABASE MICRONS`, `MANUFACTURINGGRID`, `LAYER` (`TYPE`, `WIDTH`, `DIRECTION`, `PITCH`), `VIA` (fixed and `VIARULE`-generated), `SITE` (`SIZE`), `NONDEFAULTRULE` (`LAYER … WIDTH`), `MACRO` (`CLASS`, `ORIGIN`, `SIZE`, `PIN … PORT`, `OBS`: `LAYER`, `RECT`, `POLYGON`, `VIA`; a pin's `ANTENNA*` statements, [`PinAntenna`]; the `LEF58_EDGETYPE` property), the library's `LEF58_CELLEDGESPACINGTABLE` property (in `PROPERTYDEFINITIONS` or a library `PROPERTY`) | every other statement: layer antenna rules, spacing, other properties, `VIARULE`, `SPACING` |
 //! | DEF | `UNITS`, `DESIGN`, `DIEAREA`, `ROW`, `TRACKS`, `VIAS`, `NONDEFAULTRULES`, `COMPONENTS`, `PINS`, `NETS` and `SPECIALNETS` (connections, `ROUTED`/`FIXED`/`COVER`/`NOSHIELD` wiring, `RECT`, `POLYGON`, `VIA`, `NONDEFAULTRULE`), `FILLS` | `PROPERTYDEFINITIONS`, `REGIONS`, `GROUPS`, `SCANCHAINS`, `BLOCKAGES`, `GCELLGRID`, `HISTORY`, `BEGINEXT`, `PINPROPERTIES`, `SLOTS`, `STYLES`; per item: `SOURCE`, `WEIGHT`, `HALO`, `PROPERTY`, antenna data, `USE`, `DIRECTION` |
 //!
 //! Refused, with the line: a LEF `PATH` or `ITERATE` geometry, a wire
@@ -56,7 +56,10 @@ mod lex;
 
 pub use def::{def_units, read_def, Component, Def, DefPin, Net, Row, Track, ViaAt, Wire};
 pub use gds_out::to_gds;
-pub use lef::{read_lef_into, AntennaKind, LayerKind, Lef, LefLayer, Macro, MacroPin, PinAntenna};
+pub use lef::{
+    read_lef_into, AntennaKind, CellEdgeSpacing, EdgeSide, EdgeSpan, EdgeType, LayerKind, Lef,
+    LefLayer, Macro, MacroPin, PinAntenna,
+};
 
 /// Why a LEF or DEF file could not be read, or its design not flattened.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

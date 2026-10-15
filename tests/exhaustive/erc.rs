@@ -3888,7 +3888,9 @@ impl Board {
         // a board has no resistors), measuring 0 against 1.
         let mut ws = Vec::new();
         for (i, m) in self.devs.iter().enumerate() {
-            let Some(well) = m.b.filter(|_| matches!(m.model, Model::NfetB | Model::PfetB)) else {
+            let Some(well) =
+                m.b.filter(|_| matches!(m.model, Model::NfetB | Model::PfetB))
+            else {
                 continue;
             };
             let (mut seen, mut walk, mut joined) = ([false; NETS], vec![m.s, m.d], false);

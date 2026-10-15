@@ -805,6 +805,23 @@ kinds! {
     /// `patterning(layer, anchors..; colors: colors) >= color_spacing`, the
     /// anchor of mask `i + 1` at `anchors[i]`.
     anchored_patterning(layer: one, anchors: many) [] { colors: u32 = "colors", color_spacing: Dbu = "color_spacing" }
+    /// [`Rule::Sadp`](crate::drc::Rule::Sadp): `sadp(layer; different, same,
+    /// track_width: len | none, track_space: len | none)`.
+    sadp(layer: one) [] {
+        different: Dbu = "different",
+        same: Dbu = "same",
+        track_width: Option<Dbu> = "track_width",
+        track_space: Option<Dbu> = "track_space",
+    }
+    /// [`Rule::SadpLineEnd`](crate::drc::Rule::SadpLineEnd):
+    /// `sadp_line_end(layer; adjacent, tip, overlap, corner, offset)`.
+    sadp_line_end(layer: one) [] {
+        adjacent: Dbu = "adjacent",
+        tip: Dbu = "tip",
+        overlap: Dbu = "overlap",
+        corner: Dbu = "corner",
+        offset: Dbu = "offset",
+    }
     /// [`Rule::Forbidden`](crate::drc::Rule::Forbidden): `forbidden(layer)`.
     forbidden(layer: one) [] {}
     /// [`Rule::MustContain`](crate::drc::Rule::MustContain): `contains(outer, inner) >= min_count`;

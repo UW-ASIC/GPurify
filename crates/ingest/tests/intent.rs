@@ -268,7 +268,12 @@ fn net_types_read_back_and_a_malformed_one_is_refused() {
     let types = intent.net_types();
     assert_eq!(strings.resolve(types[0].name), "power");
     assert!(matches!(&types[0].by, NetTypeBy::Names(n) if n == &["VDD?", "lvsPower"]));
-    let NetTypeBy::Devices { models, negate, pins } = &types[1].by else {
+    let NetTypeBy::Devices {
+        models,
+        negate,
+        pins,
+    } = &types[1].by
+    else {
         panic!("gated is assigned by device");
     };
     assert!(*negate);
