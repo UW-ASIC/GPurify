@@ -869,3 +869,83 @@ fn mixed_tag_flags_only_an_untagged_figure_sharing_a_net_with_a_tagged_one() {
     assert_eq!(violations.measured, vec![Measurement::Count(1)]);
     assert_eq!(violations.limit, vec![Measurement::Count(0)]);
 }
+
+/// `esd_latchup`'s guard rings: each ring narrower than the minimum width
+/// is reported at its width, and each ring further than `max_tap_distance`
+/// from every supply shape at that gap, both strictly.
+///
+/// Oracle: construct-from-answer, gaps and widths by hand: a supply bar
+/// `[0, 1000]²`; ring R1 50 wide at x = 1500 (gap 500), R3 exactly 100
+/// wide at x = 2000 (gap exactly 1000), R2 200 wide at x = 5000 (gap
+/// 4000); limits 100 wide and 1000 away: R1 is narrow, R2 is far, R3 is
+/// at both limits and clean. No pad is drawn, so three rings are examined.
+#[test]
+fn esd_latchup_reports_narrow_rings_and_rings_far_from_a_supply() {
+    use gpurify_check::erc::rules::reliability::{check_esd_latchup, EsdLatchupTable};
+    use gpurify_ingest::intent::{DomainId, SupplyRole};
+    let mut layout = LayoutBuilder::new(3);
+    let bar = layout.rect(LayerId(0), 0, 0, 1_000, 1_000);
+    let r1 = layout.rect(LayerId(1), 1_500, 0, 1_550, 1_000);
+    layout.rect(LayerId(1), 2_000, 0, 2_100, 1_000);
+    let r2 = layout.rect(LayerId(1), 5_000, 0, 5_200, 1_000);
+    let (store, ids) = layout.finish();
+    let connectivity = Connectivity {
+        conductors: vec![LayerId(0)],
+        ..no_connectivity()
+    };
+    let drawn = Drawn::new(store, &connectivity);
+    let intent = IntentMap {
+        declared: true,
+        supply_net: vec![drawn.nets.net_of(ids.of(bar))],
+        supply_role: vec![SupplyRole::Power],
+        supply_domain: vec![DomainId(0)],
+        supply_voltage: vec![common::millivolts(1_800.0)],
+        limit_net: Vec::new(),
+        limit: Vec::new(),
+    };
+    let id = rule(63);
+    let table = EsdLatchupTable {
+        head: head(id),
+        pad: vec![LayerId(2)],
+        guard_ring: vec![LayerId(1)],
+        min_guard_ring_width: vec![dbu(100)],
+        max_tap_distance: vec![dbu(1_000)],
+        clamp_start: vec![0, 0],
+        clamp: Vec::new(),
+    };
+    let mut scratch = Scratch::default();
+    let (mut violations, mut runs) = report();
+    check_esd_latchup(
+        drawn.design(),
+        &intent,
+        &table,
+        &mut scratch,
+        &mut violations,
+        &mut runs,
+    );
+    assert_eq!(assert_rule_ran(&runs, id).examined, 3);
+    let found: Vec<_> = (0..violations.rule.len())
+        .map(|row| {
+            (
+                violations.shape_a[row],
+                violations.measured[row],
+                violations.limit[row],
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (
+                ids.of(r1),
+                Measurement::Length(dbu(50)),
+                Measurement::Length(dbu(100))
+            ),
+            (
+                ids.of(r2),
+                Measurement::Length(dbu(4_000)),
+                Measurement::Length(dbu(1_000))
+            ),
+        ]
+    );
+}
