@@ -20,9 +20,9 @@ does not pass.
 
 | Domain | Implemented | Expressible | Partial | Missing |
 |---|---:|---:|---:|---:|
-| DRC | 56 | 6 | 42 | 2 |
+| DRC | 56 | 6 | 44 | 0 |
 | LVS | 31 | 1 | 15 | 1 |
-| ERC | 63 | 4 | 11 | 3 |
+| ERC | 64 | 4 | 13 | 0 |
 | PEX | 9 | 0 | 7 | 0 |
 | Flow | 2 | 0 | 8 | 0 |
 

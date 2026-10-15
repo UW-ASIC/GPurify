@@ -110,7 +110,7 @@ const PROVED_BY_TEST: &[(&str, &str)] = &[
     // 45-degree shapes are drawn as polygons; the harness draws rectangles.
     (
         "DRC-038",
-        "tests/drc_octilinear.rs::two_45_degree_bars_are_as_far_apart_as_their_lines",
+        "crates/check/tests/drc/octilinear.rs::two_45_degree_bars_are_as_far_apart_as_their_lines",
     ),
     // A malformed database is refused by the reader, before any run.
     (

@@ -309,7 +309,7 @@ fn antenna_lef() -> Vec<Fixture> {
         for (n, &(value, _)) in row.nets.iter().enumerate() {
             for limit in sweep(value) {
                 let deck = antenna_deck(&format!(
-                    "rule {} antenna(gate, {}; max_ratio: {limit}, sidewall: none, diode: none)",
+                    "rule {} antenna(gate, {}; max_ratio: {limit}, sidewall: none, diode: none, diode_area: none, diode_min: none)",
                     row.id, row.collectors
                 ));
                 let fixture = Fixture::new(
@@ -393,7 +393,7 @@ fn antenna_sidewall() -> Vec<Fixture> {
                 &format!("erc/antenna/sidewall/{name}/{}", side(limit, value)),
                 &["ERC-A2"],
                 &antenna_deck(&format!(
-                    "rule ant.side antenna(gate, met1; max_ratio: {limit}, sidewall: 350nm, diode: none)"
+                    "rule ant.side antenna(gate, met1; max_ratio: {limit}, sidewall: 350nm, diode: none, diode_area: none, diode_min: none)"
                 )),
             )
             .layout(layout.clone())
@@ -432,7 +432,7 @@ fn antenna_variants() -> Vec<Fixture> {
                 &format!("erc/antenna/derived_gate/{}", side(limit, 2.0)),
                 &["ERC-A1"],
                 &antenna_deck(&format!(
-                    "rule ant.d antenna(gated, met1; max_ratio: {limit}, sidewall: none, diode: none)"
+                    "rule ant.d antenna(gated, met1; max_ratio: {limit}, sidewall: none, diode: none, diode_area: none, diode_min: none)"
                 )),
             )
             .layout(derived.clone())
@@ -463,7 +463,7 @@ fn antenna_variants() -> Vec<Fixture> {
                     &format!("erc/antenna/oxide/{id}/{}", side(limit, value)),
                     &["ERC-A12"],
                     &antenna_deck(&format!(
-                        "rule {id} antenna({layer}, met1; max_ratio: {limit}, sidewall: none, diode: none)"
+                        "rule {id} antenna({layer}, met1; max_ratio: {limit}, sidewall: none, diode: none, diode_area: none, diode_min: none)"
                     )),
                 )
                 .layout(oxides.clone())
@@ -486,7 +486,7 @@ fn antenna_variants() -> Vec<Fixture> {
                 &format!("erc/antenna/mim/{}", side(limit, 2.0)),
                 &["ERC-A11"],
                 &antenna_deck(&format!(
-                    "rule ant.mim antenna(mim, met2; max_ratio: {limit}, sidewall: none, diode: none)"
+                    "rule ant.mim antenna(mim, met2; max_ratio: {limit}, sidewall: none, diode: none, diode_area: none, diode_min: none)"
                 )),
             )
             .layout(mim.clone())
@@ -514,7 +514,7 @@ fn antenna_variants() -> Vec<Fixture> {
                 &format!("erc/antenna/car_single_gate/{}", side(limit, 10.0)),
                 &["ERC-A3"],
                 &antenna_deck(&format!(
-                    "rule car antenna(gate, met1, met2, met3; max_ratio: {limit}, sidewall: none, diode: none)"
+                    "rule car antenna(gate, met1, met2, met3; max_ratio: {limit}, sidewall: none, diode: none, diode_area: none, diode_min: none)"
                 )),
             )
             .layout(stack.clone())
@@ -536,7 +536,7 @@ fn antenna_variants() -> Vec<Fixture> {
             "erc/antenna/f29/overlapping_collectors",
             &["ERC-A1"],
             &antenna_deck(
-                "rule ant antenna(gate, met1; max_ratio: 1.75, sidewall: none, diode: none)",
+                "rule ant antenna(gate, met1; max_ratio: 1.75, sidewall: none, diode: none, diode_area: none, diode_min: none)",
             ),
         )
         .layout(over_collect)
@@ -556,7 +556,7 @@ fn antenna_variants() -> Vec<Fixture> {
             "erc/antenna/f29/overlapping_gate",
             &["ERC-A1"],
             &antenna_deck(
-                "rule ant antenna(gate, met1; max_ratio: 1.75, sidewall: none, diode: none)",
+                "rule ant antenna(gate, met1; max_ratio: 1.75, sidewall: none, diode: none, diode_area: none, diode_min: none)",
             ),
         )
         .layout(over_gate)
@@ -588,7 +588,7 @@ fn gate_on_its_device_poly() -> Fixture {
 layer sd = diff not poly
 connect via bc [diff, poly]
 device mos gated model \"nfet\" terminals [poly, sd, sd]
-rule ant antenna(gated, met1; max_ratio: 1.0, sidewall: none, diode: none)",
+rule ant antenna(gated, met1; max_ratio: 1.0, sidewall: none, diode: none, diode_area: none, diode_min: none)",
     );
     Fixture::new("erc/antenna/f81/direct_diff_poly_cut", &["ERC-A1"], &deck)
         .layout(l)
@@ -633,7 +633,7 @@ fn metal_over_a_gate() -> Vec<Fixture> {
                 &format!("erc/antenna/f72/{name}"),
                 &["ERC-A1"],
                 &antenna_deck(&format!(
-                    "rule ant antenna({gate}, met1; max_ratio: 1.0, sidewall: none, diode: none)"
+                    "rule ant antenna({gate}, met1; max_ratio: 1.0, sidewall: none, diode: none, diode_area: none, diode_min: none)"
                 )),
             )
             .layout(layout)
@@ -650,7 +650,7 @@ fn metal_over_a_gate() -> Vec<Fixture> {
             "erc/antenna/f72/cut_over_other_poly",
             &["ERC-A1", "ERC-A4"],
             &antenna_deck(
-                "rule ant antenna(gate, via1; max_ratio: 0.01, sidewall: none, diode: none)",
+                "rule ant antenna(gate, via1; max_ratio: 0.01, sidewall: none, diode: none, diode_area: none, diode_min: none)",
             ),
         )
         .layout(cut)
@@ -700,7 +700,7 @@ fn ihp_area_ratio() -> Fixture {
     Fixture::new(
         "erc/antenna/ihp_fig7_1",
         &["ERC-A3"],
-        &antenna_deck("rule ant.b antenna(gate, met1, met2, met3; max_ratio: 100, sidewall: none, diode: none)"),
+        &antenna_deck("rule ant.b antenna(gate, met1, met2, met3; max_ratio: 100, sidewall: none, diode: none, diode_area: none, diode_min: none)"),
     )
     .layout(l)
     .expect(Expect::rule("ant.b", vec![ratio(g1).at(500, 500)]))
@@ -780,7 +780,7 @@ fn antenna_electrical() -> Vec<Fixture> {
     out.extend(sky130_lef_agrees_with_egar());
     out.extend(sky130_ar1());
     out.extend(ihp_ant_g());
-    let ihp = "rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: diff)
+    let ihp = "rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: diff, diode_area: none, diode_min: none)
 rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, sidewall: none, cut_factor: 1, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)";
     out.push(
         Fixture::new(
@@ -1067,7 +1067,7 @@ fn lef_c20_cumulative() -> Vec<Fixture> {
         };
         for limit in limits {
             let rule = if name == "antenna" {
-                format!("rule ae antenna(gate, {collectors}; max_ratio: {limit}, sidewall: none, diode: none)")
+                format!("rule ae antenna(gate, {collectors}; max_ratio: {limit}, sidewall: none, diode: none, diode_area: none, diode_min: none)")
             } else {
                 format!(
                     "rule ae antenna_electrical(gate, {collectors}; max_ratio: {limit}, sidewall: none, cut_factor: {cut}, diode: diff, diode_credit: 0, diode_bonus: 0, area_minus_diode: {minus}, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)"
@@ -1198,9 +1198,9 @@ connect touch_within_layer
 connect via via2 [metal2, metal3]
 connect via via2 [fusetop, metal3]
 connect via via3 [metal3, metal4]
-rule ant14.m3 antenna(fusetop, metal3; max_ratio: 400, sidewall: 540nm, diode: none)
-rule ant14.m2 antenna(fusetop, metal2; max_ratio: 400, sidewall: 540nm, diode: none)
-rule ant15.v3 antenna(fusetop, via3; max_ratio: 20, sidewall: none, diode: none)
+rule ant14.m3 antenna(fusetop, metal3; max_ratio: 400, sidewall: 540nm, diode: none, diode_area: none, diode_min: none)
+rule ant14.m2 antenna(fusetop, metal2; max_ratio: 400, sidewall: 540nm, diode: none, diode_area: none, diode_min: none)
+rule ant15.v3 antenna(fusetop, via3; max_ratio: 20, sidewall: none, diode: none, diode_area: none, diode_min: none)
 ";
     let plates = |l: &mut Layout| {
         rect(l, "metal2", (-500, -500, 1500, 1500));
@@ -1427,7 +1427,7 @@ fn sky130_ar1() -> Vec<Fixture> {
     let rules = "layer ptap = gds(13, 0)
 layer adiode = diff not ptap
 rule ae antenna_electrical(gate, met1; max_ratio: 400, sidewall: 350nm, cut_factor: 1, diode: adiode, diode_credit: 400, diode_bonus: 2200, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: ptap)
-rule an antenna(gate, met1; max_ratio: 400, sidewall: 350nm, diode: ptap)";
+rule an antenna(gate, met1; max_ratio: 400, sidewall: 350nm, diode: ptap, diode_area: none, diode_min: none)";
     let ratio_of = (2 * (4_286_000_i64 + 140) * 350) as f64 / 1e6;
     let mut out = Vec::new();
     for tap in [false, true] {
@@ -1475,7 +1475,7 @@ rule an antenna(gate, met1; max_ratio: 400, sidewall: 350nm, diode: ptap)";
 fn ihp_ant_g() -> Vec<Fixture> {
     let deck = antenna_deck(
         "layer prot = diff.with_area(>= 0.16um2)
-rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: prot)
+rule Ant.b antenna(gate, met1; max_ratio: 1.5, sidewall: none, diode: prot, diode_area: none, diode_min: none)
 rule Ant.e antenna_electrical(gate, met1; max_ratio: 100, sidewall: none, cut_factor: 1, diode: prot, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0, diode_reduce: none, diode_max_ratio: none, exempt: none)
 rule Ant.g area(diff) >= 0.16um2",
     );
@@ -1918,8 +1918,8 @@ const TOPO_RULES: [(&str, &str, bool); 25] = [
     ("ssw", "supply_short(ntap, ptap, nwpm)", false),
     ("soft", "soft_connection(well)", false),
     ("fo", "fanout(; max: 1)", false),
-    ("sp1", "supply_path(; both: false)", true),
-    ("sp2", "supply_path(; both: true)", true),
+    ("sp1", "supply_path(; both: false, labels_are_ports: false)", true),
+    ("sp2", "supply_path(; both: true, labels_are_ports: false)", true),
     ("gp0", "gate_path(; ground: true, max_devices: 0)", true),
     ("gp1", "gate_path(; ground: false, max_devices: 1)", true),
     ("cl", "combinational_loop()", true),
@@ -4282,8 +4282,8 @@ pub(crate) fn circuit_pins(labels: &[&str], devs: &[Dev], pins: &[(&str, usize, 
 /// pull-down, two devices), C reaches nothing (a diode passes no path), and
 /// G is a gate alone.
 ///
-/// - `supply_path(; both: false)`: G and C, 0 roles against 1.
-/// - `supply_path(; both: true)`: A and B 1 role, G and C 0, against 2.
+/// - `supply_path(; both: false, labels_are_ports: false)`: G and C, 0 roles against 1.
+/// - `supply_path(; both: true, labels_are_ports: false)`: A and B 1 role, G and C 0, against 2.
 /// - `gate_path(; ground: true, max_devices: 1)`: B's path passes 2
 ///   devices; G has none (0 against 1).
 /// - with `max_devices: 2`: only G.
@@ -4293,8 +4293,8 @@ fn path_through_resistor() -> Vec<Fixture> {
     let devs = [dev(Model::Nfet, g, vss, a), dev(Model::Nfet, b, vss, vss)];
     let layout = circuit_pins(&labels, &devs, &[("mkres", a, b), ("mkdi", b, c)]);
     let deck = format!(
-        "{}rule sp1 supply_path(; both: false)\n\
-         rule sp2 supply_path(; both: true)\n\
+        "{}rule sp1 supply_path(; both: false, labels_are_ports: false)\n\
+         rule sp2 supply_path(; both: true, labels_are_ports: false)\n\
          rule gp1 gate_path(; ground: true, max_devices: 1)\n\
          rule gp2 gate_path(; ground: true, max_devices: 2)\n",
         diode_process()

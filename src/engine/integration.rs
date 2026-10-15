@@ -569,7 +569,9 @@ END DESIGN
             .collect()
     }
 
-    /// Catalog DRC-127. Oracle: hand-derived from OpenROAD's dpl test
+    /// Catalog DRC-127.
+    ///
+    /// Oracle: hand-derived from OpenROAD's dpl test
     /// `mirror_edge_spacing`
     /// (its LEF and DEF, R4's reading): `E2 E2 0.5` (1000 units); `ONE` has
     /// an untyped-in-the-table `E1` left and an `E2` right. At x 3800 and
@@ -600,7 +602,9 @@ END DESIGN
         assert_eq!(filler, []);
     }
 
-    /// Catalog DRC-127. Oracle: hand-derived from OpenROAD's dpl test
+    /// Catalog DRC-127.
+    ///
+    /// Oracle: hand-derived from OpenROAD's dpl test
     /// `edge_spacing`: a
     /// two-row cell typed `E1` on its first row and `E2` on its second, both
     /// sides, under `E1 E1 0.1 E2 E2 0.5` (200 and 1000 units). Two such

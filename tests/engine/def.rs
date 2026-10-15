@@ -669,8 +669,8 @@ fn c20_findings(tag: &str, extra: &str) -> (Vec<Finding>, StageStatus) {
          connect label met1 names met1\nconnect label met2 names met2\n\
          connect label met3 names met3\n\
          {}{}{}\
-         rule par1 antenna(gate, met1; max_ratio: 1e-6, sidewall: none, diode: none)\n\
-         rule par2 antenna(gate, met2; max_ratio: 1e-6, sidewall: none, diode: none)\n",
+         rule par1 antenna(gate, met1; max_ratio: 1e-6, sidewall: none, diode: none, diode_area: none, diode_min: none)\n\
+         rule par2 antenna(gate, met2; max_ratio: 1e-6, sidewall: none, diode: none, diode_area: none, diode_min: none)\n",
         electrical("ex1", all, "none", 0.0),
         electrical("ex2", all, "dio", 100.0),
         electrical("ex2v1", "met1, via1", "dio", 100.0),

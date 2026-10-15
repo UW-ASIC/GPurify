@@ -342,7 +342,7 @@ single oracle is a named gap that ledger P1 closes.
 | ERC-A9 | Minimum protection-diode size | expressible | IHP:Ant.g | SE:IHP Ant.g; MR; SY |
 | ERC-A10 | Diode well legality | expressible | IHP:Ant.h,Ant.i | FR; SY |
 | ERC-A13 | Exemption for substrate-shorted nets | implemented | SKY:.ar.1 | SE:SKY .ar.1; MR; SY |
-| ERC-A15 | Fix hint: required diode area | partial | IHP:Ant.g Note 4; SKY:antenna EGAR; US9142556; LEF:ANTENNADIFFAREARATIO PWL | SE; CF |
+| ERC-A15 | Fix hint: required diode area | partial | IHP:Ant.g Note 4; SKY:antenna EGAR; US9142556; LEF:ANTENNADIFFAREARATIO PWL | SE; CF; MR |
 | ERC-B1 | Windowed density + CMP thickness | implemented | GF:13 | CF; MR; SY |
 | ERC-C1 | Pad ESD path to power and ground | implemented | TR18-01:4.5.2-4.5.4; Khazhinsky2012 | SY; NV; MR |
 | ERC-C2 | ESD device sizing (perimeter, clamp width) | implemented | TR18-01:Fig23,Fig24; Hogan2012:III; GF:14.5 | CF; SY; MR |

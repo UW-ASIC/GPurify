@@ -660,10 +660,11 @@ mod tests {
     /// rounding up would read 25); `y = x + 1` is squared 0.5, read 1;
     /// touching reads 0; axis-aligned segments 3 along and 4 across read 16.
     /// Segments of slope 1/2 on `y = x/2` and `y = x/2 + 3` are `3/√1.25`
-    /// apart, squared 7.2: any other angle takes `seg_seg_dist2`, rounded up
-    /// to 8.
+    /// apart (the foot from `(0, 3)` is `(1.2, 0.6)`, inside the other),
+    /// squared `9 - 9/5 = 7.2`: any other angle is floored the same way, to 7
+    /// (a rounding up would read 8).
     #[test]
-    fn seg_dist2_floors_45_degree_half_units_and_rounds_other_angles_up() {
+    fn seg_dist2_floors_45_degree_half_units_and_other_angles_alike() {
         let diagonal = seg(0, 0, 10, 10);
         let at = |p, q| seg_dist2(p, q).raw();
         assert_eq!(at(diagonal, seg(0, 7, 10, 17)), 24);
@@ -672,8 +673,7 @@ mod tests {
         assert_eq!(at(seg(0, 0, 10, 0), seg(13, 4, 23, 4)), 16 + 9);
         assert_eq!(at(seg(0, 0, 10, 0), seg(3, 4, 13, 4)), 16);
         let (p, q) = (seg(0, 0, 20, 10), seg(0, 3, 20, 13));
-        assert_eq!(at(p, q), 8);
-        assert_eq!(seg_dist2(p, q), seg_seg_dist2(p, q));
+        assert_eq!(at(p, q), 7);
     }
 
     /// Differential: the SIMD kernel equals its scalar oracle for every edge

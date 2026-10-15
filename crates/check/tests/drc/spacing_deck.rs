@@ -908,6 +908,12 @@ fn net_space_tells_one_net_from_two() {
 /// at the midpoint of the gap below the limit; the same bars joined into
 /// one net through a via are not judged however close; a met2 bar crossing
 /// the met1 bar on another net overlaps it, a distance of 0.
+///
+/// Oracle: nets and gaps by construction: the met2 bar drawn `g` = 300,
+/// 301, 302 right of the met1 bar (two nets: a finding of `g` at the gap's
+/// midpoint `((1000 + g) / 2, 1000)` for 300, nothing at or above 301);
+/// the same bars strapped by a met2 bar and a via onto met1 (one net:
+/// nothing); a met2 bar drawn across the met1 bar (overlap: 0).
 #[test]
 fn net_space_across_two_layers_reads_their_nets() {
     let deck = new_deck(
