@@ -1,7 +1,7 @@
 //! The DEF reader: a design's die, rows, tracks, vias, components, pins,
 //! nets and fill, in its own database units.
 
-use super::lef::{check_rule, LayerKind, Lef};
+use super::lef::{generated, LayerKind, Lef};
 use super::lex::{Lexer, MAX_COORD};
 use super::{fault, LefDefError, Orient, Pt, Shape, ViaRule};
 
@@ -61,6 +61,18 @@ pub struct ViaAt {
     pub orient: Orient,
     /// `(numX, numY, stepX, stepY)`; `(1, 1, 0, 0)` for one via.
     pub array: (i64, i64, i64, i64),
+}
+
+impl ViaAt {
+    /// One via, not an array.
+    fn one(name: &str, at: Pt, orient: Orient) -> Self {
+        Self {
+            name: name.to_owned(),
+            at,
+            orient,
+            array: (1, 1, 0, 0),
+        }
+    }
 }
 
 /// One `PINS` entry, its shapes already placed.
@@ -281,31 +293,23 @@ pub fn read_def(text: &str, lef: &Lef) -> Result<Def, LefDefError> {
             }
             "FILLS" => section(&mut lx, "FILLS", |lx| {
                 if lx.eat("VIA") {
-                    let name = lx.next()?.to_owned();
+                    let name = lx.next()?;
                     plus_options(lx)?;
                     while lx.peek() == Some("(") {
                         let at = lx.point(None)?;
-                        def.fill_vias.push(ViaAt {
-                            name: name.clone(),
-                            at,
-                            orient: Orient::N,
-                            array: (1, 1, 0, 0),
-                        });
+                        def.fill_vias.push(ViaAt::one(name, at, Orient::N));
                     }
                     return lx.expect(";");
                 }
                 lx.expect("LAYER")?;
-                let layer = lx.next()?.to_owned();
+                let layer = lx.next()?;
                 plus_options(lx)?;
                 loop {
                     match lx.next()? {
                         ";" => return Ok(()),
-                        "RECT" => {
-                            let a = lx.point(None)?;
-                            let b = lx.point(Some(a))?;
-                            def.fills.push(Shape::rect(&layer, a, b));
+                        kind @ ("RECT" | "POLYGON") => {
+                            def.fills.push(shape(lx, layer, kind == "RECT")?);
                         }
-                        "POLYGON" => def.fills.push(polygon(lx, &layer)?),
                         other => return Err(lx.err(format!("unexpected {other} in a fill"))),
                     }
                 }
@@ -319,7 +323,7 @@ pub fn read_def(text: &str, lef: &Lef) -> Result<Def, LefDefError> {
             | "PINPROPERTIES"
             | "SLOTS"
             | "STYLES"
-            | "GCELLGRIDS" => while !(lx.next()? == "END" && lx.eat(word)) {},
+            | "GCELLGRIDS" => lx.skip_to_end(word)?,
             "END" => {
                 lx.expect("DESIGN")?;
                 break;
@@ -387,6 +391,15 @@ fn orient(lx: &mut Lexer<'_>) -> Result<Orient, LefDefError> {
     Orient::parse(word).ok_or_else(|| lx.err(format!("{word} is not an orientation")))
 }
 
+/// A `RECT`'s two points on `layer` when `rect`, else a `POLYGON`'s.
+fn shape(lx: &mut Lexer<'_>, layer: &str, rect: bool) -> Result<Shape, LefDefError> {
+    if !rect {
+        return polygon(lx, layer);
+    }
+    let a = lx.point(None)?;
+    Ok(Shape::rect(layer, a, lx.point(Some(a))?))
+}
+
 fn polygon(lx: &mut Lexer<'_>, layer: &str) -> Result<Shape, LefDefError> {
     let mut ring = Vec::new();
     while lx.peek() == Some("(") {
@@ -416,7 +429,7 @@ fn row(lx: &mut Lexer<'_>) -> Result<Row, LefDefError> {
             step = (lx.int()?, lx.int()?);
         }
     }
-    while lx.next()? != ";" {}
+    lx.skip_statement()?;
     Ok(Row {
         name,
         site,
@@ -483,13 +496,7 @@ fn def_via(lx: &mut Lexer<'_>) -> Result<Vec<Shape>, LefDefError> {
                     lx.expect("MASK")?;
                     lx.next()?;
                 }
-                if key == "RECT" {
-                    let a = lx.point(None)?;
-                    let b = lx.point(Some(a))?;
-                    shapes.push(Shape::rect(layer, a, b));
-                } else {
-                    shapes.push(polygon(lx, layer)?);
-                }
+                shapes.push(shape(lx, layer, key == "RECT")?);
             }
             "VIARULE" => {
                 lx.next()?;
@@ -538,10 +545,7 @@ fn def_via(lx: &mut Lexer<'_>) -> Result<Vec<Shape>, LefDefError> {
             }
         }
     }
-    if let Some(rule) = rule {
-        check_rule(lx, &rule)?;
-        shapes.extend(rule.shapes());
-    }
+    generated(lx, rule, &mut shapes)?;
     Ok(shapes)
 }
 
@@ -587,13 +591,7 @@ fn pin(
                     lx.next()?;
                     lx.next()?;
                 }
-                if key == "LAYER" {
-                    let a = lx.point(None)?;
-                    let b = lx.point(Some(a))?;
-                    port.0.push(Shape::rect(layer, a, b));
-                } else {
-                    port.0.push(polygon(lx, layer)?);
-                }
+                port.0.push(shape(lx, layer, key == "LAYER")?);
             }
             "VIA" => {
                 let via = lx.next()?.to_owned();
@@ -602,12 +600,7 @@ fn pin(
                     lx.next()?;
                 }
                 let at = lx.point(None)?;
-                port.1.push(ViaAt {
-                    name: via,
-                    at,
-                    orient: Orient::N,
-                    array: (1, 1, 0, 0),
-                });
+                port.1.push(ViaAt::one(&via, at, Orient::N));
             }
             "PLACED" | "FIXED" | "COVER" => {
                 let at = lx.point(None)?;
@@ -693,15 +686,9 @@ fn net(
             "SUBNET" => return Err(lx.err("a SUBNET is not read")),
             "NONDEFAULTRULE" => ndr = Some(lx.next()?.to_owned()),
             "RECT" | "POLYGON" if special => {
-                let layer = lx.next()?.to_owned();
+                let layer = lx.next()?;
                 plus_options(lx)?;
-                if key == "RECT" {
-                    let a = lx.point(None)?;
-                    let b = lx.point(Some(a))?;
-                    out.shapes.push(Shape::rect(&layer, a, b));
-                } else {
-                    out.shapes.push(polygon(lx, &layer)?);
-                }
+                out.shapes.push(shape(lx, layer, key == "RECT")?);
             }
             "VIA" if special => {
                 let via = lx.next()?.to_owned();
@@ -714,12 +701,7 @@ fn net(
                 };
                 while lx.peek() == Some("(") {
                     let at = lx.point(None)?;
-                    out.vias.push(ViaAt {
-                        name: via.clone(),
-                        at,
-                        orient,
-                        array: (1, 1, 0, 0),
-                    });
+                    out.vias.push(ViaAt::one(&via, at, orient));
                 }
             }
             _ => {}

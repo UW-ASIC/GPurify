@@ -208,7 +208,7 @@ pub fn read_lef_into(text: &str, dbu: i64, lef: &mut Lef) -> Result<(), LefDefEr
                 // `END LIBRARY`, the last statement.
                 lx.next()?;
             }
-            "UNITS" | "SPACING" => skip_to_end(&mut lx, word)?,
+            "UNITS" | "SPACING" => lx.skip_to_end(word)?,
             "PROPERTYDEFINITIONS" => loop {
                 // `object name type [RANGE …] [value] ;`; a library string
                 // property may carry its value here.
@@ -246,18 +246,14 @@ pub fn read_lef_into(text: &str, dbu: i64, lef: &mut Lef) -> Result<(), LefDefEr
                 lx.expect(";")?;
             }
             "LAYER" => lef.layers.push(layer(&mut lx, dbu)?),
-            "VIA" => {
-                let name = lx.next()?.to_owned();
-                let shapes = via(&mut lx, dbu, &name)?;
-                lef.vias.push((name, shapes));
-            }
+            "VIA" => lef.vias.push(via(&mut lx, dbu)?),
             "SITE" => {
-                let name = lx.next()?.to_owned();
+                let name = lx.next()?;
                 let mut size = (0, 0);
                 loop {
                     match lx.next()? {
                         "END" => {
-                            lx.expect(&name)?;
+                            lx.expect(name)?;
                             break;
                         }
                         "SIZE" => {
@@ -269,48 +265,44 @@ pub fn read_lef_into(text: &str, dbu: i64, lef: &mut Lef) -> Result<(), LefDefEr
                         _ => lx.skip_statement()?,
                     }
                 }
-                lef.sites.push((name, size));
+                lef.sites.push((name.to_owned(), size));
             }
             "NONDEFAULTRULE" => {
-                let name = lx.next()?.to_owned();
+                let name = lx.next()?;
                 let mut widths = Vec::new();
                 loop {
                     match lx.next()? {
                         "END" => {
-                            lx.expect(&name)?;
+                            lx.expect(name)?;
                             break;
                         }
                         "LAYER" => {
-                            let layer = lx.next()?.to_owned();
+                            let layer = lx.next()?;
                             loop {
                                 match lx.next()? {
                                     "END" => {
-                                        lx.expect(&layer)?;
+                                        lx.expect(layer)?;
                                         break;
                                     }
                                     "WIDTH" => {
-                                        widths.push((layer.clone(), lx.microns(dbu)?));
+                                        widths.push((layer.to_owned(), lx.microns(dbu)?));
                                         lx.expect(";")?;
                                     }
                                     _ => lx.skip_statement()?,
                                 }
                             }
                         }
-                        "VIA" => {
-                            let via_name = lx.next()?.to_owned();
-                            let shapes = via(&mut lx, dbu, &via_name)?;
-                            lef.vias.push((via_name, shapes));
-                        }
-                        "SPACING" => skip_to_end(&mut lx, "SPACING")?,
+                        "VIA" => lef.vias.push(via(&mut lx, dbu)?),
+                        "SPACING" => lx.skip_to_end("SPACING")?,
                         _ => lx.skip_statement()?,
                     }
                 }
-                lef.ndrs.push((name, widths));
+                lef.ndrs.push((name.to_owned(), widths));
             }
             "BEGINEXT" => while lx.next()? != "ENDEXT" {},
             "VIARULE" => {
-                let name = lx.next()?.to_owned();
-                skip_to_end(&mut lx, &name)?;
+                let name = lx.next()?;
+                lx.skip_to_end(name)?;
             }
             "MACRO" => lef.macros.push(macro_(&mut lx, dbu)?),
             _ => lx.skip_statement()?,
@@ -434,16 +426,10 @@ fn edge_types(lx: &Lexer<'_>, dbu: i64, value: &str) -> Result<Vec<EdgeType>, Le
     Ok(out)
 }
 
-/// Skips to just past `END name`.
-fn skip_to_end(lx: &mut Lexer<'_>, name: &str) -> Result<(), LefDefError> {
-    while !(lx.next()? == "END" && lx.eat(name)) {}
-    Ok(())
-}
-
 fn layer(lx: &mut Lexer<'_>, dbu: i64) -> Result<LefLayer, LefDefError> {
-    let name = lx.next()?.to_owned();
+    let name = lx.next()?;
     let mut out = LefLayer {
-        name: name.clone(),
+        name: name.to_owned(),
         kind: LayerKind::Other,
         width: None,
         pitch: None,
@@ -452,7 +438,7 @@ fn layer(lx: &mut Lexer<'_>, dbu: i64) -> Result<LefLayer, LefDefError> {
     loop {
         match lx.next()? {
             "END" => {
-                lx.expect(&name)?;
+                lx.expect(name)?;
                 return Ok(out);
             }
             "TYPE" => {
@@ -502,9 +488,10 @@ fn layer(lx: &mut Lexer<'_>, dbu: i64) -> Result<LefLayer, LefDefError> {
     }
 }
 
-/// A `VIA` body after its name, through `END name`: fixed shapes, or a
-/// generated via's rule.
-fn via(lx: &mut Lexer<'_>, dbu: i64, name: &str) -> Result<Vec<Shape>, LefDefError> {
+/// A `VIA` after its keyword, through `END name`: its name, and its fixed
+/// shapes or a generated via's rule.
+fn via(lx: &mut Lexer<'_>, dbu: i64) -> Result<(String, Vec<Shape>), LefDefError> {
+    let name = lx.next()?;
     lx.eat("DEFAULT");
     let mut shapes = Vec::new();
     let mut rule: Option<ViaRule> = None;
@@ -529,49 +516,44 @@ fn via(lx: &mut Lexer<'_>, dbu: i64, name: &str) -> Result<Vec<Shape>, LefDefErr
                     ..ViaRule::default()
                 });
             }
-            "CUTSIZE" | "CUTSPACING" | "ROWCOL" | "ORIGIN" => {
+            "CUTSIZE" | "CUTSPACING" | "ROWCOL" | "ORIGIN" | "ENCLOSURE" | "OFFSET" | "LAYERS" => {
                 let r = rule
                     .as_mut()
                     .ok_or_else(|| lx.err("via rule data without VIARULE"))?;
-                let a = if word == "ROWCOL" {
-                    lx.int()?
-                } else {
-                    lx.microns(dbu)?
-                };
-                let b = if word == "ROWCOL" {
-                    lx.int()?
-                } else {
-                    lx.microns(dbu)?
-                };
                 match word {
-                    "CUTSIZE" => r.cut = (a, b),
-                    "CUTSPACING" => r.spacing = (a, b),
-                    "ROWCOL" => r.rowcol = (a, b),
-                    _ => r.origin = (a, b),
-                }
-                lx.expect(";")?;
-            }
-            "ENCLOSURE" | "OFFSET" => {
-                let r = rule
-                    .as_mut()
-                    .ok_or_else(|| lx.err("via rule data without VIARULE"))?;
-                let mut v = [0; 4];
-                for slot in &mut v {
-                    *slot = lx.microns(dbu)?;
-                }
-                if word == "ENCLOSURE" {
-                    r.enclosure = v;
-                } else {
-                    r.offset = v;
-                }
-                lx.expect(";")?;
-            }
-            "LAYERS" => {
-                let r = rule
-                    .as_mut()
-                    .ok_or_else(|| lx.err("via rule data without VIARULE"))?;
-                for slot in &mut r.layers {
-                    lx.next()?.clone_into(slot);
+                    "LAYERS" => {
+                        for slot in &mut r.layers {
+                            lx.next()?.clone_into(slot);
+                        }
+                    }
+                    "ENCLOSURE" | "OFFSET" => {
+                        let mut v = [0; 4];
+                        for slot in &mut v {
+                            *slot = lx.microns(dbu)?;
+                        }
+                        if word == "ENCLOSURE" {
+                            r.enclosure = v;
+                        } else {
+                            r.offset = v;
+                        }
+                    }
+                    _ => {
+                        // A cut count, else a length.
+                        let mut value = || {
+                            if word == "ROWCOL" {
+                                lx.int()
+                            } else {
+                                lx.microns(dbu)
+                            }
+                        };
+                        let pair = (value()?, value()?);
+                        match word {
+                            "CUTSIZE" => r.cut = pair,
+                            "CUTSPACING" => r.spacing = pair,
+                            "ROWCOL" => r.rowcol = pair,
+                            _ => r.origin = pair,
+                        }
+                    }
                 }
                 lx.expect(";")?;
             }
@@ -585,14 +567,25 @@ fn via(lx: &mut Lexer<'_>, dbu: i64, name: &str) -> Result<Vec<Shape>, LefDefErr
             _ => lx.skip_statement()?,
         }
     }
+    generated(lx, rule, &mut shapes)?;
+    Ok((name.to_owned(), shapes))
+}
+
+/// Adds a generated via's cut and enclosure shapes to `shapes`, once its
+/// rule holds; nothing for a fixed via.
+pub(super) fn generated(
+    lx: &Lexer<'_>,
+    rule: Option<ViaRule>,
+    shapes: &mut Vec<Shape>,
+) -> Result<(), LefDefError> {
     if let Some(rule) = rule {
         check_rule(lx, &rule)?;
         shapes.extend(rule.shapes());
     }
-    Ok(shapes)
+    Ok(())
 }
 
-pub(super) fn check_rule(lx: &Lexer<'_>, rule: &ViaRule) -> Result<(), LefDefError> {
+fn check_rule(lx: &Lexer<'_>, rule: &ViaRule) -> Result<(), LefDefError> {
     if rule.rowcol.0 < 1 || rule.rowcol.1 < 1 || rule.cut.0 <= 0 || rule.cut.1 <= 0 {
         return Err(lx.err("a generated via needs a positive CUTSIZE and ROWCOL"));
     }
@@ -616,22 +609,10 @@ fn geometry(lx: &mut Lexer<'_>, dbu: i64, layer: &str, word: &str) -> Result<Sha
     if layer.is_empty() {
         return Err(lx.err(format!("{word} before any LAYER")));
     }
-    if lx.eat("MASK") {
-        lx.next()?;
-    }
-    if lx.peek() == Some("ITERATE") {
-        return Err(lx.err("ITERATE geometry is not read"));
-    }
+    mask(lx)?;
     let mut points = Vec::new();
     while lx.peek() != Some(";") {
-        // LEF points may be bracketed: `( x y )`.
-        let bracketed = lx.eat("(");
-        let x = lx.microns(dbu)?;
-        let y = lx.microns(dbu)?;
-        if bracketed {
-            lx.expect(")")?;
-        }
-        points.push((x, y));
+        points.push(point(lx, dbu)?);
     }
     lx.expect(";")?;
     if word == "RECT" {
@@ -647,6 +628,27 @@ fn geometry(lx: &mut Lexer<'_>, dbu: i64, layer: &str, word: &str) -> Result<Sha
             ring: points,
         })
     }
+}
+
+/// A LEF point, `x y` in micrometres, bracketed or not: `( x y )`.
+fn point(lx: &mut Lexer<'_>, dbu: i64) -> Result<Pt, LefDefError> {
+    let bracketed = lx.eat("(");
+    let at = (lx.microns(dbu)?, lx.microns(dbu)?);
+    if bracketed {
+        lx.expect(")")?;
+    }
+    Ok(at)
+}
+
+/// Skips a `MASK n`, and refuses `ITERATE` geometry.
+fn mask(lx: &mut Lexer<'_>) -> Result<(), LefDefError> {
+    if lx.eat("MASK") {
+        lx.next()?;
+    }
+    if lx.peek() == Some("ITERATE") {
+        return Err(lx.err("ITERATE geometry is not read"));
+    }
+    Ok(())
 }
 
 /// `LAYER`/`RECT`/`POLYGON`/`VIA` statements up to `END`, into shapes and
@@ -668,19 +670,9 @@ fn geometries(
             }
             "RECT" | "POLYGON" => shapes.push(geometry(lx, dbu, &layer, word)?),
             "VIA" => {
-                if lx.eat("MASK") {
-                    lx.next()?;
-                }
-                if lx.peek() == Some("ITERATE") {
-                    return Err(lx.err("ITERATE geometry is not read"));
-                }
-                let bracketed = lx.eat("(");
-                let x = lx.microns(dbu)?;
-                let y = lx.microns(dbu)?;
-                if bracketed {
-                    lx.expect(")")?;
-                }
-                vias.push((lx.next()?.to_owned(), (x, y)));
+                mask(lx)?;
+                let at = point(lx, dbu)?;
+                vias.push((lx.next()?.to_owned(), at));
                 lx.expect(";")?;
             }
             "PATH" => return Err(lx.err("PATH geometry is not read")),
@@ -720,15 +712,15 @@ fn antenna(lx: &mut Lexer<'_>, kind: AntennaKind) -> Result<PinAntenna, LefDefEr
 }
 
 fn macro_(lx: &mut Lexer<'_>, dbu: i64) -> Result<Macro, LefDefError> {
-    let name = lx.next()?.to_owned();
+    let name = lx.next()?;
     let mut out = Macro {
-        name: name.clone(),
+        name: name.to_owned(),
         ..Macro::default()
     };
     loop {
         match lx.next()? {
             "END" => {
-                lx.expect(&name)?;
+                lx.expect(name)?;
                 return Ok(out);
             }
             "CLASS" => {
@@ -747,11 +739,7 @@ fn macro_(lx: &mut Lexer<'_>, dbu: i64) -> Result<Macro, LefDefError> {
                 }
             },
             "ORIGIN" => {
-                let bracketed = lx.eat("(");
-                out.origin = (lx.microns(dbu)?, lx.microns(dbu)?);
-                if bracketed {
-                    lx.expect(")")?;
-                }
+                out.origin = point(lx, dbu)?;
                 lx.expect(";")?;
             }
             "SIZE" => {
@@ -761,9 +749,9 @@ fn macro_(lx: &mut Lexer<'_>, dbu: i64) -> Result<Macro, LefDefError> {
                 lx.expect(";")?;
             }
             "PIN" => {
-                let pin_name = lx.next()?.to_owned();
+                let pin_name = lx.next()?;
                 let mut pin = MacroPin {
-                    name: pin_name.clone(),
+                    name: pin_name.to_owned(),
                     ..MacroPin::default()
                 };
                 let mut oxide1 = true;
@@ -799,7 +787,7 @@ fn macro_(lx: &mut Lexer<'_>, dbu: i64) -> Result<Macro, LefDefError> {
                     }
                     match word {
                         "END" => {
-                            lx.expect(&pin_name)?;
+                            lx.expect(pin_name)?;
                             break;
                         }
                         "ANTENNAMODEL" => {
