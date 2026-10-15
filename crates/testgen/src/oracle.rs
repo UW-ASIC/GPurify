@@ -12,7 +12,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 /// Tool processes alive at once, across every thread of the binary. One
@@ -39,10 +39,11 @@ pub fn tool(name: &str) -> PathBuf {
         })
 }
 
-/// A new, empty directory for one comparison's input and output files, under
-/// the system temporary directory and named after `tag`. Nothing removes it:
-/// a caller removes it once the comparison holds, and a failure leaves it for
-/// a reader.
+/// A new, empty directory for one comparison's (or one fixture's) files,
+/// under the system temporary directory and named after `tag`, the process
+/// and a per-process serial, so no two calls share one. Nothing removes it: a
+/// caller removes it once the comparison holds, and a failure leaves it for a
+/// reader.
 ///
 /// # Panics
 ///
@@ -50,30 +51,46 @@ pub fn tool(name: &str) -> PathBuf {
 pub fn scratch(tag: &str) -> PathBuf {
     static NEXT: AtomicU32 = AtomicU32::new(0);
     let serial = NEXT.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "gpurify-oracle-{tag}-{}-{serial}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("gpurify-{tag}-{}-{serial}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)
         .unwrap_or_else(|why| panic!("cannot create {}: {why}", dir.display()));
     dir
 }
 
-/// A slot of [`MAX_RUNNING`] and the child holding it: dropping it, on
-/// return or on a panic, kills the child if it still runs, reaps it, and
-/// frees the slot.
-struct Running(Child);
+/// One of the [`MAX_RUNNING`] slots, taken by [`Slot::take`] and freed on
+/// drop, on return or on a panic.
+struct Slot;
+
+impl Slot {
+    /// Waits until a slot is free and takes it.
+    fn take() -> Self {
+        let (free, freed) = &SLOTS;
+        let mut slots = free.lock().unwrap_or_else(PoisonError::into_inner);
+        while *slots == 0 {
+            slots = freed.wait(slots).unwrap_or_else(PoisonError::into_inner);
+        }
+        *slots -= 1;
+        Self
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let (free, freed) = &SLOTS;
+        *free.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+        freed.notify_one();
+    }
+}
+
+/// A child and the slot it holds: dropping it kills the child if it still
+/// runs and reaps it, then frees the slot (fields drop after `drop`).
+struct Running(Child, Slot);
 
 impl Drop for Running {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
-        let (free, freed) = &SLOTS;
-        *free
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
-        freed.notify_one();
     }
 }
 
@@ -88,18 +105,7 @@ impl Drop for Running {
 /// When it cannot be started, runs past `limit` (it is killed first), or
 /// exits unsuccessfully; the message carries both of its output streams.
 pub fn run(tool: &Path, args: &[&str], dir: &Path, limit: Duration) -> String {
-    let (free, freed) = &SLOTS;
-    {
-        let mut slots = free
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        while *slots == 0 {
-            slots = freed
-                .wait(slots)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-        }
-        *slots -= 1;
-    }
+    let slot = Slot::take();
     let stream = |name: &str| {
         File::create(dir.join(name)).unwrap_or_else(|why| panic!("{}: {why}", dir.display()))
     };
@@ -111,14 +117,8 @@ pub fn run(tool: &Path, args: &[&str], dir: &Path, limit: Duration) -> String {
         .stderr(stream("stderr.txt"))
         .spawn();
     let mut child = match spawned {
-        Ok(child) => Running(child),
-        Err(why) => {
-            *free
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
-            freed.notify_one();
-            panic!("cannot start {}: {why}", tool.display());
-        }
+        Ok(child) => Running(child, slot),
+        Err(why) => panic!("cannot start {}: {why}", tool.display()),
     };
     let start = Instant::now();
     let status = loop {
