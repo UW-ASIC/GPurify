@@ -354,17 +354,10 @@ pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
     let drop = cross(seg.a, seg.b, p).unsigned_abs();
     let scale = len2.unsigned_abs();
 
-    let dist2 = if let Some(num) = drop.checked_mul(drop) {
-        num / scale + u128::from(num % scale != 0)
-    } else {
+    let dist2 = match drop.checked_mul(drop) {
+        Some(num) => num / scale + u128::from(num % scale != 0),
         // `cross²` reaches 166 bits at the domain corners: divide at 256 bits.
-        let wide = |v: u128| I256::from_i128(i128::try_from(v).expect("under 2^84"));
-        let (floor, inexact) = wide(drop).mul(wide(drop)).div_floor(wide(scale));
-        floor
-            .to_i128()
-            .expect("a squared distance in the domain fits an i128")
-            .unsigned_abs()
-            + u128::from(inexact)
+        None => ceil_sq_div(drop, scale),
     };
     // At most the squared diagonal of the `±2^40` domain, `2^83`.
     debug_assert!(
@@ -378,6 +371,22 @@ pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
     )]
     let dist2 = dist2 as i128;
     DbuArea::new(dist2)
+}
+
+/// `ceil(a² / d)` for `a, d < 2^84`, `d > 0`, where `a²` is past `u128`.
+// Cold and out of line: only points near the domain's corners reach it, and
+// the 256-step division inlined into `point_seg_dist2` kept that out of its
+// callers' loops (+50% on the bench's enclosure rule).
+#[cold]
+#[inline(never)]
+fn ceil_sq_div(a: u128, d: u128) -> u128 {
+    let wide = |v: u128| I256::from_i128(i128::try_from(v).expect("under 2^84"));
+    let (floor, inexact) = wide(a).mul(wide(a)).div_floor(wide(d));
+    floor
+        .to_i128()
+        .expect("a squared distance in the domain fits an i128")
+        .unsigned_abs()
+        + u128::from(inexact)
 }
 
 /// Integer square root, truncating; negatives give 0, results clamp to `MAX_ABS_DBU`.
