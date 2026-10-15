@@ -1,5 +1,5 @@
-//! Geometry at any size whose net partition and per-layer area are known by
-//! construction, so one corpus serves both the benchmark and the assertion.
+//! Geometry at any size whose net partition is known by construction, so one
+//! corpus serves both the benchmark and the assertion.
 //!
 //! A comb per net — a rail on the lower layer, `fingers` stubs on the upper
 //! layer and a cut per stub — with nets in disjoint y bands and blocks in
@@ -11,7 +11,7 @@
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::Connectivity;
 
-use crate::shapes::{Handle, Ids, LayoutBuilder};
+use crate::shapes::{Handle, LayoutBuilder};
 use crate::Rng;
 
 /// How big a corpus to build.
@@ -27,35 +27,21 @@ pub struct ScaleSpec {
     pub hierarchy_depth: u8,
 }
 
-/// Which layer is which in a corpus.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ScaleLayers {
-    /// Rails.
-    pub lower: LayerId,
-    /// Fingers.
-    pub upper: LayerId,
-    /// Cuts joining the two.
-    pub cut: LayerId,
-}
-
-impl ScaleLayers {
-    /// The layer table this corpus needs.
-    pub const COUNT: usize = 3;
-    const LOWER: LayerId = LayerId(0);
-    const UPPER: LayerId = LayerId(1);
-    const CUT: LayerId = LayerId(2);
-}
+/// Rails.
+const LOWER: LayerId = LayerId(0);
+/// Fingers.
+const UPPER: LayerId = LayerId(1);
+/// Cuts joining the two.
+const CUT: LayerId = LayerId(2);
+/// The layer table a corpus is built on.
+const LAYERS: usize = 3;
 
 /// A corpus and everything known about it without running anything.
 #[derive(Debug)]
 pub struct ScaleCorpus {
-    /// The geometry, on a [`ScaleLayers::COUNT`]-layer table.
+    /// The geometry, on a three-layer table: rails on layer 0, fingers on 1,
+    /// cuts on 2.
     pub store: GeometryStore,
-    /// Resolves the builder's handles; the expected answers already use
-    /// store ids.
-    pub ids: Ids,
-    /// Which layer holds rails, fingers and cuts.
-    pub layers: ScaleLayers,
     /// The deck fragment that extracts it: rails and fingers conduct, cuts
     /// join them, and touching shapes do not connect, so every join is through
     /// a cut.
@@ -63,17 +49,9 @@ pub struct ScaleCorpus {
     /// `expected_net_polys[n]` is every conductor polygon on net `n`,
     /// ascending. Cuts are not conductors and are not listed.
     pub expected_net_polys: Vec<Vec<PolyId>>,
-    /// Covered area per layer, indexed by `LayerId`. Exact: shapes on one
-    /// layer never overlap.
-    pub layer_area: [i128; ScaleLayers::COUNT],
-    /// Polygons actually emitted: `nets * (1 + 2 * fingers)`, cuts included.
+    /// Polygons actually emitted, cuts included: `nets * (1 + 2 * fingers)`
+    /// for `fingers = (polygons / nets - 1) / 2`.
     pub polygons: u32,
-    /// Fingers per net.
-    pub fingers: u32,
-    /// Leaf blocks the nets were spread over.
-    pub blocks: u32,
-    /// Side of the square region the whole corpus occupies.
-    pub extent: i64,
 }
 
 /// Rail height, in database units.
@@ -130,7 +108,7 @@ pub fn scale_corpus(spec: ScaleSpec) -> ScaleCorpus {
     // block above, where a cut bridges two combs and two nets extract as one.
     let block_side = i64::from(fingers + 1) * FINGER_PITCH;
     let block_side = block_side.max(i64::from(bands) * BAND_PITCH);
-    let (extent, origins) = tile(spec.hierarchy_depth, block_side, BLOCK_GAP);
+    let (_, origins) = tile(spec.hierarchy_depth, block_side, BLOCK_GAP);
     debug_assert_eq!(origins.len(), blocks as usize, "one origin per leaf block");
 
     // Round-robin then shuffle, so a net's index says nothing about where it
@@ -138,9 +116,8 @@ pub fn scale_corpus(spec: ScaleSpec) -> ScaleCorpus {
     let mut block_of_net: Vec<u32> = (0..spec.nets).map(|n| n % blocks).collect();
     rng.shuffle(&mut block_of_net);
 
-    let mut layout = LayoutBuilder::new(ScaleLayers::COUNT);
+    let mut layout = LayoutBuilder::new(LAYERS);
     let mut net_handles: Vec<Vec<Handle>> = Vec::with_capacity(spec.nets as usize);
-    let mut layer_area = [0i128; ScaleLayers::COUNT];
     let mut band_in_block = vec![0i64; blocks as usize];
 
     for &block in &block_of_net {
@@ -150,26 +127,15 @@ pub fn scale_corpus(spec: ScaleSpec) -> ScaleCorpus {
         let y = by + band * BAND_PITCH;
 
         let rail_width = i64::from(fingers) * FINGER_PITCH + FINGER_WIDTH;
-        let mut handles =
-            vec![layout.rect(ScaleLayers::LOWER, bx, y, bx + rail_width, y + RAIL_HEIGHT)];
-        layer_area[ScaleLayers::LOWER.idx()] += i128::from(rail_width) * i128::from(RAIL_HEIGHT);
+        let mut handles = vec![layout.rect(LOWER, bx, y, bx + rail_width, y + RAIL_HEIGHT)];
 
         for finger in 0..fingers {
             let x = bx + i64::from(finger) * FINGER_PITCH;
-            handles.push(layout.rect(
-                ScaleLayers::UPPER,
-                x,
-                y,
-                x + FINGER_WIDTH,
-                y + FINGER_HEIGHT,
-            ));
-            layer_area[ScaleLayers::UPPER.idx()] +=
-                i128::from(FINGER_WIDTH) * i128::from(FINGER_HEIGHT);
+            handles.push(layout.rect(UPPER, x, y, x + FINGER_WIDTH, y + FINGER_HEIGHT));
 
             let cx = x + FINGER_WIDTH / 2 - CUT_SIZE / 2;
             let cy = y + RAIL_HEIGHT / 2 - CUT_SIZE / 2;
-            layout.rect(ScaleLayers::CUT, cx, cy, cx + CUT_SIZE, cy + CUT_SIZE);
-            layer_area[ScaleLayers::CUT.idx()] += i128::from(CUT_SIZE) * i128::from(CUT_SIZE);
+            layout.rect(CUT, cx, cy, cx + CUT_SIZE, cy + CUT_SIZE);
         }
         net_handles.push(handles);
     }
@@ -180,26 +146,16 @@ pub fn scale_corpus(spec: ScaleSpec) -> ScaleCorpus {
 
     ScaleCorpus {
         store,
-        ids,
-        layers: ScaleLayers {
-            lower: ScaleLayers::LOWER,
-            upper: ScaleLayers::UPPER,
-            cut: ScaleLayers::CUT,
-        },
         connectivity: Connectivity {
-            conductors: vec![ScaleLayers::LOWER, ScaleLayers::UPPER],
-            via_cut: vec![ScaleLayers::CUT],
-            via_connects: vec![(ScaleLayers::LOWER, ScaleLayers::UPPER)],
+            conductors: vec![LOWER, UPPER],
+            via_cut: vec![CUT],
+            via_connects: vec![(LOWER, UPPER)],
             // Off deliberately: every join here is via-mediated.
             intra_layer_touch: false,
             ..Connectivity::default()
         },
         expected_net_polys,
-        layer_area,
         polygons,
-        fingers,
-        blocks,
-        extent,
     }
 }
 
