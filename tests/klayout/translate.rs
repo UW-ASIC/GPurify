@@ -426,6 +426,45 @@ def metal_width_via(rule, cuts, below, above, bb, ab, w, h)
     put({ rule: rule }.merge(poly(c))) if held && ![[w, h], [h, w]].include?([b.width, b.height])
   end
 end
+# An enclosure band's LEF qualifiers over the polygons of `i`. With `within`
+# (EXCEPTEXTRACUT), each whose redundant-cut flag is `only`: another polygon
+# of `i` on the same merged figure of `outer` and of `other`, box to box at
+# most `within` away. With `lf`/`lb` (LENGTH), each whose overhang length is
+# at least `lf` and below `lb`: the longer run of merged `outer` along the
+# horizontal and the vertical line through its box centre, the run holding
+# the centre. At x2 metal edges are even, so a strip one unit either side
+# of the line holds exactly the material on it.
+def qualified(i, outer, other, within, only, lf, lb)
+  cuts = i.data.each.to_a
+  m = outer.data.merged
+  unless within.nil?
+    figs = [m.each.to_a, other.data.merged.each.to_a]
+    first = lambda { |fs, c| fs.index { |f| !(RBA::Region.new(f) & RBA::Region.new(c.bbox)).is_empty? } }
+    key = cuts.map { |c| figs.map { |fs| first.(fs, c) } }
+    gap2 = lambda do |a, b|
+      dx = [a.left - b.right, b.left - a.right, 0].max
+      dy = [a.bottom - b.top, b.bottom - a.top, 0].max
+      dx * dx + dy * dy
+    end
+    red = cuts.each_index.map do |k|
+      !key[k].include?(nil) && cuts.each_index.any? { |j| j != k && key[j] == key[k] && gap2.(cuts[k].bbox, cuts[j].bbox) <= within * within }
+    end
+    cuts = cuts.each_index.select { |k| red[k] == only }.map { |k| cuts[k] }
+  end
+  unless lf.nil? && lb.nil?
+    w = m.bbox
+    run = lambda do |c|
+      b = c.bbox
+      cx = (b.left + b.right) / 2
+      cy = (b.bottom + b.top) / 2
+      h = (m & RBA::Region.new(RBA::Box.new(w.left, cy - 1, w.right, cy + 1))).each.map(&:bbox).find { |r| r.left <= cx && cx <= r.right }
+      v = (m & RBA::Region.new(RBA::Box.new(cx - 1, w.bottom, cx + 1, w.top))).each.map(&:bbox).find { |r| r.bottom <= cy && cy <= r.top }
+      [h.nil? ? 0 : h.width, v.nil? ? 0 : v.height].max
+    end
+    cuts = cuts.select { |c| l = run.(c) ; (lf.nil? || l >= lf) && (lb.nil? || l < lb) }
+  end
+  DRC::DRCLayer::new(self, RBA::Region.new(cuts))
+end
 def via_stack(rule, layers, max, metals = nil)
   cuts = layers.map { |l| l.data.each.to_a }
   unless metals.nil?
@@ -1326,6 +1365,9 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
             } => {
                 fig(outer, &mut reads);
                 let name = fig(inner, &mut reads);
+                if let Some(extra) = wire.extra_cut {
+                    layers.reads(extra.other, &mut reads);
+                }
                 writeln!(
                     body,
                     "i = {} ; emit({q}, {o}.enclosing(i, {}, euclidian, transparent)) ; emit({q}, i.not_inside({o}))",
@@ -1375,6 +1417,9 @@ pub fn translate(deck: &Deck, strings: &StrTable) -> Result<Script, String> {
             } => {
                 fig(outer, &mut reads);
                 let name = fig(inner, &mut reads);
+                if let Some(extra) = wire.extra_cut {
+                    layers.reads(extra.other, &mut reads);
+                }
                 writeln!(
                     body,
                     "i = {} ; c = enclosed({o}, projection) < {} ; \
@@ -2468,7 +2513,8 @@ type Spec = (&'static str, Verdict, Compare, Key, Value, Vec<String>);
 
 /// The inner layer `inner` restricted to an enclosure's wire band: the shapes
 /// inside the part of `outer` at least `from` wide (`sized(-(w - 1))` and back
-/// at x2, as for wide spacing) and not inside the part `below` wide.
+/// at x2, as for wide spacing) and not inside the part `below` wide, then
+/// the band's `EXCEPTEXTRACUT` and `LENGTH` selections (`qualified`).
 fn banded(inner: String, outer: &str, wire: WireBand) -> String {
     let wide = |w: gpurify::geom::Dbu| {
         let t = w.raw() - 1;
@@ -2481,7 +2527,21 @@ fn banded(inner: String, outer: &str, wire: WireBand) -> String {
     if let Some(below) = wire.below {
         out = format!("{out}.not_inside({})", wide(below));
     }
-    out
+    if wire.widths_only() {
+        return out;
+    }
+    let doubled =
+        |l: Option<gpurify::geom::Dbu>| l.map_or("nil".to_owned(), |l| (2 * l.raw()).to_string());
+    let (other, within, only) = wire
+        .extra_cut
+        .map_or(("nil".to_owned(), "nil".to_owned(), false), |e| {
+            (var(e.other), (2 * e.within.raw()).to_string(), e.only)
+        });
+    format!(
+        "qualified({out}, {outer}, {other}, {within}, {only}, {}, {})",
+        doubled(wire.length.0),
+        doubled(wire.length.1)
+    )
 }
 
 /// Lengths doubled for the ×2 layout, as a Ruby list's items.

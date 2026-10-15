@@ -608,7 +608,12 @@ pub enum Rule {
     /// `enclosure(inner, outer; width: len, below: len) >= len` (either bound
     /// alone too) holds only the inner polygons its [`WireBand`] selects: LEF
     /// `ENCLOSURE ... WIDTH minWidth`, an enclosure that applies by the width
-    /// of the wire around the cut.
+    /// of the wire around the cut. The band's other two selections are LEF's
+    /// other qualifiers: `.., except_extra_cut: len, other: layer` (or
+    /// `extra_cut:` for the minimum-width rows that take the excepted cuts
+    /// over) is `EXCEPTEXTRACUT cutWithin` ([`ExtraCut`]), and `length: len`
+    /// / `length_below: len` is `LENGTH minLength` and the vias it leaves
+    /// to the other rows ([`WireBand::length`]).
     ///
     /// One violation per offending inner polygon, reported on the `inner`
     /// layer. A rectangle is marked in the middle of the strip on its least
@@ -619,7 +624,7 @@ pub enum Rule {
     /// [Catalog](https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv):
     /// DRC-040, DRC-043, DRC-090, DRC-096. Rules: sky130 ct.4, m1.4 and
     /// licon.5a, GF180 CO.3, IHP M1.c and V1.c, ASAP7 V3.M4.EN.2; LEF
-    /// `ENCLOSURE`, and `ENCLOSURE ... WIDTH` (LEF/DEF 5.8, Example 1-3);
+    /// `ENCLOSURE`, and `ENCLOSURE ... WIDTH` (LEF/DEF 5.8, Examples 1-3 to 1-5);
     /// `KLayout` `enclosing`.
     MinEnclosure {
         /// The enclosing layer, merged; the deck's second argument.
@@ -721,7 +726,8 @@ pub enum Rule {
     ///
     /// With `width:` and `below:`, the rule holds only the inner polygons its
     /// [`WireBand`] selects, as [`Rule::MinEnclosure`]'s: LEF `ENCLOSURE
-    /// overhang1 overhang2 WIDTH minWidth`.
+    /// overhang1 overhang2 WIDTH minWidth`, with `EXCEPTEXTRACUT` and
+    /// `LENGTH` as there.
     ///
     /// One violation per offending inner polygon, on the `inner` layer, in the
     /// middle of the strip past the least enclosed edge of the better axis.
@@ -3142,6 +3148,11 @@ pub enum StepNeighbour {
 /// equal to the wire width", so a deck writes one row per band, each `below`
 /// the next one's `from`, and every inner polygon falls in exactly one; one
 /// no host covers falls in the lowest.
+///
+/// An enclosure's band also carries LEF's two other selections, which a
+/// [`Rule::MetalWidthVia`] band never states: `extra_cut`
+/// (`EXCEPTEXTRACUT`) and `length` (`LENGTH`). A polygon is held when every
+/// stated selection holds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WireBand {
     /// The narrowest wire held, in grid units; 0 holds every width.
@@ -3149,6 +3160,23 @@ pub struct WireBand {
     /// The wire width, in grid units and above `from`, at and above which an
     /// inner polygon is no longer held; `None` for no upper bound.
     pub below: Option<Dbu>,
+    /// LEF `EXCEPTEXTRACUT`: an inner polygon with a redundant cut is not
+    /// held, or with [`ExtraCut::only`] only such a one is; `None` holds
+    /// either.
+    pub extra_cut: Option<ExtraCut>,
+    /// LEF `ENCLOSURE ... LENGTH minLength`: "the enclosure rule only
+    /// applies if the total length of the longest opposite-side overhangs is
+    /// greater than or equal to minLength. The total length of the overhang
+    /// is measured at the via cut center" (LEF/DEF 5.8, `ENCLOSURE`, Example
+    /// 1-5 and Figure 1-5). The overhang length of an inner polygon is the
+    /// longer of the two runs of merged outer material along the horizontal
+    /// and the vertical line through its bounding box's centre, each the run
+    /// that contains the centre, its ends included (0 where the centre is on
+    /// no outer material): Figure 1-5 a) reads 0.05 + 0.20 + 0.40 = 0.65 for
+    /// a 0.20 cut. Held from `.0` (`None`: from 0) up to but not at `.1`
+    /// (`None`: no bound), so a deck states LEF's rule with `.0` and the
+    /// shorter vias the other rules hold with `.1`.
+    pub length: (Option<Dbu>, Option<Dbu>),
 }
 
 impl WireBand {
@@ -3156,7 +3184,47 @@ impl WireBand {
     pub const ANY: Self = Self {
         from: Dbu::new_unchecked(0),
         below: None,
+        extra_cut: None,
+        length: (None, None),
     };
+
+    /// Whether the band states wire widths only, as a
+    /// [`Rule::MetalWidthVia`] band must.
+    #[must_use]
+    pub fn widths_only(&self) -> bool {
+        self.extra_cut.is_none() && self.length == (None, None)
+    }
+}
+
+/// LEF `ENCLOSURE ... WIDTH minWidth EXCEPTEXTRACUT cutWithin`: "if there is
+/// another via cut having same metal shapes on both metal layers less than or
+/// equal to cutWithin distance away, this ENCLOSURE with WIDTH rule is
+/// ignored and the ENCLOSURE rules for minimum width wires (that is, no WIDTH
+/// keyword) are applied to the via cuts instead" (LEF/DEF 5.8, `ENCLOSURE`,
+/// Example 1-4 and Figure 1-4).
+///
+/// A drawn inner polygon has a redundant cut when another drawn polygon of
+/// its layer lies on the same merged figure of the enclosing layer and on the
+/// same merged figure of `other` (the metal on the cuts' far side), at most
+/// `within` from it, edge to edge (Euclidean between their bounding boxes, as
+/// LEF measures cut spacing). A polygon lies on the lowest figure its box
+/// overlaps with positive area; one on no figure of either metal has none.
+///
+/// The `WIDTH` row states it without `only` (the deck's `except_extra_cut:`)
+/// and does not hold such a cut. The minimum-width rows that hold it instead
+/// are written once more over the excepted band with `only` (the deck's
+/// `extra_cut:`), so a cut on a wider band, which the exception does not
+/// reach, is held by its own row alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExtraCut {
+    /// How far the other cut may be, edge to edge, inclusive, in grid units;
+    /// positive.
+    pub within: Dbu,
+    /// The metal on the cuts' far side from the enclosing layer.
+    pub other: LayerId,
+    /// Hold only the inner polygons with a redundant cut, rather than only
+    /// those without one.
+    pub only: bool,
 }
 
 /// A spacing table, LEF `SPACINGTABLE PARALLELRUNLENGTH`: the required space
@@ -3560,13 +3628,42 @@ impl RuleSet {
                 };
             let from = bound("wire_width")?.unwrap_or(Dbu::new_unchecked(0));
             let below = bound("wire_below")?;
-            if let Some(below) = below.filter(|&below| below <= from) {
-                return Err(DrcError::NonPositiveLimit {
+            let length = (bound("length_from")?, bound("length_below")?);
+            let empty = |lo: Dbu, hi: Option<Dbu>| match hi.filter(|&hi| hi <= lo) {
+                Some(hi) => Err(DrcError::NonPositiveLimit {
                     rule: name_of(spec.id),
-                    limit: (below - from).raw(),
-                });
-            }
-            Ok(WireBand { from, below })
+                    limit: (hi - lo).raw(),
+                }),
+                None => Ok(()),
+            };
+            empty(from, below)?;
+            empty(length.0.unwrap_or(Dbu::new_unchecked(0)), length.1)?;
+            let extra_cut = match bound("extra_cut_within")? {
+                None => None,
+                Some(within) => {
+                    let Some(ParamValue::Layer(other)) = strings
+                        .get("extra_cut_other")
+                        .and_then(|p| rules.param(spec, p))
+                    else {
+                        return Err(wrong_type(spec, "extra_cut_other"));
+                    };
+                    let only = strings
+                        .get("extra_cut_only")
+                        .and_then(|p| rules.param(spec, p))
+                        == Some(ParamValue::Flag(true));
+                    Some(ExtraCut {
+                        within,
+                        other,
+                        only,
+                    })
+                }
+            };
+            Ok(WireBand {
+                from,
+                below,
+                extra_cut,
+                length,
+            })
         };
         // A length that may be 0, as a run a pair must exceed.
         let at_least_zero = |spec: &RuleSpec, param| -> Result<Dbu, DrcError> {
@@ -4094,6 +4191,7 @@ impl RuleSet {
                         Ok(WireBand {
                             from: lo,
                             below: Some(hi + Dbu::new_unchecked(1)),
+                            ..WireBand::ANY
                         })
                     };
                     Rule::MetalWidthVia {
@@ -5551,13 +5649,8 @@ impl Rule {
             | Rule::MinSpacingDiff { limit, .. }
             | Rule::ProjectionSpacing { limit, .. }
             | Rule::CornerToCorner { limit, .. }
-            | Rule::MinEnclosure { limit, .. }
             | Rule::NoncoincidentEnclosure { limit, .. }
             | Rule::MaxEnclosure { limit, .. }
-            | Rule::AsymmetricEnclosure {
-                min_one_side: limit,
-                ..
-            }
             | Rule::AdjacentEnclosure {
                 min_one_side: limit,
                 ..
@@ -5596,7 +5689,23 @@ impl Rule {
             } => length(below_band.from)
                 .and(length(above_band.from))
                 .and(length(width))
-                .and(length(height)),
+                .and(length(height))
+                .and(if below_band.widths_only() && above_band.widths_only() {
+                    Ok(())
+                } else {
+                    Err(DrcError::BadTable(rule.to_owned()))
+                }),
+            Rule::MinEnclosure {
+                limit, wire: band, ..
+            }
+            | Rule::AsymmetricEnclosure {
+                min_one_side: limit,
+                wire: band,
+                ..
+            } => length(limit)
+                .and(band.extra_cut.map_or(Ok(()), |extra| length(extra.within)))
+                .and(band.length.0.map_or(Ok(()), length))
+                .and(band.length.1.map_or(Ok(()), length)),
             Rule::EolSpacing {
                 eol_width: first,
                 limit,
@@ -6011,6 +6120,18 @@ impl Rule {
             | Rule::GlobalDensity {
                 layer, boundary, ..
             } => [Some(layer), boundary, None],
+            Rule::MinEnclosure {
+                outer: a,
+                inner: b,
+                wire,
+                ..
+            }
+            | Rule::AsymmetricEnclosure {
+                outer: a,
+                inner: b,
+                wire,
+                ..
+            } => [Some(a), Some(b), wire.extra_cut.map(|extra| extra.other)],
             Rule::MinSpacingDiff { a, b, .. }
             | Rule::ProjectionSpacing { a, b, .. }
             | Rule::DensityBalance { a, b, .. }
@@ -6018,12 +6139,6 @@ impl Rule {
                 layer: a, cover: b, ..
             }
             | Rule::Overlap { a, b, .. }
-            | Rule::MinEnclosure {
-                outer: a, inner: b, ..
-            }
-            | Rule::AsymmetricEnclosure {
-                outer: a, inner: b, ..
-            }
             | Rule::MaxEnclosure {
                 outer: a, inner: b, ..
             }

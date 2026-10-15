@@ -413,6 +413,7 @@ fn a_wire_band_holds_only_the_inner_shapes_on_wires_of_its_widths() {
                 wire: WireBand {
                     from: dbu(from),
                     below: below.map(dbu),
+                    ..WireBand::ANY
                 },
             },
         )]

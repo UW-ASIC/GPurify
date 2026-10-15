@@ -621,6 +621,15 @@ emit(id, O.enclosing(I, LIM, euclidian, transparent)) ; emit(id, I.not_inside(O)
 - A wire band restricts `I` first, for this kind and the next: `I.inside(O.sized(-T).sized(T))`
   with `T = W - 1` at x2 (the wide part of kind 11) for `width: W`, and `.not_inside(...)` the
   same way for `below:`.
+- The band's LEF qualifiers (DRC-043) are scripted by `qualified(I, O, other, within, only, lf,
+  lb)` over the band's inner polygons. `EXCEPTEXTRACUT`: an inner polygon has a redundant cut when
+  another lies on the same merged figure of `O` and of `other` (the first figure each box overlaps
+  with positive area) with a box-to-box gap at most `within`; the polygons kept are those whose
+  flag is `only`. `LENGTH`: the run of merged `O` through the box centre is read from `O & strip`,
+  a strip one unit either side of the horizontal (vertical) centre line; at x2 every metal edge is
+  even, so the strip holds exactly the material on the line. Kept from `lf` up to, not at, `lb`.
+  Inner polygons are the band's figures, which are the drawn cuts where cuts do not touch, as in
+  the fixtures (`extra_cut_enclosure`, `length_enclosure`).
 - Key FIG by shape: per inner figure, the least over its drawn rows (the marker is in the strip
   outside the inner).
 

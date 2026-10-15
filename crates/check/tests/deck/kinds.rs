@@ -93,6 +93,10 @@ rule ph pitch(m, horizontal) == 54nm
 rule ps space(m, r, projection) >= 235nm
 rule en.band enclosure(v, m; width: 400nm, below: 1000nm) >= 30nm
 rule en.op enclosure(v, m, opposite; below: 340nm) >= 60nm
+rule en.except enclosure(v, m; width: 300nm, except_extra_cut: 200nm, other: m2) >= 30nm
+rule en.extra enclosure(v, m, opposite; width: 300nm, below: 1000nm, extra_cut: 200nm, other: m2) >= 50nm
+rule en.long enclosure(v, m, opposite; length: 700nm) >= 50nm
+rule en.short enclosure(v, m; length_below: 700nm, below: 1000nm) >= 30nm
 rule en.nc enclosure(v, m, noncoincident) >= 20nm
 rule fw full_width(v, m)
 rule en.max enclosure(v, m) <= 95nm
@@ -347,6 +351,7 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
         min_enclosure(v, m, nm(30)).wire(WireBand {
             from: nm(400),
             below: Some(nm(1000)),
+            ..WireBand::ANY
         }),
     );
     d.rule(
@@ -354,7 +359,40 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
         asymmetric_enclosure(v, m, nm(60)).wire(WireBand {
             from: nm(0),
             below: Some(nm(340)),
+            ..WireBand::ANY
         }),
+    );
+    let from = |w: i64| WireBand {
+        from: nm(w),
+        ..WireBand::ANY
+    };
+    d.rule(
+        "en.except",
+        min_enclosure(v, m, nm(30))
+            .wire(from(300))
+            .extra_cut(nm(200), m2, false),
+    );
+    d.rule(
+        "en.extra",
+        asymmetric_enclosure(v, m, nm(50))
+            .wire(WireBand {
+                below: Some(nm(1000)),
+                ..from(300)
+            })
+            .extra_cut(nm(200), m2, true),
+    );
+    d.rule(
+        "en.long",
+        asymmetric_enclosure(v, m, nm(50)).overhang_length(Some(nm(700)), None),
+    );
+    d.rule(
+        "en.short",
+        min_enclosure(v, m, nm(30))
+            .wire(WireBand {
+                below: Some(nm(1000)),
+                ..WireBand::ANY
+            })
+            .overhang_length(None, Some(nm(700))),
     );
     d.rule("en.nc", noncoincident_enclosure(v, m, nm(20)));
     d.rule("fw", full_width(v, m));

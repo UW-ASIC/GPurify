@@ -36,6 +36,8 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         min_enclosure(depth),
         asymmetric_enclosure(depth),
         wire_enclosure(),
+        extra_cut_enclosure(),
+        length_enclosure(),
         noncoincident_enclosure(),
         full_width(),
         projection_spacing(),
@@ -639,6 +641,206 @@ fn wire_enclosure() -> Vec<Fixture> {
         via().rect("met2", 5000, 5000, 6000, 6000),
         [lengths(&[0]), vec![], vec![]],
     ));
+    every_placement(cases)
+}
+
+/// LEF/DEF 5.8 Example 1-4's `via34` in nm, `ENCLOSURE 0.03 0.03 WIDTH 0.3
+/// EXCEPTEXTRACUT 0.2` beside the minimum-width `ENCLOSURE 0.0 0.05`
+/// (`min_enclosure` and `asymmetric_enclosure` with an extra-cut band,
+/// DRC-043): `narrow` is `enclosure(v, m, opposite; below: 300nm) >= 50nm`,
+/// `taken` the same minimum-width rule over the excepted band
+/// (`width: 300nm, extra_cut: 200nm, other: m2`), and `wide`
+/// `enclosure(v, m; width: 300nm, except_extra_cut: 200nm, other: m2) >=
+/// 30nm`. LEF: "if there is another via cut having same metal shapes on
+/// both metal layers less than or equal to cutWithin distance away, this
+/// ENCLOSURE with WIDTH rule is ignored and the ENCLOSURE rules for minimum
+/// width wires ... are applied to the via cuts instead".
+///
+/// Oracle: the LEF text, margins and gaps by construction. 100 nm cuts on
+/// a 400 wide `m` wire `[0, 3000] x [0, 400]` under one `m2` pad.
+///
+/// Shapes: one cut, its bottom margin swept around 30 (`wide` only); cut A
+/// 10 from the wire's end and 20 from its bottom with cut B beside it, the
+/// gap swept around 200 (at or under 200 both are `taken`: A's better axis
+/// reads 20, B's x axis 300 or more; over 200 `wide` reads A 10 and B 20);
+/// the same pair 100 apart with the `m2` pad split between them (`wide`, 10
+/// and 20), and on two 400 wide `m` wires, A's reaching 310 left of it and
+/// B's starting 40 left of it, under one pad (no shared metal, so `wide`,
+/// 20 each); two cuts 100 apart on a 180 wide wire (`narrow` alone, A
+/// reading 40, whatever the extra cut).
+fn extra_cut_enclosure() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["v", "m", "m2"],
+        "rule narrow enclosure(v, m, opposite; below: 300nm) >= 50nm\n\
+         rule taken enclosure(v, m, opposite; width: 300nm, extra_cut: 200nm, other: m2) >= 50nm\n\
+         rule wide enclosure(v, m; width: 300nm, except_extra_cut: 200nm, other: m2) >= 30nm\n",
+    );
+    let case = |name: &str, layout: Layout, rows: [Vec<Finding>; 3]| {
+        let [narrow, taken, wide] = rows;
+        fixture(
+            &format!("extra_cut_enclosure/{name}"),
+            &["DRC-043"],
+            &deck,
+            layout,
+            &[("narrow", narrow), ("taken", taken), ("wide", wide)],
+        )
+    };
+    let wire = || {
+        Layout::default()
+            .rect("m", 0, 0, 3000, 400)
+            .rect("m2", -500, -500, 3500, 900)
+    };
+    let mut cases = Vec::new();
+    for (m, side) in sweep(30) {
+        cases.push(case(
+            &format!("single/{side}"),
+            wire().rect("v", 1000, m, 1100, m + 100),
+            [vec![], vec![], below(m, 30)],
+        ));
+    }
+    let pair = |layout: Layout, gap: i64| {
+        layout
+            .rect("v", 10, 20, 110, 120)
+            .rect("v", 110 + gap, 20, 210 + gap, 120)
+    };
+    for (gap, side) in sweep(200) {
+        let rows = if gap <= 200 {
+            [vec![], lengths(&[20]), vec![]]
+        } else {
+            [vec![], vec![], lengths(&[10, 20])]
+        };
+        cases.push(case(&format!("pair/{side}"), pair(wire(), gap), rows));
+    }
+    cases.push(case(
+        "pad_split",
+        pair(
+            Layout::default()
+                .rect("m", 0, 0, 3000, 400)
+                .rect("m2", -500, -500, 160, 900)
+                .rect("m2", 170, -500, 3500, 900),
+            100,
+        ),
+        [vec![], vec![], lengths(&[10, 20])],
+    ));
+    cases.push(case(
+        "two_wires",
+        pair(
+            Layout::default()
+                .rect("m", -300, 0, 160, 400)
+                .rect("m", 170, 0, 3000, 400)
+                .rect("m2", -500, -500, 3500, 900),
+            100,
+        ),
+        [vec![], vec![], lengths(&[20, 20])],
+    ));
+    cases.push(case(
+        "narrow_wire",
+        Layout::default()
+            .rect("m", 0, 0, 3000, 180)
+            .rect("m2", -500, -500, 3500, 900)
+            .rect("v", 10, 40, 110, 140)
+            .rect("v", 210, 40, 310, 140),
+        [lengths(&[40]), vec![], vec![]],
+    ));
+    every_placement(cases)
+}
+
+/// LEF/DEF 5.8 Example 1-5's `via34` in nm (`min_enclosure` and
+/// `asymmetric_enclosure` with a length band, DRC-043): `ENCLOSURE 0.05 0.0
+/// LENGTH 0.7` is `long`, `enclosure(v, m, opposite; length: 700nm, below:
+/// 1000nm) >= 50nm`; the vias it leaves to `ENCLOSURE 0.05 0.05` are
+/// `short`, `enclosure(v, m; length_below: 700nm, below: 1000nm) >= 50nm`
+/// (the second rule implies the first, so one of the two holds each via);
+/// `ENCLOSURE 0.10 0.10 WIDTH 1.0` is `wide`. LEF: "the enclosure rule only
+/// applies if the total length of the longest opposite-side overhangs is
+/// greater than or equal to minLength. The total length of the overhang is
+/// measured at the via cut center".
+///
+/// Oracle: Figure 1-5's illustrations, drawn as stated, each verdict the
+/// figure's: a) 0.05 + 0.20 + 0.40 = 0.65, a violation of `short` (0 above
+/// and below); b) 0.05 + 0.20 + 0.45 = 0.70, legal under `long`, with the
+/// right overhang swept around 450 (449 falls to `short`, 0); c) 0.04 +
+/// 0.20 + 0.50, `long` reads 40; d) b) upright; e) 0.05 on every side,
+/// legal under `short`; f) an L whose arm crosses the line through the
+/// cut's centre (run 750, `long`, the arm's step 50 past the cut) and one
+/// whose arm stops 10 short of it (run 300, `short`, 0); g) a 1.0 wide
+/// plate, `wide` reads 50. An unhosted cut runs 0, `short` reading 0.
+fn length_enclosure() -> Vec<Fixture> {
+    let deck = new_deck(
+        &["v", "m"],
+        "rule long enclosure(v, m, opposite; length: 700nm, below: 1000nm) >= 50nm\n\
+         rule short enclosure(v, m; length_below: 700nm, below: 1000nm) >= 50nm\n\
+         rule wide enclosure(v, m; width: 1000nm) >= 100nm\n",
+    );
+    let case = |name: &str, layout: Layout, rows: [Vec<Finding>; 3]| {
+        let [long, short, wide] = rows;
+        fixture(
+            &format!("length_enclosure/{name}"),
+            &["DRC-043"],
+            &deck,
+            layout,
+            &[("long", long), ("short", short), ("wide", wide)],
+        )
+    };
+    let cut = || Layout::default().rect("v", 0, 0, 200, 200);
+    let mut cases = vec![case(
+        "a",
+        cut().rect("m", -50, 0, 600, 200),
+        [vec![], lengths(&[0]), vec![]],
+    )];
+    for (r, side) in sweep(450) {
+        let rows = if r < 450 {
+            [vec![], lengths(&[0]), vec![]]
+        } else {
+            [vec![], vec![], vec![]]
+        };
+        cases.push(case(
+            &format!("b/{side}"),
+            cut().rect("m", -50, 0, 200 + r, 200),
+            rows,
+        ));
+    }
+    cases.extend([
+        case(
+            "c",
+            cut().rect("m", -40, 0, 700, 200),
+            [lengths(&[40]), vec![], vec![]],
+        ),
+        case(
+            "d",
+            cut().rect("m", 0, -50, 200, 650),
+            [vec![], vec![], vec![]],
+        ),
+        case(
+            "e",
+            cut().rect("m", -50, -50, 250, 250),
+            [vec![], vec![], vec![]],
+        ),
+        case(
+            "f/crossing",
+            cut()
+                .rect("m", -50, 0, 250, 200)
+                .rect("m", 250, 0, 700, 110),
+            [vec![], vec![], vec![]],
+        ),
+        case(
+            "f/short_of_the_centre",
+            cut().rect("m", -50, 0, 250, 200).rect("m", 250, 0, 700, 90),
+            [vec![], lengths(&[0]), vec![]],
+        ),
+        case(
+            "g",
+            Layout::default()
+                .rect("v", 400, 50, 600, 250)
+                .rect("m", 0, 0, 1000, 1000),
+            [vec![], vec![], lengths(&[50])],
+        ),
+        case(
+            "unhosted",
+            cut().rect("m", 1000, 1000, 1500, 1500),
+            [vec![], lengths(&[0]), vec![]],
+        ),
+    ]);
     every_placement(cases)
 }
 
