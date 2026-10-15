@@ -552,6 +552,13 @@ Status: `todo`, `doing`, `done`, `dropped` (with a reason). Each commit's subjec
 | X3 | Round 2, LVS rows left partial or missing (hierarchical matching, new device kinds, LVS-074/075) | catalog | doing (agent/x3) |
 | X4 | Round 2, ERC rows left partial or missing (ERC-F4, H2, H3, H5's and H7's leftovers, R2's C14/D9/F14/G9) | catalog | doing (agent/x4) |
 | X5 | Round 2, PEX and flow rows left partial or missing (a LEF/DEF reader, R2's PEX-011 to 016 and FLOW-007 to 010, F6's field-solver corpus half) | catalog | doing (agent/x5) |
+| M1 | Nightly blockers before main: `min_step_adjacent` nightly fixtures, the deck/netlist_spice/spef fuzz crashes | L1, L6 | doing (agent/m1) |
+| M2 | gpurify-check mutation score back above its 65 % floor (60.0 % on run 38286515024) with crate tests | L7 | doing (agent/m2) |
+| N1 | DRC-116 arbitrary-angle geometry (#59) | catalog | doing (agent/n1) |
+| N2 | LVS-033, 042, 048, 067 (#47-#50) | catalog | doing (agent/n2) |
+| N3 | PEX-013 substrate network (#53), ERC-A14 hierarchical antenna on the LEF reader | catalog | doing (agent/n3) |
+| N4 | FLOW-007 fill, FLOW-008 incremental, FLOW-009 enhancement (#56-#58) | catalog | doing (agent/n4) |
+| Q1 | Every partial row's missing qualifiers and variants (#37-#46, #51, #52, #54, #55, #60, #61) | catalog | doing (agent/q1) |
 | Z | Last, after every other row: a per-crate pass for clean code and documentation (ponytail ultra, data-oriented design, clean code, SIMD-friendly loops, doc comments), each change held to the goldens and the bench gate so abstraction never costs performance; and a dependency audit that replaces bulky crates with lighter ones or a few lines of our own where we use only a small part | all crates | todo: last; issue #65 |
 
 **How code on this branch is written:**
