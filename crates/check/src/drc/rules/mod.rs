@@ -29,7 +29,7 @@ use gpurify_geom::derive::{contains_scaled, interior_point8};
 use gpurify_geom::ops::{seg_seg_dist2, seg_seg_near2, seg_seg_twice2, Point, Seg};
 use gpurify_geom::rects::decompose_into;
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, PolygonRef, ValidatedLayer};
-use gpurify_geom::{Dbu, DbuArea};
+use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
 
 /// How one rule row ended, and how many of its primitives it examined.
 pub(crate) type Verdict = (Outcome, u64);
@@ -37,6 +37,12 @@ pub(crate) type Verdict = (Outcome, u64);
 pub(crate) const REFUSED: Verdict = (Outcome::Refused, 0);
 
 /// Midpoint of two coordinates, floored (`div_euclid`) on both sides of the origin.
+/// `v` clamped into the coordinate domain, `±MAX_ABS_DBU`: for a marker or a
+/// search box grown past the edge of the layout.
+pub(crate) fn clamped(v: i64) -> Dbu {
+    Dbu::new_unchecked(v.clamp(-MAX_ABS_DBU, MAX_ABS_DBU))
+}
+
 pub(crate) const fn mid(a: Dbu, b: Dbu) -> Dbu {
     Dbu::new_unchecked((a.raw() + b.raw()).div_euclid(2))
 }

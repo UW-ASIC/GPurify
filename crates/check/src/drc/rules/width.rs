@@ -7,7 +7,7 @@
 //! on the whole input domain.
 
 use super::facing::merged_owners;
-use super::{centre, mid, owners_by_point, owners_of, Verdict, REFUSED};
+use super::{centre, clamped, mid, owners_by_point, owners_of, Verdict, REFUSED};
 use crate::drc::ruleset::{StepKind, StepNeighbour};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
@@ -21,7 +21,7 @@ use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::width::{
     narrowest_facing, narrowest_neck, narrowest_pair2, narrowest_pair_any, narrowest_width2,
 };
-use gpurify_geom::{Bbox, Dbu, DbuArea, MAX_ABS_DBU};
+use gpurify_geom::{Bbox, Dbu, DbuArea};
 use gpurify_geom::{GeometryStore, LayerId};
 use gpurify_ingest::StrId;
 
@@ -694,8 +694,7 @@ pub(crate) fn wide_rects_into(
         return Ok(());
     }
     let k = w.raw() - 1;
-    let shift =
-        |v: Dbu, by: i64| Dbu::new_unchecked((v.raw() + by).clamp(-MAX_ABS_DBU, MAX_ABS_DBU));
+    let shift = |v: Dbu, by: i64| clamped(v.raw() + by);
     let mut start = Vec::new();
     let mut scratch = ValidatedLayer::default();
     if k == 0 {

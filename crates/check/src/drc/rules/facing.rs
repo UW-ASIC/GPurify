@@ -12,15 +12,13 @@
 //! stretch its two nearest offending edges face each other over.
 
 use super::spacing::{line_of, nearest, on_line, spacing_violation};
-use super::{centre, figure_rects, merged, mid, owners_of, ring_segs, Verdict, REFUSED};
+use super::{centre, clamped, figure_rects, merged, mid, owners_of, ring_segs, Verdict, REFUSED};
 use crate::drc::ruleset::{ClassTable, EncloseCut, Eol58, EolParallel, SpanTable};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::derive::merge_into;
 use gpurify_geom::ops::{isqrt, Point, Seg};
-use gpurify_geom::{
-    Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer, MAX_ABS_DBU,
-};
+use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_ingest::StrId;
 
 /// One edge of a merged figure. Field order is the sort order the facing scan
@@ -602,18 +600,17 @@ pub(crate) fn eol_keep_out(
 /// (`getEolKeepOutExceptWithinRects`).
 fn side_zones(end: &Edge, (backward, forward): (i64, i64), (low, high): (i64, i64)) -> [Bbox; 2] {
     let depth = keep_out_box(end, (backward, 0, forward));
-    let at = |v: i64| Dbu::new_unchecked(v.clamp(-MAX_ABS_DBU, MAX_ABS_DBU));
     let along = |lo: i64, hi: i64| {
         if end.vertical {
             Bbox {
-                ylo: at(lo),
-                yhi: at(hi),
+                ylo: clamped(lo),
+                yhi: clamped(hi),
                 ..depth
             }
         } else {
             Bbox {
-                xlo: at(lo),
-                xhi: at(hi),
+                xlo: clamped(lo),
+                xhi: clamped(hi),
                 ..depth
             }
         }
@@ -628,7 +625,6 @@ fn side_zones(end: &Edge, (backward, forward): (i64, i64), (low, high): (i64, i6
 /// each side, from `backward` behind its line to `forward` past it, clamped
 /// to the coordinate domain.
 fn keep_out_box(end: &Edge, (backward, side, forward): (i64, i64, i64)) -> Bbox {
-    let at = |v: i64| Dbu::new_unchecked(v.clamp(-MAX_ABS_DBU, MAX_ABS_DBU));
     let (along_lo, along_hi) = (end.lo - side, end.hi + side);
     let (across_lo, across_hi) = if end.faces_up {
         (end.pos - backward, end.pos + forward)
@@ -637,17 +633,17 @@ fn keep_out_box(end: &Edge, (backward, side, forward): (i64, i64, i64)) -> Bbox 
     };
     if end.vertical {
         Bbox {
-            xlo: at(across_lo),
-            ylo: at(along_lo),
-            xhi: at(across_hi),
-            yhi: at(along_hi),
+            xlo: clamped(across_lo),
+            ylo: clamped(along_lo),
+            xhi: clamped(across_hi),
+            yhi: clamped(along_hi),
         }
     } else {
         Bbox {
-            xlo: at(along_lo),
-            ylo: at(across_lo),
-            xhi: at(along_hi),
-            yhi: at(across_hi),
+            xlo: clamped(along_lo),
+            ylo: clamped(across_lo),
+            xhi: clamped(along_hi),
+            yhi: clamped(across_hi),
         }
     }
 }

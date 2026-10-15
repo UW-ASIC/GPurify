@@ -296,37 +296,16 @@ pub(crate) fn density(
         return REFUSED;
     }
 
-    let (side, stride) = (window.raw(), step.raw());
-    let (x0, y0) = (die.xlo.raw(), die.ylo.raw());
-    let cols = positions(die.xhi.raw() - x0, side, stride);
-    let ways = positions(die.yhi.raw() - y0, side, stride);
-    // A sweep leaving the coordinate domain is refused: clamping the window would
-    // shrink the numerator but not the denominator.
-    let (xmax, ymax) = (
-        x0 + (cols - 1) * stride + side,
-        y0 + (ways - 1) * stride + side,
-    );
-    if Dbu::new(xmax).is_none() || Dbu::new(ymax).is_none() {
-        return REFUSED;
-    }
-    let Some(sweep) = cols.checked_mul(ways).and_then(|n| u64::try_from(n).ok()) else {
+    let Some((grid, sweep)) = WindowGrid::over(die, window, step) else {
         return REFUSED;
     };
 
-    let denominator = to_f64(i128::from(side) * i128::from(side));
+    let denominator = to_f64(i128::from(grid.side) * i128::from(grid.side));
     let validated = s
         .validated
         .get(store, layer)
         .expect("merge_within validated the layer");
     let mut owners = Owners::new(store, validated);
-    let grid = WindowGrid {
-        x0,
-        y0,
-        side,
-        stride,
-        cols,
-        ways,
-    };
     window_areas(&s.rects, grid, |window, covered| {
         let fraction = to_f64(covered.raw()) / denominator;
         if !Measurement::Ratio(fraction).violates(Measurement::Ratio(limit), sense) {
@@ -365,27 +344,8 @@ pub(crate) fn density_balance(
     if die.is_empty() {
         return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
     }
-    let (side, stride) = (window.raw(), step.raw());
-    let (x0, y0) = (die.xlo.raw(), die.ylo.raw());
-    let cols = positions(die.xhi.raw() - x0, side, stride);
-    let ways = positions(die.yhi.raw() - y0, side, stride);
-    let (xmax, ymax) = (
-        x0 + (cols - 1) * stride + side,
-        y0 + (ways - 1) * stride + side,
-    );
-    if Dbu::new(xmax).is_none() || Dbu::new(ymax).is_none() {
+    let Some((grid, sweep)) = WindowGrid::over(die, window, step) else {
         return REFUSED;
-    }
-    let Some(sweep) = cols.checked_mul(ways).and_then(|n| u64::try_from(n).ok()) else {
-        return REFUSED;
-    };
-    let grid = WindowGrid {
-        x0,
-        y0,
-        side,
-        stride,
-        cols,
-        ways,
     };
     if !merge_within(store, a, die, s) {
         return REFUSED;
@@ -437,29 +397,10 @@ pub(crate) fn cover_density(
     if die.is_empty() {
         return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
     }
-    let (side, stride) = (window.raw(), step.raw());
-    let (x0, y0) = (die.xlo.raw(), die.ylo.raw());
-    let cols = positions(die.xhi.raw() - x0, side, stride);
-    let ways = positions(die.yhi.raw() - y0, side, stride);
-    let (xmax, ymax) = (
-        x0 + (cols - 1) * stride + side,
-        y0 + (ways - 1) * stride + side,
-    );
-    if Dbu::new(xmax).is_none() || Dbu::new(ymax).is_none() {
-        return REFUSED;
-    }
-    let Some(sweep) = cols.checked_mul(ways).and_then(|n| u64::try_from(n).ok()) else {
+    let Some((grid, sweep)) = WindowGrid::over(die, window, step) else {
         return REFUSED;
     };
-    let grid = WindowGrid {
-        x0,
-        y0,
-        side,
-        stride,
-        cols,
-        ways,
-    };
-    let area = to_f64(i128::from(side) * i128::from(side));
+    let area = to_f64(i128::from(grid.side) * i128::from(grid.side));
     if !merge_within(store, cover, die, s) {
         return REFUSED;
     }
@@ -821,6 +762,30 @@ struct WindowGrid {
 }
 
 impl WindowGrid {
+    /// The windows of side `window`, origins `step` apart from `die`'s lower
+    /// left corner, covering `die`, and how many there are; `None` (the rule
+    /// is `Refused`) when the sweep leaves the coordinate domain, since
+    /// clamping a window would shrink a density's numerator but not its
+    /// denominator, or when the count does not fit a `u64`.
+    fn over(die: Bbox, window: Dbu, step: Dbu) -> Option<(Self, u64)> {
+        let (side, stride) = (window.raw(), step.raw());
+        let (x0, y0) = (die.xlo.raw(), die.ylo.raw());
+        let cols = positions(die.xhi.raw() - x0, side, stride);
+        let ways = positions(die.yhi.raw() - y0, side, stride);
+        Dbu::new(x0 + (cols - 1) * stride + side)?;
+        Dbu::new(y0 + (ways - 1) * stride + side)?;
+        let sweep = u64::try_from(cols.checked_mul(ways)?).ok()?;
+        let grid = WindowGrid {
+            x0,
+            y0,
+            side,
+            stride,
+            cols,
+            ways,
+        };
+        Some((grid, sweep))
+    }
+
     fn window(self, ix: i64, iy: i64) -> Bbox {
         let (x, y) = (self.x0 + ix * self.stride, self.y0 + iy * self.stride);
         Bbox {

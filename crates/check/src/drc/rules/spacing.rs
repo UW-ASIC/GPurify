@@ -7,7 +7,7 @@
 //! shapes) have no gap and are skipped.
 
 use super::{
-    gap_midpoint, join_nested, label_pairs_into, mid, owners_of, pair_distances_into,
+    clamped, gap_midpoint, join_nested, label_pairs_into, mid, owners_of, pair_distances_into,
     rects_ring_dist2, ring_segs, seg_bbox, LayerRects, SortedRects, Verdict, REFUSED,
 };
 use crate::drc::rules::width::wide_rects_into;
@@ -20,7 +20,7 @@ use gpurify_geom::derive::{edges_into, merge_into};
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, seg_seg_dist2, seg_seg_near2, Point, Seg};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
-use gpurify_geom::{Dbu, DbuArea, MAX_ABS_DBU};
+use gpurify_geom::{Dbu, DbuArea};
 use gpurify_ingest::StrId;
 use std::cmp::Ordering;
 
@@ -227,6 +227,18 @@ pub(super) fn prepare(store: &GeometryStore, layer: LayerId, limit: Dbu, s: &mut
     s.validated.get(store, layer).is_some() && prepare_any(store, layer, limit, s)
 }
 
+/// Every pair of an `a` and a `b` polygon within `limit` into `s.pairs`, its
+/// exact squared distance into `s.dists` (zero for a hole and its outer).
+/// The caller has validated both layers.
+fn cross_pairs(store: &GeometryStore, (a, b): (LayerId, LayerId), limit: Dbu, s: &mut Scratch) {
+    SpatialIndex::build_into(store, a, &mut s.index_a);
+    SpatialIndex::build_into(store, b, &mut s.index_b);
+    cross_layer_pairs_into(store, &s.index_a, &s.index_b, limit, &mut s.pairs);
+    pair_distances_into(store, &s.pairs, limit, &mut s.dists);
+    s.holes.build(store, [a, b]);
+    join_nested(store, &s.holes, &s.pairs, &mut s.dists);
+}
+
 /// [`prepare`] for a rule proved on edges at any angle.
 fn prepare_any(store: &GeometryStore, layer: LayerId, limit: Dbu, s: &mut Scratch) -> bool {
     if s.validated.get_any(store, layer).is_none() {
@@ -345,12 +357,7 @@ pub(crate) fn min_spacing_diff(
     {
         return REFUSED;
     }
-    SpatialIndex::build_into(store, a_layer, &mut s.index_a);
-    SpatialIndex::build_into(store, b_layer, &mut s.index_b);
-    cross_layer_pairs_into(store, &s.index_a, &s.index_b, limit, &mut s.pairs);
-    pair_distances_into(store, &s.pairs, limit, &mut s.dists);
-    s.holes.build(store, [a_layer, b_layer]);
-    join_nested(store, &s.holes, &s.pairs, &mut s.dists);
+    cross_pairs(store, (a_layer, b_layer), limit, s);
     let limit2 = limit.mul_wide(limit);
     for (&pair, &d2) in s.pairs.iter().zip(&s.dists) {
         if d2 < limit2 {
@@ -437,12 +444,7 @@ pub(crate) fn projection_spacing(
     if s.validated.get(store, a_layer).is_none() || s.validated.get(store, b_layer).is_none() {
         return REFUSED;
     }
-    SpatialIndex::build_into(store, a_layer, &mut s.index_a);
-    SpatialIndex::build_into(store, b_layer, &mut s.index_b);
-    cross_layer_pairs_into(store, &s.index_a, &s.index_b, limit, &mut s.pairs);
-    pair_distances_into(store, &s.pairs, limit, &mut s.dists);
-    s.holes.build(store, [a_layer, b_layer]);
-    join_nested(store, &s.holes, &s.pairs, &mut s.dists);
+    cross_pairs(store, (a_layer, b_layer), limit, s);
     for (&pair, &d2) in s.pairs.iter().zip(&s.dists) {
         let found = if d2.raw() == 0 {
             Some((Dbu::new_unchecked(0), whole_at(store, pair, d2)))
@@ -532,8 +534,7 @@ fn eol_zone(edge: Seg, depth: Dbu) -> Bbox {
     let (nx, ny) = (dy.signum(), -dx.signum());
     let d = depth.raw();
     let span = seg_bbox(edge);
-    let grow =
-        |coord: i64, by: i64| Dbu::new_unchecked((coord + by * d).clamp(-MAX_ABS_DBU, MAX_ABS_DBU));
+    let grow = |coord: i64, by: i64| clamped(coord + by * d);
     Bbox {
         xlo: grow(span.xlo.raw(), nx.min(0)),
         ylo: grow(span.ylo.raw(), ny.min(0)),
@@ -682,8 +683,7 @@ fn wide_parts(
     let drawn = SortedRects::new(polys.labelled());
     let label_of = |row: PolyId| labels[(row.0 - first_row) as usize];
     let d = attached.raw();
-    let grow =
-        |v: Dbu, by: i64| Dbu::new_unchecked((v.raw() + by).clamp(-MAX_ABS_DBU, MAX_ABS_DBU));
+    let grow = |v: Dbu, by: i64| clamped(v.raw() + by);
     let grown = SortedRects::new(
         wide.iter()
             .filter_map(|&r| {
@@ -848,12 +848,7 @@ pub(crate) fn stack_spacing(
             .map(|(_, net)| net)
             .min()
     };
-    SpatialIndex::build_into(store, a, &mut s.index_a);
-    SpatialIndex::build_into(store, b, &mut s.index_b);
-    cross_layer_pairs_into(store, &s.index_a, &s.index_b, limit, &mut s.pairs);
-    pair_distances_into(store, &s.pairs, limit, &mut s.dists);
-    s.holes.build(store, [a, b]);
-    join_nested(store, &s.holes, &s.pairs, &mut s.dists);
+    cross_pairs(store, (a, b), limit, s);
     let limit2 = limit.mul_wide(limit);
     let mut examined = 0u64;
     for (&(p, q), &d2) in s.pairs.iter().zip(&s.dists) {
@@ -931,12 +926,7 @@ fn pair_spacing_by_net(
             if s.validated.get(store, a).is_none() || s.validated.get(store, b).is_none() {
                 return REFUSED;
             }
-            SpatialIndex::build_into(store, a, &mut s.index_a);
-            SpatialIndex::build_into(store, b, &mut s.index_b);
-            cross_layer_pairs_into(store, &s.index_a, &s.index_b, widest, &mut s.pairs);
-            pair_distances_into(store, &s.pairs, widest, &mut s.dists);
-            s.holes.build(store, [a, b]);
-            join_nested(store, &s.holes, &s.pairs, &mut s.dists);
+            cross_pairs(store, (a, b), widest, s);
             false
         }
     };
@@ -1081,7 +1071,7 @@ fn wide_runs(wide: &[Bbox], other: gpurify_geom::PolygonRef<'_>, within: Dbu) ->
         .chain(other.holes())
         .flat_map(|ring| {
             let (xs, ys) = ring.coords();
-            ring_segs(xs, ys).collect::<Vec<_>>()
+            ring_segs(xs, ys)
         })
         .enumerate();
     for (k, e) in edges {

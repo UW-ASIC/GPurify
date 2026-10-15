@@ -7,8 +7,8 @@
 use super::spacing::whole_at;
 use super::width::{rects_layer, wide_rects_into};
 use super::{
-    bbox_gap2, centre, figure_rects, join_nested, label_pairs_into, merged, pair_distances_into,
-    SortedRects, Verdict, REFUSED,
+    bbox_gap2, centre, clamped, figure_rects, join_nested, label_pairs_into, merged,
+    pair_distances_into, SortedRects, Verdict, REFUSED,
 };
 use crate::drc::ruleset::CutAreaBands;
 use crate::drc::{CutClassTable, Scratch};
@@ -18,9 +18,7 @@ use gpurify_geom::connectivity::components_into;
 use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{isqrt, Point};
 use gpurify_geom::rects::decompose_into;
-use gpurify_geom::{
-    Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer, MAX_ABS_DBU,
-};
+use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_ingest::StrId;
 
 fn measured_pairs(store: &GeometryStore, layer: LayerId, radius: Dbu, s: &mut Scratch) {
@@ -659,7 +657,6 @@ pub(crate) fn keep_out_zone(
             .filter(|&(b, _)| to.is_none_or(|to| of_class(b, to)))
             .collect(),
     );
-    let at = |v: i64| Dbu::new_unchecked(v.clamp(-MAX_ABS_DBU, MAX_ABS_DBU));
     let mut examined = 0u64;
     let mut hits: Vec<(PolyId, Bbox, bool)> = Vec::new();
     for &(b, cut) in cuts.iter().filter(|&&(b, _)| of_class(b, class)) {
@@ -673,10 +670,10 @@ pub(crate) fn keep_out_zone(
                 (across.raw(), along.raw())
             };
             Bbox {
-                xlo: at(b.xlo.raw() - dx),
-                ylo: at(b.ylo.raw() - dy),
-                xhi: at(b.xhi.raw() + dx),
-                yhi: at(b.yhi.raw() + dy),
+                xlo: clamped(b.xlo.raw() - dx),
+                ylo: clamped(b.ylo.raw() - dy),
+                xhi: clamped(b.xhi.raw() + dx),
+                yhi: clamped(b.yhi.raw() + dy),
             }
         };
         let (side_zone, end_zone) = (zone(side.1, side.0), zone(end.0, end.1));
