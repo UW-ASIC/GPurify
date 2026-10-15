@@ -40,7 +40,8 @@ pub fn point(x: i64, y: i64) -> Point {
     }
 }
 
-/// Wraps an `i128` as a layout area, in database units squared.
+/// Wraps an `i128` as a layout area, in database units squared. Unlike
+/// [`dbu`] it checks nothing: every `i128` is an area.
 #[must_use]
 pub fn area(value: i128) -> DbuArea {
     DbuArea::new(value)
@@ -241,7 +242,12 @@ impl Ids {
         self.id[handle.0 as usize]
     }
 
-    /// Resolve several handles, sorted ascending.
+    /// Resolves several handles and sorts the ids ascending, the order
+    /// `NetTable::polys_of` states a net's polygons in.
+    ///
+    /// # Panics
+    ///
+    /// Panics as [`Ids::of`] does.
     #[must_use]
     pub fn sorted(&self, handles: &[Handle]) -> Vec<PolyId> {
         let mut ids: Vec<PolyId> = handles.iter().map(|&h| self.of(h)).collect();
@@ -284,8 +290,8 @@ impl LayoutBuilder {
         handle
     }
 
-    /// Pushes a shape from one of the free functions above. Panics as
-    /// [`LayoutBuilder::push`] does.
+    /// Pushes a shape from [`rect`], [`hole`], [`l_shape`], [`plus_shape`] or
+    /// [`u_shape`]. Panics as [`LayoutBuilder::push`] does.
     pub fn shape(&mut self, layer: LayerId, shape: &(Vec<i64>, Vec<i64>)) -> Handle {
         self.push(layer, &shape.0, &shape.1)
     }
