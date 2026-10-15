@@ -77,9 +77,8 @@ impl Seg {
 ///
 /// On an edge that is not octilinear: its crossings would not be integers.
 fn edges_into(rings: &Rings, right: bool, out: &mut Vec<Edge>) {
-    for ring in 0..rings.start.len().saturating_sub(1) {
-        let (lo, hi) = (rings.start[ring] as usize, rings.start[ring + 1] as usize);
-        let n = hi - lo;
+    for ring in rings.ranges() {
+        let (lo, n) = (ring.start, ring.len());
         for i in 0..n {
             let (a, b) = (lo + i, lo + (i + 1) % n);
             let (xa, ya, xb, yb) = (rings.xs[a], rings.ys[a], rings.xs[b], rings.ys[b]);
@@ -177,7 +176,7 @@ pub(super) fn combine_into(a: &Rings, b: &Rings, op: impl Fn(bool, bool) -> bool
         }
         active.retain(|&e| edges[e as usize].x1 > x);
         while next_edge < edges.len() && edges[next_edge].x0 <= x {
-            active.push(u32::try_from(next_edge).expect("a layer's edges fit a u32"));
+            active.push(crate::narrow(next_edge));
             next_edge += 1;
         }
         // Stable and adaptive: the order only changes where edges cross at `x`.
@@ -269,8 +268,7 @@ pub(super) fn combine_into(a: &Rings, b: &Rings, op: impl Fn(bool, bool) -> bool
 /// visits is one edge. Reads segments at any angle.
 pub(super) fn link(segs: &[Seg], out: &mut Rings) {
     let count = segs.len();
-    let index = |i: usize| u32::try_from(i).expect("a boundary has under 2^32 segments");
-    let mut by_head: Vec<u32> = (0..count).map(index).collect();
+    let mut by_head: Vec<u32> = (0..crate::narrow(count)).collect();
     let mut by_tail = by_head.clone();
     by_head.sort_unstable_by_key(|&i| segs[i as usize].head());
     by_tail.sort_unstable_by_key(|&i| segs[i as usize].tail());
@@ -325,10 +323,7 @@ pub(super) fn link(segs: &[Seg], out: &mut Rings) {
         t = t_end;
     }
 
-    out.xs.clear();
-    out.ys.clear();
-    out.start.clear();
-    out.start.push(0);
+    out.reset();
     let mut used = vec![false; count];
     let mut cycle: Vec<u32> = Vec::new();
     for seed in 0..count {
@@ -339,7 +334,7 @@ pub(super) fn link(segs: &[Seg], out: &mut Rings) {
         let mut cur = seed;
         loop {
             used[cur] = true;
-            cycle.push(index(cur));
+            cycle.push(crate::narrow(cur));
             cur = next[cur] as usize;
             if cur == seed {
                 break;
@@ -356,8 +351,7 @@ pub(super) fn link(segs: &[Seg], out: &mut Rings) {
                 out.ys.push(seg.sy);
             }
         }
-        out.start
-            .push(u32::try_from(out.xs.len()).expect("a layer's vertices fit a u32"));
+        out.close_ring();
     }
 }
 
@@ -379,13 +373,9 @@ pub(super) fn off_grid(rings: &Rings) -> bool {
 /// The rings may then hold a slit or a vanished sliver, which a pass through
 /// [`combine_into`] removes.
 pub(super) fn snap_into(rings: &Rings, out: &mut Rings) {
-    out.xs.clear();
-    out.ys.clear();
-    out.start.clear();
-    out.start.push(0);
-    for ring in 0..rings.start.len().saturating_sub(1) {
-        let (lo, hi) = (rings.start[ring] as usize, rings.start[ring + 1] as usize);
-        let n = hi - lo;
+    out.reset();
+    for ring in rings.ranges() {
+        let (lo, n) = (ring.start, ring.len());
         for i in 0..n {
             let at = lo + i;
             let (x, y) = (rings.xs[at], rings.ys[at]);
@@ -409,7 +399,6 @@ pub(super) fn snap_into(rings: &Rings, out: &mut Rings) {
             out.xs.extend([x - way_in.0, x + way_out.0]);
             out.ys.extend([y - way_in.1, y + way_out.1]);
         }
-        out.start
-            .push(u32::try_from(out.xs.len()).expect("a layer's vertices fit a u32"));
+        out.close_ring();
     }
 }
