@@ -60,6 +60,8 @@ pub struct DeckSource {
     pub pex_models: super::PexModels,
     /// The layout edits (`fill`, `widen`).
     pub edits: super::Edits,
+    /// The `report` lines.
+    pub reports: super::Reports,
 }
 
 /// One `corner` line: `corner <corner> <layer> <key> <value> ..`.
@@ -438,6 +440,7 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
         waivers,
         pex_models,
         edits,
+        reports: doc.reports.clone(),
     })
 }
 

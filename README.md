@@ -98,16 +98,20 @@ though nothing was found.
 | `drc` | Design rules: widths, spacings, areas, density | none |
 | `erc` | Electrical rules: antenna, ties, shorts, power grid | `--intent <file>` for some rules |
 | `lvs` | Layout against your schematic | a reference netlist, required |
-| `pex` | Parasitic resistance and capacitance | `--quasistatic <net>…` to field-solve a net |
+| `pex` | Parasitic resistance and capacitance | `--quasistatic <net>…` to field-solve a net; the deck's `report` lines for point-to-point and net-to-net figures |
 | `all` | Everything | a missing input marks its check skipped, never passed |
-| `lib` | Nothing: writes a hard macro's Liberty `.lib` per corner, and its Verilog blackbox | `--spec <file>`; ngspice above `interface` accuracy |
+| `lib` | Nothing: writes a hard macro's Liberty `.lib` per corner, and its Verilog blackbox | `--spec <file>`, which also states the accuracy, and `--output-dir <dir>`; ngspice above `interface` accuracy |
 | `xor` | Two layouts against each other, layer by layer | a second layout: `gpurify xor <layout> <other> --deck <deck>` |
 | `fill` | Nothing: writes the layout with density fill added, then reports DRC on it | the deck's `fill` lines; `gpurify fill <layout> <output.gds> --deck <deck>` |
 | `enhance` | Nothing: writes the layout with redundant cuts and widened straps, then reports DRC on it | the deck's `via_redundancy` rules and `widen` lines; `gpurify enhance <layout> <output.gds> --deck <deck>` |
 | `system` | Several dies as one assembly: bump bonding, LVS and system ESD | a system file and netlist: `gpurify system <stack.json> --reference <netlist>` |
-| `compare` | Two parasitic netlists (SPEF or DSPF), net by net | `gpurify compare <reference> <candidate>`; no layout or deck |
+| `compare` | Two parasitic netlists (SPEF or DSPF), net by net | `gpurify compare <reference> <candidate> [--spec <compare.json>]`, the spec stating the tolerance (default 5 %); no layout or deck |
 
-Every option, the report format and the design intent file are described in
+The only choice made on the command line is `--quasistatic`; the rest are
+input and output files and `--format`. Settings that shape a run live with
+what they describe: the deck (`report` lines, temperature, layers to skip),
+`lib`'s macro spec (accuracy) and `compare`'s spec (tolerance). Every option,
+the report format and the design intent file are described in
 [docs/usage.md](docs/usage.md).
 
 The exit code is `0` only when every check you selected ran and passed. Anything

@@ -1,5 +1,6 @@
 //! Point-to-point resistance and net-to-net coupling between nets a user
-//! names (catalog PEX-016): what `pex --p2p` and `--coupling` report.
+//! names (catalog PEX-016): what a PEX run's text report prints for the
+//! deck's `report p2p` and `report coupling` lines.
 //!
 //! **Point to point.** Between two or more points on one net, the effective
 //! resistance of the net's resistor network between each pair: every
@@ -38,43 +39,27 @@ fn net_named(loaded: &Loaded, extracted: &Extracted, name: &str) -> Result<NetId
     }
 }
 
-/// The resistance between every two of `points` (µm) on the net `name`, as
-/// `(i, j, ohms)` for `i < j` in the order given; a pair whose points the
-/// net does not join is absent.
+/// The resistance between every two of `points` (database units, as a
+/// deck's `report p2p` line holds them) on the net `name`, as `(i, j,
+/// ohms)` for `i < j` in the order given; a pair whose points the net does
+/// not join is absent.
 ///
 /// # Errors
 ///
 /// No net or several of that name, a point on none of its conducting
-/// shapes, a point off the database grid, or a conductor with no sheet
-/// resistance.
+/// shapes, or a conductor with no sheet resistance.
 pub fn resistance(
     loaded: &Loaded,
     extracted: &Extracted,
     name: &str,
-    points_um: &[(f64, f64)],
+    points: &[(Dbu, Dbu)],
 ) -> Result<Vec<(usize, usize, f64)>, String> {
     let net = net_named(loaded, extracted, name)?;
     #[expect(clippy::cast_precision_loss, reason = "a resolution is a small count")]
     let per_um = loaded.grid.dbu_per_um() as f64;
-    let dbu = |um: f64| {
-        let units = um * per_um;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "checked whole and in range"
-        )]
-        ((units.round() - units).abs() < 1e-6 && units.abs() < 1e15)
-            .then(|| Dbu::new_unchecked(units.round() as i64))
-            .ok_or_else(|| format!("{um} µm is not on the {per_um}-per-µm grid"))
-    };
-    let points = points_um
-        .iter()
-        .map(|&(x, y)| {
-            Ok(Point {
-                x: dbu(x)?,
-                y: dbu(y)?,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+    #[expect(clippy::cast_precision_loss, reason = "a coordinate, for a message")]
+    let um = |d: Dbu| d.raw() as f64 / per_um;
+    let at: Vec<Point> = points.iter().map(|&(x, y)| Point { x, y }).collect();
     let process = gpurify_check::erc::Process {
         grid: loaded.grid,
         stack: &loaded.deck.stack,
@@ -86,13 +71,14 @@ pub fn resistance(
         &extracted.nets,
         process,
         net,
-        &points,
+        &at,
         &mut networks,
     )
     .map_err(|why| match why {
         gpurify_check::erc::PowerError::NotOnNet(k) => format!(
             "point ({}, {}) µm lies on no conducting shape of {name}",
-            points_um[k].0, points_um[k].1
+            um(points[k].0),
+            um(points[k].1)
         ),
         other => other.to_string(),
     })?;

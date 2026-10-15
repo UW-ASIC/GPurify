@@ -133,6 +133,26 @@ pub struct Deck {
     pub pex_models: PexModels,
     /// The layout edits the deck configures (`fill`, `widen`), as written.
     pub edits: Edits,
+    /// What the text report adds after the findings (`report`), as written.
+    pub reports: Reports,
+}
+
+/// The `report` statements: measurements the text report prints after the
+/// findings, by net names as written, points and lengths in grid units.
+/// None is a check: each prints a number and passes or fails nothing.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Reports {
+    /// `report p2p "<net>" at [(x, y), ..]`, in deck order: a net and two
+    /// or more points on it, the resistance between every two of which a
+    /// PEX run reports (catalog PEX-016).
+    pub p2p: Vec<(String, Vec<(Dbu, Dbu)>)>,
+    /// `report coupling "<net>" "<net>"`, in deck order: two nets whose
+    /// total coupling capacitance a PEX run reports (catalog PEX-016).
+    pub coupling: Vec<(String, String)>,
+    /// `report cluster <len>`, at most once: the reach within which one
+    /// rule's violation markers chain into a cluster, listed after the
+    /// findings (catalog FLOW-010); zero or more.
+    pub cluster: Option<Dbu>,
 }
 
 /// What `gpurify fill` and `gpurify enhance` draw, as the deck states it:

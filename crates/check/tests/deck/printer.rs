@@ -272,6 +272,58 @@ pex_substrate ports [diff] backside grounded profile [(3um, 10), (300um, 0.01)]
     assert!(refused(("backside grounded", "backside wet")));
 }
 
+/// A deck's `report` lines survive printing, read back as written (points
+/// and the reach in grid units, negative coordinates included), and a
+/// malformed one is refused.
+/// Oracle: round trip; construct-from-answer for the values (a 1 nm grid,
+/// so a length in nm is its grid units); and the refusals `docs/deck.md`
+/// states (two or more points, each `(x, y)`; a named net; a reach of zero
+/// or more, stated once; on the deck's grid).
+#[test]
+fn a_deck_with_report_lines_survives_printing() {
+    let text = "grid 5nm
+layer met1 = gds(68, 20)
+report p2p \"VDD\" at [(10um, 20um), (150um, -20um), (0.5um, 90um)]
+report p2p \"a\" at [(0um, 0um), (1um, 0um)]
+report p2p \"VDD\" at [(1um, 2um), (3.5um, -4um)]
+report coupling \"a\" \"b\"
+report cluster 2.5um
+";
+    let mut strings = StrTable::default();
+    let deck = compile(text, grid(), &mut strings).expect("the deck compiles");
+    let raw = |points: &[(gpurify_geom::Dbu, gpurify_geom::Dbu)]| -> Vec<(i64, i64)> {
+        points.iter().map(|(x, y)| (x.raw(), y.raw())).collect()
+    };
+    assert_eq!(deck.reports.p2p[0].0, "VDD");
+    assert_eq!(
+        raw(&deck.reports.p2p[0].1),
+        [(10_000, 20_000), (150_000, -20_000), (500, 90_000)]
+    );
+    // What the removed `--p2p VDD:1,2:3.5,-4` read, now from the deck.
+    assert_eq!(raw(&deck.reports.p2p[2].1), [(1000, 2000), (3500, -4000)]);
+    assert_eq!(deck.reports.coupling, [("a".to_owned(), "b".to_owned())]);
+    assert_eq!(deck.reports.cluster.map(gpurify_geom::Dbu::raw), Some(2500));
+    assert_round_trip("report lines", &deck, &mut strings);
+    let refused = |swap: (&str, &str)| {
+        let text = text.replace(swap.0, swap.1);
+        compile(&text, grid(), &mut StrTable::default()).is_err()
+    };
+    assert!(refused((", (1um, 0um)]", "]")));
+    assert!(refused(("(1um, 0um)", "(1um)")));
+    assert!(refused(("(1um, 0um)", "1um")));
+    assert!(refused(("\"a\" \"b\"", "\"a\"")));
+    assert!(refused(("\"a\" \"b\"", "\"a\" \"\"")));
+    assert!(refused(("cluster 2.5um", "cluster -1um")));
+    assert!(refused((
+        "cluster 2.5um",
+        "cluster 2.5um\nreport cluster 1um"
+    )));
+    assert!(refused(("(0um, 0um)", "(2nm, 0um)")));
+    assert!(refused(("report coupling", "report cuopling")));
+    assert!(refused((" at [(0um", " [(0um")));
+    assert!(refused(("(3.5um, -4um)", "(x, -4um)")));
+}
+
 /// A deck's layout edits (`fill`, `widen`) survive printing, and one
 /// drawing on a derived layer or missing a key is refused.
 /// Oracle: round trip; and the refusals `docs/deck.md` states (an edit

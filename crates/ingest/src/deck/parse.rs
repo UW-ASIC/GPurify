@@ -484,9 +484,10 @@ impl<'a> Parser<'a> {
             "lvs" => self.lvs(),
             "fill" => self.fill(),
             "widen" => self.widen(),
+            "report" => self.report(),
             _ => Err(self.err(
                 span,
-                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, if, connect, device, pex, pex_fill, pex_device, pex_tsv, pex_substrate, temperature, lvs, extraction, corner, stage, waive, fill or widen"),
+                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, if, connect, device, pex, pex_fill, pex_device, pex_tsv, pex_substrate, temperature, lvs, extraction, corner, stage, waive, fill, widen or report"),
             )),
         }
     }
@@ -2172,6 +2173,69 @@ impl<'a> Parser<'a> {
             .widen
             .push(super::WidenSpec { layer, net, by });
         Ok(())
+    }
+
+    /// `report p2p "<net>" at [(x, y), ..]`, `report coupling "<net>"
+    /// "<net>"` or `report cluster <len>`: what the text report adds after
+    /// the findings ([`super::Reports`]).
+    fn report(&mut self) -> R<()> {
+        let (word, span) = self.ident("p2p, coupling or cluster")?;
+        match word.as_str() {
+            "p2p" => {
+                let net = self.net_name()?;
+                self.expect("at")?;
+                let value = self.value()?;
+                let Val::List(items, _) = &value else {
+                    return Err(self.err(value.span(), "expected a list of points [(x, y), ..]"));
+                };
+                let mut points = Vec::with_capacity(items.len());
+                for item in items {
+                    let Val::Tuple(parts, at) = item else {
+                        return Err(self.err(item.span(), "expected a point (x, y)"));
+                    };
+                    let [x, y] = &parts[..] else {
+                        return Err(self.err(*at, "a point is (x, y)"));
+                    };
+                    points.push((self.length(x, "x")?, self.length(y, "y")?));
+                }
+                if points.len() < 2 {
+                    return Err(self.err(value.span(), "report p2p needs two or more points"));
+                }
+                self.out.reports.p2p.push((net, points));
+            }
+            "coupling" => {
+                let a = self.net_name()?;
+                let b = self.net_name()?;
+                self.out.reports.coupling.push((a, b));
+            }
+            "cluster" => {
+                let value = self.value()?;
+                let reach = self.length(&value, "cluster")?;
+                if reach.raw() < 0 {
+                    return Err(self.err(value.span(), "cluster must be zero or more"));
+                }
+                if self.out.reports.cluster.replace(reach).is_some() {
+                    return Err(self.err(span, "report cluster is already stated"));
+                }
+            }
+            _ => {
+                return Err(self.err(
+                    span,
+                    &format!("unknown report `{word}`; expected p2p, coupling or cluster"),
+                ))
+            }
+        }
+        Ok(())
+    }
+
+    /// A net name in quotes, not empty.
+    fn net_name(&mut self) -> R<String> {
+        let t = self.peek();
+        let name = self.quoted("a net name in quotes")?;
+        if name.is_empty() {
+            return Err(self.err_tok(t, "a net name is not empty"));
+        }
+        Ok(name)
     }
 
     /// `extraction <type> [coupling_threshold <capacitance>]`, at most once:

@@ -7,7 +7,7 @@ simulated, at the accuracy you choose.
 
 ```sh
 gpurify lib strongarm.gds --deck pdks/sky130.deck \
-    --spec strongarm.json --accuracy spice --output-dir lib/ \
+    --spec strongarm.json --output-dir lib/ \
     --reference strongarm.spice --lef strongarm.lef
 ```
 
@@ -22,9 +22,8 @@ spice: wrote lib/min/strongarm__tt_025C_1v80.lib
 
 | Option | Meaning |
 |---|---|
-| `--spec <file>` | The macro spec, below. Required. |
-| `--accuracy <level>` | `interface`, `analytical`, `field`, `spice`, `statistical`, or `0` to `4`, or `all`. Default `spice`. |
-| `--output-dir <dir>` | Where the files go. With `--accuracy all`, one subdirectory per level. |
+| `--spec <file>` | The macro spec, below, which also states the [accuracy](#accuracy). Required. |
+| `--output-dir <dir>` | Where the files go. With `"accuracy": "all"`, one subdirectory per level. |
 | `--reference <netlist>` | A `.subckt` whose ports must match the spec's pins. |
 | `--lef <file>` | A LEF whose `MACRO`'s pins must match the spec's pins. |
 
@@ -33,6 +32,12 @@ temporary directory, removed on success and kept, with its path printed, on
 failure.
 
 ## Accuracy
+
+The spec's `accuracy` key chooses the level: `"interface"`, `"analytical"`,
+`"field"`, `"spice"`, `"statistical"`, or `"0"` to `"4"`, or `"all"` for
+every level. Default `"spice"`. It sits in the spec, versioned with the
+block, because it decides what the files contain. (`--accuracy` is refused
+with a pointer here.)
 
 | Level | Pin capacitance | Arcs | Leakage |
 |---|---|---|---|
@@ -172,6 +177,7 @@ says those things. It is JSON, and an unknown key is an error.
 ```json
 {
   "cell": "strongarm",
+  "accuracy": "spice",
   "substrate": "vss",
   "pins": [
     {"name": "vinp", "role": "analog", "direction": "input", "bias": 0.9,
@@ -233,6 +239,9 @@ file gets the slowest and `min/` the fastest.
 corner globs match. `models` is written verbatim into the deck. `mc_models`
 is the same with variation switched on, and is needed only for
 `statistical`.
+
+**`accuracy`** is the level `gpurify lib` generates, see
+[Accuracy](#accuracy). Default `"spice"`.
 
 **`substrate`** ties the deck's global substrate net to a supply pin.
 Without it, a substrate that no label names would float in simulation.

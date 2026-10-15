@@ -213,7 +213,7 @@
 //! | PEX-011 | Device-region (MEOL) parasitics | partial | [`device_region`]: the deck's `pex_device` gate-to-contact and gate-to-diffusion capacitance per µm of width; no device-internal resistance |
 //! | PEX-013 | Substrate network | implemented | [`substrate`]: the deck's `pex_substrate`, a layered silicon under the die, solved between the nets on its port layers and to a grounded backside |
 //! | PEX-015 | 3D-IC extraction | partial | [`tsv`]: the deck's `pex_tsv`, a through-silicon via's liner capacitance; no TSV coupling, bumps or interposer |
-//! | PEX-016 | Point-to-point resistance and net-to-net coupling report | partial | `gpurify::engine::p2p` (`pex --p2p`, `--coupling`), over ERC's chain resistor model |
+//! | PEX-016 | Point-to-point resistance and net-to-net coupling report | partial | `gpurify::engine::p2p` (the deck's `report p2p` and `report coupling`), over ERC's chain resistor model |
 //! | PEX-012 | Metal-fill treatment | partial | [`fill`]: the deck's `pex_fill`, floating (Kron reduction), grounded or ignored; no virtual fill |
 //!
 //! [limitations.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/limitations.md)

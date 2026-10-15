@@ -1295,6 +1295,33 @@ via, the first neighbour at least `space` from every cut, with each metal
 that does not hold it extended by the box round both cuts, grown by the
 margin the metal leaves round the via's own cut.
 
+## Reports
+
+`report` lines add measurements to the text report, after the findings
+([usage.md](usage.md#point-to-point-and-net-to-net)). None is a check: each
+prints a number and passes or fails nothing, and none reaches the JSON,
+SPEF or DSPF output.
+
+```
+report p2p "VDD" at [(10um, 20um), (150um, 20um), (150um, 90um)]
+report coupling "clk" "data"
+report cluster 2.5um
+```
+
+`report p2p "<net>" at [(x, y), ..]` prints, after a PEX run (`pex` or
+`all`), the effective resistance of the net between every two of the
+points (two or more), each a length pair on the deck's grid that must lie
+on a conducting shape of the net (catalog PEX-016). `report coupling
+"<net>" "<net>"` prints the total coupling capacitance between two nets in
+the extracted network. Repeat either for more nets. A net is named as its
+labels name it; one the layout lacks, or labels in two pieces, is an error
+when the report is made.
+
+`report cluster <len>`, at most once, lists after any check's findings one
+line per cluster: the violations of one rule whose markers lie within that
+distance of each other, chained (single linkage), largest first, with
+their count and bounding box (catalog FLOW-010). The reach is zero or more.
+
 ## Errors
 
 Every problem is reported with its line, column and a marker under the

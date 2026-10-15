@@ -1,7 +1,9 @@
-//! `gpurify compare <reference> <candidate> [--tolerance <percent>]`: two
+//! `gpurify compare <reference> <candidate> [--spec <compare.json>]`: two
 //! parasitic netlists, SPEF or DSPF, from any two tools, compared net by net
 //! with nets linked by name (PEX-009; [`gpurify_extract::foreign`] reads
-//! them, [`gpurify_extract::compare`] measures them).
+//! them, [`gpurify_extract::compare`] measures them). The spec, JSON,
+//! states the tolerance a qualification passes at, `{"tolerance": 5}` in
+//! percent; without one it is 5 %.
 
 use gpurify_extract::compare::{compare, Errors, Metric};
 use gpurify_extract::foreign::{read_dspf, read_spef, Read};
@@ -12,6 +14,25 @@ use std::process::ExitCode;
 /// Rows whose reference and candidate are both under these are noise to a
 /// qualification and not compared: 0.01 fF, 0.01 Ω, 0.01 fs.
 const FLOOR: f64 = 0.01;
+
+/// The compare spec: what a qualification passes at. An unknown key is an
+/// error, so a misspelled one never leaves the default in force.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Spec {
+    /// Percent, zero or more: a row passes within this much of the
+    /// reference.
+    tolerance: f64,
+}
+
+/// The tolerance, percent, a spec file states.
+fn tolerance(path: &str) -> Result<f64, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    let spec: Spec = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+    Some(spec.tolerance)
+        .filter(|t| t.is_finite() && *t >= 0.0)
+        .ok_or_else(|| format!("{path}: tolerance {} is not a percentage", spec.tolerance))
+}
 
 /// Reads one netlist, its dialect told by its first line (`*SPEF` or
 /// `*|DSPF`), else by its extension.
@@ -57,18 +78,15 @@ pub(super) fn main(argv: &[String]) -> ExitCode {
 /// The report and whether it passes.
 pub(super) fn run(argv: &[String]) -> Result<(String, bool), String> {
     let mut files = Vec::new();
-    let mut tolerance = 5.0_f64;
+    let mut spec = None;
     let mut args = argv.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--spec" => spec = Some(args.next().ok_or("--spec wants a value")?),
             "--tolerance" => {
-                let text = args.next().ok_or("--tolerance wants a value")?;
-                tolerance = text
-                    .trim_end_matches('%')
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|t| t.is_finite() && *t >= 0.0)
-                    .ok_or_else(|| format!("--tolerance {text} is not a percentage"))?;
+                return Err("--tolerance is no longer an option: the compare spec's \
+                            `tolerance` field (--spec <file>) says it now"
+                    .into())
             }
             other if other.starts_with('-') => return Err(format!("unknown option {other}")),
             file => files.push(file),
@@ -77,6 +95,7 @@ pub(super) fn run(argv: &[String]) -> Result<(String, bool), String> {
     let [reference, candidate] = files[..] else {
         return Err("compare takes two parasitic netlists: compare <reference> <candidate>".into());
     };
+    let tolerance = spec.map_or(Ok(5.0), |path| tolerance(path))?;
     let (a, b) = (read(Path::new(reference))?, read(Path::new(candidate))?);
     let mut names: Vec<String> = a.names.iter().chain(&b.names).cloned().collect();
     names.sort_unstable();
@@ -149,9 +168,10 @@ mod tests {
     use super::run;
 
     /// Oracle: hand-derived: the candidate's ground cap on `b` is 10 %
-    /// over the reference's (0.33 against 0.3 fF), so at 5 % one row of two
-    /// fails and the run fails; at 20 % every row is within and it passes;
-    /// a net in one file only fails it whatever the tolerance.
+    /// over the reference's (0.33 against 0.3 fF), so at the default 5 %
+    /// one row of two fails and the run fails; at a spec's 20 % every row
+    /// is within and it passes; a net in one file only fails it whatever
+    /// the tolerance. The flag that used to say it is refused.
     #[test]
     fn a_ground_cap_ten_percent_off_fails_at_five_and_passes_at_twenty() {
         let dir = std::env::temp_dir().join(format!("gpurify-compare-{}", std::process::id()));
@@ -191,15 +211,26 @@ mod tests {
             ["ground_cap", "fF", "2", "1", "+10.000"],
             "{text}"
         );
-        let (_, passed) =
-            run(&args(&[&reference, &candidate, "--tolerance", "20%"])).expect("runs");
+        let twenty = write("20.json", r#"{"tolerance": 20}"#.to_owned());
+        let (_, passed) = run(&args(&[&reference, &candidate, "--spec", &twenty])).expect("runs");
         assert!(passed);
-        let (text, passed) = run(&args(&[&reference, &extra, "--tolerance", "50"])).expect("runs");
+        let fifty = write("50.json", r#"{"tolerance": 50}"#.to_owned());
+        let (text, passed) = run(&args(&[&reference, &extra, "--spec", &fifty])).expect("runs");
         assert!(
             !passed && text.contains("only in the candidate: c"),
             "{text}"
         );
         assert!(run(&args(&[&reference])).is_err());
+        let typo = write("typo.json", r#"{"tolerence": 20}"#.to_owned());
+        assert!(run(&args(&[&reference, &candidate, "--spec", &typo])).is_err());
+        assert_eq!(
+            run(&args(&[&reference, &candidate, "--tolerance", "20%"])).err(),
+            Some(
+                "--tolerance is no longer an option: the compare spec's `tolerance` field \
+                 (--spec <file>) says it now"
+                    .to_owned()
+            )
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

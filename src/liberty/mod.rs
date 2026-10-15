@@ -130,8 +130,8 @@ pub enum Accuracy {
 }
 
 impl Accuracy {
-    /// Every level, cheapest first: the order `--accuracy all` runs them, and
-    /// the numbering `0`..`4` [`Accuracy::parse`] reads.
+    /// Every level, cheapest first: the order a spec's `"accuracy": "all"`
+    /// runs them, and the numbering `0`..`4` [`Accuracy::parse`] reads.
     pub const ALL: [Self; 5] = [
         Self::Interface,
         Self::Analytical,
@@ -140,8 +140,8 @@ impl Accuracy {
         Self::Statistical,
     ];
 
-    /// The level's command-line spelling: also its subdirectory under
-    /// `--accuracy all`, and the word in each `.lib`'s header comment.
+    /// The level's spelling in the spec: also its subdirectory under
+    /// `"accuracy": "all"`, and the word in each `.lib`'s header comment.
     pub const fn name(self) -> &'static str {
         match self {
             Self::Interface => "interface",
@@ -170,7 +170,7 @@ impl Accuracy {
 
     /// Parses a level from its [`name`](Accuracy::name) (`interface` ..
     /// `statistical`) or its number (`0` .. `4`). `None` for anything else,
-    /// including `all`, which the command line expands to [`Accuracy::ALL`]
+    /// including `all`, which the spec expands to [`Accuracy::ALL`]
     /// itself.
     pub fn parse(text: &str) -> Option<Self> {
         Self::ALL

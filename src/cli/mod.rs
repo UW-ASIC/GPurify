@@ -173,12 +173,10 @@ fn render(cli: &args::Cli, decks: &[(&str, DeckFn)]) -> Result<(Summary, String)
         args::Format::Text => {
             format::write_violations(&outputs, &loaded.strings, loaded.grid, &mut text);
             format::write_summary(&summary, &mut text);
-            if let Some(extracted) = &extracted {
-                reports(cli, &loaded, extracted, &outputs, &mut text).map_err(|why| {
-                    eprintln!("error: {why}");
-                    ExitCode::FAILURE
-                })?;
-            }
+            reports(cli, &loaded, extracted.as_ref(), &outputs, &mut text).map_err(|why| {
+                eprintln!("error: {why}");
+                ExitCode::FAILURE
+            })?;
             Ok(())
         }
         args::Format::Json => json::write_report(
@@ -231,36 +229,26 @@ fn render(cli: &args::Cli, decks: &[(&str, DeckFn)]) -> Result<(Summary, String)
     Ok((summary, text))
 }
 
-/// The `--p2p` and `--coupling` reports, one line per pair (PEX-016), and
-/// the `--cluster` list, one line per cluster (FLOW-010).
+/// The deck's `report` lines: `p2p` and `coupling`, one line per pair,
+/// after a PEX run (PEX-016), and `cluster`, one line per cluster, after
+/// any check (FLOW-010).
 fn reports(
     cli: &args::Cli,
     loaded: &crate::engine::Loaded,
-    extracted: &crate::engine::Extracted,
+    extracted: Option<&crate::engine::Extracted>,
     outputs: &crate::engine::Outputs,
     text: &mut String,
 ) -> Result<(), String> {
     use std::fmt::Write as _;
-    let network = outputs.parasitics.as_ref();
-    for (net, points) in &cli.p2p {
-        for (i, j, ohms) in crate::engine::p2p::resistance(loaded, extracted, net, points)? {
-            let ((xa, ya), (xb, yb)) = (points[i], points[j]);
-            let _ = writeln!(
-                text,
-                "p2p {net} ({xa}, {ya}) um to ({xb}, {yb}) um: {ohms:.6} ohm"
-            );
-        }
-    }
-    if let Some(reach_um) = cli.cluster {
-        #[expect(clippy::cast_precision_loss, reason = "a resolution is a small count")]
-        let per_um = loaded.grid.dbu_per_um() as f64;
-        #[expect(clippy::cast_possible_truncation, reason = "a reach in database units")]
-        let reach = gpurify_geom::Dbu::new_unchecked((reach_um * per_um).round() as i64);
-        let um = |d: gpurify_geom::Dbu| {
-            #[expect(clippy::cast_precision_loss, reason = "a coordinate")]
-            let v = d.raw() as f64 / per_um;
-            v
-        };
+    let wanted = &loaded.deck.reports;
+    #[expect(clippy::cast_precision_loss, reason = "a resolution is a small count")]
+    let per_um = loaded.grid.dbu_per_um() as f64;
+    let um = |d: gpurify_geom::Dbu| {
+        #[expect(clippy::cast_precision_loss, reason = "a coordinate")]
+        let v = d.raw() as f64 / per_um;
+        v
+    };
+    if let Some(reach) = wanted.cluster {
         for c in crate::engine::triage::cluster(&outputs.violations, reach) {
             let _ = writeln!(
                 text,
@@ -274,16 +262,35 @@ fn reports(
             );
         }
     }
-    for (a, b) in &cli.coupling {
-        let network = network.ok_or("--coupling needs a parasitic network, and PEX made none")?;
+    // A deck serves every check; its PEX reports print when PEX ran.
+    let Some(extracted) = extracted.filter(|_| cli.options.checks.pex) else {
+        return Ok(());
+    };
+    for (net, points) in &wanted.p2p {
+        for (i, j, ohms) in crate::engine::p2p::resistance(loaded, extracted, net, points)? {
+            let ((xa, ya), (xb, yb)) = (points[i], points[j]);
+            let _ = writeln!(
+                text,
+                "p2p {net} ({}, {}) um to ({}, {}) um: {ohms:.6} ohm",
+                um(xa),
+                um(ya),
+                um(xb),
+                um(yb)
+            );
+        }
+    }
+    for (a, b) in &wanted.coupling {
+        let network = (outputs.parasitics.as_ref())
+            .ok_or("report coupling needs a parasitic network, and PEX made none")?;
         let ff = crate::engine::p2p::coupling(loaded, extracted, network, a, b)?;
         let _ = writeln!(text, "coupling {a} {b}: {ff:.6} fF");
     }
     Ok(())
 }
 
-/// `lib`: load and extract once, then generate every requested accuracy.
-/// `--accuracy all` writes each level under its own subdirectory.
+/// `lib`: load and extract once, then generate every accuracy the spec
+/// asks for. `"accuracy": "all"` writes each level under its own
+/// subdirectory.
 fn liberty(cli: &args::Cli, lib: &args::LibArgs, decks: &[(&str, DeckFn)]) -> ExitCode {
     let spec = match std::fs::read_to_string(&lib.spec)
         .map_err(|e| format!("{}: {e}", lib.spec.display()))
@@ -315,8 +322,8 @@ fn liberty(cli: &args::Cli, lib: &args::LibArgs, decks: &[(&str, DeckFn)]) -> Ex
     };
     // Simulator decks and logs; kept only when a simulation fails, to debug it.
     let scratch = std::env::temp_dir().join(format!("gpurify-lib-{}", std::process::id()));
-    let many = lib.accuracy.len() > 1;
-    for &accuracy in &lib.accuracy {
+    let many = spec.accuracy.len() > 1;
+    for &accuracy in &spec.accuracy {
         let (dir, work) = if many {
             (
                 lib.output_dir.join(accuracy.name()),

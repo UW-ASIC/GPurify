@@ -353,13 +353,14 @@ fn fill_between_two_plates_is_in_series_grounded_or_gone() {
 }
 
 /// The point-to-point and net-to-net reports (PEX-016) on two parallel
-/// met1 wires.
+/// met1 wires, as the deck's `report` lines state them.
 ///
 /// Oracle: closed forms. Between x = 10 and x = 60 µm along a 0.2 µm wire
 /// of 0.1 Ω/□ the resistance is `0.1 · 50 / 0.2 = 25 Ω` (and 0 from a
 /// point to itself); the wires, 100.2 µm long and 0.8 µm apart in k = 3.9
 /// with met1 0.1 µm thick, couple by `ε₀ k t L / S = 8.854… · 3.9 · 0.1 ·
-/// 100.2 / 0.8` aF (Weste & Harris ch. 6). A point off the net is refused.
+/// 100.2 / 0.8` aF (Weste & Harris ch. 6). A point off the net, and a net
+/// the layout lacks, are refused.
 #[test]
 fn point_to_point_resistance_and_net_coupling_are_reported() {
     let inputs = inputs(
@@ -369,6 +370,12 @@ fn point_to_point_resistance_and_net_coupling_are_reported() {
              - b + ROUTED met1 ( 0 1000 ) ( 100000 1000 ) ;\nEND NETS",
         ),
     );
+    let deck = format!(
+        "{DECK}report p2p \"a\" at [(10um, 0um), (60um, 50nm), (10um, 0um)]\n\
+         report p2p \"a\" at [(10um, 0.5um), (20um, 0um)]\n\
+         report coupling \"a\" \"b\"\nreport coupling \"a\" \"zz\"\n"
+    );
+    std::fs::write(&inputs.deck, deck).expect("writable");
     let options = RunOptions {
         checks: Checks {
             drc: false,
@@ -380,30 +387,27 @@ fn point_to_point_resistance_and_net_coupling_are_reported() {
         quasistatic_nets: Vec::new(),
     };
     let (loaded, extracted, outputs, _) = run(&inputs, &options).expect("the DEF runs");
-    let r = gpurify::engine::p2p::resistance(
-        &loaded,
-        &extracted,
-        "a",
-        &[(10.0, 0.0), (60.0, 0.05), (10.0, 0.0)],
-    )
-    .expect("the points are on a");
+    let reports = &loaded.deck.reports;
+    let (net, points) = &reports.p2p[0];
+    let r = gpurify::engine::p2p::resistance(&loaded, &extracted, net, points)
+        .expect("the points are on a");
     assert_eq!(r.len(), 3);
     assert!((r[0].2 - 25.0).abs() < 1e-9, "{r:?}");
     assert_eq!((r[1].0, r[1].1, r[1].2), (0, 2, 0.0));
     let network = outputs.parasitics.expect("PEX ran");
-    let c = gpurify::engine::p2p::coupling(&loaded, &extracted, &network, "a", "b")
-        .expect("both are nets");
+    let (a, b) = &reports.coupling[0];
+    let c =
+        gpurify::engine::p2p::coupling(&loaded, &extracted, &network, a, b).expect("both are nets");
     let want = 8.854_187_812_8 * 3.9 * 0.1 * 100.2 / 0.8 / 1000.0;
     assert!((c - want).abs() < 1e-9, "{c} against {want}");
-    assert!(gpurify::engine::p2p::resistance(
-        &loaded,
-        &extracted,
-        "a",
-        &[(10.0, 0.5), (20.0, 0.0)]
-    )
-    .unwrap_err()
-    .contains("no conducting shape"));
-    assert!(gpurify::engine::p2p::coupling(&loaded, &extracted, &network, "a", "zz").is_err());
+    let (net, points) = &reports.p2p[1];
+    assert!(
+        gpurify::engine::p2p::resistance(&loaded, &extracted, net, points)
+            .unwrap_err()
+            .contains("no conducting shape")
+    );
+    let (a, b) = &reports.coupling[1];
+    assert!(gpurify::engine::p2p::coupling(&loaded, &extracted, &network, a, b).is_err());
 }
 
 /// Two through-silicon vias on one net add their liners' capacitance

@@ -735,6 +735,8 @@ pub struct DeckBuilder<'s> {
     pex_models: gpurify_ingest::deck::PexModels,
     /// The base deck's layout edits, kept as they are.
     edits: gpurify_ingest::deck::Edits,
+    /// The base deck's `report` lines, and those added here.
+    reports: gpurify_ingest::deck::Reports,
     /// The base deck's `corner` lines, kept as they are.
     corners: Vec<gpurify_ingest::deck::CornerSource>,
     /// The base deck's stages, each with its rules' ids; a rule added here is
@@ -790,6 +792,7 @@ impl<'s> DeckBuilder<'s> {
             extraction: None,
             pex_models: gpurify_ingest::deck::PexModels::default(),
             edits: gpurify_ingest::deck::Edits::default(),
+            reports: gpurify_ingest::deck::Reports::default(),
             corners: Vec::new(),
             stages: Vec::new(),
             waivers: Vec::new(),
@@ -864,6 +867,7 @@ impl<'s> DeckBuilder<'s> {
             extraction: source.extraction,
             pex_models: source.pex_models,
             edits: source.edits,
+            reports: source.reports,
             corners: source.corners,
             stages: source.stages,
             waivers: source.waivers,
@@ -1156,6 +1160,47 @@ impl<'s> DeckBuilder<'s> {
     /// at. Every row then gives its coefficients ([`StackSource::tc`]).
     pub fn temperature(&mut self, operating_k: f64, nominal_k: f64) {
         self.temperature = Some((operating_k, nominal_k));
+    }
+
+    /// `report p2p "<net>" at [(x, y), ..]`: the resistance between every
+    /// two of `points` on `net`, printed after a PEX run's findings
+    /// (catalog PEX-016). Refused, as the parser refuses it, with an empty
+    /// name or fewer than two points.
+    #[track_caller]
+    pub fn report_p2p(&mut self, net: &str, points: &[(Dbu, Dbu)]) {
+        if net.is_empty() {
+            self.refuse("a net name is not empty".to_owned());
+            return;
+        }
+        if points.len() < 2 {
+            self.refuse("report p2p needs two or more points".to_owned());
+            return;
+        }
+        self.reports.p2p.push((net.to_owned(), points.to_vec()));
+    }
+
+    /// `report coupling "<a>" "<b>"`: the total coupling capacitance
+    /// between two nets, printed after a PEX run's findings (catalog
+    /// PEX-016). Refused, as the parser refuses it, with an empty name.
+    #[track_caller]
+    pub fn report_coupling(&mut self, a: &str, b: &str) {
+        if a.is_empty() || b.is_empty() {
+            self.refuse("a net name is not empty".to_owned());
+            return;
+        }
+        self.reports.coupling.push((a.to_owned(), b.to_owned()));
+    }
+
+    /// `report cluster <len>`: each rule's violations chained within
+    /// `reach` of each other, listed after the findings (catalog
+    /// FLOW-010); replaces the base deck's. Refused when negative.
+    #[track_caller]
+    pub fn report_cluster(&mut self, reach: Dbu) {
+        if reach.raw() < 0 {
+            self.refuse("cluster must be zero or more".to_owned());
+            return;
+        }
+        self.reports.cluster = Some(reach);
     }
 
     /// Removes a layer's parasitic row. Refused when it has none.
@@ -1557,6 +1602,7 @@ impl<'s> DeckBuilder<'s> {
             waivers,
             pex_models: self.pex_models,
             edits: self.edits,
+            reports: self.reports,
         };
         let deck = lower(&source, self.strings).map_err(CompileError::from)?;
         let mut compiled = CompiledDeck::from_deck(deck, self.grid, self.strings)?;

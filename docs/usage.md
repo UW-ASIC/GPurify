@@ -16,15 +16,17 @@ gpurify <command> <layout.gds> --deck <process.deck> [options] > report
 | `fill` | Nothing: writes the layout with density fill added, then reports DRC on it, see [below](#editing-a-layout) | the deck's `fill` lines; `gpurify fill <layout> <output.gds> --deck <deck>` |
 | `enhance` | Nothing: writes the layout with redundant cuts and widened straps added, then reports DRC on it, see [below](#editing-a-layout) | the deck's `via_redundancy` rules and `widen` lines; `gpurify enhance <layout> <output.gds> --deck <deck>` |
 | `system` | Several dies as one assembly: system LVS and package and system ESD, see [below](#multi-die-systems) | a system file in place of the layout, `--reference <system netlist>`; no `--deck` |
-| `compare` | Two parasitic netlists (SPEF or DSPF) against each other, net by net, see [below](#comparing-two-parasitic-netlists) | `gpurify compare <reference> <candidate>`; no layout or deck |
+| `compare` | Two parasitic netlists (SPEF or DSPF) against each other, net by net, see [below](#comparing-two-parasitic-netlists) | `gpurify compare <reference> <candidate> [--spec <compare.json>]`; no layout or deck |
 
 ## Options
 
 The options are the files a run reads, the report's form, and one choice of
-method. Everything else is stated where it already lives: the grid is the
-layout's own (its GDS `UNITS` record), and layers to skip are listed in the
-deck (`ignore gds(L, D)`, see [deck.md](deck.md#layers)). The report goes to
-standard output.
+method, `--quasistatic`. Everything else is stated where it already lives:
+the grid is the layout's own (its GDS `UNITS` record); layers to skip, the
+temperature and the extra report lines are in the deck (`ignore gds(L, D)`,
+`temperature`, `report`, see [deck.md](deck.md)); `lib`'s accuracy is in its
+spec ([liberty.md](liberty.md#the-spec)) and `compare`'s tolerance in its
+own. The report goes to standard output.
 
 | Option | Meaning |
 |---|---|
@@ -34,9 +36,12 @@ standard output.
 | `--format text\|json\|spef\|dspf` | Report format. `spef` and `dspf` need a `pex` run. Default `text`. |
 | `--quasistatic <net>` | Field-solve this net's capacitance and inductance instead of using the closed-form estimate. Repeat for more nets. |
 | `--lef <file>` | A LEF a DEF layout reads (technology first, then cells). Repeat for more. Only with a `.def` layout. |
-| `--p2p <net>:<x>,<y>:<x>,<y>…` | `pex`, text report: the resistance between every two of these points (µm) on the net, see [below](#point-to-point-and-net-to-net). Repeat for more nets. |
-| `--coupling <net>:<net>` | `pex`, text report: the total coupling capacitance between two nets. Repeat for more pairs. |
-| `--cluster <µm>` | Text report: after the violations, one line per cluster: the violations of one rule whose markers lie within this distance of each other, chained (single linkage), largest first, with their count and bounding box. For triage of a large result set. |
+
+A flag that has moved is refused with where it went: `--p2p`, `--coupling`
+and `--cluster` are the deck's `report` lines (see
+[below](#point-to-point-and-net-to-net) and
+[deck.md](deck.md#reports)), `lib`'s `--accuracy` is the spec's `accuracy`
+field, and `compare`'s `--tolerance` is its spec's `tolerance` field.
 
 A shape on a GDS layer the deck neither declares nor ignores refuses the
 layout, naming the layer. A layout whose database unit is not a whole fraction
@@ -536,20 +541,26 @@ The same inputs always give a byte-identical report.
 
 ### Point to point and net to net
 
-`pex --p2p VDD:10,20:150,20:150,90` adds a line per pair of points to the
-text report: the effective resistance of the net between them, each
+A deck line `report p2p "VDD" at [(10um, 20um), (150um, 20um), (150um,
+90um)]` adds, to a `pex` (or `all`) run's text report, a line per pair of
+points: the effective resistance of the net between them, each
 conducting shape a chain of resistors along its long axis (sheet
 resistance times squares), each via cut its layer's resistance, the
 points tapped where they lie; the same model as ERC's `p2p_resistance`.
 A point must lie on a conducting shape of the net. A parallel strap can
 only lower it; current spreading across a wide shape is not modelled.
-`--coupling a:b` adds the total coupling capacitance between two nets in
-the extracted network.
+`report coupling "a" "b"` adds the total coupling capacitance between two
+nets in the extracted network. `report cluster 2.5um` adds, to any check's
+text report, one line per cluster after the violations: the violations of
+one rule whose markers lie within that distance of each other, chained
+(single linkage), largest first, with their count and bounding box, for
+triage of a large result set. None of these is in the JSON, SPEF or DSPF
+output.
 
 ### Comparing two parasitic netlists
 
 ```sh
-gpurify compare <reference.spef> <candidate.spef> [--tolerance 5%]
+gpurify compare <reference.spef> <candidate.spef> [--spec compare.json]
 ```
 
 `compare` qualifies one extraction against another, from any two tools:
@@ -561,7 +572,9 @@ node, and the Elmore delay to the slowest node; per metric it reports how
 many rows were compared, how many are within the tolerance, and the worst,
 mean and RMS relative error with the net of the worst. Rows under 0.01 (fF,
 Ω, fs) in both files are noise and not compared. It exits 0 only when every
-compared row is within the tolerance (default 5 %) and both files name the
-same nets. A coupling listed in both nets' `*CAP` sections, as most tools
+compared row is within the tolerance and both files name the same nets.
+The tolerance is a qualification's own threshold, so it is stated in a
+spec file kept with the qualification, `{"tolerance": 5}` in percent (an
+unknown key is refused); without `--spec` it is 5 %. A coupling listed in both nets' `*CAP` sections, as most tools
 write it, counts once; a reduced (`*R_NET`) or physical (`*D_PNET`) net is
 refused.

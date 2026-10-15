@@ -341,6 +341,34 @@ impl Printer<'_> {
                 self.length(i128::from(widen.by.raw()))?
             );
         }
+        for (net, points) in &source.reports.p2p {
+            let points = points
+                .iter()
+                .map(|&(x, y)| {
+                    Ok(format!(
+                        "({}, {})",
+                        self.length(i128::from(x.raw()))?,
+                        self.length(i128::from(y.raw()))?
+                    ))
+                })
+                .collect::<Result<Vec<_>, PrintError>>()?;
+            let _ = writeln!(
+                out,
+                "report p2p {} at [{}]",
+                quoted(net)?,
+                points.join(", ")
+            );
+        }
+        for (a, b) in &source.reports.coupling {
+            let _ = writeln!(out, "report coupling {} {}", quoted(a)?, quoted(b)?);
+        }
+        if let Some(reach) = source.reports.cluster {
+            let _ = writeln!(
+                out,
+                "report cluster {}",
+                self.length(i128::from(reach.raw()))?
+            );
+        }
         for device in &source.pex_models.device {
             let _ = writeln!(
                 out,

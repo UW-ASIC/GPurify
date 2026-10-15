@@ -84,6 +84,8 @@ pub struct CompiledDeck {
     pub pex_models: gpurify_ingest::deck::PexModels,
     /// The layout edits the deck configures (`fill`, `widen`).
     pub edits: gpurify_ingest::deck::Edits,
+    /// What the text report adds after the findings (`report`).
+    pub reports: gpurify_ingest::deck::Reports,
     /// The `corner` statements: each process corner's stack.
     pub corners: Vec<ProcessCorner>,
     /// The `stage` statements: the order a staged run checks the rules in.
@@ -249,6 +251,7 @@ impl CompiledDeck {
             waivers,
             pex_models,
             edits,
+            reports,
         } = deck;
         Ok(Self {
             grid,
@@ -262,6 +265,7 @@ impl CompiledDeck {
             extraction,
             pex_models,
             edits,
+            reports,
             corners,
             stages,
             waivers,

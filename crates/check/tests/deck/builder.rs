@@ -238,6 +238,18 @@ fn every_parser_refusal_has_a_builder_twin() {
         ("lvs filter_unused u u\n", |d| {
             d.lvs_filter_unused(&[UnusedFilter::U, UnusedFilter::U]);
         }),
+        // A report on a net with no name, a p2p report with one point, a
+        // negative cluster reach.
+        ("report coupling \"a\" \"\"\n", |d| {
+            d.report_coupling("a", "");
+        }),
+        ("report p2p \"\" at [(0nm, 0nm), (1nm, 0nm)]\n", |d| {
+            d.report_p2p("", &[(nm(0), nm(0)), (nm(1), nm(0))]);
+        }),
+        ("report p2p \"a\" at [(0nm, 0nm)]\n", |d| {
+            d.report_p2p("a", &[(nm(0), nm(0))]);
+        }),
+        ("report cluster -1nm\n", |d| d.report_cluster(nm(-1))),
     ] {
         let mut strings = StrTable::default();
         let (mut d, _, _) = start(&mut strings);
@@ -533,6 +545,40 @@ rule c forbidden(n.edges().extended(begin: 0nm, end: 0nm, out: 0nm, in: 15nm) an
     );
     let built = d.finish().expect("the builder twin builds");
     assert_same("H4 layer operations", &parsed, &built, &strings);
+}
+
+/// The deck's `report` lines built in Rust equal the same lines written as
+/// text, and a builder over a deck keeps the base deck's reports, adding to
+/// them and replacing its cluster reach.
+/// Oracle: construct-from-answer, the parser's reading of the text twin.
+#[test]
+fn report_lines_build_as_their_text() {
+    let text = "grid 1nm
+layer m = gds(1, 0)
+report p2p \"VDD\" at [(10nm, 20nm), (-150nm, 20nm), (150nm, 90nm)]
+report coupling \"a\" \"b\"
+report cluster 2500nm
+";
+    let mut strings = StrTable::default();
+    let parsed = compile(text, grid(), &mut strings).expect("the text twin compiles");
+    let mut d = DeckBuilder::new(grid(), &mut strings);
+    d.layer("m", (1, 0));
+    d.report_p2p(
+        "VDD",
+        &[(nm(10), nm(20)), (nm(-150), nm(20)), (nm(150), nm(90))],
+    );
+    d.report_coupling("a", "b");
+    d.report_cluster(nm(2500));
+    let built = d.finish().expect("the builder twin builds");
+    assert_same("report lines", &parsed, &built, &strings);
+
+    let more = format!("{text}report coupling \"c\" \"d\"\n").replace("2500nm", "10nm");
+    let parsed = compile(&more, grid(), &mut strings).expect("the override's twin compiles");
+    let mut d = DeckBuilder::from_deck(&built, &mut strings);
+    d.report_coupling("c", "d");
+    d.report_cluster(nm(10));
+    let built = d.finish().expect("the override builds");
+    assert_same("report lines overridden", &parsed, &built, &strings);
 }
 
 /// The refusals of H4's operations have builder twins in the parser's words,

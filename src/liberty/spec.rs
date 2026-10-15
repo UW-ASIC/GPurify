@@ -14,6 +14,7 @@
 //! Build a spec with [`parse`], never by hand: the characterizer trusts every
 //! relation [`parse`] checks.
 
+use super::Accuracy;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -46,6 +47,32 @@ pub struct MacroSpec {
     /// How the simulator is run and its device cards spelled.
     #[serde(default)]
     pub simulator: Simulator,
+    /// The levels `gpurify lib` generates, cheapest first: in JSON one
+    /// level's name or number (`"spice"`, `"3"`; [`Accuracy::parse`]), or
+    /// `"all"` for every level. Default `"spice"`. A library caller states
+    /// its level in [`Request`](super::Request) instead.
+    #[serde(default = "spice", deserialize_with = "accuracy")]
+    pub accuracy: Vec<Accuracy>,
+}
+
+fn spice() -> Vec<Accuracy> {
+    vec![Accuracy::Spice]
+}
+
+/// `"all"` is every level; anything [`Accuracy::parse`] reads is that one.
+fn accuracy<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Vec<Accuracy>, D::Error> {
+    let text = String::deserialize(de)?;
+    if text == "all" {
+        return Ok(Accuracy::ALL.to_vec());
+    }
+    Accuracy::parse(&text)
+        .map(|level| vec![level])
+        .ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "unknown accuracy {text:?}; expected interface, analytical, field, spice, \
+             statistical (or 0 to 4), or all"
+            ))
+        })
 }
 
 /// Pin values applied together, by pin name. Unnamed pins keep their previous
@@ -768,6 +795,31 @@ mod tests {
         let spec = parse(INVERTER).expect("valid");
         assert_eq!(spec.arcs[0].cases[0].vectors[0]["A"], Level::Low);
         assert_eq!(spec.characterization.slews_ns.len(), 7);
+    }
+
+    /// Oracle: `docs/liberty.md`: `accuracy` defaults to `spice`, `"all"`
+    /// is the five levels, `"2"` is `field` (levels 0 to 4 from
+    /// `interface`), and anything else is refused with the levels named.
+    #[test]
+    fn the_accuracy_field_reads_a_level_or_all() {
+        use crate::liberty::Accuracy;
+        let with =
+            |value: &str| parse(&INVERTER.replacen('{', &format!("{{\"accuracy\": {value}, "), 1));
+        assert_eq!(parse(INVERTER).expect("valid").accuracy, [Accuracy::Spice]);
+        assert_eq!(with("\"all\"").expect("valid").accuracy, Accuracy::ALL);
+        assert_eq!(with("\"2\"").expect("valid").accuracy, [Accuracy::Field]);
+        assert_eq!(
+            with("\"interface\"").expect("valid").accuracy,
+            [Accuracy::Interface]
+        );
+        let refused = with("\"9\"").expect_err("not a level").to_string();
+        assert!(
+            refused.contains(
+                "unknown accuracy \"9\"; expected interface, analytical, field, spice, \
+                 statistical (or 0 to 4), or all"
+            ),
+            "{refused}"
+        );
     }
 
     /// Each refusal is a spec that would otherwise characterize the wrong thing.
