@@ -348,14 +348,9 @@ fn recognition_of(
     strings: &mut StrTable,
 ) -> DeviceRecognition {
     let mut recognition = DeviceRecognition {
-        kind: Vec::with_capacity(spec.devices.len()),
-        marker: Vec::with_capacity(spec.devices.len()),
-        terminal_start: Vec::with_capacity(spec.devices.len() + 1),
-        terminal: Vec::new(),
-        model: Vec::with_capacity(spec.devices.len()),
-        value: Vec::new(),
+        terminal_start: vec![0],
+        ..DeviceRecognition::default()
     };
-    recognition.terminal_start.push(0);
     for device in &spec.devices {
         recognition.kind.push(device.kind);
         recognition.marker.push(layers.marker);
