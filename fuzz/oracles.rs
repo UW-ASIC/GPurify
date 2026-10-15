@@ -12,7 +12,7 @@
 
 use gpurify::check::lvs::CompareOptions;
 use gpurify::engine::pipeline::{extract, intern_report_ids, Loaded};
-use gpurify::engine::run::{run_checks, Checks, RunOptions};
+use gpurify::engine::run::{run_checks, Checks, RunOptions, StageStatus};
 use gpurify::geom::{GeometryStore, Grid, LayerId, PolyId};
 use gpurify_ingest::deck::{parse_deck, Deck, DeckError, DeviceRecognition};
 use gpurify_ingest::layout::{derive_layers, gds, LayoutError, UnknownLayers};
@@ -536,10 +536,17 @@ pub fn deck(data: &[u8]) {
         lvs: CompareOptions::default(),
         quasistatic_nets: Vec::new(),
     };
-    let Ok((outputs, _)) = run_checks(&loaded, &extracted, &options) else {
+    let Ok((outputs, summary)) = run_checks(&loaded, &extracted, &options) else {
         return;
     };
+    // A stage that did not run says why in its status, not row by row: ERC
+    // is skipped on a layout with no geometry, which a deck drawing no layer
+    // gets here.
+    let erc_ran = summary.erc == StageStatus::Ran;
     for id in rules {
+        if !erc_ran && loaded.deck.erc.rules().any(|(rule, _)| rule == id) {
+            continue;
+        }
         assert!(
             outputs.runs.iter().any(|run| run.rule == id),
             "rule {} has no row in the run table",
@@ -573,7 +580,7 @@ fn spice_cards(text: &str) -> (usize, usize) {
         }
         cards += 1;
         match head.chars().next().map(|c| c.to_ascii_uppercase()) {
-            Some('M' | 'Q' | 'R' | 'C' | 'D') => devices += 1,
+            Some('M' | 'Q' | 'R' | 'C' | 'D' | 'L') => devices += 1,
             Some('X') => instances += 1,
             _ => {}
         }
@@ -694,7 +701,7 @@ fn flatten_checked(netlist: &Netlist, strings: &mut StrTable) {
 /// the flattening below the top LVS does.
 ///
 /// Oracle: a typed error, never a panic; an accepted netlist has one device
-/// per `M`/`Q`/`R`/`C`/`D` card and one instance per `X` card, counted from
+/// per `M`/`Q`/`R`/`C`/`D`/`L` card and one instance per `X` card, counted from
 /// the text by [`spice_cards`]; and [`flatten_checked`].
 pub fn netlist_spice(data: &[u8]) {
     let Ok(text) = std::str::from_utf8(data) else {

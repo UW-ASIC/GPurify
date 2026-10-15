@@ -1,0 +1,3 @@
+.subckt a x y
+L1 x y 1n
+.ends
