@@ -1058,3 +1058,32 @@ fn a_supply_or_terminal_past_the_extraction_is_ignored() {
     assert_eq!(after.nominal_lo, before.nominal_lo);
     assert_eq!(after.nominal_hi, before.nominal_hi);
 }
+
+/// A pad diode wired forward is no clamp: an anode on VDD, or a cathode on
+/// VSS, conducts in operation and carries no discharge, so a pad whose only
+/// diodes are wired that way reaches neither rail.
+///
+/// Oracle: construct-from-answer, per `reverse_biased`'s contract: nets 0
+/// VDD, 1 VSS, 2 PAD; a diode VDD → PAD (anode at 1.8 V) and one PAD → VSS
+/// (cathode at 0 V), plus the rail clamp so the rails themselves are clean:
+/// three pads examined, PAD alone flagged, reaching 0 rail kinds of 2.
+#[test]
+fn a_pad_with_only_forward_wired_diodes_reaches_no_rail() {
+    let circuit = build(
+        3,
+        vec![
+            two_pin(DeviceKind::Diode, "esd_diode", 0, 2),
+            two_pin(DeviceKind::Diode, "esd_diode", 2, 1),
+            mos("rail_clamp", 1, 1, 0, 1),
+        ],
+    );
+    let id = rule(15);
+    let (violations, runs) = run_esd(&circuit, id);
+    let run = common::run_of(&runs, id);
+    assert_eq!((run.examined, run.violations), (3, 1));
+    assert_eq!(
+        violations.shape_a,
+        vec![circuit.case.expected_net_polys[2][0]]
+    );
+    assert_eq!(violations.measured, vec![Measurement::Count(0)]);
+}
