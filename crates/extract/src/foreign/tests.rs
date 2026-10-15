@@ -81,10 +81,15 @@ fn a_spef_reads_in_ff_and_ohms_with_its_names_mapped() {
     assert!((both.resistance.reference[0] - 75.0).abs() < 1e-9);
 }
 
-/// Oracle: the module's refusal list: a reduced net is not read, and a
-/// node no net owns is refused at its line.
+/// Oracle: the module's refusal list: a reduced net is not read, a node
+/// no net owns is refused at its line, and so is a section before any
+/// `*D_NET` (the fuzz crasher `fuzz/regressions/spef/conn_before_any_net`).
 #[test]
 fn a_reduced_net_and_an_orphan_node_are_refused() {
+    let headless = SPEF.replacen("*D_NET *1", "*D_NOT *1", 1);
+    let e = read_spef(&headless).unwrap_err();
+    assert!(e.message.contains("before any *D_NET"), "{e}");
+    assert!(e.line > 0);
     let reduced = SPEF.replace("*D_NET *2", "*R_NET *2");
     assert!(read_spef(&reduced).unwrap_err().message.contains("*R_NET"));
     let orphan = SPEF.replace("2 *2:1 *1:2 0.0008", "2 *2:1 zz:9 0.0008");

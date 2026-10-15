@@ -18,6 +18,7 @@
 //!
 //! **Refused.** A reduced net (`*R_NET`), a physical net (`*D_PNET`,
 //! `*R_PNET`), a hierarchical `*DEFINE`, a value that is not a finite number,
+//! a `*CONN`, `*CAP`, `*RES` or `*INDUC` section before any `*D_NET`,
 //! and a node whose net cannot be told: one no net's `*CONN` (or `*|NET`
 //! section) declares, no element of its own net names, and whose name
 //! before the delimiter is no net's.
@@ -381,6 +382,10 @@ pub fn read_spef(text: &str) -> Result<Read, ReadError> {
                     .ok_or_else(|| fault(line, "*D_NET names a net"))?;
                 net = c.net(&resolve(name, &name_map, c.delimiter));
                 at = At::Header;
+            }
+            // A section belongs to the `*D_NET` above it.
+            "*CONN" | "*CAP" | "*RES" | "*INDUC" if c.nets.is_empty() => {
+                return Err(fault(line, format!("{head} before any *D_NET")));
             }
             "*CONN" => at = At::Conn,
             "*CAP" => at = At::Cap,
