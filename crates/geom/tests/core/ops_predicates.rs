@@ -206,6 +206,27 @@ fn point_to_segment_distance_is_the_perpendicular_or_the_nearer_endpoint() {
     );
 }
 
+/// Oracle: hand-derived closed form. The segment `±(3m, 4m)` has `|v|² =
+/// 100m²`; from `p = (4n + k, -3n)` the cross product is `-(50n + 8k)m`, so
+/// the squared drop is `(50n + 8k)² / 100`: `25n²` exactly at `k = 0`, and
+/// `25n² + 8n + 0.64`, rounded up to `25n² + 8n + 1`, at `k = 1`. At `m = n =
+/// 2^37` the cross product squared passes `2^158`, past `u128`, so this is
+/// the 256-bit division and its rounding.
+#[test]
+fn a_skew_distance_past_128_bits_is_exact_and_rounds_up() {
+    let (m, n) = (1i64 << 37, 1i64 << 37);
+    let slant = seg(-3 * m, -4 * m, 3 * m, 4 * m);
+    let n2 = i128::from(n) * i128::from(n);
+    assert_eq!(
+        point_seg_dist2(point(4 * n, -3 * n), slant),
+        DbuArea::new(25 * n2)
+    );
+    assert_eq!(
+        point_seg_dist2(point(4 * n + 1, -3 * n), slant),
+        DbuArea::new(25 * n2 + 8 * i128::from(n) + 1)
+    );
+}
+
 /// Oracle: closed form for the parallel and collinear cases, law for the rest.
 /// Segment distance is bounded above by the distance from any of the four
 /// endpoints to the other segment, which pins it without stating an answer.
