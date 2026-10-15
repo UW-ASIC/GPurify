@@ -164,6 +164,29 @@ impl ValidatedLayer {
         }
     }
 
+    /// Copies polygon `idx` alone into `out` (cleared and refilled), keeping
+    /// its store rows: [`ValidatedLayer::select_into`] of one polygon, at the
+    /// cost of that polygon.
+    ///
+    /// # Panics
+    ///
+    /// On `idx >= len()`.
+    pub fn copy_polygon_into(&self, idx: u32, out: &mut ValidatedLayer) {
+        out.reset();
+        let idx = idx as usize;
+        let (start, len) = (self.poly_ring_start[idx], self.poly_ring_len[idx]);
+        for ring in start..start + len {
+            let RingRef { xs, ys } = self.ring(ring);
+            let (diagonal, skew) = angle_flags(xs, ys);
+            out.diagonal |= diagonal;
+            out.skew |= skew;
+            out.push_ring(xs, ys, self.ring_poly[ring as usize]);
+        }
+        out.poly_ring_start.push(0);
+        out.poly_ring_len.push(len);
+        out.poly_bbox.push(self.poly_bbox[idx]);
+    }
+
     /// Every ring of polygon `idx`, outer first, then its holes ascending by
     /// store row. Panics on `idx >= len()`.
     pub fn poly_rings(&self, idx: u32) -> impl Iterator<Item = RingRef<'_>> + '_ {
