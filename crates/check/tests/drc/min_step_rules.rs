@@ -3,7 +3,14 @@
 //! the root suite's exhaustive fixtures (`tests/exhaustive/drc_dimension.rs`)
 //! at the crate level, with the same oracles.
 
-use crate::common::deck::{check, count, deck, len, rect, Shape, Want};
+use crate::common::deck::{any, check, count, deck, len, rect, Shape, Want};
+use gpurify_check::report::Measurement;
+use gpurify_testgen::dbu;
+
+/// A count limit.
+fn most(n: u32) -> Measurement {
+    Measurement::Count(n)
+}
 
 /// One polygon on `met1`.
 fn met1(points: &[(i64, i64)]) -> Vec<Shape> {
@@ -45,10 +52,10 @@ fn an_outside_staircase_is_one_run_judged_by_count_and_by_length_sum() {
         let mut want = Vec::new();
         if s < 50 {
             let at = |w: Want| w.at2(2000 - s, 2000 - s);
-            want.push(at(count("out", 2)));
-            want.push(at(count("e1", 2)));
+            want.push(at(count("out", 2).limit(most(1))));
+            want.push(at(count("e1", 2).limit(most(1))));
             if 2 * s > 80 {
-                want.push(at(len("sum", 2 * s)));
+                want.push(at(len("sum", 2 * s).limit(Measurement::Length(dbu(80)))));
             }
         }
         check(
@@ -79,10 +86,12 @@ fn lef_figure_d_four_short_edges_break_every_outside_row() {
         (0, 1000),
     ]);
     let want = [
-        count("out", 4).at(960, 960),
-        len("sum", 160).at(960, 960),
-        count("e1", 4).at(960, 960),
-        count("e2", 4).at(960, 960),
+        count("out", 4).at(960, 960).limit(most(1)),
+        len("sum", 160)
+            .at(960, 960)
+            .limit(Measurement::Length(dbu(80))),
+        count("e1", 4).at(960, 960).limit(most(1)),
+        count("e2", 4).at(960, 960).limit(most(2)),
     ];
     check("lef_figure_d", &deck(STEP), &shape, &STEP_IDS, &want);
 }
@@ -102,10 +111,17 @@ fn an_inside_staircase_breaks_only_the_inside_row() {
         (500, 1000),
         (0, 1000),
     ]);
-    let want = [count("in", 2).at(520, 520), count("e1", 2).at(520, 520)];
+    let want = [
+        count("in", 2).at(520, 520).limit(most(1)),
+        count("e1", 2).at(520, 520).limit(most(1)),
+    ];
     check("inside_two", &deck(STEP), &shape, &STEP_IDS, &want);
 }
 
+/// The limits stated with each finding are the rule's: the most short
+/// edges a corner kind allows in a row is 1 (two is a violation), a step's
+/// 0, `MAXEDGES n`'s n, and `LENGTHSUM`'s length.
+///
 /// Oracle: by construction. One 40 nm jog between two long edges running the
 /// same way is a step: only `corner: step` rejects it, a run of one edge,
 /// at the jog's middle (500, 520). One short edge is not more than one, so
@@ -125,7 +141,7 @@ fn a_single_jog_is_a_step_and_nothing_else() {
         &deck(STEP),
         &shape,
         &STEP_IDS,
-        &[count("st", 1).at(500, 520)],
+        &[count("st", 1).at(500, 520).limit(most(0))],
     );
 }
 
@@ -154,7 +170,10 @@ fn a_ring_of_only_short_edges_is_one_run_with_no_corner() {
         &deck(STEP),
         &[rect("met1", 0, 0, 40, 30)],
         &STEP_IDS,
-        &[count("e1", 4).at(20, 15), count("e2", 4).at(20, 15)],
+        &[
+            count("e1", 4).at(20, 15).limit(most(1)),
+            count("e2", 4).at(20, 15).limit(most(2)),
+        ],
     );
 }
 
@@ -317,4 +336,67 @@ fn a_tip_s_sides_offend_by_its_end_of_line() {
         };
         check(&format!("tip/{e}"), &deck(ADJ), &shape, &ADJ_IDS, &want);
     }
+}
+
+/// Oracle: the same checker's `_noBetweenEol`, its third edge swept around
+/// the limit. A tip 40 long on a bar's end, its end of line 60, its top
+/// running back 50 or 49 to a bar narrowed by 10 or 9 above it: the 40
+/// side, the end of line and the top in a row. At 50 the top is not short
+/// and nothing is reported; at 49 there is one finding (its marker, x (991
+/// + 1040) / 2, is off the lattice and not pinned). The checker walks the
+/// ring one way, so the finding names whichever short edge comes first: the
+/// 40 side, or under a mirror the 49 top; the value is left unstated.
+#[test]
+fn between_eol_needs_the_edge_after_the_end_of_line_to_be_short() {
+    for top in [50, 49] {
+        let x = 1040 - top;
+        let shape = met1(&[
+            (0, 0),
+            (1000, 0),
+            (1000, 100),
+            (1040, 100),
+            (1040, 160),
+            (x, 160),
+            (x, 400),
+            (0, 400),
+        ]);
+        let want: Vec<Want> = if top < 50 {
+            vec![any("between").at2(x + 1040, 260)]
+        } else {
+            Vec::new()
+        };
+        check(
+            &format!("asymmetric_tip/{top}"),
+            &deck(ADJ),
+            &shape,
+            &["between"],
+            &want,
+        );
+    }
+}
+
+/// Oracle: the same checker. The tip of the case above with its top 46
+/// long (the bar above narrowed by 6): the between row's box takes all
+/// three edges, x 994 to 1040 and y 100 to 160, so the marker is at
+/// ((994 + 1040) / 2, 130) = (1017, 130), not the 40 side's and end's
+/// (1020, 130). The box is the same whichever way the ring is walked.
+#[test]
+fn between_eol_s_marker_spans_all_three_edges() {
+    let shape = met1(&[
+        (0, 0),
+        (1000, 0),
+        (1000, 100),
+        (1040, 100),
+        (1040, 160),
+        (994, 160),
+        (994, 400),
+        (0, 400),
+    ]);
+    check(
+        "marker",
+        &deck(ADJ),
+        &shape,
+        &["between"],
+        &[any("between").at(1017, 130)],
+    );
 }
