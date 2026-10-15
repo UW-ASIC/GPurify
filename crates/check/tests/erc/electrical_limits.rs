@@ -540,3 +540,202 @@ fn a_node_over_the_absolute_voltage_cap_is_reported_with_its_own_voltage() {
         );
     }
 }
+
+/// Five nodes held at chosen voltages, no solve: the reliability rule reads
+/// only the solved voltages, so the test states them.
+fn held_at(millivolt: &[f64]) -> (PowerGrid, PowerSolution) {
+    let mut builder = GridBuilder::new();
+    for (k, _) in (0i64..).zip(millivolt) {
+        builder.node(k * 1_000, 1_800.0, 0.0);
+    }
+    let solution = PowerSolution {
+        node_voltage: millivolt.iter().map(|&v| millivolts(v)).collect(),
+        ..PowerSolution::default()
+    };
+    (builder.finish(), solution)
+}
+
+/// A reliability row: lifetime 10 000 h at 2 V and 398.15 K, exponent 4,
+/// activation 0.6 eV, duty one half.
+fn lifetime_table(id: StrId, required_hours: f64, cap_mv: f64) -> ReliabilityTable {
+    ReliabilityTable {
+        head: head(id),
+        required_lifetime_hours: vec![required_hours],
+        reference_lifetime_hours: vec![10_000.0],
+        reference_stress: vec![millivolts(2_000.0)],
+        stress_exponent: vec![4.0],
+        reference_temperature: vec![Qty::<Temperature, { prefix::BASE }>::new(398.15)],
+        activation_energy_ev: vec![0.6],
+        duty_cycle: vec![0.5],
+        max_abs_voltage: vec![millivolts(cap_mv)],
+    }
+}
+
+/// The lifetime half of `reliability`: each node's predicted life is
+/// `L_ref · e^{Ea/k (1/T - 1/T_ref)} / duty · (V_ref / |V|)^n`, and a node
+/// living less than `required` is reported with its hours; one exactly at
+/// it is not, nor a node at 0 V (unstressed, infinite). `|V|` over the cap
+/// is reported as well, a negative rail by its magnitude.
+///
+/// Oracle: closed form. At the reference temperature the Arrhenius factor
+/// is 1, so the unit life is 10 000 / 0.5 = 20 000 h, and nodes at 0, 1, 2,
+/// 4 and -4 V live forever, 320 000, 20 000, 1 250 and 1 250 h: against a
+/// required 20 000 h only the two 4 V nodes fail, and against a 3 V cap the
+/// same two. At 358.15 K the life scales by
+/// `exp(0.6 / 8.617333262e-5 · (1/358.15 - 1/398.15))` (CODATA k).
+#[test]
+fn reliability_predicts_each_nodes_lifetime_in_closed_form() {
+    let (grid, solution) = held_at(&[0.0, 1_000.0, 2_000.0, 4_000.0, -4_000.0]);
+    let solved = Solved {
+        grid: &grid,
+        solution: &solution,
+    };
+    let at_reference = Qty::<Temperature, { prefix::BASE }>::new(398.15);
+    let id = rule(40);
+    let (mut violations, mut runs) = report();
+    check_reliability(
+        Ok(Some(solved)),
+        &intent_with(NetLimits::default()),
+        at_reference,
+        &lifetime_table(id, 20_000.0, 3_000.0),
+        &mut violations,
+        &mut runs,
+    );
+    let run = common::run_of(&runs, id);
+    assert_eq!((run.outcome, run.examined), (Outcome::Ran, 5));
+    let mut found: Vec<(PolyId, Measurement, Measurement)> = (0..violations.rule.len())
+        .map(|row| {
+            (
+                violations.shape_a[row],
+                violations.measured[row],
+                violations.limit[row],
+            )
+        })
+        .collect();
+    found.sort_by_key(|f| (f.0, matches!(f.1, Measurement::Ratio(_))));
+    let cap = Measurement::Voltage(millivolts(3_000.0));
+    let required = Measurement::Ratio(20_000.0);
+    assert_eq!(
+        found,
+        [
+            (PolyId(3), Measurement::Voltage(millivolts(4_000.0)), cap),
+            (PolyId(3), Measurement::Ratio(1_250.0), required),
+            (PolyId(4), Measurement::Voltage(millivolts(4_000.0)), cap),
+            (PolyId(4), Measurement::Ratio(1_250.0), required),
+        ]
+    );
+    for row in 0..violations.rule.len() {
+        let node = violations.shape_a[row].0 as usize;
+        assert_eq!(violations.at[row], grid.node_at[node]);
+    }
+
+    // Colder than the reference: every life longer by the Arrhenius factor.
+    let thermal = (0.6_f64 / 8.617_333_262e-5 * (1.0 / 358.15 - 1.0 / 398.15)).exp();
+    let id = rule(41);
+    let (mut violations, mut runs) = report();
+    check_reliability(
+        Ok(Some(solved)),
+        &intent_with(NetLimits::default()),
+        Qty::new(358.15),
+        &lifetime_table(id, 1e12, 1e9),
+        &mut violations,
+        &mut runs,
+    );
+    assert_eq!(common::run_of(&runs, id).outcome, Outcome::Ran);
+    let mut hours: Vec<(PolyId, f64)> = (0..violations.rule.len())
+        .map(|row| match violations.measured[row] {
+            Measurement::Ratio(h) => (violations.shape_a[row], h),
+            other => panic!("only lives fall short here, not {other:?}"),
+        })
+        .collect();
+    hours.sort_by_key(|h| h.0);
+    let want = [
+        (PolyId(1), 320_000.0),
+        (PolyId(2), 20_000.0),
+        (PolyId(3), 1_250.0),
+        (PolyId(4), 1_250.0),
+    ];
+    assert_eq!(hours.len(), want.len(), "{hours:?}");
+    for ((poly, got), (want_poly, at_reference)) in hours.into_iter().zip(want) {
+        assert_eq!(poly, want_poly);
+        assert_close_relative("a node's life", got, at_reference * thermal, 1e-9);
+    }
+}
+
+/// A reliability row whose model has no meaning is refused, not run: an
+/// operating or reference temperature at absolute zero, no reference
+/// stress, an unbounded exponent, an unbounded or zero required life, an
+/// unbounded cap, a zero duty cycle (an infinite unit life), and a node
+/// voltage that is not a number.
+///
+/// Oracle: construct-from-answer: each row differs from the legal one of
+/// the test above in the one value the rule's documentation says it refuses.
+#[test]
+fn reliability_refuses_a_row_whose_model_has_no_meaning() {
+    let (grid, solution) = held_at(&[0.0, 1_000.0, 2_000.0]);
+    let breaks: [(&str, fn(&mut ReliabilityTable)); 8] = [
+        ("reference at 0 K", |t| {
+            t.reference_temperature[0] = Qty::new(0.0);
+        }),
+        ("no reference stress", |t| {
+            t.reference_stress[0] = millivolts(0.0)
+        }),
+        ("infinite exponent", |t| {
+            t.stress_exponent[0] = f64::INFINITY
+        }),
+        ("infinite required life", |t| {
+            t.required_lifetime_hours[0] = f64::INFINITY;
+        }),
+        ("zero required life", |t| t.required_lifetime_hours[0] = 0.0),
+        ("infinite cap", |t| {
+            t.max_abs_voltage[0] = millivolts(f64::INFINITY)
+        }),
+        ("zero duty", |t| t.duty_cycle[0] = 0.0),
+        ("infinite reference life", |t| {
+            t.reference_lifetime_hours[0] = f64::INFINITY;
+        }),
+    ];
+    let run_one = |table: &ReliabilityTable, kelvin: f64, solution: &PowerSolution| {
+        let (mut violations, mut runs) = report();
+        check_reliability(
+            Ok(Some(Solved {
+                grid: &grid,
+                solution,
+            })),
+            &intent_with(NetLimits::default()),
+            Qty::new(kelvin),
+            table,
+            &mut violations,
+            &mut runs,
+        );
+        (
+            violations.rule.len(),
+            common::run_of(&runs, rule(42)).outcome,
+        )
+    };
+    let legal = lifetime_table(rule(42), 1e9, 1e9);
+    assert_eq!(run_one(&legal, 398.15, &solution).1, Outcome::Ran);
+    for (why, break_it) in breaks {
+        let mut table = lifetime_table(rule(42), 1e9, 1e9);
+        break_it(&mut table);
+        assert_eq!(
+            run_one(&table, 398.15, &solution),
+            (0, Outcome::Refused),
+            "{why}"
+        );
+    }
+    assert_eq!(
+        run_one(&legal, 0.0, &solution),
+        (0, Outcome::Refused),
+        "operating at 0 K"
+    );
+    let not_a_number = PowerSolution {
+        node_voltage: vec![millivolts(0.0), millivolts(f64::NAN), millivolts(1.0)],
+        ..PowerSolution::default()
+    };
+    assert_eq!(
+        run_one(&legal, 398.15, &not_a_number),
+        (0, Outcome::Refused),
+        "a node at NaN"
+    );
+}
