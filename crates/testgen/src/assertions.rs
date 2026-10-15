@@ -129,7 +129,7 @@ pub fn assert_clean(runs: &[RuleRun], violations: &Violations, rule: StrId) {
     assert!(
         found.is_empty(),
         "rule {rule:?} was expected clean but rows {found:?} name it:\n{}",
-        describe(violations, &found)
+        describe(violations, found.iter().copied())
     );
 }
 
@@ -142,10 +142,10 @@ pub fn assert_clean(runs: &[RuleRun], violations: &Violations, rule: StrId) {
 /// that differs from `expected`.
 pub fn assert_only_violation(violations: &Violations, expected: &Violation) {
     assert!(
-        violations.rule.len() == 1,
+        violations.len() == 1,
         "expected exactly one violation, found {}:\n{}",
-        violations.rule.len(),
-        describe(violations, &(0..violations.rule.len()).collect::<Vec<_>>())
+        violations.len(),
+        describe(violations, 0..violations.len())
     );
     assert_violation_row(violations, 0, expected);
 }
@@ -158,12 +158,12 @@ pub fn assert_only_violation(violations: &Violations, expected: &Violation) {
 /// Panics listing the whole table when no row matches.
 #[must_use]
 pub fn assert_has_violation(violations: &Violations, expected: &Violation) -> usize {
-    let found = (0..violations.rule.len()).find(|&i| row_matches(violations, i, expected));
+    let found = (0..violations.len()).find(|&i| violations.get(i) == *expected);
     match found {
         Some(index) => index,
         None => panic!(
             "no row matches {expected:?}; the table holds:\n{}",
-            describe(violations, &(0..violations.rule.len()).collect::<Vec<_>>())
+            describe(violations, 0..violations.len())
         ),
     }
 }
@@ -176,15 +176,15 @@ pub fn assert_has_violation(violations: &Violations, expected: &Violation) -> us
 /// row and field that differ.
 pub fn assert_violations_eq(actual: &Violations, expected: &Violations) {
     assert!(
-        actual.rule.len() == expected.rule.len(),
+        actual.len() == expected.len(),
         "violation tables differ in length: {} against {}\nactual:\n{}\nexpected:\n{}",
-        actual.rule.len(),
-        expected.rule.len(),
-        describe(actual, &(0..actual.rule.len()).collect::<Vec<_>>()),
-        describe(expected, &(0..expected.rule.len()).collect::<Vec<_>>())
+        actual.len(),
+        expected.len(),
+        describe(actual, 0..actual.len()),
+        describe(expected, 0..expected.len())
     );
-    for index in 0..actual.rule.len() {
-        assert_violation_row(actual, index, &row(expected, index));
+    for index in 0..actual.len() {
+        assert_violation_row(actual, index, &expected.get(index));
     }
 }
 
@@ -217,33 +217,9 @@ pub fn assert_bytes_identical(what: &str, first: &[u8], second: &[u8]) {
     );
 }
 
-/// Read one row back out of a table.
-fn row(violations: &Violations, index: usize) -> Violation {
-    Violation {
-        rule: violations.rule[index],
-        layer: violations.layer[index],
-        severity: violations.severity[index],
-        at: violations.at[index],
-        measured: violations.measured[index],
-        limit: violations.limit[index],
-        shapes: (violations.shape_a[index], violations.shape_b[index]),
-    }
-}
-
-fn row_matches(violations: &Violations, index: usize, expected: &Violation) -> bool {
-    let actual = row(violations, index);
-    actual.rule == expected.rule
-        && actual.layer == expected.layer
-        && actual.severity == expected.severity
-        && actual.at == expected.at
-        && actual.measured == expected.measured
-        && actual.limit == expected.limit
-        && actual.shapes == expected.shapes
-}
-
 /// Compare one row field by field, so the failure names the field.
 fn assert_violation_row(violations: &Violations, index: usize, expected: &Violation) {
-    let actual = row(violations, index);
+    let actual = violations.get(index);
     assert!(
         actual.rule == expected.rule,
         "row {index}: rule {:?}, expected {:?}",
@@ -289,11 +265,11 @@ fn assert_violation_row(violations: &Violations, index: usize, expected: &Violat
 }
 
 /// Render the named rows for a failure message.
-fn describe(violations: &Violations, rows: &[usize]) -> String {
+fn describe(violations: &Violations, rows: impl IntoIterator<Item = usize>) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
-    for &index in rows {
-        let _ = writeln!(out, "  [{index}] {:?}", row(violations, index));
+    for index in rows {
+        let _ = writeln!(out, "  [{index}] {:?}", violations.get(index));
     }
     if out.is_empty() {
         out.push_str("  (no rows)\n");
