@@ -129,6 +129,7 @@ fn run_in_cell(id: &str, cell: &str, rects: &[(&str, i64, i64, i64, i64)]) -> (u
     let cells = [
         Structure {
             name: "TOP".to_owned(),
+            texts: Vec::new(),
             rects: Vec::new(),
             refs: vec![Placement {
                 cell: cell.to_owned(),
@@ -141,6 +142,7 @@ fn run_in_cell(id: &str, cell: &str, rects: &[(&str, i64, i64, i64, i64)]) -> (u
         },
         Structure {
             name: cell.to_owned(),
+            texts: Vec::new(),
             rects: rects.iter().map(rect).collect(),
             refs: Vec::new(),
         },

@@ -234,6 +234,7 @@ fn hierarchy(b: &mut Bytes<'_>) -> Hierarchy {
         };
         h.cells.push(Structure {
             name: format!("D{j}"),
+            texts: Vec::new(),
             rects: Vec::new(),
             refs: vec![Placement {
                 cell: next,

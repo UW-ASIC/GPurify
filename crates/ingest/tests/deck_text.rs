@@ -862,6 +862,64 @@ fn lvs_ignore_names_any_model_once() {
     );
 }
 
+/// Oracle: the language spec (deck.md, "LVS controls"). `lvs blackbox`
+/// keeps its cell-name globs in deck order, each once, refusing an empty
+/// one, KLayout's class and escape characters, and one matching a device
+/// model; `lvs filter_unused` keeps its options in deck order, once each,
+/// refusing an unknown letter, a repeat, none, a second statement, and `c`
+/// with no `lvs supply`; `lvs supply` keeps its names across statements,
+/// refusing none and a repeat.
+/// Breaks if a pattern is dropped or reordered, a model is boxed, or an
+/// option is misread.
+#[test]
+fn lvs_blackbox_and_filter_unused_lower_as_stated() {
+    use gpurify_ingest::deck::UnusedFilter;
+    let devices = "device mos poly model \"nfet\" terminals [poly, diff, diff]\n";
+    let (deck, strings) = ok(&format!(
+        "{devices}lvs blackbox \"SRAM_*\"\nlvs blackbox \"pad\"\nlvs filter_unused ag c u\n\
+         lvs supply \"VDD\" \"VSS\"\nlvs supply \"GND\"\n"
+    ));
+    assert_eq!(deck.lvs.blackbox, ["SRAM_*", "pad"]);
+    assert_eq!(
+        deck.lvs.filter_unused,
+        [UnusedFilter::Ag, UnusedFilter::C, UnusedFilter::U]
+    );
+    let names: Vec<&str> = deck
+        .lvs
+        .supply
+        .iter()
+        .map(|&n| strings.resolve(n))
+        .collect();
+    assert_eq!(names, ["VDD", "VSS", "GND"]);
+    for (body, needle) in [
+        ("lvs blackbox \"\"\n", "matches no cell"),
+        ("lvs blackbox \"a[bc]\"\n", "`*` and `?` only"),
+        (
+            "lvs blackbox \"pad\"\nlvs blackbox \"pad\"\n",
+            "already a black box",
+        ),
+        ("lvs filter_unused\n", "one or more"),
+        ("lvs filter_unused ae x\n", "unknown filter option"),
+        ("lvs filter_unused ae ae\n", "given twice"),
+        (
+            "lvs filter_unused ae\nlvs filter_unused u\n",
+            "already stated",
+        ),
+        ("lvs supply\n", "one net or more"),
+        ("lvs supply \"VDD\" \"VDD\"\n", "already a supply"),
+    ] {
+        one_error(&format!("{devices}{body}"), needle);
+    }
+    assert!(matches!(
+        parse(&format!("{devices}lvs filter_unused c\n")),
+        Err(DeckError::Malformed(ref why)) if why.contains("no lvs supply")
+    ));
+    assert!(matches!(
+        parse(&format!("{devices}lvs blackbox \"n*\"\n")),
+        Err(DeckError::Malformed(ref why)) if why.contains("matches the device model \"nfet\"")
+    ));
+}
+
 /// Oracle: the language spec (deck.md, "Devices"). An `inductor` device
 /// states its inductance in pH, nH or uH, kept in nH; `inductance` on any
 /// other kind, or a value in another unit, is refused. Breaks if the unit is

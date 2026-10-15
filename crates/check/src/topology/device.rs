@@ -371,7 +371,8 @@ pub fn recognise_into(
                 DeviceKind::Bjt
                 | DeviceKind::Capacitor
                 | DeviceKind::Diode
-                | DeviceKind::Inductor => false,
+                | DeviceKind::Inductor
+                | DeviceKind::Cell => false,
             };
 
             let at = terminal_index
@@ -855,9 +856,11 @@ pub(crate) fn role_at(kind: DeviceKind, position: u8) -> TerminalRole {
     let named: &[TerminalRole] = match kind {
         DeviceKind::Mos => &MOS,
         DeviceKind::Bjt => &BJT,
-        DeviceKind::Resistor | DeviceKind::Capacitor | DeviceKind::Diode | DeviceKind::Inductor => {
-            &[]
-        }
+        DeviceKind::Resistor
+        | DeviceKind::Capacitor
+        | DeviceKind::Diode
+        | DeviceKind::Inductor
+        | DeviceKind::Cell => &[],
     };
     named
         .get(usize::from(position))

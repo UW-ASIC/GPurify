@@ -323,6 +323,134 @@ fn an_x_card_calling_a_deck_model_is_the_same_device_as_the_m_card() {
     );
 }
 
+/// Oracle: construct-from-answer, catalog LVS-067 (`KLayout`'s
+/// `wants_subcircuit`). An `X` card calling a deck model is that device
+/// even where the netlist also defines a `.subckt` of the name: its
+/// parameters read as on any PDK `X` card (`w=2` is 2 µm), its body is
+/// never read as placed, and the definition is no candidate top, so the
+/// file's top stays unique. Breaks if the call is placed as an instance,
+/// its parameters refused, or the definition taken for a second top.
+#[test]
+fn an_x_card_calling_a_deck_model_is_that_device_when_the_netlist_defines_it_too() {
+    let mut strings = StrTable::default();
+    let devices = DeviceRecognition {
+        kind: vec![DeviceKind::Resistor],
+        model: vec![strings.intern("rhigh")],
+        ..DeviceRecognition::default()
+    };
+    let source = "\
+.subckt rhigh a b
+R0 a b rinner r=1k
+.ends
+.subckt top n1 n2
+XR1 n1 n2 rhigh w=2 l=10
+.ends
+";
+    let netlist = spice::read(source, &mut strings, &devices).expect("reads");
+    assert!(netlist.instance_of.is_empty(), "XR1 placed as an instance");
+    let top = netlist.top().expect("the definition is no top");
+    assert_eq!(strings.resolve(netlist.subckt_name[top.0 as usize]), "top");
+    let flat = netlist.flatten_top(top, &mut strings).expect("flattens");
+    let models: Vec<&str> = flat
+        .device_model
+        .iter()
+        .map(|&m| strings.resolve(m))
+        .collect();
+    assert_eq!(models, ["rhigh"]);
+    assert_eq!(flat.device_kind, [DeviceKind::Resistor]);
+    let (w, l) = (strings.intern("w"), strings.intern("l"));
+    let names: Vec<_> = flat.param.iter().map(|&(name, _)| name).collect();
+    assert_eq!(names, [w, l]);
+    for (&(_, got), want) in flat.param.iter().zip([2e-6, 10e-6]) {
+        assert!((got - want).abs() <= 1e-12 * want, "{got} for {want}");
+    }
+}
+
+/// Oracle: construct-from-answer, catalog LVS-033 (Netgen's `model ...
+/// blackbox`: "will only recognize the pin names and pin order but will
+/// otherwise ignore the subcell contents"). Flattening with `BB*` kept
+/// makes each placement of `BB1` one `Cell` device of model `BB1` on the
+/// caller's nets in port order, with no parameter, its body (two MOS)
+/// never expanded, the placement recorded with its one device, and `BB1`'s
+/// ports listed once in port order; `INV`, matching no pattern, still
+/// expands. A box of 257 ports is refused, of 256 is not. Breaks if a box is
+/// expanded, its terminals reordered, or its ports listed twice.
+#[test]
+fn flattening_keeps_a_black_box_whole_on_its_ports() {
+    let mut strings = StrTable::default();
+    let source = "\
+.subckt BB1 P Q R
+M0 P Q R R nfet
+M1 Q P R R pfet
+.ends
+.subckt INV A Y
+M0 Y A Y Y nfet
+.ends
+.subckt TOP a b c
+X1 c a b BB1
+X2 b b a BB1
+X3 a b INV
+.ends
+";
+    let netlist = spice::read(source, &mut strings, &DeviceRecognition::default()).expect("reads");
+    let top = netlist.top().expect("TOP");
+    let flat = netlist
+        .flatten_top_with(top, &["BB*".to_owned()], &mut strings)
+        .expect("flattens");
+    let name = |id: gpurify_ingest::StrId| strings.resolve(id).to_owned();
+    let models: Vec<String> = flat.device_model.iter().map(|&m| name(m)).collect();
+    assert_eq!(models, ["BB1", "BB1", "nfet"]);
+    assert_eq!(
+        flat.device_kind,
+        [DeviceKind::Cell, DeviceKind::Cell, DeviceKind::Mos]
+    );
+    let nets = |device: usize| -> Vec<String> {
+        let range = flat.device_terminal_start[device] as usize
+            ..flat.device_terminal_start[device + 1] as usize;
+        flat.terminal_net[range]
+            .iter()
+            .map(|&n| name(flat.net_name[n.0 as usize]))
+            .collect()
+    };
+    assert_eq!(nets(0), ["c", "a", "b"]);
+    assert_eq!(nets(1), ["b", "b", "a"]);
+    assert_eq!(flat.device_param_start[..3], [0, 0, 0]);
+    assert_eq!(flat.black_box_ports.len(), 1);
+    let (cell, ports) = &flat.black_box_ports[0];
+    assert_eq!(name(*cell), "BB1");
+    let ports: Vec<String> = ports.iter().map(|&p| name(p)).collect();
+    assert_eq!(ports, ["P", "Q", "R"]);
+    let placed: Vec<(String, std::ops::Range<u32>)> = flat
+        .placements
+        .iter()
+        .map(|p| (name(p.path), p.devices.clone()))
+        .collect();
+    assert_eq!(
+        placed,
+        [
+            ("X1".to_owned(), 0..1),
+            ("X2".to_owned(), 1..2),
+            ("X3".to_owned(), 2..3)
+        ]
+    );
+
+    for (ports, refused) in [(256, false), (257, true)] {
+        let pins: Vec<String> = (0..ports).map(|k| format!("p{k}")).collect();
+        let pins = pins.join(" ");
+        let source =
+            format!(".subckt WIDE {pins}\n.ends\n.subckt T {pins}\nX1 {pins} WIDE\n.ends\n");
+        let netlist =
+            spice::read(&source, &mut strings, &DeviceRecognition::default()).expect("reads");
+        let top = netlist.top().expect("T");
+        let flat = netlist.flatten_top_with(top, &["WIDE".to_owned()], &mut strings);
+        assert_eq!(
+            matches!(flat, Err(NetlistError::TooManyPins(_, 257))),
+            refused,
+            "{ports} ports: {flat:?}"
+        );
+    }
+}
+
 /// Flattening places every leaf device under the top, wired through the
 /// instance's port nets, with internal nets named by path.
 ///

@@ -65,4 +65,4 @@ pub(crate) fn narrow(rows: usize) -> u32 {
 pub use deck::{Deck, DeckError};
 pub use gpurify_geom::{StrId, StrTable};
 pub use intent::{DesignIntent, IntentError};
-pub use provenance::{LabelError, PlacedLabel, Provenance};
+pub use provenance::{BlackBox, LabelError, PlacedLabel, Provenance};

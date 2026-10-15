@@ -291,7 +291,10 @@ The deck's `lvs` statements change the comparison per device model (see
 drain do not swap (`lvs asymmetric`); pins that do (`lvs permute`); and
 devices left out of the comparison altogether, fill or decap cells one side
 does not state (`lvs ignore`), or dummies with every terminal on one net
-(`lvs ignore_shorted`). Must-connect nets, rails joined only above this
+(`lvs ignore_shorted`), or the layout's transistors wired to do nothing
+(`lvs filter_unused`). A cell can be compared by its pins alone, its
+contents ignored on both sides: a macro, or a foundry's fixed cell such as
+a VPP capacitor (`lvs blackbox`). Must-connect nets, rails joined only above this
 layout, are one net to compare (`lvs connect_implicit`, `lvs
 connect_explicit`). And `lvs range` holds a model's drawn devices to the
 sizes the foundry allows (`lvs.param_range`). The layout's own checks still see every

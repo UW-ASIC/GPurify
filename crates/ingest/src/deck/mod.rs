@@ -956,6 +956,13 @@ pub enum DeviceKind {
     /// A two-pin inductor; a SPICE `L` card. Its ends are interchangeable,
     /// as `KLayout`'s `DeviceClassInductor` declares them (catalog LVS-065).
     Inductor,
+    /// A cell compared by its pins alone, its contents ignored: a placement
+    /// of a cell the deck's `lvs blackbox` names, and a reference `X` card
+    /// calling a subcircuit of that name (catalog LVS-033, LVS-067). Its
+    /// model is the cell's name and pin `k` is the subcircuit's port `k`;
+    /// no pin trades places with another, and it never merges. No `device`
+    /// statement declares one.
+    Cell,
 }
 
 /// The `lvs` statements: what the layout-versus-schematic comparison does
@@ -1037,6 +1044,67 @@ pub struct LvsControls {
     /// gates, so a NAND's or NOR's inputs may be wired in either order
     /// (Silvaco Guardian's gate reduction; catalog LVS-047).
     pub recognize_gates: bool,
+    /// `lvs blackbox "pattern"`: cell-name globs (`*` any run, `?` one
+    /// character, the whole name, case included), each once. A layout cell
+    /// placed under a matching name, and a reference subcircuit of one, is
+    /// compared by its pins alone, its contents ignored on both sides, as
+    /// `KLayout`'s `blank_circuit` and Netgen's black boxes are (catalog
+    /// LVS-033, LVS-067): one device of [`DeviceKind::Cell`] per placement.
+    /// No pattern matches a deck device model.
+    pub blackbox: Vec<String>,
+    /// `lvs filter_unused <option> ...`: the unused-transistor patterns
+    /// whose layout transistors leave the comparison (catalog LVS-048), each
+    /// once, in deck order.
+    pub filter_unused: Vec<UnusedFilter>,
+    /// `lvs supply "name" ...`: the power and ground net names, Calibre's
+    /// `LVS POWER NAME` and `LVS GROUND NAME` together, each once: what
+    /// `filter_unused c` holds a gate to. A layout net is one when its label
+    /// is.
+    pub supply: Vec<StrId>,
+}
+
+/// One pattern of `lvs filter_unused`: a layout transistor wired so that it
+/// does nothing is left out of the comparison, as Calibre's `LVS FILTER
+/// UNUSED OPTION <option> LAYOUT` filters it. The options and their
+/// one-line definitions are the ones US 8,751,985 B1 (GlobalFoundries,
+/// 2014, col. 7 ll. 44-62) quotes from the Calibre documentation; `C`'s
+/// power and ground are the LVS power and ground names (US 2010/0306720 A1
+/// [0162]: "Power net names can be used by a layout-versus-schematic
+/// operation in, for example, ... filtering of unused MOS transistors"),
+/// here the deck's `lvs supply` names. The others it lists (`K`, `P`, `Q`)
+/// need paths and pads no public source defines. A pin is floating when its
+/// net holds no other terminal and is no port (`KLayout`'s `purge_nets`: a
+/// net that "makes less than two connections").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnusedFilter {
+    /// `ae`: source, drain and gate all floating.
+    Ae,
+    /// `af`: source and drain tied together.
+    Af,
+    /// `ag`: every pin tied together, bulk included.
+    Ag,
+    /// `c`: gate on a supply net (`lvs supply`), and source or drain
+    /// floating.
+    C,
+    /// `u`: source and drain both floating.
+    U,
+}
+
+impl UnusedFilter {
+    /// Every option, in the order the deck spells them.
+    pub const ALL: [Self; 5] = [Self::Ae, Self::Af, Self::Ag, Self::C, Self::U];
+
+    /// The deck's spelling: Calibre's option letters, lowercase.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Ae => "ae",
+            Self::Af => "af",
+            Self::Ag => "ag",
+            Self::C => "c",
+            Self::U => "u",
+        }
+    }
 }
 
 /// One `lvs lde` statement: where a transistor's layout-dependent effects
@@ -1113,6 +1181,7 @@ pub const fn pin_names(kind: DeviceKind) -> &'static [&'static str] {
         DeviceKind::Resistor | DeviceKind::Inductor => &["end_a", "end_b"],
         DeviceKind::Capacitor => &["top", "bottom"],
         DeviceKind::Diode => &["anode", "cathode"],
+        DeviceKind::Cell => &[],
     }
 }
 
@@ -1249,6 +1318,31 @@ fn build_lvs(
     }
     lvs.ports_by_name = declared.ports_by_name;
     lvs.recognize_gates = declared.recognize_gates;
+    for pattern in &declared.blackbox {
+        // A model is a device by its recogniser; one also boxed would be two
+        // things on the reference side.
+        if let Some(device) = devices
+            .iter()
+            .find(|device| crate::layout::glob_matches(pattern, &device.model))
+        {
+            return Err(DeckError::Malformed(format!(
+                "lvs blackbox: \"{pattern}\" matches the device model \"{}\"; a model is \
+                 compared as its device statement says",
+                device.model
+            )));
+        }
+    }
+    lvs.blackbox.clone_from(&declared.blackbox);
+    lvs.filter_unused.clone_from(&declared.filter_unused);
+    if lvs.filter_unused.contains(&UnusedFilter::C) && declared.supply.is_empty() {
+        return Err(DeckError::Malformed(
+            "lvs filter_unused c holds a gate to the supply nets, and no lvs supply names one"
+                .to_owned(),
+        ));
+    }
+    for name in &declared.supply {
+        lvs.supply.push(strings.intern(name));
+    }
     lvs.relaxed = declared.topology == Some(true);
     lvs.connect_implicit.clone_from(&declared.connect_implicit);
     for group in &declared.connect_explicit {
@@ -1386,6 +1480,12 @@ pub struct LvsSrc {
     pub(crate) count: Vec<(String, Option<u32>, Option<u32>)>,
     /// `lvs recognize_gates`.
     pub(crate) recognize_gates: bool,
+    /// `lvs blackbox`: cell-name patterns.
+    pub(crate) blackbox: Vec<String>,
+    /// `lvs filter_unused`: the options.
+    pub(crate) filter_unused: Vec<UnusedFilter>,
+    /// `lvs supply`: the supply net names.
+    pub(crate) supply: Vec<String>,
     /// `lvs lde`: `(model, od layer, max, (well layer, scref))`.
     pub(crate) lde: Vec<LdeSrc>,
 }
@@ -1405,6 +1505,75 @@ pub(crate) struct ToleranceSrc {
 }
 
 impl LvsSrc {
+    /// Adds `lvs blackbox "pattern"`. Refused, with the reason: an empty
+    /// pattern, one holding `[`, `]`, `{`, `}` or `\\` (which `KLayout`
+    /// reads as classes, alternatives and escapes, as `.in_cells` refuses
+    /// them), or one already stated.
+    ///
+    /// # Errors
+    ///
+    /// The reason, as the parser and the deck builder report it.
+    pub fn blackbox(&mut self, pattern: &str) -> Result<(), String> {
+        if pattern.is_empty() {
+            return Err("an empty pattern matches no cell".to_owned());
+        }
+        if pattern.contains(['[', ']', '{', '}', '\\']) {
+            return Err(
+                "a cell-name pattern takes `*` and `?` only; `[`, `]`, `{`, `}` and `\\` are refused"
+                    .to_owned(),
+            );
+        }
+        if self.blackbox.iter().any(|stated| stated == pattern) {
+            return Err(format!("\"{pattern}\" is already a black box"));
+        }
+        self.blackbox.push(pattern.to_owned());
+        Ok(())
+    }
+
+    /// Adds `lvs supply` names. Refused, with the reason: none, or a name
+    /// already stated.
+    ///
+    /// # Errors
+    ///
+    /// The reason, as the parser and the deck builder report it.
+    pub fn supply(&mut self, names: &[&str]) -> Result<(), String> {
+        if names.is_empty() {
+            return Err("supply names one net or more, each in quotes".to_owned());
+        }
+        for (at, &name) in names.iter().enumerate() {
+            if names[..at].contains(&name) || self.supply.iter().any(|stated| stated == name) {
+                return Err(format!("\"{name}\" is already a supply"));
+            }
+        }
+        self.supply
+            .extend(names.iter().map(|&name| name.to_owned()));
+        Ok(())
+    }
+
+    /// Sets `lvs filter_unused` to `options`, in their order. Refused, with
+    /// the reason: none, one given twice, or a second statement.
+    ///
+    /// # Errors
+    ///
+    /// The reason, as the parser and the deck builder report it.
+    pub fn filter_unused(&mut self, options: &[UnusedFilter]) -> Result<(), String> {
+        if !self.filter_unused.is_empty() {
+            return Err("the unused filters are already stated".to_owned());
+        }
+        if options.is_empty() {
+            return Err("filter_unused takes ae, af, ag, c or u, one or more".to_owned());
+        }
+        if let Some(twice) = options
+            .iter()
+            .enumerate()
+            .find(|&(at, option)| options[..at].contains(option))
+        {
+            return Err(format!("`{}` is given twice", twice.1.name()));
+        }
+        self.filter_unused = options.to_vec();
+        Ok(())
+    }
+
     /// The statements that [`lower`] resolves to `controls`, for a deck
     /// whose devices are `devices`: what a compiled deck decompiles to.
     #[must_use]
@@ -1448,6 +1617,9 @@ impl LvsSrc {
             ignore_shorted: controls.ignore_shorted.iter().map(|&id| name(id)).collect(),
             ports_by_name: controls.ports_by_name,
             recognize_gates: controls.recognize_gates,
+            blackbox: controls.blackbox.clone(),
+            filter_unused: controls.filter_unused.clone(),
+            supply: controls.supply.iter().map(|&id| name(id)).collect(),
             lde: controls
                 .lde
                 .iter()

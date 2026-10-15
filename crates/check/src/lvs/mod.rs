@@ -141,6 +141,20 @@
 //!   labels and the reference net the second names start refinement in a
 //!   class of their own, so they pair with each other or are reported
 //!   (catalog LVS-032; `KLayout`'s `same_nets!`).
+//! - `lvs filter_unused ae af ag c u` (with `lvs supply` for `c`): each
+//!   layout transistor wired as an option describes is dropped before
+//!   reduction, judged once as drawn (catalog LVS-048; Calibre's `LVS
+//!   FILTER UNUSED OPTION ... LAYOUT`, as US 8,751,985 B1 col. 7 quotes its
+//!   options).
+//! - `lvs blackbox "pattern"`: a cell compared by its pins alone (catalog
+//!   LVS-033, LVS-067; `KLayout`'s `blank_circuit`, Netgen's `model ...
+//!   blackbox`). Not a comparison control: the load step keeps the
+//!   reference's calls whole
+//!   ([`Netlist::flatten_top_with`](gpurify_ingest::netlist::Netlist::flatten_top_with))
+//!   and finds the layout's placements, and [`add_black_boxes`] puts one
+//!   device of [`DeviceKind::Cell`](gpurify_ingest::deck::DeviceKind::Cell)
+//!   per placement in the layout graph, its pins ranked by the reference's
+//!   ports, before the comparison.
 //!
 //! # Against Netgen
 //!
@@ -212,6 +226,7 @@
 //!   relaxed` combines them, and chains resistors and capacitors in
 //!   series by their law.
 
+mod blackbox;
 pub mod checks;
 mod compare;
 mod controls;
@@ -222,6 +237,7 @@ pub mod reduce;
 mod refine;
 pub mod verdict;
 
+pub use blackbox::add_black_boxes;
 pub use checks::{
     check_device_counts, check_layout, check_net_seed_conflicts, check_param_ranges,
     intern_rule_ids, record_discrepancies, record_unpaired_instances, unpaired_instances,

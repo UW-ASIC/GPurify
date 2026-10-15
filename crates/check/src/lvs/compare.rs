@@ -6,8 +6,8 @@
 //! layout order, then unpaired layout nodes, then unpaired reference nodes.
 
 use crate::lvs::controls::{
-    assign_roles, bound, drop_ignored_devices, drop_ignored_params, port_names, port_seeds,
-    report_roles, restore_rows,
+    assign_roles, bound, drop_ignored_devices, drop_ignored_params, filter_unused, port_names,
+    port_seeds, report_roles, restore_rows,
 };
 use crate::lvs::graph::{channel_ends, drop_unextracted_bulk, keep_declared_params, narrow, Graph};
 use crate::lvs::reduce::{reduce_with, Merge, ParamNames};
@@ -273,6 +273,10 @@ pub fn compare_logged(
 ///   in a class of their own, as `KLayout`'s `same_nets!` holds them
 ///   together; a pair whose wiring disagrees, or a row only one side has a
 ///   net for, leaves its nets unpaired. Seeding only splits classes.
+/// - **`lvs filter_unused`** (catalog LVS-048): each layout transistor an
+///   option matches ([`UnusedFilter`](gpurify_ingest::deck::UnusedFilter))
+///   is dropped before anything else is, with the nets only it reached,
+///   each judged once on the layout as given; the reference keeps its own.
 ///
 /// # Panics
 ///
@@ -342,9 +346,15 @@ pub fn compare_traced(
     );
     protect_labelled(layout, &mut declared);
     let mut measured = layout.clone();
+    // Unused transistors are judged as drawn, before anything else leaves.
+    let filtered = filter_unused(&mut measured, controls);
     // A threshold reads the layout's own value, whether or not the
     // reference states one, so devices go before measures do.
-    let layout_rows = drop_ignored_devices(&mut measured, controls, values);
+    let ignored = drop_ignored_devices(&mut measured, controls, values);
+    let layout_rows = match (filtered, ignored) {
+        (Some(first), Some(then)) => Some(then.iter().map(|&row| first[row as usize]).collect()),
+        (first, then) => first.or(then),
+    };
     keep_declared_params(reference, &mut measured);
     drop_ignored_params(&mut measured, controls);
     drop_ignored_params(&mut declared, controls);

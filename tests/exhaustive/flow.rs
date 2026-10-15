@@ -166,6 +166,7 @@ fn a_waiver_drawn_in_a_cell_waives_at_every_placement() {
 
     let ip = Structure {
         name: "IP".into(),
+        texts: Vec::new(),
         rects: vec![
             (68, 20, [0, 0, 2_000, 50]),
             (255, 0, [-100, -100, 2_100, 150]),
@@ -182,6 +183,7 @@ fn a_waiver_drawn_in_a_cell_waives_at_every_placement() {
     };
     let top = Structure {
         name: "TOP".into(),
+        texts: Vec::new(),
         rects: vec![(68, 20, [0, 10_000, 2_000, 10_050])],
         refs: vec![place((0, 0), 0, false), place((20_000, 0), 1, true)],
     };
