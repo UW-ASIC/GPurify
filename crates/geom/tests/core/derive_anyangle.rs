@@ -82,7 +82,7 @@ fn rings(layer: &ValidatedLayer, map: impl Fn(Pt) -> Pt) -> Vec<(Pt, Pt)> {
     out
 }
 
-fn same<T: PartialEq + std::fmt::Debug>(what: &str, want: T, got: T) -> Result<(), String> {
+fn same<T: PartialEq + std::fmt::Debug>(what: &str, want: &T, got: &T) -> Result<(), String> {
     if want == got {
         Ok(())
     } else {
@@ -105,21 +105,21 @@ fn commutes((ra, rb): &(Vec<Ring>, Vec<Ring>)) -> Result<(), String> {
     edges_into(&b, &mut eb);
     edges_into(&ta, &mut tea);
     edges_into(&tb, &mut teb);
-    same("edges", segs(&ea, turn), segs(&tea, id))?;
+    same("edges", &segs(&ea, turn), &segs(&tea, id))?;
 
     let (mut x, mut tx) = (Vec::new(), Vec::new());
     for op in [EdgeOp::And, EdgeOp::Not, EdgeOp::Or] {
         edge_boolean_into(&ea, &eb, op, &mut x);
         edge_boolean_into(&tea, &teb, op, &mut tx);
-        same(&format!("edge {op:?}"), segs(&x, turn), segs(&tx, id))?;
+        same(&format!("edge {op:?}"), &segs(&x, turn), &segs(&tx, id))?;
     }
     for inside in [true, false] {
         edge_part_into(&ea, &b, inside, &mut x);
         edge_part_into(&tea, &tb, inside, &mut tx);
         same(
             &format!("part inside={inside}"),
-            segs(&x, turn),
-            segs(&tx, id),
+            &segs(&x, turn),
+            &segs(&tx, id),
         )?;
     }
     for keep in [true, false] {
@@ -127,14 +127,14 @@ fn commutes((ra, rb): &(Vec<Ring>, Vec<Ring>)) -> Result<(), String> {
         edge_interacting_into(&tea, &tb, keep, &mut tx);
         same(
             &format!("edge interacting {keep}"),
-            segs(&x, turn),
-            segs(&tx, id),
+            &segs(&x, turn),
+            &segs(&tx, id),
         )?;
     }
     // A side k units long turns into one 5k long.
     with_length_into(&ea, 3..=8, &mut x);
     with_length_into(&tea, 15..=40, &mut tx);
-    same("with_length", segs(&x, turn), segs(&tx, id))?;
+    same("with_length", &segs(&x, turn), &segs(&tx, id))?;
 
     let (mut s, mut ts) = (ValidatedLayer::default(), ValidatedLayer::default());
     for keep in [true, false] {
@@ -142,29 +142,33 @@ fn commutes((ra, rb): &(Vec<Ring>, Vec<Ring>)) -> Result<(), String> {
         interacting_into(&ta, &tb, keep, &mut ts);
         same(
             &format!("interacting {keep}"),
-            rings(&s, turn),
-            rings(&ts, id),
+            &rings(&s, turn),
+            &rings(&ts, id),
         )?;
         overlapping_into(&a, &b, keep, &mut s).map_err(|e| e.to_string())?;
         overlapping_into(&ta, &tb, keep, &mut ts).map_err(|e| e.to_string())?;
         same(
             &format!("overlapping {keep}"),
-            rings(&s, turn),
-            rings(&ts, id),
+            &rings(&s, turn),
+            &rings(&ts, id),
         )?;
         covering_into(&a, &b, keep, &mut s).map_err(|e| e.to_string())?;
         covering_into(&ta, &tb, keep, &mut ts).map_err(|e| e.to_string())?;
-        same(&format!("covering {keep}"), rings(&s, turn), rings(&ts, id))?;
+        same(
+            &format!("covering {keep}"),
+            &rings(&s, turn),
+            &rings(&ts, id),
+        )?;
     }
     inside_into(&a, &b, &mut s).map_err(|e| e.to_string())?;
     inside_into(&ta, &tb, &mut ts).map_err(|e| e.to_string())?;
-    same("inside", rings(&s, turn), rings(&ts, id))?;
+    same("inside", &rings(&s, turn), &rings(&ts, id))?;
     holes_into(&a, &mut s).map_err(|e| e.to_string())?;
     holes_into(&ta, &mut ts).map_err(|e| e.to_string())?;
-    same("holes", rings(&s, turn), rings(&ts, id))?;
+    same("holes", &rings(&s, turn), &rings(&ts, id))?;
     with_area_into(&a, 20..=150, &mut s);
     with_area_into(&ta, 500..=3750, &mut ts);
-    same("with_area", rings(&s, turn), rings(&ts, id))?;
+    same("with_area", &rings(&s, turn), &rings(&ts, id))?;
     Ok(())
 }
 

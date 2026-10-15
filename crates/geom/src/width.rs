@@ -484,7 +484,8 @@ fn facing(e: Seg, f: Seg, material_between: bool) -> bool {
 /// the least, over every ordered pair of the figure's edges at more than 90
 /// degrees to each other, of the distance between the parts of each on the
 /// other's material side
-/// ([`crate::relation::pair_threshold_any`] under [`Relation::Width`]); so
+/// ([`crate::relation::pair_threshold_any`] under
+/// [`Relation::Width`](crate::relation::Relation::Width)); so
 /// facing edges, necks, a skew edge against one across from it, and an acute
 /// tip (0). On octilinear figures it is [`narrowest_pair2`]. A notch is two
 /// antiparallel edges facing across empty space over a stretch of positive

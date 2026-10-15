@@ -211,7 +211,9 @@ fn run(kind: &str, a: &ValidatedLayer, b: &ValidatedLayer) -> Result<ValidatedLa
     Ok(out)
 }
 
-const OPS: [(&str, fn(bool, bool) -> bool); 3] = [
+type Op = fn(bool, bool) -> bool;
+
+const OPS: [(&str, Op); 3] = [
     ("or", |p, q| p | q),
     ("and", |p, q| p & q),
     ("not", |p, q| p & !q),
