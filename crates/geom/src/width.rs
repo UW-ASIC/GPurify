@@ -474,3 +474,71 @@ fn facing(e: Seg, f: Seg, material_between: bool) -> bool {
     let (f0, f1) = (at(f.a).min(at(f.b)), at(f.a).max(at(f.b)));
     e0.max(f0) < e1.min(f1)
 }
+
+/// [`narrowest_pair2`] at any angle, exact: the narrowest width
+/// (`material_between`) or notch under `limit`, twice its square as its floor
+/// and whether the true value lies above it, and where it is (the midpoint
+/// of its two nearest points, rounded). `None` when there is none.
+///
+/// The width is `KLayout`'s Euclidean `width` at its default `angle_limit`:
+/// the least, over every ordered pair of the figure's edges at more than 90
+/// degrees to each other, of the distance between the parts of each on the
+/// other's material side
+/// ([`crate::relation::pair_threshold_any`] under [`Relation::Width`]); so
+/// facing edges, necks, a skew edge against one across from it, and an acute
+/// tip (0). On octilinear figures it is [`narrowest_pair2`]. A notch is two
+/// antiparallel edges facing across empty space over a stretch of positive
+/// length, as [`narrowest_pair2`] reads one.
+///
+/// Over `n` edges, the pairs within `limit` in x: `O(n²)` only when every
+/// edge sits in one `limit`-wide column.
+pub fn narrowest_pair_any(
+    poly: PolygonRef<'_>,
+    material_between: bool,
+    limit: Dbu,
+) -> Option<((i128, bool), Point)> {
+    use crate::relation::{pair_threshold_any, Relation, Zero};
+    let mut best: Option<((i128, bool), Point)> = None;
+    let bound = 2 * limit.mul_wide(limit).raw();
+    let mut keep = |d2: (i128, bool), e: Seg, f: Seg| {
+        if d2.0 < bound && best.is_none_or(|(b, _)| d2 < b) {
+            let (_, p, q) = seg_seg_near2(e, f);
+            let at = Point {
+                x: Dbu::new_unchecked((p.0 + q.0).div_euclid(4)),
+                y: Dbu::new_unchecked((p.1 + q.1).div_euclid(4)),
+            };
+            best = Some((d2, at));
+        }
+    };
+    let rev = |s: Seg| Seg { a: s.b, b: s.a };
+    let mut edges: Vec<Seg> = poly_edges(poly)
+        .filter(|(a, b)| a != b)
+        .map(|(a, b)| Seg { a, b })
+        .collect();
+    edges.sort_unstable_by_key(|e| e.a.x.min(e.b.x));
+    for (i, &e) in edges.iter().enumerate() {
+        let reach = e.a.x.max(e.b.x).raw() + limit.raw();
+        let (ylo, yhi) = (e.a.y.min(e.b.y).raw(), e.a.y.max(e.b.y).raw());
+        for &f in &edges[i + 1..] {
+            if f.a.x.min(f.b.x).raw() > reach {
+                break;
+            }
+            let (flo, fhi) = (f.a.y.min(f.b.y).raw(), f.a.y.max(f.b.y).raw());
+            if flo > yhi + limit.raw() || ylo > fhi + limit.raw() {
+                continue;
+            }
+            if material_between {
+                for (p, q) in [(e, f), (f, e)] {
+                    if let Some(d2) =
+                        pair_threshold_any(Relation::Width, Zero::WhenTouching, rev(p), rev(q))
+                    {
+                        keep(d2, e, f);
+                    }
+                }
+            } else if facing(e, f, false) {
+                keep(crate::ops::seg_seg_twice2(e, f), e, f);
+            }
+        }
+    }
+    best
+}

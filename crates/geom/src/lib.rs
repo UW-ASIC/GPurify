@@ -139,6 +139,7 @@ pub mod rects;
 pub mod relation;
 pub mod store;
 pub mod view;
+mod wide;
 pub mod width;
 pub use bbox::Bbox;
 pub use ids::{LayerId, PolyId};

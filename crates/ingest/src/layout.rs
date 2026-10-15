@@ -274,9 +274,9 @@ fn derive_layers_into(
                 return Err(ValidityError::Uncomputed(id).into());
             }
             // An operand's polygons, merged: selections and sizing read whole
-            // shapes. Every operation takes edges at 45 degrees.
+            // shapes. Every operation takes edges at any angle.
             let mut merged = |id: LayerId, out: &mut ValidatedLayer| {
-                validate_layer_with(store, id, Angles::Octilinear, &mut raw)?;
+                validate_layer_with(store, id, Angles::Any, &mut raw)?;
                 merge_into(&raw, out)
             };
 
@@ -349,9 +349,9 @@ fn derive_layers_into(
 
             match *op {
                 DerivedOp::And | DerivedOp::Or | DerivedOp::Not => {
-                    validate_layer_with(store, operands[0], Angles::Octilinear, &mut folded)?;
+                    validate_layer_with(store, operands[0], Angles::Any, &mut folded)?;
                     for &next in &operands[1..] {
-                        validate_layer_with(store, next, Angles::Octilinear, &mut operand)?;
+                        validate_layer_with(store, next, Angles::Any, &mut operand)?;
                         match op {
                             DerivedOp::And => intersection_into(&folded, &operand, &mut combined),
                             DerivedOp::Or => union_into(&folded, &operand, &mut combined),
