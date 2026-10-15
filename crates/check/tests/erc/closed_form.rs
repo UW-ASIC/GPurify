@@ -853,3 +853,38 @@ fn ir_drop_examines_every_node_whose_net_states_any_limit() {
     assert_eq!(rows[0].1, (18_000, 500));
     assert_eq!(millivolts(rows[0].2), 1.75);
 }
+
+// ----------------------------------------------------------- floating_supply
+
+/// A declared supply drawn in pieces that carry its name but touch nothing
+/// else of it: the grid is fed at its highest, then widest, shape, and
+/// every other piece is floating.
+///
+/// Oracle: the kind's documented rule, construct-from-answer: VDD as a met2
+/// bar (the highest layer, so the feed) and two met1 bars, none touching:
+/// three pieces examined, the two met1 pieces flagged, each measuring 0
+/// connections against 1. A supply in one piece flags nothing.
+#[test]
+fn floating_supply_flags_every_piece_but_the_fed_one() {
+    let supply = intent(1800.0, &[("VDD", "power")], "");
+    let report = erc("rule fs floating_supply()\n", &supply, |l, layout| {
+        let a = layout.rect(l.met1, 0, 0, 1_000, 1_000);
+        let top = layout.rect(l.met2, 0, 3_000, 1_000, 4_000);
+        let b = layout.rect(l.met1, 0, 6_000, 1_000, 7_000);
+        vec![(a, "VDD"), (top, "VDD"), (b, "VDD")]
+    });
+    let run = report.run("fs");
+    assert_eq!((run.outcome, run.examined), (Outcome::Ran, 3));
+    let mut rows = report.rows("fs");
+    rows.sort_by_key(|row| row.1);
+    let met1 = report.layers.met1;
+    let floating = |at| (met1, at, Measurement::Count(0), Measurement::Count(1));
+    assert_eq!(rows, [floating((0, 0)), floating((0, 6_000))]);
+
+    let report = erc("rule fs floating_supply()\n", &supply, |l, layout| {
+        let a = layout.rect(l.met1, 0, 0, 1_000, 1_000);
+        vec![(a, "VDD")]
+    });
+    assert_eq!(report.run("fs").outcome, Outcome::Ran);
+    assert!(report.rows("fs").is_empty());
+}
