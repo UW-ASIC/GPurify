@@ -695,3 +695,134 @@ fn ir_drop_on_a_ground_rail_is_its_bounce_above_zero() {
     assert_eq!(at, (18_000, 500));
     assert_eq!(millivolts(measured), 1.0);
 }
+
+// ---------------------------------------------------------- p2p_resistance
+
+fn ohms(m: Measurement) -> f64 {
+    match m {
+        Measurement::Resistance(r) => r.raw(),
+        other => panic!("{other:?} is not a resistance"),
+    }
+}
+
+/// `p2p_resistance` over a net's own network: the worst pair of device
+/// attach points, by effective resistance, against `max`, strictly.
+///
+/// Oracle: Ohm's law on the per-net network. Three loads on one 20 um x
+/// 1 um met1 bar at x = 2000, 6000 and 18000: the worst pair is the
+/// outer two, 16 squares of 0.125 ohm = 2.0 ohm. Two met1 bars joined
+/// through a met2 bar by one via each: load to via 2 squares of met1
+/// (0.25 ohm), a cut (0.0625), 6 squares of met2 (0.375), a cut
+/// (0.0625), 2 squares of met1 (0.25): 1.0 ohm. Each poly stub is a net
+/// with one attach point and makes no network. The probe is a dense
+/// solve, exact only to rounding, so the limits sit 0.01 ohm either side.
+#[test]
+fn p2p_resistance_is_the_worst_attach_pair_by_ohms_law() {
+    // A supply no labelled net carries: p2p reads no intent.
+    let no_supply = intent(1800.0, &[("VDD", "power")], "");
+    for (max, expect) in [("2.01ohm", 0usize), ("1.99ohm", 1)] {
+        let report = erc(
+            &format!("rule p2p p2p_resistance(; max: {max})\n"),
+            &no_supply,
+            |l, layout| {
+                layout.rect(l.met1, 0, 0, 20_000, 1_000);
+                for x in [2_000, 6_000, 18_000] {
+                    load_at(l, layout, x, 0);
+                }
+                Vec::new()
+            },
+        );
+        let run = report.run("p2p");
+        assert_eq!((run.outcome, run.examined), (Outcome::Ran, 1), "{max}");
+        let rows = report.rows("p2p");
+        assert_eq!(rows.len(), expect, "{max}");
+        for (layer, at, measured, _) in rows {
+            assert_eq!(layer, report.layers.met1);
+            assert!(
+                [(2_000, 500), (18_000, 500)].contains(&at),
+                "at an end of the worst pair, not {at:?}"
+            );
+            close(ohms(measured), 2.0, "the outer pair");
+        }
+    }
+
+    for (max, expect) in [("1.01ohm", 0usize), ("0.99ohm", 1)] {
+        let report = erc(
+            &format!("rule p2p p2p_resistance(; max: {max})\n"),
+            &no_supply,
+            |l, layout| {
+                layout.rect(l.met1, 0, 0, 4_000, 1_000);
+                layout.rect(l.met1, 8_000, 0, 12_000, 1_000);
+                layout.rect(l.met2, 0, 500, 12_000, 1_500);
+                layout.rect(l.via1, 2_900, 650, 3_100, 850);
+                layout.rect(l.via1, 8_900, 650, 9_100, 850);
+                load_at(l, layout, 1_000, 0);
+                load_at(l, layout, 11_000, 0);
+                Vec::new()
+            },
+        );
+        let run = report.run("p2p");
+        assert_eq!((run.outcome, run.examined), (Outcome::Ran, 1), "{max}");
+        let rows = report.rows("p2p");
+        assert_eq!(rows.len(), expect, "{max}");
+        for (layer, at, measured, _) in rows {
+            assert_eq!(layer, report.layers.met1);
+            assert!([(1_000, 500), (11_000, 500)].contains(&at), "{at:?}");
+            close(ohms(measured), 1.0, "load to load through both vias");
+        }
+    }
+}
+
+// ------------------------------------------------------- em_rms and em_peak
+
+/// `em_rms` and `em_peak` load the grid with each net's RMS or peak current
+/// in place of its budget, and hold every segment to the AC table's
+/// density times its width, strictly.
+///
+/// Oracle: Ohm's law and the table, by hand. On the single 8 um edge
+/// (pad at x = 10000, the one load at 18000) the whole stated current
+/// flows through the edge, 1 um wide: against a one-cell table of
+/// `D uA/um` the limit is `D uA`. With RMS 500 uA and peak 2000 uA, a
+/// 999 uA/um table passes the RMS row and fails the peak row by 2000 uA;
+/// a 2000 uA/um table passes both (exactly at the limit); a 499 uA/um
+/// table fails both, by 500 and 2000 uA.
+#[test]
+fn ac_current_rows_load_the_grid_with_their_own_current() {
+    let currents = intent(
+        1800.0,
+        &[("VDD", "power")],
+        r#"{"net":"VDD","budget_current_ua":7,"rms_current_ua":500,"peak_current_ua":2000,"frequency_mhz":100}"#,
+    );
+    for (density, rms, peak) in [
+        (999, None, Some(2_000.0)),
+        (2_000, None, None),
+        (499, Some(500.0), Some(2_000.0)),
+    ] {
+        let rules = format!(
+            "rule rms em_rms(met1; frequency: [100MHz], width: [0um], density: [[{density}uA/um]], \
+             max_current_per_cut: 1000uA)\n\
+             rule pk em_peak(met1; frequency: [100MHz], width: [0um], density: [[{density}uA/um]], \
+             max_current_per_cut: 1000uA)\n"
+        );
+        let report = erc(&rules, &currents, single_edge);
+        for (rule, want) in [("rms", rms), ("pk", peak)] {
+            let run = report.run(rule);
+            assert_eq!((run.outcome, run.examined), (Outcome::Ran, 1), "{rule}");
+            let rows = report.rows(rule);
+            assert_eq!(
+                rows.len(),
+                usize::from(want.is_some()),
+                "{rule} at {density}"
+            );
+            for (layer, _, measured, bound) in rows {
+                assert_eq!(layer, report.layers.met1);
+                close(
+                    microamps(measured),
+                    want.unwrap_or(0.0),
+                    "the edge's current",
+                );
+                close(microamps(bound), f64::from(density), "density times 1 um");
+            }
+        }
+    }
+}
