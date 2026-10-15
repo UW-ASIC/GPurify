@@ -124,5 +124,7 @@ pub fn coupling(
             }
             _ => None,
         })
-        .sum())
+        // From +0.0: `f64`'s `sum` starts at -0.0, which an uncoupled pair
+        // would print as "-0.000000".
+        .fold(0.0, |total, q| total + q))
 }
