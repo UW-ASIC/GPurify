@@ -706,8 +706,8 @@ fn merged(design: Design<'_>, layer: LayerId, scratch: &mut Scratch) -> Option<F
         out.area2
             .push(mine.iter().map(|r| 2 * r.area().raw()).sum());
         let poly = figures.get(idx);
-        let perimeter: i128 = std::iter::once(poly.outer())
-            .chain(poly.holes())
+        let perimeter: i128 = poly
+            .rings()
             .map(|ring| {
                 let (xs, ys) = ring.coords();
                 (0..xs.len())

@@ -189,8 +189,8 @@ pub(crate) fn cut_size(
         } else if bl != long {
             (Measurement::Length(bl), Measurement::Length(long))
         } else if !rectangle {
-            let area = std::iter::once(poly.outer())
-                .chain(poly.holes())
+            let area = poly
+                .rings()
                 .fold(0i128, |sum, ring| sum + ring.area2().raw())
                 / 2;
             (
@@ -406,7 +406,7 @@ pub(crate) fn min_edge_length(
 /// either way the edge is still one edge, as `KLayout` reads it.
 fn straight_runs(poly: gpurify_geom::view::PolygonRef<'_>) -> Vec<(Point, Point)> {
     let mut runs = Vec::new();
-    for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+    for ring in poly.rings() {
         let (xs, ys) = ring.coords();
         let n = xs.len();
         let at = |i: usize| Point {
@@ -497,7 +497,7 @@ pub(crate) fn min_step(
     let (mut points, mut short) = (Vec::new(), Vec::new());
     for (idx, owner) in (0u32..).zip(owners) {
         let poly = s.layer_out.get(idx);
-        for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+        for ring in poly.rings() {
             let (xs, ys) = ring.coords();
             points.clear();
             points.extend(xs.iter().zip(ys).map(|(&x, &y)| Point { x, y }));
@@ -609,7 +609,7 @@ pub(crate) fn min_step_adjacent(
         {
             continue;
         }
-        for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+        for ring in poly.rings() {
             let (xs, ys) = ring.coords();
             points.clear();
             points.extend(xs.iter().zip(ys).map(|(&x, &y)| Point { x, y }));

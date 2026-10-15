@@ -62,7 +62,7 @@ fn far() -> Dbu {
 /// contains `inner`.
 fn strips(inner: Bbox, host: PolygonRef<'_>) -> [(Dbu, Side); 4] {
     let [mut l, mut r, mut b, mut t] = [far(); 4];
-    for ring in std::iter::once(host.outer()).chain(host.holes()) {
+    for ring in host.rings() {
         let (xs, ys) = ring.coords();
         for e in ring_segs(xs, ys) {
             if e.a.x == e.b.x {
@@ -116,7 +116,7 @@ fn strip_ends(inner: Bbox, host: PolygonRef<'_>) -> [(Dbu, Dbu); 4] {
             slot.1 = slot.1.min(d);
         }
     };
-    for ring in std::iter::once(host.outer()).chain(host.holes()) {
+    for ring in host.rings() {
         let (xs, ys) = ring.coords();
         for e in ring_segs(xs, ys) {
             if e.a.x == e.b.x {
@@ -201,8 +201,7 @@ fn adjacent_enclosure(inner: PolygonRef<'_>, host: PolygonRef<'_>) -> (Dbu, Poin
 /// Squared distance from the inner region (its rectangles) to the host's
 /// boundary: the euclidean enclosure once the host contains it.
 fn boundary_dist2(inner: &[Bbox], host: PolygonRef<'_>) -> i128 {
-    std::iter::once(host.outer())
-        .chain(host.holes())
+    host.rings()
         .map(|ring| {
             let (xs, ys) = ring.coords();
             rects_ring_dist2(inner, xs, ys)
@@ -1203,7 +1202,7 @@ pub(crate) fn min_extension(
 /// where the material lies on the left of travel. A corner a figure meets
 /// itself at is two.
 fn concave_corners(poly: PolygonRef<'_>, out: &mut Vec<Point>) {
-    for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+    for ring in poly.rings() {
         let (xs, ys) = ring.coords();
         let n = xs.len();
         for i in 0..n {

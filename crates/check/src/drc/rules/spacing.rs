@@ -1066,8 +1066,8 @@ pub(crate) fn spacing_table(
 /// cut into abutting rectangles runs its whole length.
 fn wide_runs(wide: &[Bbox], other: gpurify_geom::PolygonRef<'_>, within: Dbu) -> Vec<(i64, i64)> {
     let mut spans: Vec<(usize, i64, i64, i64)> = Vec::new();
-    let edges = std::iter::once(other.outer())
-        .chain(other.holes())
+    let edges = other
+        .rings()
         .flat_map(|ring| {
             let (xs, ys) = ring.coords();
             ring_segs(xs, ys)
