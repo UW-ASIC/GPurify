@@ -22,7 +22,8 @@ const OPS: [(&str, DerivedOp); 3] = [
     ("not", DerivedOp::Not),
 ];
 
-const DEVICES: [(&str, DeviceKind); 6] = [
+/// The device kinds a `device` statement names, by word.
+pub(super) const DEVICES: [(&str, DeviceKind); 6] = [
     ("mos", DeviceKind::Mos),
     ("bjt", DeviceKind::Bjt),
     ("resistor", DeviceKind::Resistor),

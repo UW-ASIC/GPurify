@@ -12,11 +12,12 @@
 //! [`lower`]: super::lower
 
 use super::kinds::{Cmp, Dim, Kind, Param, KINDS, PEX};
+use super::parse::DEVICES;
 use super::{
-    absolute_unit, DeckSource, DerivedOp, DerivedSource, DeviceKind, ExtractionKind, LvsLimit,
-    ParamSource, ParamValue, RuleSource,
+    absolute_unit, DeckSource, DerivedOp, DerivedSource, ExtractionKind, LvsLimit, ParamSource,
+    ParamValue, RuleSource,
 };
-use gpurify_geom::{DbuArea, Grid};
+use gpurify_geom::{Dbu, DbuArea, Grid};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
@@ -153,6 +154,15 @@ fn quoted(text: &str) -> Result<String, PrintError> {
     ))
 }
 
+/// Each of `texts` [`quoted`], joined by `separator`.
+fn quoted_all(texts: &[String], separator: &str) -> Result<String, PrintError> {
+    let quoted = texts
+        .iter()
+        .map(|text| quoted(text))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(quoted.join(separator))
+}
+
 /// `m` such that `m * |m|` is `squared`: a `with_width` bound is twice that.
 fn signed_root(squared: i128) -> Option<i64> {
     let magnitude = squared.unsigned_abs();
@@ -182,6 +192,11 @@ impl Printer<'_> {
                     "{raw} grid units is no terminating decimal of a nanometre"
                 ))
             })
+    }
+
+    /// A length, in nanometres.
+    fn dbu(&self, length: Dbu) -> Result<String, PrintError> {
+        self.length(i128::from(length.raw()))
     }
 
     /// An area in square grid units, in square nanometres.
@@ -234,14 +249,12 @@ impl Printer<'_> {
                 )));
             };
             for rule in &source.rules[written..=written + at] {
-                self.staged(rule, &mut stage, &mut out)?;
-                let _ = writeln!(out, "{}", self.rule(rule)?);
+                self.write_rule(rule, &mut stage, &mut out)?;
             }
             written += at + 1;
         }
         for rule in &source.rules[written..] {
-            self.staged(rule, &mut stage, &mut out)?;
-            let _ = writeln!(out, "{}", self.rule(rule)?);
+            self.write_rule(rule, &mut stage, &mut out)?;
         }
         // Stages no rule is in, after the last rule.
         for (name, _) in source.stages.iter().skip(stage) {
@@ -326,9 +339,9 @@ impl Printer<'_> {
                 "fill {} for {} size {} space {} keep {} avoid [{}]",
                 fill.layer,
                 fill.density,
-                self.length(i128::from(fill.size.raw()))?,
-                self.length(i128::from(fill.space.raw()))?,
-                self.length(i128::from(fill.keep.raw()))?,
+                self.dbu(fill.size)?,
+                self.dbu(fill.space)?,
+                self.dbu(fill.keep)?,
                 fill.avoid.join(", ")
             );
         }
@@ -338,19 +351,13 @@ impl Printer<'_> {
                 "widen {} net {} by {}",
                 widen.layer,
                 quoted(&widen.net)?,
-                self.length(i128::from(widen.by.raw()))?
+                self.dbu(widen.by)?
             );
         }
         for (net, points) in &source.reports.p2p {
             let points = points
                 .iter()
-                .map(|&(x, y)| {
-                    Ok(format!(
-                        "({}, {})",
-                        self.length(i128::from(x.raw()))?,
-                        self.length(i128::from(y.raw()))?
-                    ))
-                })
+                .map(|&(x, y)| Ok(format!("({}, {})", self.dbu(x)?, self.dbu(y)?)))
                 .collect::<Result<Vec<_>, PrintError>>()?;
             let _ = writeln!(
                 out,
@@ -363,11 +370,7 @@ impl Printer<'_> {
             let _ = writeln!(out, "report coupling {} {}", quoted(a)?, quoted(b)?);
         }
         if let Some(reach) = source.reports.cluster {
-            let _ = writeln!(
-                out,
-                "report cluster {}",
-                self.length(i128::from(reach.raw()))?
-            );
+            let _ = writeln!(out, "report cluster {}", self.dbu(reach)?);
         }
         for device in &source.pex_models.device {
             let _ = writeln!(
@@ -399,9 +402,9 @@ impl Printer<'_> {
         Ok(out)
     }
 
-    /// Heads `rule` with the `stage` lines up to its own, the last stage for a
-    /// rule no stage lists; `stage` counts the stages headed so far.
-    fn staged(
+    /// Writes `rule`, headed by the `stage` lines up to its own (the last
+    /// stage for a rule no stage lists); `stage` counts the stages headed so far.
+    fn write_rule(
         &self,
         rule: &RuleSource,
         stage: &mut usize,
@@ -409,6 +412,7 @@ impl Printer<'_> {
     ) -> Result<(), PrintError> {
         let stages = &self.source.stages;
         if stages.is_empty() {
+            let _ = writeln!(out, "{}", self.rule(rule)?);
             return Ok(());
         }
         let own = stages
@@ -425,6 +429,7 @@ impl Printer<'_> {
             let _ = writeln!(out, "stage {}", stages[*stage].0);
             *stage += 1;
         }
+        let _ = writeln!(out, "{}", self.rule(rule)?);
         Ok(())
     }
 
@@ -457,16 +462,11 @@ impl Printer<'_> {
 
     fn devices(&self, out: &mut String) -> Result<(), PrintError> {
         for device in &self.source.devices {
-            let kind = match device.kind {
-                DeviceKind::Mos => "mos",
-                DeviceKind::Bjt => "bjt",
-                DeviceKind::Resistor => "resistor",
-                DeviceKind::Capacitor => "capacitor",
-                DeviceKind::Diode => "diode",
-                DeviceKind::Inductor => "inductor",
-                // No device statement declares one; `lvs blackbox` does.
-                DeviceKind::Cell => "cell",
-            };
+            // A cell is in no device statement's table; `lvs blackbox` declares one.
+            let kind = DEVICES
+                .iter()
+                .find(|&&(_, kind)| kind == device.kind)
+                .map_or("cell", |&(word, _)| word);
             let _ = write!(
                 out,
                 "device {kind} {} model {} terminals [{}]",
@@ -530,20 +530,11 @@ impl Printer<'_> {
             out.push_str("lvs recognize_gates\n");
         }
         if !lvs.filter_unused.is_empty() {
-            out.push_str("lvs filter_unused");
-            for option in &lvs.filter_unused {
-                out.push(' ');
-                out.push_str(option.name());
-            }
-            out.push('\n');
+            let options: Vec<&str> = lvs.filter_unused.iter().map(|o| o.name()).collect();
+            let _ = writeln!(out, "lvs filter_unused {}", options.join(" "));
         }
         if !lvs.supply.is_empty() {
-            out.push_str("lvs supply");
-            for name in &lvs.supply {
-                out.push(' ');
-                out.push_str(&quoted(name)?);
-            }
-            out.push('\n');
+            let _ = writeln!(out, "lvs supply {}", quoted_all(&lvs.supply, " ")?);
         }
         for pattern in &lvs.blackbox {
             let _ = writeln!(out, "lvs blackbox {}", quoted(pattern)?);
@@ -553,7 +544,7 @@ impl Printer<'_> {
             for (cmp, limit) in [(">=", min), ("<=", max)] {
                 let Some(limit) = limit else { continue };
                 let value = match *limit {
-                    LvsLimit::Length(length) => self.length(i128::from(length.raw()))?,
+                    LvsLimit::Length(length) => self.dbu(length)?,
                     LvsLimit::Area(area) => self.area(area)?,
                     LvsLimit::Count(count) => count.to_string(),
                 };
@@ -569,8 +560,7 @@ impl Printer<'_> {
             let _ = writeln!(out, "lvs connect_implicit {}", quoted(pattern)?);
         }
         for group in &lvs.connect_explicit {
-            let names: Result<Vec<_>, _> = group.iter().map(|name| quoted(name)).collect();
-            let _ = writeln!(out, "lvs connect_explicit {}", names?.join(" "));
+            let _ = writeln!(out, "lvs connect_explicit {}", quoted_all(group, " ")?);
         }
         if let Some(ohm) = lvs.max_res {
             let _ = writeln!(out, "lvs max_res {}ohm", number(ohm)?);
@@ -583,14 +573,10 @@ impl Printer<'_> {
                 out,
                 "lvs lde {} od {od} max {}",
                 quoted(model)?,
-                self.length(i128::from(max.raw()))?
+                self.dbu(*max)?
             );
             if let Some((well, scref)) = well {
-                let _ = write!(
-                    out,
-                    " well {well} scref {}",
-                    self.length(i128::from(scref.raw()))?
-                );
+                let _ = write!(out, " well {well} scref {}", self.dbu(*scref)?);
             }
             out.push('\n');
         }
@@ -658,16 +644,10 @@ impl Printer<'_> {
             DerivedOp::And => fold("and"),
             DerivedOp::Or => fold("or"),
             DerivedOp::Not => fold("not"),
-            DerivedOp::Sized(dx, dy) if dx == dy => {
-                call("sized", Some(self.length(i128::from(dx.raw()))?))
-            }
+            DerivedOp::Sized(dx, dy) if dx == dy => call("sized", Some(self.dbu(dx)?)),
             DerivedOp::Sized(dx, dy) => call(
                 "sized",
-                Some(format!(
-                    "{}, {}",
-                    self.length(i128::from(dx.raw()))?,
-                    self.length(i128::from(dy.raw()))?
-                )),
+                Some(format!("{}, {}", self.dbu(dx)?, self.dbu(dy)?)),
             ),
             DerivedOp::Overlapping => call("overlapping", layer_argument()?),
             DerivedOp::Covering(true) => call("covering", layer_argument()?),
@@ -681,10 +661,10 @@ impl Printer<'_> {
                 "extended",
                 Some(format!(
                     "begin: {}, end: {}, out: {}, in: {}",
-                    self.length(i128::from(begin.raw()))?,
-                    self.length(i128::from(end.raw()))?,
-                    self.length(i128::from(outside.raw()))?,
-                    self.length(i128::from(inside.raw()))?
+                    self.dbu(begin)?,
+                    self.dbu(end)?,
+                    self.dbu(outside)?,
+                    self.dbu(inside)?
                 )),
             ),
             DerivedOp::Interacting(true) => call("interacting", layer_argument()?),
@@ -717,11 +697,7 @@ impl Printer<'_> {
             }
             DerivedOp::WithRect { keep, w, h } => call(
                 if keep { "with_rect" } else { "without_rect" },
-                Some(format!(
-                    "{} x {}",
-                    self.length(i128::from(w.raw()))?,
-                    self.length(i128::from(h.raw()))?
-                )),
+                Some(format!("{} x {}", self.dbu(w)?, self.dbu(h)?)),
             ),
             DerivedOp::Extents => call("extents", None),
             DerivedOp::Edges => call("edges", None),
@@ -791,12 +767,8 @@ impl Printer<'_> {
                     .ok_or_else(|| {
                         PrintError::Unprintable(format!("layer {}: no cell-name pattern", row.name))
                     })?;
-                let quoted: Vec<String> = patterns
-                    .iter()
-                    .map(|p| quoted(p))
-                    .collect::<Result<_, _>>()?;
                 let method = if keep { "in_cells" } else { "not_in_cells" };
-                call(method, Some(quoted.join(", ")))
+                call(method, Some(quoted_all(patterns, ", ")?))
             }
         }
     }
@@ -910,10 +882,7 @@ impl Printer<'_> {
             if param.none {
                 return Ok("none".to_owned());
             }
-            if !matches!(
-                param.dim,
-                Dim::AngleList | Dim::Models | Dim::Names | Dim::LengthList | Dim::LengthRows
-            ) {
+            if !may_be_unstated(param.dim) {
                 return Err(missing());
             }
         }
@@ -936,7 +905,7 @@ impl Printer<'_> {
                     | Dim::OptLengthList
                     | Dim::LengthRows,
                     ParamValue::Length(length),
-                ) => self.length(i128::from(length.raw())),
+                ) => self.dbu(length),
                 (Dim::Area | Dim::AreaList, ParamValue::Area(area)) => self.area(area),
                 (Dim::Count | Dim::CountList, ParamValue::Count(count)) => Ok(count.to_string()),
                 (Dim::Word(words), ParamValue::Count(at)) => words
@@ -1040,24 +1009,16 @@ impl Printer<'_> {
                     .collect::<Result<Vec<_>, PrintError>>()?;
                 Ok(format!("[{}]", points.join(", ")))
             }
-            Dim::CurrentPerWidthRows => {
-                // One row per frequency, one cell per width.
-                let columns = stated("width").len().max(1);
-                let cells = list(&values)?;
-                let rows: Vec<String> = cells
-                    .chunks(columns)
-                    .map(|row| format!("[{}]", row.join(", ")))
-                    .collect();
-                Ok(format!("[{}]", rows.join(", ")))
-            }
-            Dim::LengthRows => {
-                // A spacing table has a column per run; a table without runs
-                // (a tip table) is square.
-                let columns = match stated("prl").len() {
-                    0 => (1..=values.len())
+            Dim::CurrentPerWidthRows | Dim::LengthRows => {
+                // A current table has one row per frequency and one cell per
+                // width; a spacing table a column per run, and a table without
+                // runs (a tip table) is square.
+                let columns = match (param.dim, stated("prl").len()) {
+                    (Dim::CurrentPerWidthRows, _) => stated("width").len().max(1),
+                    (_, 0) => (1..=values.len())
                         .find(|side| side * side >= values.len())
                         .unwrap_or(1),
-                    runs => runs,
+                    (_, runs) => runs,
                 };
                 let cells = list(&values)?;
                 let rows: Vec<String> = cells
@@ -1088,6 +1049,20 @@ impl Printer<'_> {
     }
 }
 
+/// Whether a parameter of kind `dim` may have no stated value: an empty
+/// list, or a group whose parts are each checked on their own.
+fn may_be_unstated(dim: Dim) -> bool {
+    matches!(
+        dim,
+        Dim::AngleList
+            | Dim::Models
+            | Dim::Names
+            | Dim::LengthList
+            | Dim::LengthRows
+            | Dim::Group(_)
+    )
+}
+
 /// The kind-table row a rule is written with: its engine kind, its layer
 /// count, and the flags the row fixes (a density rule's `maximum`).
 fn kind_of(rule: &RuleSource) -> Result<&'static Kind, PrintError> {
@@ -1102,15 +1077,7 @@ fn kind_of(rule: &RuleSource) -> Result<&'static Kind, PrintError> {
                 // in their limit's).
                 && kind.limit.iter().chain(kind.params).all(|param| {
                     param.none
-                        || matches!(
-                            param.dim,
-                            Dim::AngleList
-                                | Dim::Models
-                                | Dim::Names
-                                | Dim::LengthList
-                                | Dim::LengthRows
-                                | Dim::Group(_)
-                        )
+                        || may_be_unstated(param.dim)
                         || rule.params.iter().any(|(name, _)| *name == param.engine)
                 })
                 && kind.fixed.iter().all(|&(flag, on)| {

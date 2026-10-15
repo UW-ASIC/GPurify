@@ -228,7 +228,6 @@ pub struct StackSource {
 /// # Ok::<(), gpurify_ingest::deck::DeckError>(())
 /// ```
 pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError> {
-    let malformed = |message: String| Err(DeckError::Malformed(message));
     let mut layers = build_layers(&doc.layers, strings)?;
     // First: any later section may name a derived layer.
     for row in &doc.derived {
@@ -360,14 +359,10 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
     let mut waivers = Vec::with_capacity(doc.waivers.len());
     for (rule, layer) in &doc.waivers {
         if !doc.rules.iter().any(|declared| declared.id == *rule) {
-            return Err(DeckError::Malformed(format!(
-                "waive {rule}: no rule of the deck has that id"
-            )));
+            return malformed(format!("waive {rule}: no rule of the deck has that id"));
         }
         if waivers.contains(&(rule, layer)) {
-            return Err(DeckError::Malformed(format!(
-                "waive {rule}: {layer} is stated twice"
-            )));
+            return malformed(format!("waive {rule}: {layer} is stated twice"));
         }
         waivers.push((rule, layer));
     }
@@ -408,19 +403,16 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
             .iter()
             .any(|d| d.model == device.model && d.kind == super::DeviceKind::Mos);
         if !mos {
-            return Err(DeckError::Malformed(format!(
+            return malformed(format!(
                 "pex_device \"{}\": no `device mos` statement has that model",
                 device.model
-            )));
+            ));
         }
         if pex_models.device[..at]
             .iter()
             .any(|d| d.model == device.model)
         {
-            return Err(DeckError::Malformed(format!(
-                "pex_device \"{}\": stated twice",
-                device.model
-            )));
+            return malformed(format!("pex_device \"{}\": stated twice", device.model));
         }
     }
     Ok(Deck {
@@ -444,6 +436,11 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
     })
 }
 
+/// [`DeckError::Malformed`] with `why`.
+fn malformed<T>(why: String) -> Result<T, DeckError> {
+    Err(DeckError::Malformed(why))
+}
+
 /// The edits, checked: every layer named is the deck's, and the layers an
 /// edit draws on are drawn layers, which have a stream pair to write.
 ///
@@ -458,9 +455,9 @@ fn check_edits(
     let drawn = |name: &str, what: &str| {
         let id = layer_of(layers, strings, name, what)?;
         if layers.is_derived(id) {
-            return Err(DeckError::Malformed(format!(
+            return malformed(format!(
                 "{what} {name}: a derived layer, which a layout cannot draw on"
-            )));
+            ));
         }
         Ok(())
     };
@@ -492,43 +489,38 @@ fn check_pex_models(
     for (at, tsv) in models.tsv.iter().enumerate() {
         let id = layer_of(layers, strings, &tsv.layer, "pex_tsv")?;
         if !connectivity.via_cut.contains(&id) {
-            return Err(DeckError::Malformed(format!(
+            return malformed(format!(
                 "pex_tsv {}: not a `connect via` cut layer",
                 tsv.layer
-            )));
+            ));
         }
         if models.tsv[..at]
             .iter()
             .any(|earlier| earlier.layer == tsv.layer)
         {
-            return Err(DeckError::Malformed(format!(
-                "pex_tsv {}: stated twice",
-                tsv.layer
-            )));
+            return malformed(format!("pex_tsv {}: stated twice", tsv.layer));
         }
     }
     for layer in models.substrate.iter().flat_map(|s| &s.ports) {
         let id = layer_of(layers, strings, layer, "pex_substrate")?;
         if !connectivity.conductors.contains(&id) {
-            return Err(DeckError::Malformed(format!(
+            return malformed(format!(
                 "pex_substrate port {layer}: not a `connect conductors` layer, so it holds no net"
-            )));
+            ));
         }
     }
     for (at, (layer, _)) in models.fill.iter().enumerate() {
         let id = layer_of(layers, strings, layer, "pex_fill")?;
         if !connectivity.conductors.contains(&id) {
-            return Err(DeckError::Malformed(format!(
+            return malformed(format!(
                 "pex_fill {layer}: not a `connect conductors` layer, so it holds no net"
-            )));
+            ));
         }
         if models.fill[..at]
             .iter()
             .any(|(earlier, _)| earlier == layer)
         {
-            return Err(DeckError::Malformed(format!(
-                "pex_fill {layer}: stated twice"
-            )));
+            return malformed(format!("pex_fill {layer}: stated twice"));
         }
     }
     Ok(models.clone())
@@ -549,21 +541,17 @@ fn build_stages(
     let mut seen: Vec<&str> = Vec::new();
     for (at, (name, ids)) in declared.iter().enumerate() {
         if declared[..at].iter().any(|(earlier, _)| earlier == name) {
-            return Err(DeckError::Malformed(format!(
-                "stage {name} is stated twice"
-            )));
+            return malformed(format!("stage {name} is stated twice"));
         }
         let stage = u16::try_from(at)
             .map_err(|_| DeckError::Malformed("a deck has at most 65535 stages".to_owned()))?;
         stages.name.push(strings.intern(name));
         for id in ids {
             if seen.contains(&id.as_str()) {
-                return Err(DeckError::Malformed(format!(
-                    "stage {name}: rule {id} is already in a stage"
-                )));
+                return malformed(format!("stage {name}: rule {id} is already in a stage"));
             }
             if !rules.iter().any(|rule| rule.id == *id) {
-                return Err(DeckError::Malformed(format!("stage {name}: no rule {id}")));
+                return malformed(format!("stage {name}: no rule {id}"));
             }
             seen.push(id);
             stages.of_rule.push((strings.intern(id), stage));
@@ -593,7 +581,7 @@ fn check_operands(
     operands: &[LayerId],
 ) -> Result<(), DeckError> {
     let edges = layers.is_edges(operands[0]);
-    let wrong = |what: &str| Err(DeckError::Malformed(format!("layer {}: {what}", row.name)));
+    let wrong = |what: &str| malformed(format!("layer {}: {what}", row.name));
     match row.op {
         DerivedOp::And | DerivedOp::Or | DerivedOp::Not
             if operands
@@ -669,10 +657,7 @@ fn build_layers(
     let mut sorted: Vec<&(String, (u16, u16))> = declared.iter().collect();
     sorted.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     if let Some(pair) = sorted.windows(2).find(|pair| pair[0].0 == pair[1].0) {
-        return Err(DeckError::Malformed(format!(
-            "layer {} is declared twice",
-            pair[0].0
-        )));
+        return malformed(format!("layer {} is declared twice", pair[0].0));
     }
     let entries: Vec<(StrId, u16, u16)> = sorted
         .iter()
@@ -694,12 +679,7 @@ fn build_rules(
     let mut seen: Vec<&str> = Vec::with_capacity(declared.len());
     for rule in declared {
         match seen.binary_search(&rule.id.as_str()) {
-            Ok(_) => {
-                return Err(DeckError::Malformed(format!(
-                    "duplicate rule id `{}`",
-                    rule.id
-                )))
-            }
+            Ok(_) => return malformed(format!("duplicate rule id `{}`", rule.id)),
             Err(at) => seen.insert(at, &rule.id),
         }
         let id = strings.intern(&rule.id);
@@ -719,10 +699,10 @@ fn build_rules(
                     } else {
                         ("a polygon layer", "edges")
                     };
-                    return Err(DeckError::Malformed(format!(
+                    return malformed(format!(
                         "rule {}: {} here takes {want}; {name} is {got}",
                         rule.id, rule.kind
-                    )));
+                    ));
                 }
                 _ => {}
             }
@@ -735,10 +715,10 @@ fn build_rules(
                 ParamSource::Layer(ref layer) => {
                     let layer = layer_of(layers, strings, layer, &rule.id)?;
                     if layers.is_edges(layer) {
-                        return Err(DeckError::Malformed(format!(
+                        return malformed(format!(
                             "rule {}: parameter {name} takes a polygon layer",
                             rule.id
-                        )));
+                        ));
                     }
                     ParamValue::Layer(layer)
                 }
@@ -768,9 +748,9 @@ fn build_connectivity(
     let layer = |name: &str| -> Result<LayerId, DeckError> {
         let layer = layer_of(layers, strings, name, "connect")?;
         if layers.is_edges(layer) {
-            return Err(DeckError::Malformed(format!(
+            return malformed(format!(
                 "connect: {name} is an edge layer, which carries no net"
-            )));
+            ));
         }
         Ok(layer)
     };
@@ -802,28 +782,28 @@ fn build_connectivity(
         .find(|(_, global)| connectivity.conductors.contains(global))
         .map(|(name, _)| name)
     {
-        return Err(DeckError::Malformed(format!(
+        return malformed(format!(
             "connect global {name}: a global layer is net-only, not a conductor"
-        )));
+        ));
     }
     for label in &declared.labels {
         let names = layer(&label.names)?;
         // Fail closed here rather than as `topology::port`'s `OrphanLabel`: at
         // run time nothing can say which deck row was wrong.
         if !connectivity.conductors.contains(&names) {
-            return Err(DeckError::Malformed(format!(
+            return malformed(format!(
                 "connect label {} names {}, which is not a conductor",
                 label.layer, label.names
-            )));
+            ));
         }
         let text = layer(&label.layer)?;
         // A `TEXT` record carries a stream pair and a derived layer has none,
         // so such a pairing can never bind a label — silently, at run time.
         if layers.is_derived(text) {
-            return Err(DeckError::Malformed(format!(
+            return malformed(format!(
                 "connect label {}: a derived layer carries no text records",
                 label.layer
-            )));
+            ));
         }
         connectivity.label_layer.push(text);
         connectivity.label_names.push(names);
@@ -850,9 +830,9 @@ fn build_devices(
         let polygons = |name: &str| -> Result<LayerId, DeckError> {
             let layer = layer_of(layers, strings, name, &user)?;
             if layers.is_edges(layer) {
-                return Err(DeckError::Malformed(format!(
+                return malformed(format!(
                     "{user}: {name} is an edge layer, not a device's shapes"
-                )));
+                ));
             }
             Ok(layer)
         };
@@ -935,20 +915,20 @@ fn temperature_factor(
             if factor.is_finite() && factor > 0.0 {
                 Ok(factor)
             } else {
-                Err(DeckError::Malformed(format!(
+                malformed(format!(
                     "{name}: tc1 and tc2 scale its resistance by {factor} at the \
                      deck's temperature; a resistance stays positive"
-                )))
+                ))
             }
         }
-        (None, Some(_)) => Err(DeckError::Malformed(format!(
+        (None, Some(_)) => malformed(format!(
             "{name}: tc1 and tc2 need a `temperature` statement to say how far \
              from nominal the run is"
-        ))),
-        (Some(_), None) => Err(DeckError::Malformed(format!(
+        )),
+        (Some(_), None) => malformed(format!(
             "{name}: the deck states a temperature, so the row needs tc1 and tc2 \
              (0/K and 0/K2 for a resistance that does not vary)"
-        ))),
+        )),
     }
 }
 
@@ -977,13 +957,13 @@ fn build_corners(
     for line in declared {
         let name = format!("corner {} {}", line.corner, line.layer);
         let Some((_, base)) = pex.iter().find(|(layer, _)| *layer == line.layer) else {
-            return Err(DeckError::Malformed(format!(
+            return malformed(format!(
                 "corner {}: layer {} has no pex row to vary",
                 line.corner, line.layer
-            )));
+            ));
         };
         if line.values.iter().all(Option::is_none) {
-            return Err(DeckError::Malformed(format!("{name}: states nothing")));
+            return malformed(format!("{name}: states nothing"));
         }
         let at = if let Some(at) = corners
             .iter()
@@ -1001,9 +981,7 @@ fn build_corners(
         let layer = layer_of(layers, strings, &line.layer, &name)?;
         let ProcessCorner { stack, stated, .. } = &mut corners[at];
         if stated.iter().any(|&(on, _)| on == layer) {
-            return Err(DeckError::Malformed(format!(
-                "{name}: the layer is stated twice"
-            )));
+            return malformed(format!("{name}: the layer is stated twice"));
         }
         stated.push((layer, line.values));
         let row = layer.idx();
@@ -1025,9 +1003,9 @@ fn build_corners(
             (Some(tc1), Some(tc2)) => Some((tc1, tc2)),
             (None, None) => base.tc,
             _ => {
-                return Err(DeckError::Malformed(format!(
+                return malformed(format!(
                     "{name}: gives one of tc1 and tc2; give both, or neither"
-                )))
+                ))
             }
         };
         stack.sheet_res_ohm_sq[row] =
