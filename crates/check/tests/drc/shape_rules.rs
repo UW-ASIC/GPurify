@@ -3,7 +3,9 @@
 //! root suite's exhaustive fixtures (`tests/exhaustive/drc_dimension.rs`,
 //! `drc_overlay.rs`) at the crate level, with the same oracles.
 
-use crate::common::deck::{any, check, count, new_deck, ratio, rect, run, Shape, Symmetry, Want};
+use crate::common::deck::{
+    any, area, check, count, new_deck, ratio, rect, run, Shape, Symmetry, Want,
+};
 use gpurify_check::report::{Measurement, Outcome};
 use gpurify_testgen::dbu;
 
@@ -224,4 +226,43 @@ fn origin_measures_the_lower_left_corner_s_distance_from_the_origin() {
         "{:?}",
         ran.runs
     );
+}
+
+/// Oracle: `Rule::Forbidden`'s definition (shapes as the store holds them,
+/// not merged; area with holes excluded), areas by hand: two overlapping
+/// 100 squares are two findings of 10000, and so are two abutting ones; a
+/// 1000 square with a 200 square hole (a clockwise row) is one of 1000000 -
+/// 40000 = 960000; a shape on another layer is none.
+#[test]
+fn forbidden_reports_each_drawn_shape_with_its_area() {
+    let deck = new_deck(&["met1", "met2"], "rule f forbidden(met2)");
+    let ten = || [area("f", 10_000), area("f", 10_000)];
+    let cases: [(&str, Vec<Shape>, Vec<Want>); 4] = [
+        (
+            "overlapping_drawn",
+            vec![rect("met2", 0, 0, 100, 100), rect("met2", 50, 0, 150, 100)],
+            ten().to_vec(),
+        ),
+        (
+            "abutting_drawn",
+            vec![rect("met2", 0, 0, 100, 100), rect("met2", 100, 0, 200, 100)],
+            ten().to_vec(),
+        ),
+        (
+            "holed",
+            vec![
+                rect("met2", 0, 0, 1000, 1000),
+                met("met2", &[(400, 400), (400, 600), (600, 600), (600, 400)]),
+            ],
+            vec![area("f", 960_000)],
+        ),
+        (
+            "other_layer_only",
+            vec![rect("met1", 0, 0, 100, 100)],
+            vec![],
+        ),
+    ];
+    for (name, shapes, want) in cases {
+        check(name, &deck, &shapes, &["f"], &want);
+    }
 }

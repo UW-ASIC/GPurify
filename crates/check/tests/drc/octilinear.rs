@@ -495,3 +495,36 @@ fn inside_and_contains_read_45_degree_figures() {
     );
     holds_under_symmetries(rules, &layout);
 }
+
+/// DRC-048 and DRC-049 on 45-degree figures: `contains` counts each
+/// diamond the octagonal host holds against every bound, at and either
+/// side of the count.
+///
+/// Oracle: counts fixed by construction. Two diamonds of radius 10 at (50,
+/// 25) and (50, 75) lie inside [`octagon_host`] (their tips 15 and 85 high
+/// stay inside the chamfers `x + y = 30` and `y - x = 70`): the host holds
+/// 2. `>= 1`, `>= 2`, `== 2` and `<= 2` hold (the count at a bound is
+/// legal); `>= 3` is short (2 against 3) and `<= 1` over (2 against 1).
+#[test]
+fn contains_counts_45_degree_figures_against_each_bound() {
+    let rules = "rule one contains(met2, met1) >= 1\nrule two contains(met2, met1) >= 2\n\
+                 rule three contains(met2, met1) >= 3\nrule most contains(met2, met1) <= 1\n\
+                 rule most2 contains(met2, met1) <= 2\nrule exact contains(met2, met1) == 2";
+    let diamond = |cx: i64, cy: i64| {
+        (
+            "met1",
+            vec![(cx, cy - 10), (cx + 10, cy), (cx, cy + 10), (cx - 10, cy)],
+        )
+    };
+    let want = [
+        deck::count("three", 2).limit(Measurement::Count(3)),
+        deck::count("most", 2).limit(Measurement::Count(1)),
+    ];
+    deck::check(
+        "two_diamonds",
+        &deck::deck(rules),
+        &[octagon_host(), diamond(50, 25), diamond(50, 75)],
+        &["one", "two", "three", "most", "most2", "exact"],
+        &want,
+    );
+}
