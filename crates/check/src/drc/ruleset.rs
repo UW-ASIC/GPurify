@@ -3252,7 +3252,7 @@ pub struct Eol58 {
     /// `OPPOSITEWIDTH oppositeWidth`: "the rule applies only if a wire beyond
     /// the end of the line edge has a perpendicular span to the EOL edge less
     /// than oppositeWidth", and "if part of the opposite wire width <
-    /// [oppositeWidth] ..., it is a violation" (Figure 1-50 e): a facing
+    /// \[oppositeWidth\] ..., it is a violation" (Figure 1-50 e): a facing
     /// edge is held only where its own figure's material, read straight out
     /// from it away from the end, ends less than this far, over the stretch
     /// it faces the end in, in grid units.
