@@ -484,9 +484,7 @@ pub fn deck(data: &[u8]) {
     }
     let (mut store, _) = layout.finish();
     let provenance = Provenance::default();
-    if derive_layers(&mut store, &deck, &provenance, &strings).is_err() {
-        return;
-    }
+    derive_layers(&mut store, &deck, &provenance, &strings);
     intern_report_ids(&mut strings);
     let rules: Vec<_> = deck.rules.spec.iter().map(|rule| rule.id).collect();
     // A deck whose rules do not compile has no run table to hold them to.

@@ -202,8 +202,7 @@ pub fn run(deck: &str, layout: &Layout) -> Vec<Row> {
         builder.push(id, &xs, &ys);
     }
     let (mut store, _) = builder.finish();
-    derive_layers(&mut store, &parsed, &Provenance::default(), &strings)
-        .expect("derived layers compute");
+    derive_layers(&mut store, &parsed, &Provenance::default(), &strings);
     let mut nets = NetTable::default();
     extract_nets_into(&store, &parsed.connectivity, &mut nets);
     let compiled = CompiledDeck::from_deck(parsed, grid, &strings).expect("the fixture deck types");
