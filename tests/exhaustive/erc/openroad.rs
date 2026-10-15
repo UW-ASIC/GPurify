@@ -60,6 +60,16 @@
 //! ratio positive, so it never applies), and sky130's credit, bonus and
 //! exemption, which LEF does not state.
 //!
+//! **Through the macro pins** (ERC-A14). A second test gives `GPurify` the
+//! very LEF and DEF `OpenROAD` reads: it draws the DEF's wiring and the
+//! cells' pins, and takes each gate from its pin's `ANTENNAGATEAREA` and
+//! each diode from its pin's `ANTENNADIFFAREA` (`MacroPinAntenna`), on a
+//! deck of the LEF's layer names with the same rows ([`def_deck`]). Its
+//! findings sit at the gates' pins, the contacts. `OpenROAD` 26Q2 reads
+//! no `ANTENNAPARTIAL*` or `ANTENNAMAX*CAR` (`AntennaChecker.cc` has no
+//! use of them), so those are checked against Appendix C's examples
+//! alone (`tests/engine/def.rs`).
+//!
 //! **Compared.** Per row, per group of gates on one net at the row's stage
 //! (the board's construction, [`Board::group`]): the checker gives every
 //! gate of the group the same ratio; the group carries exactly one `GPurify`
@@ -68,8 +78,8 @@
 //! decimals at the factor) plus 1e-9 relative.
 
 use super::antenna_board::{
-    area, contains, Board, BoardRow, Findings, Profile, H5, H5_DIODE_MAX, H5_MAX, LIMIT, ROWS,
-    THICKNESS,
+    area, contains, Board, BoardRow, Findings, Gate, Profile, H5, H5_DIODE_MAX, H5_MAX, LIMIT,
+    ROWS, THICKNESS,
 };
 use super::Rect;
 use crate::harness;
@@ -415,10 +425,11 @@ fn gpurify(seed: u64) -> BTreeMap<String, Findings> {
 
 /// Compares one row of one board: per group of gates at the row's stage,
 /// `value(g)` (scaled by [`FACTOR`]) and `flagged(g)` against `GPurify`'s
-/// violations.
+/// violations, each found at the gate whose `site` holds it.
 fn compare_row(
     board: &Board,
     row: &BoardRow,
+    site: fn(&Gate) -> Rect,
     findings: &[(f64, (i64, i64))],
     value: impl Fn(usize) -> f64,
     flagged: impl Fn(usize) -> bool,
@@ -434,7 +445,7 @@ fn compare_row(
     }
     let mut hits: BTreeMap<(u8, usize), Vec<f64>> = BTreeMap::new();
     for &(ratio, point) in findings {
-        let Some(g) = (0..board.gates.len()).find(|&g| contains(board.gates[g].marker, point))
+        let Some(g) = (0..board.gates.len()).find(|&g| contains(site(&board.gates[g]), point))
         else {
             tally.broken.push(at(format!(
                 "GPurify flags {ratio} at {point:?}, on no gate"
@@ -474,9 +485,79 @@ fn compare_row(
     }
 }
 
-/// One batch: `GPurify` on every board, `OpenROAD` twice on the batch's DEF
-/// (ratios, then the diode verdicts), every row compared.
-fn batch(openroad: &Path, seeds: &[u64]) -> Tally {
+/// The deck `GPurify` reads the boards' LEF and DEF with: the LEF's layer
+/// names, poly and the metals conductors joined by their cuts, `gate` and
+/// `diff` drawn layers that the DEF leaves empty (the pins carry their
+/// areas), and every row of the board deck.
+fn def_deck() -> String {
+    format!(
+        "grid 1nm\nlayer poly = gds(1, 0)\nlayer cont = gds(2, 0)\nlayer met1 = gds(3, 0)\n\
+         layer via1 = gds(4, 0)\nlayer met2 = gds(5, 0)\nlayer via2 = gds(6, 0)\n\
+         layer met3 = gds(7, 0)\nlayer gate = gds(8, 0)\nlayer diff = gds(9, 0)\n\
+         connect conductors [poly, met1, met2, met3]\nconnect touch_within_layer\n\
+         connect via cont [poly, met1]\nconnect via via1 [met1, met2]\n\
+         connect via via2 [met2, met3]\n\
+         connect label poly names poly\nconnect label met1 names met1\n\
+         connect label met2 names met2\nconnect label met3 names met3\n{}\n",
+        super::antenna_board::rows()
+    )
+}
+
+/// `GPurify` on the batch's own `boards.def` and `values.lef` in `dir`:
+/// per board, each row's violations at board-local points.
+fn def_findings(dir: &Path, boards: usize) -> Result<Vec<BTreeMap<String, Findings>>, String> {
+    use gpurify::engine::run::{run, Checks, RunOptions, StageStatus};
+    std::fs::write(dir.join("gpurify.deck"), def_deck()).map_err(|e| e.to_string())?;
+    let inputs = gpurify::engine::pipeline::Inputs {
+        layout: dir.join("boards.def"),
+        lef: vec![dir.join("values.lef")],
+        deck: dir.join("gpurify.deck"),
+        ..gpurify::engine::pipeline::Inputs::default()
+    };
+    let options = RunOptions {
+        checks: Checks {
+            drc: false,
+            erc: true,
+            lvs: false,
+            pex: false,
+        },
+        lvs: gpurify::check::lvs::CompareOptions::default(),
+        quasistatic_nets: Vec::new(),
+    };
+    let (loaded, _, outputs, summary) = run(&inputs, &options).map_err(|e| e.to_string())?;
+    if summary.erc != StageStatus::Ran {
+        return Err(format!("GPurify's ERC on the DEF: {:?}", summary.erc));
+    }
+    if let Some(run) = outputs
+        .runs
+        .iter()
+        .find(|r| r.outcome != gpurify::check::report::Outcome::Ran)
+    {
+        return Err(format!("{} did not run", loaded.strings.resolve(run.rule)));
+    }
+    let mut out = vec![BTreeMap::<String, Findings>::new(); boards];
+    let v = &outputs.violations;
+    for k in 0..v.len() {
+        let Measurement::Ratio(r) = v.measured[k] else {
+            return Err("an antenna finding that is no ratio".into());
+        };
+        let (x, y) = (v.at[k].x.raw(), v.at[k].y.raw());
+        let board = usize::try_from(x / SPACING).map_err(|e| e.to_string())?;
+        let local = (x - SPACING * i64::try_from(board).expect("small"), y);
+        out.get_mut(board)
+            .ok_or_else(|| format!("a finding at {x}, past the boards"))?
+            .entry(loaded.strings.resolve(v.rule[k]).to_owned())
+            .or_default()
+            .push((r, local));
+    }
+    Ok(out)
+}
+
+/// One batch: `GPurify` on every board (each its own GDS, or, `through_pins`,
+/// all of them as the batch's LEF and DEF), `OpenROAD` on the batch's DEF
+/// four times (ratios and verdicts, plain and with LEF's diode terms),
+/// every row compared.
+fn batch(openroad: &Path, seeds: &[u64], through_pins: bool) -> Tally {
     let boards: Vec<Board> = seeds.iter().map(|&s| Board::random(s)).collect();
     let dir = oracle::scratch("openroad-antenna");
     let write = |name: &str, text: &str| {
@@ -508,11 +589,31 @@ fn batch(openroad: &Path, seeds: &[u64]) -> Tally {
         reports.push(parse(&text));
     }
     let mut tally = Tally::default();
+    let from_def = if through_pins {
+        match def_findings(&dir, boards.len()) {
+            Ok(found) => Some(found),
+            Err(why) => {
+                tally.broken.push(why);
+                tally.broken.push(super::kept(&dir));
+                return tally;
+            }
+        }
+    } else {
+        None
+    };
+    let site: fn(&Gate) -> Rect = if through_pins {
+        |gate| gate.cont
+    } else {
+        |gate| gate.marker
+    };
     match (&reports[0], &reports[1], &reports[2], &reports[3]) {
         (Ok(values), Ok(verdicts), Ok(h5values), Ok(h5verdicts)) => {
             for (k, board) in boards.iter().enumerate() {
                 tally.boards += 1;
-                let found = gpurify(board.seed);
+                let found = match &from_def {
+                    Some(all) => all[k].clone(),
+                    None => gpurify(board.seed),
+                };
                 for row in &ROWS {
                     if row.id == "par.poly" {
                         continue;
@@ -532,6 +633,7 @@ fn batch(openroad: &Path, seeds: &[u64]) -> Tally {
                     compare_row(
                         board,
                         row,
+                        site,
                         findings,
                         |g| reported(from, k, g, row),
                         |g| match verdict {
@@ -568,6 +670,24 @@ fn batch(openroad: &Path, seeds: &[u64]) -> Tally {
 #[test]
 #[ignore = "release tier: needs openroad (nix develop .#oracles)"]
 fn openroad_antenna_differential_on_random_boards() {
+    differential(false);
+}
+
+/// The same 300 boards, `GPurify` reading `OpenROAD`'s own LEF and DEF:
+/// each gate a macro pin's `ANTENNAGATEAREA`, each diode a pin's
+/// `ANTENNADIFFAREA`, every ratio of every gate group as `OpenROAD` gives
+/// it (ERC-A14).
+///
+/// Oracle: differential against `OpenROAD`'s antenna checker on the same
+/// files (module docs). The nightly `oracles` job runs it.
+#[test]
+#[ignore = "release tier: needs openroad (nix develop .#oracles)"]
+fn openroad_antenna_differential_through_macro_pins() {
+    differential(true);
+}
+
+/// [`batch`] over every board, in parallel, and the tally checked.
+fn differential(through_pins: bool) {
     let openroad = oracle::tool("openroad");
     let seeds: Vec<u64> = (FIRST_SEED..FIRST_SEED + BOARDS).collect();
     let chunks: Vec<&[u64]> = seeds.chunks(BATCH).collect();
@@ -580,7 +700,7 @@ fn openroad_antenna_differential_on_random_boards() {
                 let Some(chunk) = chunks.get(i) else {
                     break;
                 };
-                let found = batch(&openroad, chunk);
+                let found = batch(&openroad, chunk, through_pins);
                 let mut total = total.lock().expect("not poisoned");
                 total.boards += found.boards;
                 total.groups += found.groups;
@@ -591,7 +711,12 @@ fn openroad_antenna_differential_on_random_boards() {
     });
     let total = total.into_inner().expect("not poisoned");
     println!(
-        "openroad antenna: {} boards, {} gate groups compared, {} flagged by both, {} broken",
+        "openroad antenna{}: {} boards, {} gate groups compared, {} flagged by both, {} broken",
+        if through_pins {
+            " through macro pins"
+        } else {
+            ""
+        },
         total.boards,
         total.groups,
         total.flagged,

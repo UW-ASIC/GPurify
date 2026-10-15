@@ -165,9 +165,13 @@ fn table(points: &[(i64, f64)]) -> String {
     format!("[{}]", p.join(", "))
 }
 
-/// The board deck: [`super::ANTENNA_PROCESS`] and every row of [`ROWS`] at
-/// [`LIMIT`].
+/// The board deck: [`super::ANTENNA_PROCESS`] and [`rows`].
 pub(super) fn deck() -> String {
+    antenna_deck(&rows())
+}
+
+/// Every row of [`ROWS`] at [`LIMIT`], as deck lines.
+pub(super) fn rows() -> String {
     let rows: Vec<String> = ROWS
         .iter()
         .map(|r| {
@@ -199,7 +203,7 @@ pub(super) fn deck() -> String {
             )
         })
         .collect();
-    antenna_deck(&rows.join("\n"))
+    rows.join("\n")
 }
 
 /// One gate: its marker, the poly under it, its one contact, and its diode.

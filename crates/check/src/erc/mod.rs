@@ -46,6 +46,9 @@ pub struct Inputs<'a> {
     pub die: Bbox,
     /// The applied sign-off temperature, absolute.
     pub temperature: Qty<Temperature, { prefix::BASE }>,
+    /// The placed macro pins' LEF antenna data (a DEF layout's), which the
+    /// antenna rows count on the pins' nets; empty for a GDS layout.
+    pub antenna_pins: &'a [rules::antenna::MacroPinAntenna],
 }
 
 /// Runs every row of `rules` over one extracted design, appending violations
@@ -76,6 +79,7 @@ pub fn check(
         process,
         die,
         temperature,
+        antenna_pins,
     } = inputs;
     let mut facts = NetFacts::default();
     classify_nets_into(design.nets, design.devices, &mut facts);
@@ -192,6 +196,7 @@ pub fn check(
             die,
             process,
             operating_temperature: temperature,
+            antenna_pins,
         },
         &mut scratch,
         out,

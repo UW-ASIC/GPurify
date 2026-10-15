@@ -101,6 +101,7 @@ fn a_per_stage_antenna_ratio_is_the_collecting_area_over_the_gate_area() {
     let (mut violations, mut runs) = report();
     check_antenna(
         design,
+        &[],
         &antenna_table(id, 3.0),
         &mut scratch,
         &mut violations,
@@ -143,6 +144,7 @@ fn an_antenna_ratio_under_its_limit_is_clean() {
     let (mut violations, mut runs) = report();
     check_antenna(
         design,
+        &[],
         &antenna_table(id, 5.0),
         &mut scratch,
         &mut violations,
@@ -170,6 +172,7 @@ fn the_cumulative_antenna_ratio_with_no_diode_is_the_same_division() {
     let (mut violations, mut runs) = report();
     check_antenna_electrical(
         design,
+        &[],
         common::manufacturing_grid(),
         &AntennaElectricalTable {
             head: head(id),
@@ -277,7 +280,14 @@ fn a_cumulative_antenna_check_measures_each_fabrication_stage_over_what_exists_a
 
     let mut scratch = Scratch::default();
     let (mut violations, mut runs) = report();
-    check_antenna(design, &table, &mut scratch, &mut violations, &mut runs);
+    check_antenna(
+        design,
+        &[],
+        &table,
+        &mut scratch,
+        &mut violations,
+        &mut runs,
+    );
 
     assert_eq!(runs.len(), 2, "one run row per stage, whatever the verdict");
     assert_eq!(
@@ -342,7 +352,14 @@ fn each_later_fabrication_stage_reports_at_least_the_ratio_the_one_before_it_did
 
     let mut scratch = Scratch::default();
     let (mut violations, mut runs) = report();
-    check_antenna(design, &table, &mut scratch, &mut violations, &mut runs);
+    check_antenna(
+        design,
+        &[],
+        &table,
+        &mut scratch,
+        &mut violations,
+        &mut runs,
+    );
 
     assert_eq!(runs.len(), 2);
     let ratios: Vec<f64> = stages
@@ -394,7 +411,14 @@ fn run_staged(
     };
     let mut scratch = Scratch::default();
     let (mut violations, mut runs) = report();
-    check_antenna(design, &table, &mut scratch, &mut violations, &mut runs);
+    check_antenna(
+        design,
+        &[],
+        &table,
+        &mut scratch,
+        &mut violations,
+        &mut runs,
+    );
     (violations, runs)
 }
 

@@ -35,8 +35,9 @@ pub struct LefLayer {
     pub horizontal: Option<bool>,
 }
 
-/// One macro `PIN`: its ports' shapes and vias, unplaced.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// One macro `PIN`: its ports' shapes and vias, unplaced, and its antenna
+/// data.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct MacroPin {
     /// The pin's name, as DEF connects to it.
     pub name: String,
@@ -44,10 +45,52 @@ pub struct MacroPin {
     pub shapes: Vec<Shape>,
     /// Every `VIA pt name` of every `PORT`.
     pub vias: Vec<(String, Pt)>,
+    /// The pin's antenna statements (5.8 pp. 140-142), the last of each
+    /// kind and layer kept, as LEF is read incrementally. Gate areas and
+    /// cumulative ratios are the default oxide model's (`OXIDE1`, or no
+    /// `ANTENNAMODEL`); those of `OXIDE2`-`OXIDE4` are skipped.
+    pub antenna: Vec<PinAntenna>,
+}
+
+/// What a macro pin's antenna statement states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AntennaKind {
+    /// `ANTENNAPARTIALMETALAREA`: metal inside the macro joined to the pin
+    /// on the layer, beyond the pin's own shapes, µm².
+    PartialMetal,
+    /// `ANTENNAPARTIALMETALSIDEAREA`: its side area, µm².
+    PartialMetalSide,
+    /// `ANTENNAPARTIALCUTAREA`: cut area inside the macro above the pin
+    /// layer, µm².
+    PartialCut,
+    /// `ANTENNADIFFAREA`: diffusion joined to the pin through the layer and
+    /// those below, µm².
+    Diff,
+    /// `ANTENNAGATEAREA`: gate area joined to the pin through the layer
+    /// and those below, µm².
+    Gate,
+    /// `ANTENNAMAXAREACAR`: the cumulative area ratio inside the macro on
+    /// the layer.
+    MaxAreaCar,
+    /// `ANTENNAMAXSIDEAREACAR`: the same of side areas.
+    MaxSideAreaCar,
+    /// `ANTENNAMAXCUTCAR`: the same of cut areas.
+    MaxCutCar,
+}
+
+/// One macro pin antenna statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PinAntenna {
+    /// What it states.
+    pub kind: AntennaKind,
+    /// Its value: an area in µm², or a ratio.
+    pub value: f64,
+    /// Its `LAYER`, or `None` for every layer.
+    pub layer: Option<String>,
 }
 
 /// One `MACRO`: a cell's abstract.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Macro {
     /// The cell name, as a DEF component's model names it.
     pub name: String,
@@ -66,7 +109,7 @@ pub struct Macro {
 }
 
 /// One or more LEF files, read into one library in DEF database units.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Lef {
     /// `MANUFACTURINGGRID`, database units.
     pub manufacturing_grid: Option<i64>,
@@ -436,6 +479,35 @@ fn geometries(
     }
 }
 
+/// An antenna statement's `value [LAYER name] ;`; a ratio statement needs
+/// its `LAYER`.
+fn antenna(lx: &mut Lexer<'_>, kind: AntennaKind) -> Result<PinAntenna, LefDefError> {
+    let text = lx.next()?;
+    let value: f64 = text
+        .parse()
+        .ok()
+        .filter(|v: &f64| v.is_finite() && *v >= 0.0)
+        .ok_or_else(|| {
+            lx.err(format!(
+                "antenna value {text} is not a number of zero or more"
+            ))
+        })?;
+    let layer = if lx.eat("LAYER") {
+        Some(lx.next()?.to_owned())
+    } else {
+        None
+    };
+    let ratio = matches!(
+        kind,
+        AntennaKind::MaxAreaCar | AntennaKind::MaxSideAreaCar | AntennaKind::MaxCutCar
+    );
+    if ratio && layer.is_none() {
+        return Err(lx.err("an ANTENNAMAX*CAR statement names its LAYER"));
+    }
+    lx.expect(";")?;
+    Ok(PinAntenna { kind, value, layer })
+}
+
 fn macro_(lx: &mut Lexer<'_>, dbu: i64) -> Result<Macro, LefDefError> {
     let name = lx.next()?.to_owned();
     let mut out = Macro {
@@ -472,11 +544,45 @@ fn macro_(lx: &mut Lexer<'_>, dbu: i64) -> Result<Macro, LefDefError> {
                     name: pin_name.clone(),
                     ..MacroPin::default()
                 };
+                let mut oxide1 = true;
                 loop {
-                    match lx.next()? {
+                    let word = lx.next()?;
+                    let kind = match word {
+                        "ANTENNAPARTIALMETALAREA" => Some(AntennaKind::PartialMetal),
+                        "ANTENNAPARTIALMETALSIDEAREA" => Some(AntennaKind::PartialMetalSide),
+                        "ANTENNAPARTIALCUTAREA" => Some(AntennaKind::PartialCut),
+                        "ANTENNADIFFAREA" => Some(AntennaKind::Diff),
+                        "ANTENNAGATEAREA" => Some(AntennaKind::Gate),
+                        "ANTENNAMAXAREACAR" => Some(AntennaKind::MaxAreaCar),
+                        "ANTENNAMAXSIDEAREACAR" => Some(AntennaKind::MaxSideAreaCar),
+                        "ANTENNAMAXCUTCAR" => Some(AntennaKind::MaxCutCar),
+                        _ => None,
+                    };
+                    if let Some(kind) = kind {
+                        let statement = antenna(lx, kind)?;
+                        // The oxide model governs gate areas and ratios only.
+                        let modelled = !matches!(
+                            kind,
+                            AntennaKind::PartialMetal
+                                | AntennaKind::PartialMetalSide
+                                | AntennaKind::PartialCut
+                                | AntennaKind::Diff
+                        );
+                        if oxide1 || !modelled {
+                            pin.antenna
+                                .retain(|a| (a.kind, &a.layer) != (kind, &statement.layer));
+                            pin.antenna.push(statement);
+                        }
+                        continue;
+                    }
+                    match word {
                         "END" => {
                             lx.expect(&pin_name)?;
                             break;
+                        }
+                        "ANTENNAMODEL" => {
+                            oxide1 = lx.next()? == "OXIDE1";
+                            lx.expect(";")?;
                         }
                         "PORT" => geometries(lx, dbu, &mut pin.shapes, &mut pin.vias)?,
                         ";" => {}

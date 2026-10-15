@@ -5,6 +5,7 @@
 
 use crate::engine::pipeline::{Extracted, Inputs, Loaded};
 use gpurify_check::deck::DeckFn;
+use gpurify_check::erc::rules::antenna::MacroPinAntenna;
 use gpurify_check::lvs::verdict::Inconclusive;
 use gpurify_check::lvs::Verdict;
 use gpurify_check::report::{Outcome, RuleRun, Severity, Violations};
@@ -507,6 +508,10 @@ fn run_erc(loaded: &Loaded, extracted: &Extracted, out: &mut Outputs) -> StageSt
         );
     }
 
+    let pins = match antenna_pins(loaded) {
+        Ok(pins) => pins,
+        Err(why) => return StageStatus::Refused(why),
+    };
     let inputs = gpurify_check::erc::Inputs {
         design: gpurify_check::Design {
             store: &loaded.store,
@@ -522,6 +527,7 @@ fn run_erc(loaded: &Loaded, extracted: &Extracted, out: &mut Outputs) -> StageSt
         },
         die,
         temperature: sign_off_temperature(loaded),
+        antenna_pins: &pins,
     };
     let mut result = Ok(());
     append_stage(out, |violations, runs| {
@@ -531,6 +537,108 @@ fn run_erc(loaded: &Loaded, extracted: &Extracted, out: &mut Outputs) -> StageSt
         |error| StageStatus::Refused(error.to_string()),
         |()| StageStatus::Ran,
     )
+}
+
+/// Every placed macro pin's LEF antenna data on the deck's layers (ERC-A14,
+/// [`MacroPinAntenna`]): per component pin on a DEF net whose `PIN` states
+/// any, the store polygon its first shape on a deck conductor was drawn as
+/// (the one on that layer with the shape's bounding box), and its values
+/// with areas in square database units. Empty for a GDS layout.
+///
+/// # Errors
+///
+/// A statement on a layer the deck does not define: the value would
+/// otherwise be dropped unseen.
+fn antenna_pins(loaded: &Loaded) -> Result<Vec<MacroPinAntenna>, String> {
+    use gpurify_ingest::lefdef::{AntennaKind, Origin};
+    let Some(design) = &loaded.design else {
+        return Ok(Vec::new());
+    };
+    let flat =
+        gpurify_ingest::lefdef::flatten(&design.def, &design.lef).map_err(|why| why.to_string())?;
+    #[expect(clippy::cast_precision_loss, reason = "a resolution squared, small")]
+    let per_um2 = (loaded.grid.dbu_per_um() * loaded.grid.dbu_per_um()) as f64;
+    let mut taken = std::collections::BTreeSet::new();
+    // Per pin: its conductor, its shape's bounding box, and its values.
+    let mut wanted = Vec::new();
+    for flat in &flat {
+        let Origin::MacroPin(component, pin) = flat.origin else {
+            continue;
+        };
+        if flat.net.is_none() || taken.contains(&(component, pin)) {
+            continue;
+        }
+        let model = &design.def.components[component as usize].model;
+        let Some(cell) = design.lef.macros.iter().find(|m| &m.name == model) else {
+            continue;
+        };
+        let pin_data = &cell.pins[pin as usize];
+        let Some(layer) = loaded
+            .deck
+            .layers
+            .id(&loaded.strings, &flat.shape.layer)
+            .filter(|l| loaded.deck.connectivity.conductors.contains(l))
+        else {
+            continue;
+        };
+        if pin_data.antenna.is_empty() {
+            continue;
+        }
+        let mut values = Vec::with_capacity(pin_data.antenna.len());
+        for statement in &pin_data.antenna {
+            let on = match &statement.layer {
+                None => None,
+                Some(name) => Some(loaded.deck.layers.id(&loaded.strings, name).ok_or_else(
+                    || {
+                        format!(
+                            "LEF macro {model} pin {} states antenna data on layer {name}, \
+                         which the deck does not define",
+                            pin_data.name
+                        )
+                    },
+                )?),
+            };
+            let ratio = matches!(
+                statement.kind,
+                AntennaKind::MaxAreaCar | AntennaKind::MaxSideAreaCar | AntennaKind::MaxCutCar
+            );
+            let value = if ratio {
+                statement.value
+            } else {
+                statement.value * per_um2
+            };
+            values.push((statement.kind, on, value));
+        }
+        taken.insert((component, pin));
+        wanted.push((layer, flat.shape.bbox(), values));
+    }
+    // Each pin's polygon, found by sweeping each layer's polygons over the
+    // pins sorted by bounding box.
+    let mut poly = vec![None; wanted.len()];
+    let mut sorted: Vec<usize> = (0..wanted.len()).collect();
+    sorted.sort_by_key(|&w| (wanted[w].0, wanted[w].1));
+    for run in sorted.chunk_by(|&a, &b| wanted[a].0 == wanted[b].0) {
+        let layer = wanted[run[0]].0;
+        for row in loaded.store.polys_on_layer(layer) {
+            let row = gpurify_geom::PolyId(row);
+            let b = loaded.store.poly_bbox(row);
+            let key = (b.xlo.raw(), b.ylo.raw(), b.xhi.raw(), b.yhi.raw());
+            let from = run.partition_point(|&w| wanted[w].1 < key);
+            for &w in run[from..].iter().take_while(|&&w| wanted[w].1 == key) {
+                poly[w].get_or_insert(row);
+            }
+        }
+    }
+    Ok(wanted
+        .into_iter()
+        .zip(poly)
+        .filter_map(|((_, _, values), poly)| {
+            Some(MacroPinAntenna {
+                poly: poly?,
+                values,
+            })
+        })
+        .collect())
 }
 
 /// The five layout-only checks on the unreduced graph, then a flat comparison of
