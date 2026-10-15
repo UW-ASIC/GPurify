@@ -119,7 +119,7 @@ fn grow_into(
         let mut builder = GeometryStoreBuilder::with_capacity(0, 0);
         for idx in 0..narrow(a.len()) {
             // Outer and holes as rows: every ring adds its winding to the union.
-            for ring in a.poly_rings(idx) {
+            for ring in a.get(idx).rings() {
                 let (xs, ys) = ring.coords();
                 builder.push(ONLY, xs, ys);
             }
@@ -253,7 +253,7 @@ pub fn with_area_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mut
     );
     let keep: Vec<bool> = (0..narrow(a.len()))
         .map(|idx| {
-            let twice: i128 = a.poly_rings(idx).map(|r| r.area2().raw()).sum();
+            let twice: i128 = a.get(idx).rings().map(|r| r.area2().raw()).sum();
             (lo..=hi).contains(&twice)
         })
         .collect();

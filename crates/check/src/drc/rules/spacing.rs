@@ -614,7 +614,7 @@ fn facing_runs(store: &GeometryStore, layer: LayerId, within: Dbu, s: &Scratch) 
     let (mut up, mut down) = (Vec::new(), Vec::new());
     for (figure, owner) in (0..).zip(owners) {
         let label = s.labels[(owner.0 - first_row) as usize].0;
-        for ring in s.layer_out.poly_rings(figure) {
+        for ring in s.layer_out.get(figure).rings() {
             let (xs, ys) = ring.coords();
             for (vertical, pos, forward, lo, hi) in ring_segs(xs, ys).map(line_of) {
                 // Material on the left: up-travelling vertical, left-travelling horizontal.
@@ -1357,7 +1357,7 @@ pub(crate) fn corner_to_corner(
     let figures = &s.layer_out;
     let mut corners: Vec<Corner> = (0..u32::try_from(figures.len())
         .expect("a layer indexes polygons with a u32"))
-        .flat_map(|idx| figures.poly_rings(idx))
+        .flat_map(|idx| figures.get(idx).rings())
         .flat_map(|ring| {
             let (xs, ys) = ring.coords();
             convex_corners(xs, ys)

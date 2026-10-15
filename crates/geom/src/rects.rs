@@ -50,14 +50,12 @@ pub fn decompose_into(layer: &ValidatedLayer, rects: &mut Vec<Bbox>, poly_start:
     let mut cuts: Vec<Dbu> = Vec::new();
 
     for idx in 0..layer.len() {
-        let row = u32::try_from(idx).expect("a layer's polygon count fits a u32");
-        let poly = layer.get(row);
+        let poly = layer.get(crate::narrow(idx));
 
         edges.clear();
         slabs.clear();
-        collect_ring(poly.outer(), &mut edges, &mut slabs);
-        for hole in poly.holes() {
-            collect_ring(hole, &mut edges, &mut slabs);
+        for ring in poly.rings() {
+            collect_ring(ring, &mut edges, &mut slabs);
         }
 
         slabs.sort_unstable();
@@ -98,10 +96,10 @@ pub fn decompose_into(layer: &ValidatedLayer, rects: &mut Vec<Bbox>, poly_start:
         let first = *poly_start.last().expect("seeded with 0") as usize;
         debug_assert_eq!(
             2 * covered_area(&rects[first..]).raw(),
-            poly.outer().area2().raw() + poly.holes().map(|h| h.area2().raw()).sum::<i128>(),
+            poly.rings().map(|r| r.area2().raw()).sum::<i128>(),
             "a polygon's rectangles cover exactly its area, holes excluded"
         );
-        poly_start.push(u32::try_from(rects.len()).expect("a decomposition fits a u32"));
+        poly_start.push(crate::narrow(rects.len()));
     }
 }
 

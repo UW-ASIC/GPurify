@@ -72,7 +72,7 @@ pub(crate) fn anchor_of(pattern: &Pattern) -> Option<(i64, i64)> {
             })
     };
     (0..u32::try_from(shapes.len()).ok()?)
-        .flat_map(|idx| shapes.poly_rings(idx).collect::<Vec<_>>())
+        .flat_map(|idx| shapes.get(idx).rings())
         .flat_map(|ring| {
             let (xs, ys) = ring.coords();
             xs.iter()
@@ -112,7 +112,7 @@ pub(crate) fn pattern_match(
         return REFUSED;
     };
     let corners: Vec<(i64, i64)> = (0..u32::try_from(figures.len()).unwrap_or(u32::MAX))
-        .flat_map(|idx| figures.poly_rings(idx).collect::<Vec<_>>())
+        .flat_map(|idx| figures.get(idx).rings())
         .flat_map(|ring| {
             let (xs, ys) = ring.coords();
             xs.iter()

@@ -73,7 +73,7 @@ pub(super) fn merged_owners(
 pub(super) fn figure_edges(figures: &ValidatedLayer) -> Vec<Edge> {
     let mut edges = Vec::new();
     for figure in 0..u32::try_from(figures.len()).expect("a layer indexes polygons with a u32") {
-        for ring in figures.poly_rings(figure) {
+        for ring in figures.get(figure).rings() {
             let (xs, ys) = ring.coords();
             let n = xs.len();
             // A left turn at a vertex is a convex corner: the material is on
@@ -513,7 +513,7 @@ pub(crate) fn eol_keep_out(
         for figure in
             0..u32::try_from(s.layer_out.len()).expect("a layer indexes polygons with a u32")
         {
-            for ring in s.layer_out.poly_rings(figure) {
+            for ring in s.layer_out.get(figure).rings() {
                 let (xs, ys) = ring.coords();
                 vertices.extend(xs.iter().zip(ys).map(|(x, y)| (x.raw(), y.raw(), figure)));
             }
@@ -797,7 +797,7 @@ type Corner = (i64, i64, i64, i64, u32, bool);
 fn figure_corners(figures: &ValidatedLayer, eol: Option<i64>) -> Vec<Corner> {
     let mut corners = Vec::new();
     for figure in 0..u32::try_from(figures.len()).expect("a layer indexes polygons with a u32") {
-        for ring in figures.poly_rings(figure) {
+        for ring in figures.get(figure).rings() {
             let (xs, ys) = ring.coords();
             let n = xs.len();
             let step = |i: usize| {

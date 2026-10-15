@@ -250,7 +250,7 @@ fn collect_rings(layer: &ValidatedLayer, rings: &mut Rings) {
 
     let polys = u32::try_from(layer.len()).expect("a layer's polygon count is a u32 index space");
     for idx in 0..polys {
-        for ring in layer.poly_rings(idx) {
+        for ring in layer.get(idx).rings() {
             let (xs, ys) = ring.coords();
             rings.xs.extend(xs.iter().map(|x| x.raw()));
             rings.ys.extend(ys.iter().map(|y| y.raw()));
@@ -967,7 +967,7 @@ mod tests {
     fn area(layer: &ValidatedLayer) -> i128 {
         let mut doubled = 0i128;
         for idx in 0..u32::try_from(layer.len()).expect("a test layer fits a u32") {
-            for ring in layer.poly_rings(idx) {
+            for ring in layer.get(idx).rings() {
                 doubled += ring.area2().raw();
             }
         }
