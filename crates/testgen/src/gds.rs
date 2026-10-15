@@ -167,15 +167,8 @@ pub fn write_store_labelled(
         let coordinate = |value: i64| {
             i32::try_from(value).map_err(|_| "a label coordinate beyond the GDSII range")
         };
-        let mut xy = [0u8; 8];
-        xy[..4].copy_from_slice(&coordinate(label.x)?.to_be_bytes());
-        xy[4..].copy_from_slice(&coordinate(label.y)?.to_be_bytes());
-        put_record(out, TEXT, &[])?;
-        put_record(out, LAYER, &number.to_be_bytes())?;
-        put_record(out, TEXTTYPE, &texttype.to_be_bytes())?;
-        put_record(out, XY, &xy)?;
-        put_ascii(out, STRING, label.text)?;
-        put_record(out, ENDEL, &[])?;
+        let at = (coordinate(label.x)?, coordinate(label.y)?);
+        put_text(out, number, texttype, at, label.text)?;
     }
     put_record(out, ENDSTR, &[])?;
     put_record(out, ENDLIB, &[])
@@ -243,29 +236,18 @@ pub fn write_library(cells: &[Structure], out: &mut Vec<u8>) -> Result<(), &'sta
         put_record(out, BGNSTR, &TIMESTAMPS)?;
         put_ascii(out, STRNAME, &cell.name)?;
         for &(layer, datatype, [xlo, ylo, xhi, yhi]) in &cell.rects {
-            let xy: Vec<u8> = [(xlo, ylo), (xhi, ylo), (xhi, yhi), (xlo, yhi), (xlo, ylo)]
-                .iter()
-                .flat_map(|&(x, y)| x.to_be_bytes().into_iter().chain(y.to_be_bytes()))
-                .collect();
+            let ring = [(xlo, ylo), (xhi, ylo), (xhi, yhi), (xlo, yhi), (xlo, ylo)];
             put_record(out, BOUNDARY, &[])?;
             put_record(out, LAYER, &layer.to_be_bytes())?;
             put_record(out, DATATYPE, &datatype.to_be_bytes())?;
-            put_record(out, XY, &xy)?;
+            put_record(out, XY, &xy(&ring))?;
             put_record(out, ENDEL, &[])?;
         }
         for placement in &cell.refs {
             put_placement(out, placement)?;
         }
-        for (layer, texttype, x, y, text) in &cell.texts {
-            let mut xy = [0u8; 8];
-            xy[..4].copy_from_slice(&x.to_be_bytes());
-            xy[4..].copy_from_slice(&y.to_be_bytes());
-            put_record(out, TEXT, &[])?;
-            put_record(out, LAYER, &layer.to_be_bytes())?;
-            put_record(out, TEXTTYPE, &texttype.to_be_bytes())?;
-            put_record(out, XY, &xy)?;
-            put_ascii(out, STRING, text)?;
-            put_record(out, ENDEL, &[])?;
+        for &(layer, texttype, x, y, ref text) in &cell.texts {
+            put_text(out, layer, texttype, (x, y), text)?;
         }
         put_record(out, ENDSTR, &[])?;
     }
@@ -318,12 +300,32 @@ fn put_placement(out: &mut Vec<u8>, placement: &Placement) -> Result<(), &'stati
         colrow[2..].copy_from_slice(&rows.to_be_bytes());
         put_record(out, COLROW, &colrow)?;
     }
-    let xy: Vec<u8> = points
+    put_record(out, XY, &xy(&points))?;
+    put_record(out, ENDEL, &[])
+}
+
+/// One `TEXT` element: the stream pair, the point, and the string.
+fn put_text(
+    out: &mut Vec<u8>,
+    layer: u16,
+    texttype: u16,
+    at: (i32, i32),
+    text: &str,
+) -> Result<(), &'static str> {
+    put_record(out, TEXT, &[])?;
+    put_record(out, LAYER, &layer.to_be_bytes())?;
+    put_record(out, TEXTTYPE, &texttype.to_be_bytes())?;
+    put_record(out, XY, &xy(&[at]))?;
+    put_ascii(out, STRING, text)?;
+    put_record(out, ENDEL, &[])
+}
+
+/// An `XY` payload: each point as two big-endian 32-bit database units.
+fn xy(points: &[(i32, i32)]) -> Vec<u8> {
+    points
         .iter()
         .flat_map(|&(x, y)| x.to_be_bytes().into_iter().chain(y.to_be_bytes()))
-        .collect();
-    put_record(out, XY, &xy)?;
-    put_record(out, ENDEL, &[])
+        .collect()
 }
 
 // ----------------------------------------------------------------- the format
