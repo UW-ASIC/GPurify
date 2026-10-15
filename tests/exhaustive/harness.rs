@@ -916,7 +916,7 @@ fn passivity(ran: &Ran) -> Vec<String> {
         .iter()
         .enumerate()
         .filter(|&(row, value)| match value {
-            Parasitic::Resistance(q) => !(q.raw() >= 0.0),
+            Parasitic::Resistance(q) | Parasitic::SubstrateResistance(q) => !(q.raw() >= 0.0),
             Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => !(q.raw() >= 0.0),
             Parasitic::Inductance(q) => !(q.raw() >= 0.0),
             Parasitic::MutualInductance(q) => {

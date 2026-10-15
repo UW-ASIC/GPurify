@@ -65,7 +65,7 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 | DRC | 56 | 6 | 41 | 3 | 0 | 0 |
 | LVS | 31 | 1 | 12 | 4 | 0 | 0 |
 | ERC | 63 | 4 | 10 | 4 | 0 | 0 |
-| PEX | 9 | 0 | 6 | 1 | 0 | 0 |
+| PEX | 9 | 0 | 7 | 0 | 0 | 0 |
 | Flow | 2 | 0 | 5 | 3 | 0 | 0 |
 
 These numbers come from the TSV. Once `tests/catalog.rs` exists, it computes
@@ -393,6 +393,7 @@ single oracle is a named gap that ledger P1 closes.
 | PEX-010 | SPEF output | implemented | IEEE1481 | CF; SE; MR; golden |
 | PEX-011 | Device-region (MEOL/FEOL) parasitics: gate-to-contact and gate-to-diffusion C, trench contact, via-location gate R | partial | SRC:datasheet | SY; MR |
 | PEX-012 | Metal-fill treatment (floating or grounded fill, virtual fill) | partial | SRC:datasheet | CF; SY |
+| PEX-013 | Substrate network extraction (substrate and well resistance and coupling) | partial | QNT:RFIC; SRC:datasheet | CF; MR; SY |
 | PEX-015 | 3D-IC extraction (TSV, micro-bump, interposer, TSV-TSV coupling) | partial | SRC:datasheet; CAL:3DSTACK | CF; SY |
 | PEX-016 | Point-to-point resistance and net-to-net coupling report between arbitrary points | partial | SRC:datasheet; CAL:PERC P2P | CF; NV |
 | FLOW-001 | Geometric / hierarchy-invariant waivers | implemented | CAL:Auto-Waivers; PEG | SY; MR |

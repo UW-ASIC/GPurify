@@ -828,6 +828,30 @@ fn pex_network(
         &tsvs,
         grid,
     );
+    if let Some(model) = &loaded.deck.pex_models.substrate {
+        let ports: Vec<LayerId> = (model.ports)
+            .iter()
+            .filter_map(|name| loaded.deck.layers.id(&loaded.strings, name))
+            .collect();
+        let profile = gpurify_extract::substrate::Profile {
+            // nm and Ω·cm to µm and Ω·µm.
+            layers: (model.layers)
+                .iter()
+                .map(|&(t, rho)| (t / 1000.0, rho * 1e4))
+                .collect(),
+            grounded: model.grounded,
+        };
+        gpurify_extract::substrate::add_into(
+            &mut network,
+            &loaded.store,
+            &extracted.nets,
+            &profile,
+            &ports,
+            design_extent(loaded),
+            grid,
+        )
+        .map_err(|why| format!("pex_substrate: {why}"))?;
+    }
     gpurify_extract::fill::treat(&mut network, &fill_nets(loaded, extracted))
         .map_err(|why| why.to_string())?;
     gpurify_extract::reduce::reduce(&mut network, loaded.deck.extraction);

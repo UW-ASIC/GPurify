@@ -32,6 +32,11 @@ pub enum Parasitic {
     /// produces these
     /// ([`InductMatrix::m_henry`](crate::field::henry::InductMatrix::m_henry)).
     MutualInductance(Qty<Inductance, { prefix::PICO }>),
+    /// Resistance through the silicon between two nets' substrate
+    /// contacts, or from one to the grounded backside when it has no far
+    /// node ([`crate::substrate`]). Only a deck's `pex_substrate` produces
+    /// these.
+    SubstrateResistance(Qty<Resistance, { prefix::BASE }>),
 }
 
 /// A node in the parasitic network: a net plus a position along it.
@@ -90,7 +95,8 @@ pub struct ParasiticNetwork {
     /// One row per element: its near node.
     pub from: Vec<NodeId>,
     /// Each element's far node, or `None` for ground. Only a
-    /// [`Parasitic::GroundCap`] may have `None`.
+    /// [`Parasitic::GroundCap`] or a [`Parasitic::SubstrateResistance`] may
+    /// have `None`.
     pub to: Vec<Option<NodeId>>,
     /// Each element's kind and magnitude.
     pub value: Vec<Parasitic>,
@@ -107,6 +113,7 @@ fn canonical_key(from: NodeId, to: Option<NodeId>, value: Parasitic) -> Canonica
         Parasitic::CouplingCap(q) => (2u8, q.raw()),
         Parasitic::Inductance(q) => (3u8, q.raw()),
         Parasitic::MutualInductance(q) => (4u8, q.raw()),
+        Parasitic::SubstrateResistance(q) => (5u8, q.raw()),
     };
     let far = to.map_or(0, |node| u64::from(node.0) + 1);
     (from.0, far, tag, raw.to_bits())
@@ -162,7 +169,7 @@ impl ParasiticNetwork {
         );
         debug_assert!(
             self.value.iter().all(|value| match *value {
-                Parasitic::Resistance(q) => q.is_finite(),
+                Parasitic::Resistance(q) | Parasitic::SubstrateResistance(q) => q.is_finite(),
                 Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => q.is_finite(),
                 Parasitic::Inductance(q) | Parasitic::MutualInductance(q) => q.is_finite(),
             }),
@@ -206,7 +213,8 @@ impl ParasiticNetwork {
                 Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => q.raw(),
                 Parasitic::Resistance(_)
                 | Parasitic::Inductance(_)
-                | Parasitic::MutualInductance(_) => continue,
+                | Parasitic::MutualInductance(_)
+                | Parasitic::SubstrateResistance(_) => continue,
             };
             let near = net_of(from);
             let far = to.map_or(near, net_of);

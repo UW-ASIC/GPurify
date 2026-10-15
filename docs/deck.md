@@ -1109,6 +1109,28 @@ ln((r + t) / r)` (Katti et al., IEEE TED 2010), and its resistance is the
 layer must be a `connect via` cut layer, stated once. No open PDK has a
 TSV, so the values are the deck's to state.
 
+### Substrate network
+
+```
+pex_substrate ports [ptap_tie, nwell_tie] backside grounded profile [(3um, 10), (300um, 0.01)]
+```
+
+`pex_substrate ports [layers] backside grounded|floating profile
+[(thickness, resistivity), ..]` asks PEX for the resistance through the
+silicon between the nets that contact it. The profile lists the
+silicon's layers top-down, each a thickness and a resistivity in Ω·cm
+(a bare number), uniform across the die; the backside is a grounded
+contact or carries no current. Every shape on a port layer is a contact
+on the silicon's top face, all of one net's shapes one contact. PEX
+solves the silicon under the drawn die (`gpurify_extract::substrate`)
+and writes, between every two port nets, the resistance of their
+coupling, and from each to a grounded backside its resistance there: a
+DSPF `R` card (to `0` for the backside), and a `// substrate <node>
+<node | 0> <Ω>` comment in SPEF, whose `*RES` cannot join two nets. The
+port layers must be conductors, so their shapes carry nets; every key
+is required, the values positive, and the line stated once. No open PDK
+states its substrate profile, so it is the deck's.
+
 ### Device-region capacitance
 
 ```

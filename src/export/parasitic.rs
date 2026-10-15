@@ -12,6 +12,11 @@
 //! `k = M / √(L₁L₂)`. SPEF (IEEE 1481) has no mutual inductance, so SPEF
 //! carries it as a comment in the first net's `*D_NET` block, in pH.
 //!
+//! A substrate resistance ([`gpurify_extract::substrate`]) joins two nets,
+//! or a net and the grounded backside: an `R` card in DSPF (to `0` for the
+//! backside), and in SPEF, whose `*RES` joins nodes of one net only, a
+//! comment in the first net's block: `// substrate <node> <node | 0> <Ω>`.
+//!
 //! A label on several disconnected nets would write one `*D_NET` per piece
 //! under one name, so the pieces read as one net: both writers refuse it
 //! ([`WriteError::SplitLabel`]). A net with several labels, a short, would
@@ -57,11 +62,11 @@ fn check_canonical(network: &ParasiticNetwork) -> Result<(), WriteError> {
     }
     // Only a capacitance to ground may omit its far node; DSPF would otherwise
     // write a broken resistor as a plausible one to ground.
-    let far_ok = network
-        .to
-        .iter()
-        .zip(&network.value)
-        .all(|(far, kind)| far.is_some() || as_farads(*kind).is_some());
+    let far_ok = network.to.iter().zip(&network.value).all(|(far, kind)| {
+        far.is_some()
+            || as_farads(*kind).is_some()
+            || matches!(kind, Parasitic::SubstrateResistance(_))
+    });
     if !far_ok {
         return Err(WriteError::Unrepresentable(
             "a resistance or inductance with no far node",
@@ -123,9 +128,10 @@ fn put_net_name(
 const fn as_farads(value: Parasitic) -> Option<f64> {
     match value {
         Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => Some(q.raw()),
-        Parasitic::Resistance(_) | Parasitic::Inductance(_) | Parasitic::MutualInductance(_) => {
-            None
-        }
+        Parasitic::Resistance(_)
+        | Parasitic::Inductance(_)
+        | Parasitic::MutualInductance(_)
+        | Parasitic::SubstrateResistance(_) => None,
     }
 }
 
@@ -136,7 +142,8 @@ const fn as_ohms(value: Parasitic) -> Option<f64> {
         Parasitic::GroundCap(_)
         | Parasitic::CouplingCap(_)
         | Parasitic::Inductance(_)
-        | Parasitic::MutualInductance(_) => None,
+        | Parasitic::MutualInductance(_)
+        | Parasitic::SubstrateResistance(_) => None,
     }
 }
 
@@ -147,7 +154,8 @@ const fn as_henries(value: Parasitic) -> Option<f64> {
         Parasitic::Resistance(_)
         | Parasitic::GroundCap(_)
         | Parasitic::CouplingCap(_)
-        | Parasitic::MutualInductance(_) => None,
+        | Parasitic::MutualInductance(_)
+        | Parasitic::SubstrateResistance(_) => None,
     }
 }
 
@@ -158,7 +166,16 @@ const fn as_mutual_henries(value: Parasitic) -> Option<f64> {
         Parasitic::Resistance(_)
         | Parasitic::GroundCap(_)
         | Parasitic::CouplingCap(_)
-        | Parasitic::Inductance(_) => None,
+        | Parasitic::Inductance(_)
+        | Parasitic::SubstrateResistance(_) => None,
+    }
+}
+
+/// Ohms on a substrate resistance, `None` on any other kind.
+const fn as_substrate_ohms(value: Parasitic) -> Option<f64> {
+    match value {
+        Parasitic::SubstrateResistance(q) => Some(q.raw()),
+        _ => None,
     }
 }
 
@@ -169,7 +186,7 @@ const fn as_mutual_henries(value: Parasitic) -> Option<f64> {
 /// states the coefficient instead ([`mutual_couplings`]).
 pub(crate) const fn spice_card(value: Parasitic) -> (char, usize, f64, &'static str) {
     match value {
-        Parasitic::Resistance(q) => ('R', 0, q.raw(), ""),
+        Parasitic::Resistance(q) | Parasitic::SubstrateResistance(q) => ('R', 0, q.raw(), ""),
         Parasitic::GroundCap(q) | Parasitic::CouplingCap(q) => ('C', 1, q.raw(), "f"),
         Parasitic::Inductance(q) => ('L', 2, q.raw(), "p"),
         Parasitic::MutualInductance(q) => ('K', 3, q.raw(), ""),
@@ -309,7 +326,8 @@ fn spef_section(
 /// and `*INDUC` sections. A coupling capacitance is listed once, in the
 /// section of the net that holds its near node. A mutual inductance, which
 /// the standard has no element for, is a comment after `*INDUC` in the same
-/// net's block: `// mutual <node> <node> <pH>`.
+/// net's block: `// mutual <node> <node> <pH>`. A substrate resistance is
+/// a comment after it: `// substrate <node> <node | 0> <Ω>`.
 ///
 /// # Errors
 ///
@@ -385,6 +403,7 @@ const fn kind_rank(value: Parasitic) -> u8 {
         Parasitic::CouplingCap(_) => 2,
         Parasitic::Inductance(_) => 3,
         Parasitic::MutualInductance(_) => 4,
+        Parasitic::SubstrateResistance(_) => 5,
     }
 }
 
@@ -396,6 +415,7 @@ fn with_raw(template: Parasitic, raw: f64) -> Parasitic {
         Parasitic::CouplingCap(_) => Parasitic::CouplingCap(Qty::new(raw)),
         Parasitic::Inductance(_) => Parasitic::Inductance(Qty::new(raw)),
         Parasitic::MutualInductance(_) => Parasitic::MutualInductance(Qty::new(raw)),
+        Parasitic::SubstrateResistance(_) => Parasitic::SubstrateResistance(Qty::new(raw)),
     }
 }
 
@@ -412,7 +432,9 @@ fn slots(network: &ParasiticNetwork) -> BTreeMap<Slot, Parasitic> {
             .and_modify(|have| {
                 let (a, b) = (spice_card(*have).2, spice_card(value).2);
                 let combined = match value {
-                    Parasitic::Resistance(_) | Parasitic::Inductance(_) => a * b / (a + b),
+                    Parasitic::Resistance(_)
+                    | Parasitic::Inductance(_)
+                    | Parasitic::SubstrateResistance(_) => a * b / (a + b),
                     _ => a + b,
                 };
                 *have = with_raw(value, combined);
@@ -585,6 +607,28 @@ fn write_spef_values(
             );
             out.push('\n');
         }
+        // Nor a resistor between two nets or to ground: the substrate's
+        // are comments too.
+        for row in element..element_end {
+            if as_substrate_ohms(network.value[row]).is_none() {
+                continue;
+            }
+            out.push_str("// substrate ");
+            node_name(network, network.from[row], ports, strings, out)?;
+            out.push(' ');
+            match network.to[row] {
+                Some(far) => node_name(network, far, ports, strings, out)?,
+                None => out.push_str(GROUND),
+            }
+            out.push(' ');
+            put_values(
+                values
+                    .iter()
+                    .map(|aligned| as_substrate_ohms(aligned.value[row]).unwrap_or(f64::NAN)),
+                out,
+            );
+            out.push('\n');
+        }
         out.push_str("*END\n\n");
 
         node = node_end;
@@ -689,7 +733,8 @@ pub fn write_dspf(
         let _ = write!(out, "{prefix}{} ", card[row]);
         node_name(network, network.from[row], ports, strings, out)?;
         out.push(' ');
-        // A missing far end is ground; `check_canonical` allows it only on a capacitance.
+        // A missing far end is ground; `check_canonical` allows it only on a
+        // capacitance or a substrate resistance.
         if let Some(far) = network.to[row] {
             node_name(network, far, ports, strings, out)?;
         } else {

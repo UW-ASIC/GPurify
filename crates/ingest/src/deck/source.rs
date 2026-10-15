@@ -457,6 +457,14 @@ fn check_pex_models(
             )));
         }
     }
+    for layer in models.substrate.iter().flat_map(|s| &s.ports) {
+        let id = layer_of(layers, strings, layer, "pex_substrate")?;
+        if !connectivity.conductors.contains(&id) {
+            return Err(DeckError::Malformed(format!(
+                "pex_substrate port {layer}: not a `connect conductors` layer, so it holds no net"
+            )));
+        }
+    }
     for (at, (layer, _)) in models.fill.iter().enumerate() {
         let id = layer_of(layers, strings, layer, "pex_fill")?;
         if !connectivity.conductors.contains(&id) {

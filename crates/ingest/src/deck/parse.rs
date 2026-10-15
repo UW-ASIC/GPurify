@@ -473,6 +473,7 @@ impl<'a> Parser<'a> {
             "pex_fill" => self.pex_fill(),
             "pex_device" => self.pex_device(),
             "pex_tsv" => self.pex_tsv(),
+            "pex_substrate" => self.pex_substrate(span),
             "temperature" => self.temperature(span),
             "extraction" => self.extraction(span),
             "corner" => self.corner(),
@@ -482,7 +483,7 @@ impl<'a> Parser<'a> {
             "lvs" => self.lvs(),
             _ => Err(self.err(
                 span,
-                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, if, connect, device, pex, pex_fill, pex_device, pex_tsv, temperature, lvs, extraction, corner, stage or waive"),
+                &format!("unknown statement `{word}`; expected grid, let, layer, ignore, rule, for, if, connect, device, pex, pex_fill, pex_device, pex_tsv, pex_substrate, temperature, lvs, extraction, corner, stage or waive"),
             )),
         }
     }
@@ -1968,6 +1969,97 @@ impl<'a> Parser<'a> {
             length_nm,
             liner_nm,
             liner_k,
+        });
+        Ok(())
+    }
+
+    /// `pex_substrate ports [layers] backside grounded|floating profile
+    /// [(thickness, resistivity Ω·cm), ..]`, at most once: the substrate
+    /// network's silicon ([`super::SubstrateModel`]), every key required,
+    /// each layer's values positive.
+    fn pex_substrate(&mut self, span: (u32, u32)) -> R<()> {
+        if self.out.pex_models.substrate.is_some() {
+            return Err(self.err(span, "pex_substrate is stated twice"));
+        }
+        let (mut ports, mut grounded, mut layers) = (None, None, None);
+        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+            let (key, at) = self.ident("ports, backside or profile")?;
+            let fresh = match key.as_str() {
+                "ports" => ports.replace(self.layer_list()?).is_none(),
+                "backside" => {
+                    let (word, at) = self.ident("grounded or floating")?;
+                    let value = match word.as_str() {
+                        "grounded" => true,
+                        "floating" => false,
+                        _ => {
+                            return Err(self.err(
+                                at,
+                                &format!(
+                                    "unknown backside `{word}`; expected grounded or floating"
+                                ),
+                            ))
+                        }
+                    };
+                    grounded.replace(value).is_none()
+                }
+                "profile" => {
+                    let value = self.value()?;
+                    let Val::List(items, _) = &value else {
+                        return Err(self.err(
+                            value.span(),
+                            "expected a profile [(thickness, resistivity), ..]",
+                        ));
+                    };
+                    let mut rows = Vec::with_capacity(items.len());
+                    for item in items {
+                        let Val::Tuple(parts, span) = item else {
+                            return Err(self.err(
+                                item.span(),
+                                "expected a layer (thickness, resistivity in ohm·cm)",
+                            ));
+                        };
+                        let [thickness, resistivity] = &parts[..] else {
+                            return Err(self.err(
+                                *span,
+                                "a substrate layer is (thickness, resistivity in ohm·cm)",
+                            ));
+                        };
+                        let t = self.physical(thickness, Dim::Length, "thickness")?;
+                        let rho = self.physical(resistivity, Dim::Scalar, "resistivity")?;
+                        if !(t > 0.0 && t.is_finite() && rho > 0.0 && rho.is_finite()) {
+                            return Err(self.err(
+                                *span,
+                                "a substrate layer's thickness and resistivity are positive",
+                            ));
+                        }
+                        rows.push((t, rho));
+                    }
+                    if rows.is_empty() {
+                        return Err(self.err(value.span(), "a profile has at least one layer"));
+                    }
+                    layers.replace(rows).is_none()
+                }
+                _ => {
+                    return Err(self.err(
+                        at,
+                        &format!(
+                        "unknown pex_substrate key `{key}`; expected ports, backside or profile"
+                    ),
+                    ))
+                }
+            };
+            if !fresh {
+                return Err(self.err(at, &format!("`{key}` is given twice")));
+            }
+        }
+        let (Some(ports), Some(grounded), Some(layers)) = (ports, grounded, layers) else {
+            let t = self.peek();
+            return Err(self.err_tok(t, "pex_substrate states ports, backside and profile"));
+        };
+        self.out.pex_models.substrate = Some(super::SubstrateModel {
+            ports,
+            grounded,
+            layers,
         });
         Ok(())
     }
