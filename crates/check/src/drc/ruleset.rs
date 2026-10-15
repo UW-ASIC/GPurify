@@ -2589,9 +2589,42 @@ pub enum Rule {
     /// 5.8 Language Reference, Figures 1-17 to 1-19 and Example 1-18);
     /// `LEF58_SPACING ENDOFLINE ... ENDTOEND`; `TritonRoute` `FlexGC_eol.cpp`.
     ///
-    /// Limits: `ENCLOSECUT`, the `LEF58_SPACING ENDOFLINE` qualifiers
-    /// `MINLENGTH`, `MAXLENGTH`, `ENDPRLSPACING` and `WRONGDIRSPACING`, and
-    /// the `ENDTOEND` extensions are missing. An edge beside the line, behind
+    /// With `.., side_length: .., opposite_width: .., parallel_more: ..,
+    /// end_prl: .., wrong_dir: .., extension: .., enclose_cut: ..` (each
+    /// `none` or stated), the `LEF58_SPACING ENDOFLINE` qualifiers
+    /// ([`Eol58`]): an end is held only by its side edges' lengths
+    /// (`MINLENGTH`, `MAXLENGTH`); a facing edge only where the wire beyond
+    /// is narrower than `opposite_width` (`OPPOSITEWIDTH`); the parallel-edge
+    /// search shrinks by the end's length (`SUBTRACTEOLWIDTH`) and skips a
+    /// side shorter than its minimum (`PARALLELEDGE ... MINLENGTH`); a
+    /// wrong-direction end needs `wrong_dir`'s space in place of `limit`
+    /// (`WRONGDIRSPACING`); past that space and closer than `end_prl`'s, an
+    /// edge facing the end over a run of the end itself at most `end_prl`'s
+    /// run violates (`ENDPRLSPACING`); two ends facing each other are paired
+    /// where their spans widened by `extension` overlap (`ENDTOEND ...
+    /// EXTENSION`); and with `enclose_cut` a pair violates only beside a cut
+    /// close enough to the end ([`EncloseCut`]).
+    ///
+    /// Limits: `OTHERENDWIDTH` ("the rule only applies if the width of the
+    /// other wire is less than the otherEndWidth": whether "the rule" is the
+    /// end-to-end space or the whole rule, and what the other wire's width
+    /// is, the text leaves open, and `TritonRoute` parses it but never
+    /// checks it) and `EQUALRECTWIDTH` ("if the length of the EOL edge is
+    /// larger than the wire width": the text does not say which width a
+    /// wire has at an edge wider than it, and `TritonRoute` drops a rule
+    /// stating it) are missing. So are `ENDTOEND`'s `oneCutSpace
+    /// twoCutSpace` and wrong-direction extension, `WITHIN`'s
+    /// wrong-direction within, `EXACTWIDTH`, `SAMEMASK`, `EXCEPTEXACTWIDTH`,
+    /// `FILLCONCAVECORNER`, `WITHCUT`, `TOCONCAVECORNER`, `TONOTCHLENGTH`,
+    /// and `PARALLELEDGE`'s `PRL`, `SAMEMETAL`, `NONEOLCORNERONLY` and
+    /// `PARALLELSAMEMASK`: no public text defines them, and `TritonRoute`
+    /// parses them but never checks them. `TWOSIDES` is read as the LEF/DEF
+    /// 5.7 text says; `TritonRoute` reads `PARALLELEDGE`'s `TWOEDGES` flag in
+    /// its place (`io.cpp`). For two ends facing each other, LEF/DEF 5.7 pairs
+    /// them by "the parallel run length is greater than 0 between two EOL
+    /// edges, with eolWithin extension on the EOL edge being checked", as
+    /// this rule does; `TritonRoute` pairs them by their unwidened spans
+    /// without `EXTENSION`. Both are documented differences. An edge beside the line, behind
     /// the end's line, is not in the keep-out; the minimum spacing measures
     /// it, and LEF asks `eolWithin` to be under that spacing.
     EolWithinSpacing {
@@ -2610,6 +2643,9 @@ pub enum Rule {
         end_to_end: Option<Dbu>,
         /// The space an end of line needs, in grid units; positive.
         limit: Dbu,
+        /// The `LEF58_SPACING ENDOFLINE` qualifiers; [`Eol58::NONE`] for
+        /// LEF 5.8's rule.
+        lef58: Eol58,
     },
     /// Material of another shape inside the keep-out box of an end of line.
     ///
@@ -3097,6 +3133,111 @@ pub struct EolParallel {
     pub within: Dbu,
     /// Whether both sides of the line need a parallel edge.
     pub two_edges: bool,
+}
+
+/// The `LEF58_SPACING ENDOFLINE` qualifiers [`Rule::EolWithinSpacing`]
+/// reads. `side_length`, `opposite_width`, `subtract_eol_width`,
+/// `parallel_min_length` and `enclose_cut` are as the LEF/DEF 5.7 Language
+/// Reference (November 2009, the edition the ISPD 2018 contest posts) defines
+/// them, pp. 129-138 and Figures 1-50 to 1-56; `end_prl`, `wrong_dir`,
+/// `extension` and `ALLCUTS`, which no public text defines, are as
+/// `OpenROAD`'s `TritonRoute` checks them (`FlexGC_eol.cpp`). Each is `None`
+/// (or `false`) when the deck states none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Eol58 {
+    /// `MINLENGTH minLength [TWOSIDES]` or `MAXLENGTH maxLength`: "if the EOL
+    /// is more than maxLength along both sides, the rule does not apply";
+    /// "if the EOL length is less than minLength along both sides, the rule
+    /// does not apply", and with `TWOSIDES` "along any one side". An EOL's
+    /// sides are the edges meeting it at its two corners (Figure 1-55).
+    pub side_length: Option<SideLength>,
+    /// `OPPOSITEWIDTH oppositeWidth`: "the rule applies only if a wire beyond
+    /// the end of the line edge has a perpendicular span to the EOL edge less
+    /// than oppositeWidth", and "if part of the opposite wire width <
+    /// [oppositeWidth] ..., it is a violation" (Figure 1-50 e): a facing
+    /// edge is held only where its own figure's material, read straight out
+    /// from it away from the end, ends less than this far, over the stretch
+    /// it faces the end in, in grid units.
+    pub opposite_width: Option<Dbu>,
+    /// `PARALLELEDGE SUBTRACTEOLWIDTH`: "the parSpace value should be
+    /// subtracted by the width of the EOL edge to define the distance
+    /// required to search for a parallel neighbor edge" (Figure 1-51 d).
+    pub subtract_eol_width: bool,
+    /// `PARALLELEDGE ... MINLENGTH minLength`: "if the EOL side is <
+    /// minLength, the parallel edge does not matter" (Figure 1-54 b, Figure
+    /// 1-56 f): a parallel edge beside a side shorter than this is not
+    /// counted, in grid units.
+    pub parallel_min_length: Option<Dbu>,
+    /// `ENDPRLSPACING endPrlSpace PRL endPrl`: past the end's own space and
+    /// closer than `.0`, an edge whose run along the end itself (not
+    /// widened) is positive and at most `.1` violates too, in grid units.
+    pub end_prl: Option<(Dbu, Dbu)>,
+    /// `WRONGDIRSPACING wrongDirSpace`: an end lying along the layer's
+    /// preferred direction (the end of a wire run the wrong way) needs `.0`
+    /// in place of the rule's limit; `.1` is whether the preferred direction
+    /// is horizontal (`isWrongDir`).
+    pub wrong_dir: Option<(Dbu, bool)>,
+    /// `ENDTOEND ... EXTENSION extension`: two ends facing each other are
+    /// held to `end_to_end` where their spans, each widened by this on
+    /// either side, overlap (in place of the end's `within`), in grid units.
+    pub extension: Option<Dbu>,
+    /// `ENCLOSECUT [BELOW | ABOVE] encloseDist CUTSPACING cutToMetalSpace
+    /// [ALLCUTS]`.
+    pub enclose_cut: Option<EncloseCut>,
+}
+
+impl Eol58 {
+    /// No qualifier: LEF 5.8's `SPACING ENDOFLINE`.
+    pub const NONE: Self = Self {
+        side_length: None,
+        opposite_width: None,
+        subtract_eol_width: false,
+        parallel_min_length: None,
+        end_prl: None,
+        wrong_dir: None,
+        extension: None,
+        enclose_cut: None,
+    };
+}
+
+/// `MINLENGTH minLength [TWOSIDES]` or `MAXLENGTH maxLength` of
+/// [`Eol58::side_length`]: the edges before and after the end along its
+/// figure's ring must be at least (at most, with `maximum`) `length` long,
+/// either of them, or both with `two_sides`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SideLength {
+    /// The bound, in grid units; positive.
+    pub length: Dbu,
+    /// Whether the bound is a maximum (`MAXLENGTH`).
+    pub maximum: bool,
+    /// Whether both sides must meet it (`TWOSIDES`).
+    pub two_sides: bool,
+}
+
+/// `ENCLOSECUT [BELOW | ABOVE] encloseDist CUTSPACING cutToMetalSpace` of
+/// [`Eol58::enclose_cut`]: "the rule only applies if there is a cut below or
+/// above this metal that is less than encloseDist away from the EOL edge,
+/// and the cut-edge to metal-edge space beyond the EOL edge is less than
+/// cutToMetalSpace. If there is more than one cut ... only one cut needs to
+/// meet this rule" (LEF/DEF 5.7, p. 131, Figures 1-54 c and 1-56). An end and
+/// the edge it faces violate only when an edge of `cut`'s merged figures
+/// facing the same way as the end, its span meeting the end's, lies behind
+/// the end's line by 0 or more and less than `within`, and less than `space`
+/// from the facing edge (Euclidean, segment to segment, as `TritonRoute`'s
+/// `checkMetalEndOfLine_eol_hasEncloseCut` measures it). With `all`
+/// (`ALLCUTS`, a `TritonRoute` reading no public text defines) every such cut
+/// edge must, and at least one exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EncloseCut {
+    /// The cut layer, merged: `ABOVE`'s or `BELOW`'s, or both as a derived
+    /// `or`.
+    pub cut: LayerId,
+    /// `encloseDist`, in grid units; positive.
+    pub within: Dbu,
+    /// `cutToMetalSpace`, in grid units; positive.
+    pub space: Dbu,
+    /// `ALLCUTS`.
+    pub all: bool,
 }
 
 /// Which runs of short edges a [`Rule::MinStep`] rejects, after LEF
@@ -4622,6 +4763,44 @@ impl RuleSet {
                         None => None,
                         Some(_) => Some(length(spec, "end_to_end")?),
                     };
+                    let stated = |param| optional(spec, param).is_some();
+                    let side_length = if stated("side_length") {
+                        Some(SideLength {
+                            length: length(spec, "side_length")?,
+                            maximum: flag(spec, "side_length_maximum")?,
+                            two_sides: flag(spec, "side_length_two_sides")?,
+                        })
+                    } else {
+                        None
+                    };
+                    let end_prl = if stated("end_prl_space") {
+                        Some((length(spec, "end_prl_space")?, length(spec, "end_prl")?))
+                    } else {
+                        None
+                    };
+                    let wrong_dir = if stated("wrong_dir_space") {
+                        Some((
+                            length(spec, "wrong_dir_space")?,
+                            flag(spec, "wrong_dir_horizontal")?,
+                        ))
+                    } else {
+                        None
+                    };
+                    let extension = if stated("eol_extension") {
+                        Some(length(spec, "eol_extension")?)
+                    } else {
+                        None
+                    };
+                    let enclose_cut = match optional(spec, "enclose_cut_layer") {
+                        None => None,
+                        Some(ParamValue::Layer(cut)) => Some(EncloseCut {
+                            cut,
+                            within: length(spec, "enclose_cut_within")?,
+                            space: length(spec, "enclose_cut_space")?,
+                            all: flag(spec, "enclose_cut_all")?,
+                        }),
+                        Some(_) => return Err(wrong_type(spec, "enclose_cut_layer")),
+                    };
                     Rule::EolWithinSpacing {
                         layer,
                         eol_width,
@@ -4629,6 +4808,25 @@ impl RuleSet {
                         parallel,
                         end_to_end,
                         limit: length(spec, "limit")?,
+                        lef58: Eol58 {
+                            side_length,
+                            opposite_width: if stated("opposite_width") {
+                                Some(length(spec, "opposite_width")?)
+                            } else {
+                                None
+                            },
+                            subtract_eol_width: optional(spec, "par_subtract_eol_width")
+                                == Some(ParamValue::Flag(true)),
+                            parallel_min_length: if stated("par_min_length") {
+                                Some(length(spec, "par_min_length")?)
+                            } else {
+                                None
+                            },
+                            end_prl,
+                            wrong_dir,
+                            extension,
+                            enclose_cut,
+                        },
                     }
                 }
                 "two_width_spacing_table" => {
@@ -5438,12 +5636,13 @@ impl RuleSet {
                         parallel,
                         end_to_end,
                         limit,
+                        lef58,
                     } => facing::eol_within_spacing(
                         store,
                         id,
                         layer,
                         (eol_width, within, limit),
-                        (parallel, end_to_end),
+                        (parallel, end_to_end, lef58),
                         s,
                         out,
                     ),
@@ -5854,11 +6053,25 @@ impl Rule {
                 parallel,
                 end_to_end,
                 limit,
+                lef58,
                 ..
             } => length(eol_width)
                 .and(parallel.map_or(Ok(()), |parallel| length(parallel.space)))
                 .and(end_to_end.map_or(Ok(()), length))
-                .and(length(limit)),
+                .and(length(limit))
+                .and(lef58.side_length.map_or(Ok(()), |side| length(side.length)))
+                .and(lef58.opposite_width.map_or(Ok(()), length))
+                .and(lef58.parallel_min_length.map_or(Ok(()), length))
+                .and(
+                    lef58
+                        .end_prl
+                        .map_or(Ok(()), |(space, prl)| length(space).and(length(prl))),
+                )
+                .and(lef58.wrong_dir.map_or(Ok(()), |(space, _)| length(space)))
+                .and(lef58.extension.map_or(Ok(()), length))
+                .and(lef58.enclose_cut.map_or(Ok(()), |cut| {
+                    length(cut.within).and(length(cut.space))
+                })),
             Rule::EolKeepOut {
                 eol_width, forward, ..
             } => length(eol_width).and(length(forward)),
@@ -6100,7 +6313,6 @@ impl Rule {
             | Rule::MinStepAdjacent { layer, .. }
             | Rule::TipSpacingTable { layer, .. }
             | Rule::ForbiddenSpacing { layer, .. }
-            | Rule::EolWithinSpacing { layer, .. }
             | Rule::EolKeepOut { layer, .. }
             | Rule::KeepOutZone { layer, .. }
             | Rule::ProtrusionWidth { layer, .. }
@@ -6120,6 +6332,9 @@ impl Rule {
             | Rule::GlobalDensity {
                 layer, boundary, ..
             } => [Some(layer), boundary, None],
+            Rule::EolWithinSpacing { layer, lef58, .. } => {
+                [Some(layer), lef58.enclose_cut.map(|cut| cut.cut), None]
+            }
             Rule::MinEnclosure {
                 outer: a,
                 inner: b,

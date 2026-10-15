@@ -12,8 +12,8 @@
 //! stretch its two nearest offending edges face each other over.
 
 use super::spacing::{line_of, nearest, on_line, spacing_violation};
-use super::{centre, mid, owners_of, ring_segs, SortedRects, Verdict, REFUSED};
-use crate::drc::ruleset::{ClassTable, EolParallel, SpanTable};
+use super::{centre, merged, mid, owners_of, ring_segs, SortedRects, Verdict, REFUSED};
+use crate::drc::ruleset::{ClassTable, EncloseCut, Eol58, EolParallel, SpanTable};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::derive::merge_into;
@@ -44,6 +44,8 @@ pub(super) struct Edge {
     /// Whether both of its corners are convex (the material turns away from
     /// the space in front of the edge at each end): a line end's corners.
     pub(super) convex: bool,
+    /// The lengths of the edges meeting it at its low and its high end.
+    pub(super) sides: (i64, i64),
 }
 
 impl Edge {
@@ -82,6 +84,11 @@ pub(super) fn figure_edges(figures: &ValidatedLayer) -> Vec<Edge> {
                 let (outx, outy) = (xs[next].raw() - xs[i].raw(), ys[next].raw() - ys[i].raw());
                 i128::from(inx) * i128::from(outy) > i128::from(iny) * i128::from(outx)
             };
+            // The length of the edge from vertex `i` to the next.
+            let len = |i: usize| {
+                let j = (i + 1) % n;
+                (xs[j].raw() - xs[i].raw()).abs() + (ys[j].raw() - ys[i].raw()).abs()
+            };
             for (i, seg) in ring_segs(xs, ys).enumerate() {
                 let (vertical, pos, forward, lo, hi) = line_of(seg);
                 if hi > lo {
@@ -95,6 +102,13 @@ pub(super) fn figure_edges(figures: &ValidatedLayer) -> Vec<Edge> {
                         hi,
                         figure,
                         convex: convex(i) && convex((i + 1) % n),
+                        // The edge before meets this one at its start, the
+                        // low end when it travels up.
+                        sides: if forward {
+                            (len((i + n - 1) % n), len((i + 1) % n))
+                        } else {
+                            (len((i + 1) % n), len((i + n - 1) % n))
+                        },
                     });
                 }
             }
@@ -247,26 +261,68 @@ pub(crate) fn forbidden_spacing(
 /// `PARALLELEDGE`, `TWOEDGES` and the `LEF58` `ENDTOEND`): each end of line
 /// the rule applies to holds the facing edges of other figures in its
 /// widened keep-out to `limit`, or to `end_to_end` when the facing edge is an
-/// end of line too. `examined` counts the ends of line the rule applies to.
+/// end of line too, with the `LEF58_SPACING ENDOFLINE` qualifiers of
+/// `lef58` ([`Eol58`]). `examined` counts the ends of line the rule applies
+/// to.
 pub(crate) fn eol_within_spacing(
     store: &GeometryStore,
     rule: StrId,
     layer: LayerId,
     (eol_width, within, limit): (Dbu, Dbu, Dbu),
-    (parallel, end_to_end): (Option<EolParallel>, Option<Dbu>),
+    (parallel, end_to_end, lef58): (Option<EolParallel>, Option<Dbu>, Eol58),
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
+    let cut_edges = match lef58.enclose_cut {
+        None => Vec::new(),
+        Some(cut) => match merged(store, cut.cut, s) {
+            Some(cuts) => figure_edges(&cuts),
+            None => return REFUSED,
+        },
+    };
     let Some(owners) = merged_owners(store, layer, s) else {
         return REFUSED;
     };
     let edges = figure_edges(&s.layer_out);
     let is_end = |e: &Edge| e.convex && e.length() < eol_width.raw();
+    // MINLENGTH / MAXLENGTH: the edges beside the end.
+    let sides_hold = |e: &Edge| {
+        lef58.side_length.is_none_or(|side| {
+            let holds = |l: i64| {
+                if side.maximum {
+                    l <= side.length.raw()
+                } else {
+                    l >= side.length.raw()
+                }
+            };
+            let (a, b) = (holds(e.sides.0), holds(e.sides.1));
+            if side.two_sides {
+                a && b
+            } else {
+                a || b
+            }
+        })
+    };
+    // WRONGDIRSPACING: an end lying along the preferred direction.
+    let base = |end: &Edge| match lef58.wrong_dir {
+        Some((space, horizontal)) if end.vertical != horizontal => space.raw(),
+        _ => limit.raw(),
+    };
     let w = within.raw();
-    let reach = limit.raw().max(end_to_end.map_or(0, Dbu::raw));
+    let reach = [
+        Some(limit),
+        end_to_end,
+        lef58.wrong_dir.map(|(space, _)| space),
+        lef58.end_prl.map(|(space, _)| space),
+    ]
+    .into_iter()
+    .flatten()
+    .map(Dbu::raw)
+    .max()
+    .unwrap_or(0);
     let (mut hits, mut examined) = (Vec::new(), 0u64);
     for end in edges.iter().filter(|&e| is_end(e)) {
-        if !parallel.is_none_or(|p| beside(&edges, end, p, w)) {
+        if !parallel.is_none_or(|p| beside(&edges, end, p, w, lef58)) || !sides_hold(end) {
             continue;
         }
         examined += 1;
@@ -283,17 +339,42 @@ pub(crate) fn eol_within_spacing(
         let facing = edges[from..].iter().take_while(|f| {
             f.vertical == end.vertical && f.faces_up != end.faces_up && f.pos <= last
         });
+        let own = base(end);
         for f in facing {
-            let (lo, hi) = (f.lo.max(end.lo - w), f.hi.min(end.hi + w));
-            if f.figure == end.figure || hi <= lo {
+            if f.figure == end.figure {
                 continue;
             }
-            let need = match end_to_end {
-                Some(ends) if is_end(f) => ends.raw(),
-                _ => limit.raw(),
-            };
             let depth = (f.pos - end.pos).abs();
-            if depth < need {
+            let (lo, hi, need) = match lef58.end_prl {
+                // ENDPRLSPACING: past the end's own space, a run along the
+                // end itself, positive and at most `run`.
+                Some((space, run)) if depth >= own => {
+                    let (lo, hi) = (f.lo.max(end.lo), f.hi.min(end.hi));
+                    if hi <= lo || hi - lo > run.raw() {
+                        continue;
+                    }
+                    (lo, hi, space.raw())
+                }
+                _ => {
+                    let ends = end_to_end.filter(|_| is_end(f));
+                    // ENDTOEND EXTENSION: both spans widened by it.
+                    let widen = match (ends, lef58.extension) {
+                        (Some(_), Some(extension)) => 2 * extension.raw(),
+                        _ => w,
+                    };
+                    let (lo, hi) = (f.lo.max(end.lo - widen), f.hi.min(end.hi + widen));
+                    if hi <= lo {
+                        continue;
+                    }
+                    (lo, hi, ends.map_or(own, Dbu::raw))
+                }
+            };
+            if depth < need
+                && lef58
+                    .opposite_width
+                    .is_none_or(|width| narrow_beyond(&edges, end, f, (lo, hi), width.raw()))
+                && encloses_cut(&cut_edges, end, f, lef58.enclose_cut)
+            {
                 hits.push(hit(end, f, depth, (lo, hi), need));
             }
         }
@@ -302,14 +383,89 @@ pub(crate) fn eol_within_spacing(
     (Outcome::Ran, examined)
 }
 
+/// `OPPOSITEWIDTH` ([`Eol58::opposite_width`]): whether the wire beyond the
+/// end, whose facing edge is `f`, is narrower than `width` over part of the
+/// stretch `lo..hi` it faces the end over: an edge facing back the way `end`
+/// faces, less than `width` past `f` into its material, overlapping the
+/// stretch by a positive length. The first such edge past `f` bounds `f`'s
+/// material, so any one within `width` does.
+fn narrow_beyond(edges: &[Edge], end: &Edge, f: &Edge, (lo, hi): (i64, i64), width: i64) -> bool {
+    // `f` faces back at the end, so its material lies further out.
+    let (from, to) = if end.faces_up {
+        (f.pos + 1, f.pos + width - 1)
+    } else {
+        (f.pos - width + 1, f.pos - 1)
+    };
+    let first = edges
+        .partition_point(|g| (g.vertical, g.faces_up, g.pos) < (end.vertical, end.faces_up, from));
+    edges[first..]
+        .iter()
+        .take_while(|g| g.vertical == end.vertical && g.faces_up == end.faces_up && g.pos <= to)
+        .any(|g| g.lo.max(lo) < g.hi.min(hi))
+}
+
+/// `ENCLOSECUT` ([`EncloseCut`]): whether a cut edge of `cuts` (the cut
+/// layer's merged figure edges, sorted) facing the same way as `end`, its
+/// line on `end`'s or behind it into the material by less than `within`, and
+/// its span touching
+/// `end`'s, lies less than `space` from the facing edge `f`, segment to
+/// segment; with `all`, every such cut edge, and at least one. `true` when
+/// the rule has no `ENCLOSECUT`.
+fn encloses_cut(cuts: &[Edge], end: &Edge, f: &Edge, enclose: Option<EncloseCut>) -> bool {
+    let Some(enclose) = enclose else {
+        return true;
+    };
+    let d = enclose.within.raw();
+    // Behind the end is where its material lies: below a line facing up.
+    let (from, to) = if end.faces_up {
+        (end.pos - d + 1, end.pos)
+    } else {
+        (end.pos, end.pos + d - 1)
+    };
+    let first = cuts
+        .partition_point(|c| (c.vertical, c.faces_up, c.pos) < (end.vertical, end.faces_up, from));
+    let space2 = i128::from(enclose.space.raw()).pow(2);
+    let mut close = cuts[first..]
+        .iter()
+        .take_while(|c| c.vertical == end.vertical && c.faces_up == end.faces_up && c.pos <= to)
+        .filter(|c| c.lo <= end.hi && end.lo <= c.hi)
+        .map(|c| {
+            let across = i128::from(c.pos - f.pos);
+            let along = i128::from((c.lo.max(f.lo) - c.hi.min(f.hi)).max(0));
+            across * across + along * along < space2
+        });
+    if enclose.all {
+        let mut any = false;
+        close.all(|near| {
+            any = true;
+            near
+        }) && any
+    } else {
+        close.any(|near| near)
+    }
+}
+
 /// Whether a parallel edge runs beside the line that ends at `end` (LEF
 /// `PARALLELEDGE`): at its low corner an edge facing up toward the line's
 /// side, at its high corner one facing down, its line less than
 /// `parallel.space` out from the side's, its span overlapping the stretch
 /// from `parallel.within` behind the end's line to `within` past it. Both
-/// corners with `two_edges`, either without.
-fn beside(edges: &[Edge], end: &Edge, parallel: EolParallel, within: i64) -> bool {
-    let (space, back) = (parallel.space.raw(), parallel.within.raw());
+/// corners with `two_edges`, either without. With `lef58`'s
+/// `subtract_eol_width` the space shrinks by the end's length, and with its
+/// `parallel_min_length` a corner whose side is shorter has no parallel edge.
+fn beside(edges: &[Edge], end: &Edge, parallel: EolParallel, within: i64, lef58: Eol58) -> bool {
+    let space = parallel.space.raw()
+        - if lef58.subtract_eol_width {
+            end.length()
+        } else {
+            0
+        };
+    let back = parallel.within.raw();
+    let counts = |side: i64| {
+        lef58
+            .parallel_min_length
+            .is_none_or(|min| side >= min.raw())
+    };
     // The stretch along the line's sides, across the end's line.
     let (wlo, whi) = if end.faces_up {
         (end.pos - back, end.pos + within)
@@ -325,8 +481,8 @@ fn beside(edges: &[Edge], end: &Edge, parallel: EolParallel, within: i64) -> boo
             .take_while(|f| f.vertical != end.vertical && f.faces_up == faces_up && f.pos <= to)
             .any(|f| f.lo.max(wlo) < f.hi.min(whi))
     };
-    let low = side(true, end.lo - space + 1, end.lo);
-    let high = side(false, end.hi, end.hi + space - 1);
+    let low = counts(end.sides.0) && side(true, end.lo - space + 1, end.lo);
+    let high = counts(end.sides.1) && side(false, end.hi, end.hi + space - 1);
     if parallel.two_edges {
         low && high
     } else {

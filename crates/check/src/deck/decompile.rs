@@ -802,6 +802,7 @@ impl CompiledDeck {
                 parallel,
                 end_to_end,
                 limit,
+                lef58,
             } => {
                 let mut row = one(layer)
                     .length("eol_width", eol_width)
@@ -814,6 +815,42 @@ impl CompiledDeck {
                 }
                 if let Some(space) = end_to_end {
                     row = row.length("end_to_end", space);
+                }
+                if let Some(side) = lef58.side_length {
+                    row = row
+                        .length("side_length", side.length)
+                        .value("side_length_maximum", ParamValue::Flag(side.maximum))
+                        .value("side_length_two_sides", ParamValue::Flag(side.two_sides));
+                }
+                if let Some(width) = lef58.opposite_width {
+                    row = row.length("opposite_width", width);
+                }
+                if lef58.subtract_eol_width || lef58.parallel_min_length.is_some() {
+                    row = row.value(
+                        "par_subtract_eol_width",
+                        ParamValue::Flag(lef58.subtract_eol_width),
+                    );
+                    if let Some(min) = lef58.parallel_min_length {
+                        row = row.length("par_min_length", min);
+                    }
+                }
+                if let Some((space, prl)) = lef58.end_prl {
+                    row = row.length("end_prl_space", space).length("end_prl", prl);
+                }
+                if let Some((space, horizontal)) = lef58.wrong_dir {
+                    row = row
+                        .length("wrong_dir_space", space)
+                        .value("wrong_dir_horizontal", ParamValue::Flag(horizontal));
+                }
+                if let Some(extension) = lef58.extension {
+                    row = row.length("eol_extension", extension);
+                }
+                if let Some(cut) = lef58.enclose_cut {
+                    row = row
+                        .value("enclose_cut_layer", ParamValue::Layer(cut.cut))
+                        .length("enclose_cut_within", cut.within)
+                        .length("enclose_cut_space", cut.space)
+                        .value("enclose_cut_all", ParamValue::Flag(cut.all));
                 }
                 row.length("limit", limit)
             }

@@ -80,6 +80,7 @@ Tags used in the `sources` column, grouped by part.
 | Tag | Source | Version | Access | URL |
 |---|---|---|---|---|
 | `LEF` | Cadence, *LEF/DEF 5.8 Language Reference*, incl. App. C (antenna) | 5.8, May 2017 | Public third-party mirror of a Cadence-copyrighted document; Si2 distributes the parsers (Apache-2.0) after free registration. Newer references with the full LEF58 set are customer-only. | https://coriolis.lip6.fr/doc/lefdef/lefdefref/lefdefref.pdf ; https://si2.org/lef-def-downloads/ |
+| `LEF57` | Cadence, *LEF/DEF Language Reference, Product Version 5.7*, November 2009, posted by the ISPD 2018 and 2019 contest organisers; defines LEF58_ properties the 5.8 text omits (LEF58_SPACING ENDOFLINE, LEF58_MINSTEP, LEF58_EOLEXTENSIONSPACING, LEF58_SPACINGTABLE cut, LEF58_ENCLOSURE, LEF58_MINIMUMCUT AREA) | 5.7, Nov 2009 | Public posting of a Cadence-copyrighted document (`docs/research/blocked-rows.md`, [LEF57]) | https://www.ispd.cc/contests/18/lefdefref.pdf |
 | `LEF58_*`, `odb` | OpenROAD OpenDB `lefin`: 32 LEF58 properties and all their sub-keywords | master `8a05d8549b`, 2026-10-10 | Open (BSD-3) | https://github.com/The-OpenROAD-Project/OpenROAD/tree/master/src/odb/src/lefin |
 | `drt` | OpenROAD TritonRoute `frConstraintTypeEnum` / FlexGC checks | same | Open | https://github.com/The-OpenROAD-Project/OpenROAD/tree/master/src/drt/src/gc |
 | `ISPD19` | ISPD 2019 detailed-routing contest rules (with worked examples) | 2019 | Open | http://www.ispd.cc/contests/19/Introduction_of_ISPD19_Contest_Problem.pdf |

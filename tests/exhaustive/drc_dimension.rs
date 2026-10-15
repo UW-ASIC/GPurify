@@ -67,6 +67,7 @@ pub fn fixtures(depth: Depth) -> Vec<Fixture> {
         min_spacing_diff(depth),
         eol_spacing(depth),
         eol_within_spacing(depth),
+        eol58(depth),
         eol_keep_out(depth),
         prl_spacing(depth),
         corner_to_corner(depth),
@@ -2345,6 +2346,290 @@ fn eol_within_spacing(depth: Depth) -> Vec<Fixture> {
          end_to_end: none) >= 1200nm",
         &["e"],
     ));
+    out
+}
+
+/// Example 1-18's rule with the `LEF58_SPACING ENDOFLINE` qualifiers: each
+/// of `stated` (a deck parameter and its value), the rest `none`; `via`
+/// declared for `enclose_cut`.
+fn lef58_eol(stated: &[(&str, &str)]) -> String {
+    let mut params = String::new();
+    for name in [
+        "parallel",
+        "end_to_end",
+        "side_length",
+        "opposite_width",
+        "parallel_more",
+        "end_prl",
+        "wrong_dir",
+        "extension",
+        "enclose_cut",
+    ] {
+        let value = stated
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map_or("none", |(_, v)| v);
+        params.push_str(&format!(", {name}: {value}"));
+    }
+    format!(
+        "grid 1nm\nlayer met1 = gds(68, 20)\nlayer via = gds(68, 44)\n\
+         rule e eol_space(met1; eol_width: 1300nm, within: 600nm{params}) >= 1200nm\n"
+    )
+}
+
+/// `eol_space(met1; eol_width: 1300nm, within: 600nm, .., side_length: ..,
+/// opposite_width: .., parallel_more: .., end_prl: .., wrong_dir: ..,
+/// extension: .., enclose_cut: ..) >= 1200nm` (`eol_within_spacing` with
+/// the `LEF58_SPACING ENDOFLINE` qualifiers, DRC-029). The line is a 1000
+/// wide line ending at y = 0 and the probe a bar 1000 above it, inside the
+/// keep-out, so every case that applies the rule finds 1000.
+///
+/// Oracle: the definitions, shapes by construction. LEF/DEF 5.7 (ISPD 2018
+/// posting) pp. 129-138:
+/// - `MAXLENGTH 3um`: "if the EOL is more than maxLength along both sides,
+///   the rule does not apply": a straight line, its sides swept around 3000;
+/// - `MINLENGTH 3um [TWOSIDES]`: "if the EOL length is less than minLength
+///   along both sides, the rule does not apply", with `TWOSIDES` along any
+///   one: a line whose right side turns after a length swept around 3000,
+///   its left side 5000;
+/// - `OPPOSITEWIDTH 800nm`: the bar's thickness swept around 800, and a bar
+///   only partly thin over the keep-out (Figure 1-50 e, a violation);
+/// - `SUBTRACTEOLWIDTH`: `PARALLELEDGE 2.1 WITHIN 0.5` searches 2100 - 1000
+///   = 1100 out: a neighbour's distance swept around 1100;
+/// - `PARALLELEDGE ... MINLENGTH 3um`: the parallel edge beside a side
+///   shorter than 3000 is ignored: the line's left side, where the
+///   neighbour is, swept around 3000;
+/// - `ENCLOSECUT BELOW 0.6 CUTSPACING ..`: "a cut ... less than encloseDist
+///   away from the EOL edge, and the cut-edge to metal-edge space beyond
+///   the EOL edge is less than cutToMetalSpace": the cut's enclosure swept
+///   around 600, then, with the cut 100 in and a 1200 space, the bar's depth
+///   swept around 1100, and no cut.
+///
+/// `OpenROAD`'s `TritonRoute` (`FlexGC_eol.cpp`) is the reading for the rest:
+/// `WRONGDIRSPACING 1.5` on a horizontal layer holds this end (horizontal,
+/// so a vertical wire's) to 1500, the depth swept, and on a vertical layer
+/// keeps 1200; `ENDPRLSPACING 1.6 PRL 0.3` flags a block 1400 out whose run
+/// along the end itself is swept around 300, and one at a run of 200 whose
+/// depth is swept around 1600; `ENDTOEND 1.4 EXTENSION 0.1` pairs two ends
+/// 1300 apart only while their spans widened by 100 overlap, the second
+/// line's offset swept around 1200; `ALLCUTS` needs every cut in the band
+/// close to the bar, so of two cuts 1100 and 1500 from it one is enough only
+/// without it. Every case is placed under all eight symmetries, the
+/// wrong-direction ones under the four that keep the axes.
+fn eol58(depth: Depth) -> Vec<Fixture> {
+    let (mut cases, mut axis) = (Vec::new(), Vec::new());
+    let mut case = |shape: String, deck: &str, layout: Layout, findings: Vec<Finding>| {
+        cases.push(fixture(
+            &format!("eol58/{shape}"),
+            &["DRC-029"],
+            deck,
+            layout,
+            vec![("e", findings)],
+        ));
+    };
+    let bar_above = [-3000, 1000, 4000, 2000];
+    let found = |hit: bool| {
+        if hit {
+            vec![pin(Finding::length(1000), 1000, 1000)]
+        } else {
+            Vec::new()
+        }
+    };
+    let max_length = lef58_eol(&[(
+        "side_length",
+        "(length: 3um, maximum: true, two_sides: false)",
+    )]);
+    for s in sweep(depth, 3000) {
+        case(
+            format!("max_length/{}", side(s, 3000)),
+            &max_length,
+            met1(&[[0, -s, 1000, 0], bar_above]),
+            found(s <= 3000),
+        );
+    }
+    for two_sides in [false, true] {
+        let deck = lef58_eol(&[(
+            "side_length",
+            &format!("(length: 3um, maximum: false, two_sides: {two_sides})"),
+        )]);
+        for r in sweep(depth, 3000) {
+            case(
+                format!("min_length/two_sides_{two_sides}/{}", side(r, 3000)),
+                &deck,
+                met1(&[[0, -r, 1000, 0], [0, -6000, 2000, -r], bar_above]),
+                found(!two_sides || r >= 3000),
+            );
+        }
+    }
+    let opposite = lef58_eol(&[("opposite_width", "800nm")]);
+    for t in sweep(depth, 800) {
+        case(
+            format!("opposite_width/{}", side(t, 800)),
+            &opposite,
+            met1(&[LINE, [-3000, 1000, 4000, 1000 + t]]),
+            found(t < 800),
+        );
+    }
+    case(
+        "opposite_width/partly_thin".into(),
+        &opposite,
+        met1(&[LINE, [-3000, 1000, 500, 1500], [500, 1000, 4000, 3000]]),
+        found(true),
+    );
+    let subtract = lef58_eol(&[
+        (
+            "parallel",
+            "(space: 2100nm, within: 500nm, two_edges: false)",
+        ),
+        (
+            "parallel_more",
+            "(subtract_eol_width: true, min_length: none)",
+        ),
+    ]);
+    for p in sweep(depth, 1100) {
+        case(
+            format!("subtract_eol_width/{}", side(p, 1100)),
+            &subtract,
+            met1(&[LINE, bar_above, [-p - 2000, -5000, -p, 0]]),
+            found(p < 1100),
+        );
+    }
+    let side_min = lef58_eol(&[
+        (
+            "parallel",
+            "(space: 1100nm, within: 500nm, two_edges: false)",
+        ),
+        (
+            "parallel_more",
+            "(subtract_eol_width: false, min_length: 3um)",
+        ),
+    ]);
+    for l in sweep(depth, 3000) {
+        case(
+            format!("parallel_min_length/{}", side(l, 3000)),
+            &side_min,
+            met1(&[
+                [0, -l, 1000, 0],
+                [-400, -6000, 1000, -l],
+                bar_above,
+                [-2500, -2000, -500, 0],
+            ]),
+            found(l >= 3000),
+        );
+    }
+    let cut = |within: i64, space: i64| {
+        lef58_eol(&[(
+            "enclose_cut",
+            &format!("(cut: via, within: {within}nm, space: {space}nm, all_cuts: false)"),
+        )])
+    };
+    let enclosed = cut(600, 2000);
+    for c in sweep(depth, 600) {
+        case(
+            format!("enclose_cut/within/{}", side(c, 600)),
+            &enclosed,
+            met1(&[LINE, bar_above]).rect("via", 200, -c - 400, 800, -c),
+            found(c < 600),
+        );
+    }
+    let spaced = cut(600, 1200);
+    for g in sweep(depth, 1100) {
+        case(
+            format!("enclose_cut/space/{}", side(g, 1100)),
+            &spaced,
+            met1(&[LINE, [-3000, g, 4000, g + 1000]]).rect("via", 200, -500, 800, -100),
+            if g < 1100 {
+                vec![pin(Finding::length(g), 1000, g)]
+            } else {
+                Vec::new()
+            },
+        );
+    }
+    case(
+        "enclose_cut/no_cut".into(),
+        &enclosed,
+        met1(&[LINE, bar_above]),
+        Vec::new(),
+    );
+    // Two cuts in the band, 1100 and 1500 from the bar: one is enough, but
+    // not with ALLCUTS.
+    for all in [false, true] {
+        case(
+            format!("enclose_cut/all_cuts_{all}"),
+            &lef58_eol(&[(
+                "enclose_cut",
+                &format!("(cut: via, within: 600nm, space: 1200nm, all_cuts: {all})"),
+            )]),
+            met1(&[LINE, bar_above])
+                .rect("via", 200, -500, 450, -100)
+                .rect("via", 550, -900, 800, -500),
+            found(!all),
+        );
+    }
+    for horizontal in [true, false] {
+        let deck = lef58_eol(&[(
+            "wrong_dir",
+            &format!("(space: 1500nm, horizontal: {horizontal})"),
+        )]);
+        for g in sweep(depth, 1500) {
+            let need = if horizontal { 1500 } else { 1200 };
+            // A quarter turn swaps the layer's directions: axis symmetries only.
+            axis.push(fixture(
+                &format!("eol58/wrong_dir/horizontal_{horizontal}/{}", side(g, 1500)),
+                &["DRC-029"],
+                &deck,
+                met1(&[LINE, [-3000, g, 4000, g + 1000]]),
+                vec![(
+                    "e",
+                    if g < need {
+                        vec![pin(Finding::length(g), 1000, g)]
+                    } else {
+                        Vec::new()
+                    },
+                )],
+            ));
+        }
+    }
+    let end_prl = lef58_eol(&[("end_prl", "(space: 1600nm, prl: 300nm)")]);
+    for p in sweep(depth, 300) {
+        case(
+            format!("end_prl/run/{}", side(p, 300)),
+            &end_prl,
+            met1(&[LINE, [1000 - p, 1400, 3000, 2400]]),
+            if p <= 300 {
+                vec![pin(Finding::length(1400), 2000 - p, 1400)]
+            } else {
+                Vec::new()
+            },
+        );
+    }
+    for d in sweep(depth, 1600) {
+        case(
+            format!("end_prl/depth/{}", side(d, 1600)),
+            &end_prl,
+            met1(&[LINE, [800, d, 3000, d + 1000]]),
+            if d < 1600 {
+                vec![pin(Finding::length(d), 1800, d)]
+            } else {
+                Vec::new()
+            },
+        );
+    }
+    let extension = lef58_eol(&[("end_to_end", "1400nm"), ("extension", "100nm")]);
+    for x in sweep(depth, 1200) {
+        case(
+            format!("extension/{}", side(x, 1200)),
+            &extension,
+            met1(&[LINE, [x, 1300, x + 1000, 6300]]),
+            if x < 1200 {
+                vec![Finding::length(1300)]
+            } else {
+                Vec::new()
+            },
+        );
+    }
+    let mut out = every_placement(cases);
+    out.extend(every_axis_placement(&axis));
     out
 }
 

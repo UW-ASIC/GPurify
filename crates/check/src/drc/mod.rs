@@ -17,7 +17,7 @@ pub mod rules;
 pub mod ruleset;
 
 pub use ruleset::{
-    CutClassTable, ExtraCut, Rule, RuleSet, SpacingQuery, StepKind, StepNeighbour, WireBand,
+    CutClassTable, Eol58, ExtraCut, Rule, RuleSet, SpacingQuery, StepKind, StepNeighbour, WireBand,
 };
 
 use gpurify_geom::connectivity::ComponentLabel;
