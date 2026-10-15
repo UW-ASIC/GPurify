@@ -58,6 +58,10 @@ pub(crate) enum Dim {
     AngleList,
     /// `["model", ..]`, device model names; one engine param per element.
     Models,
+    /// `["name", ..]`, quoted names that are not device models (net types,
+    /// type sets, `"!"`); one engine param per element, read as
+    /// [`Dim::Models`] is but never looked up among the `device` statements.
+    Names,
     /// `(name: value, ..)`, a nested set of params.
     Group(&'static [Param]),
     /// `same` or `different`; `same` is the engine flag.
@@ -1646,10 +1650,10 @@ pub(crate) const KINDS: &[Kind] = &[
         &[],
         false,
         &[
-            opt("net", "net", Dim::Models),
-            opt("path", "path", Dim::Models),
-            opt("break", "break", Dim::Models),
-            opt("exclude", "exclude", Dim::Models),
+            opt("net", "net", Dim::Names),
+            opt("path", "path", Dim::Names),
+            opt("break", "break", Dim::Names),
+            opt("exclude", "exclude", Dim::Names),
         ],
     ),
     erc(

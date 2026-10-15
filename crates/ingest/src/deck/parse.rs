@@ -2739,19 +2739,24 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(());
             }
-            Dim::Models => {
+            Dim::Models | Dim::Names => {
+                let (what, one) = if param.dim == Dim::Models {
+                    ("model", "a model name in quotes")
+                } else {
+                    ("name", "a name in quotes")
+                };
                 let Val::List(items, _) = value else {
-                    return Err(self.wrong(value, "a list of model names", label));
+                    return Err(self.wrong(value, dim_name(param.dim), label));
                 };
                 if items.is_empty() {
                     return Err(self.err(
                         value.span(),
-                        &format!("`{label}` needs at least one model; write none for no models"),
+                        &format!("`{label}` needs at least one {what}; write none for no {what}s"),
                     ));
                 }
                 for item in items {
                     let Val::Str(model, _) = item else {
-                        return Err(self.wrong(item, "a model name in quotes", label));
+                        return Err(self.wrong(item, one, label));
                     };
                     out.push((engine, ParamSource::Model(model.clone())));
                 }
@@ -3397,6 +3402,7 @@ fn dim_name(dim: Dim) -> &'static str {
         Dim::LengthPair(_) => "a pair of lengths",
         Dim::AngleList => "a list of angles",
         Dim::Models => "a list of model names",
+        Dim::Names => "a list of names",
         Dim::Group(_) => "named arguments",
         Dim::Nets => "same or different",
         Dim::LengthList => "a list of lengths",

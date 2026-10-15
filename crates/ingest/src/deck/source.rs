@@ -7,7 +7,7 @@
 //! ids, and refuses what contradicts itself, so a source built by anyone
 //! lowers to a deck the engines can trust as one parsed from text.
 
-use super::kinds::EDGE_KINDS;
+use super::kinds::{Dim, EDGE_KINDS, KINDS};
 use super::{build_lvs, LvsSrc};
 use super::{
     Connectivity, Deck, DeckError, DerivedOp, DeviceKind, DeviceRecognition, DeviceValue,
@@ -115,7 +115,9 @@ pub enum ParamSource {
     Value(ParamValue),
     /// A layer, by name.
     Layer(String),
-    /// A device model, by name; some `device` statement declares it.
+    /// A quoted name: a device model, which some `device` statement
+    /// declares, or, for a `Dim::Names` param, a name that is not a model
+    /// (`net_type`'s net types).
     Model(String),
 }
 
@@ -287,10 +289,18 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
     layers.ignored.clone_from(&doc.ignored);
     layers.ignored.sort_unstable();
     for rule in &doc.rules {
-        for (_, stated) in &rule.params {
+        for (name, stated) in &rule.params {
             // A misspelt model would match no device and silently check nothing.
+            // A `Dim::Names` param (`net_type`'s net types) names no model.
+            let names_models = || {
+                !KINDS
+                    .iter()
+                    .filter(|kind| kind.engine == rule.kind)
+                    .flat_map(|kind| kind.params)
+                    .any(|param| param.engine == *name && param.dim == Dim::Names)
+            };
             if let ParamSource::Model(model) = stated {
-                if !doc.devices.iter().any(|device| device.model == *model) {
+                if names_models() && !doc.devices.iter().any(|device| device.model == *model) {
                     return malformed(format!(
                         "rule {}: model \"{model}\" is not declared by any device statement",
                         rule.id

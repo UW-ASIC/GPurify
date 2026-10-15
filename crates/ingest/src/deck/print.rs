@@ -884,7 +884,7 @@ impl Printer<'_> {
             }
             if !matches!(
                 param.dim,
-                Dim::AngleList | Dim::Models | Dim::LengthList | Dim::LengthRows
+                Dim::AngleList | Dim::Models | Dim::Names | Dim::LengthList | Dim::LengthRows
             ) {
                 return Err(missing());
             }
@@ -952,7 +952,7 @@ impl Printer<'_> {
                 ParamSource::Layer(name) => Ok(name.clone()),
                 _ => Err(wrong()),
             },
-            Dim::Models => {
+            Dim::Models | Dim::Names => {
                 if values.is_empty() {
                     return Ok(if param.none {
                         "none".to_owned()
@@ -1078,6 +1078,7 @@ fn kind_of(rule: &RuleSource) -> Result<&'static Kind, PrintError> {
                             param.dim,
                             Dim::AngleList
                                 | Dim::Models
+                                | Dim::Names
                                 | Dim::LengthList
                                 | Dim::LengthRows
                                 | Dim::Group(_)
