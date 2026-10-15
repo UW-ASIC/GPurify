@@ -457,3 +457,39 @@ fn a_pins_antenna_statements_read_as_the_reference_states_them() {
     .expect_err("a CAR names its layer");
     assert!(refused.message.contains("LAYER"), "{refused}");
 }
+
+/// Oracle: GDSII stream format, the record header: a record's length is a
+/// 16-bit byte count, its 4-byte header included, and a `BOUNDARY`'s `XY`
+/// repeats its first point, so an `XY` of n vertices is 8 * (n + 1) + 4
+/// <= 65535 bytes: 8190 vertices are written and read back, 8191 are
+/// refused. Breaks if the limit counts the vertices without the closing
+/// point: 8191 then panicked writing a 65540-byte record.
+#[test]
+fn a_polygon_filling_one_xy_record_is_written_and_one_vertex_more_is_refused() {
+    let mut strings = StrTable::default();
+    let grid = gpurify_geom::Grid::new(1000).expect("a grid");
+    let deck = crate::deck::parse_deck("layer M1 = gds(1, 0)\n", grid, &mut strings)
+        .expect("the deck parses");
+    let polygon = |vertices: i64| FlatShape {
+        shape: Shape {
+            layer: "M1".into(),
+            ring: (0..vertices).map(|k| (k, k % 2)).collect(),
+        },
+        net: None,
+        origin: Origin::Route,
+    };
+    let write = |shape: FlatShape| {
+        to_gds(
+            &[shape],
+            1000,
+            "top",
+            &deck.layers,
+            &deck.connectivity,
+            &strings,
+        )
+    };
+    let bytes = write(polygon(8190)).expect("8190 vertices fill one XY record");
+    crate::layout::gds::Library::parse(&bytes, &mut StrTable::default())
+        .expect("the written stream reads back");
+    assert!(write(polygon(8191)).is_err());
+}

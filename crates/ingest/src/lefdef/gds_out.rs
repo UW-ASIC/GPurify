@@ -25,7 +25,7 @@ type Pair = (u16, u16);
 /// # Errors
 ///
 /// A LEF layer the deck does not define as a drawn layer; a net shape on
-/// a conductor with no label layer; a polygon of more than 8191 vertices;
+/// a conductor with no label layer; a polygon of more than 8190 vertices;
 /// a coordinate past GDSII's 32-bit range.
 pub fn to_gds(
     shapes: &[FlatShape],
@@ -80,7 +80,9 @@ pub fn to_gds(
         };
         // ponytail: a linear lookup per shape; a design's LEF has tens of layers.
         let (_, (layer, datatype), label) = lookup[at];
-        if flat.shape.ring.len() > 8191 {
+        // An `XY` record is at most 65535 bytes, its 4-byte header included,
+        // and repeats the first point: 8190 vertices fill it.
+        if flat.shape.ring.len() > 8190 {
             return Err(err(format!(
                 "a polygon of {} vertices on {name} is more than one GDSII XY record holds",
                 flat.shape.ring.len()
