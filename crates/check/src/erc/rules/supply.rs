@@ -1432,3 +1432,239 @@ pub fn check_floating_supply(
         record_run(runs, out, before, rule, Outcome::Ran, examined);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{furthest_from_taps, isqrt_ceil, point_in_region, Cell, TapGrid};
+    use gpurify_geom::ops::{point_seg_dist2, Point, Seg};
+    use gpurify_geom::{Bbox, Dbu, DbuArea};
+
+    fn pt(x: i64, y: i64) -> Point {
+        Point {
+            x: Dbu::new_unchecked(x),
+            y: Dbu::new_unchecked(y),
+        }
+    }
+
+    fn ring(points: &[(i64, i64)]) -> (Vec<Dbu>, Vec<Dbu>) {
+        points
+            .iter()
+            .map(|&(x, y)| (Dbu::new_unchecked(x), Dbu::new_unchecked(y)))
+            .unzip()
+    }
+
+    /// A xorshift draw in `lo ..= hi`.
+    fn draws(seed: u64) -> impl FnMut(i64, i64) -> i64 {
+        let mut state = seed;
+        move |lo, hi| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let span = u64::try_from(hi - lo + 1).expect("a non-empty range");
+            lo + i64::try_from(state % span).expect("a draw below the span fits an i64")
+        }
+    }
+
+    /// The nearest tap by an exhaustive scan.
+    fn brute_nearest(taps: &[Seg], p: Point) -> DbuArea {
+        taps.iter()
+            .map(|&s| point_seg_dist2(p, s))
+            .min()
+            .expect("a non-empty column")
+    }
+
+    /// Random horizontal, vertical and sloped tap edges over a `span` square.
+    fn random_taps(draw: &mut impl FnMut(i64, i64) -> i64, count: usize, span: i64) -> Vec<Seg> {
+        (0..count)
+            .map(|k| {
+                let (x, y) = (draw(-span, span), draw(-span, span));
+                let len = draw(0, span / 4 + 1);
+                let b = match k % 3 {
+                    0 => pt(x + len, y),
+                    1 => pt(x, y - len),
+                    _ => pt(x + len, y + draw(-len, len)),
+                };
+                Seg { a: pt(x, y), b }
+            })
+            .collect()
+    }
+
+    /// The ring search finds the nearest tap edge exactly, from inside the
+    /// grid and far outside it, over grids of one bucket and of many (more
+    /// than `BUCKET_TARGET` edges a bucket), and names a filed edge at that
+    /// distance; each edge is filed once per cell its box covers.
+    ///
+    /// Oracle: differential against an exhaustive scan of every tap edge.
+    #[test]
+    fn the_tap_grid_ring_search_agrees_with_an_exhaustive_scan() {
+        let mut draw = draws(0x9E37_79B9_7F4A_7C15);
+        for count in [1usize, 2, 5, 17, 60, 400] {
+            for span in [3i64, 50, 2000] {
+                let taps = random_taps(&mut draw, count, span);
+                let mut grid = TapGrid::default();
+                TapGrid::build_into(&taps, &mut grid);
+                let filed: usize = taps
+                    .iter()
+                    .map(|&s| {
+                        let (x0, y0, x1, y1) = grid.cells_of(s);
+                        usize::try_from((x1 - x0 + 1) * (y1 - y0 + 1)).expect("a cell count")
+                    })
+                    .sum();
+                assert_eq!(grid.segs.len(), filed, "each edge once per cell it covers");
+                for _ in 0..80 {
+                    let p = pt(draw(-3 * span, 3 * span), draw(-3 * span, 3 * span));
+                    let found = grid.nearest2(p);
+                    assert_eq!(
+                        found.dist2,
+                        brute_nearest(&taps, p),
+                        "{count} taps over {span}: {p:?}"
+                    );
+                    assert_eq!(point_seg_dist2(p, grid.tap(found.tap)), found.dist2);
+                }
+            }
+        }
+    }
+
+    /// Rebuilding a grid over another column forgets the first one.
+    ///
+    /// Oracle: law: a build is a function of its column alone, so a grid
+    /// built over `a` then `b` answers as one built over `b` only: the
+    /// nearest point of the edge `(500,500)-(500,900)` to the origin is its
+    /// end, 500² + 500² away.
+    #[test]
+    fn a_rebuilt_tap_grid_answers_for_its_new_column_only() {
+        let a = [Seg {
+            a: pt(0, 0),
+            b: pt(10, 0),
+        }];
+        let b = [Seg {
+            a: pt(500, 500),
+            b: pt(500, 900),
+        }];
+        let mut grid = TapGrid::default();
+        TapGrid::build_into(&a, &mut grid);
+        TapGrid::build_into(&b, &mut grid);
+        assert_eq!(grid.nearest2(pt(0, 0)).dist2, DbuArea::new(500 * 500 * 2));
+        assert_eq!(grid.segs.len(), 1);
+    }
+
+    /// The furthest integer point of a region from every tap edge, by
+    /// visiting every integer point of its box.
+    fn brute_furthest(xs: &[Dbu], ys: &[Dbu], bbox: Bbox, taps: &[Seg]) -> DbuArea {
+        let mut worst = DbuArea::new(-1);
+        for x in bbox.xlo.raw()..=bbox.xhi.raw() {
+            for y in bbox.ylo.raw()..=bbox.yhi.raw() {
+                let p = pt(x, y);
+                if point_in_region(xs, ys, p) {
+                    worst = worst.max(brute_nearest(taps, p));
+                }
+            }
+        }
+        worst
+    }
+
+    /// Branch and bound finds the furthest point of a region from the taps
+    /// exactly whenever it beats the floor, reports a point of the region at
+    /// that distance, and answers the floor itself when nothing beats it.
+    ///
+    /// Oracle: differential against an exhaustive scan of every integer
+    /// point of the region (rectangles, an L and a U), with taps inside,
+    /// beside and far from it.
+    #[test]
+    fn the_furthest_point_from_the_taps_agrees_with_an_exhaustive_scan() {
+        let mut draw = draws(0x2545_F491_4F6C_DD1D);
+        let regions: [&[(i64, i64)]; 4] = [
+            &[(0, 0), (40, 0), (40, 30), (0, 30)],
+            &[(0, 0), (1, 0), (1, 57), (0, 57)],
+            &[(0, 0), (50, 0), (50, 10), (10, 10), (10, 45), (0, 45)],
+            &[
+                (0, 0),
+                (60, 0),
+                (60, 40),
+                (45, 40),
+                (45, 12),
+                (15, 12),
+                (15, 40),
+                (0, 40),
+            ],
+        ];
+        let mut stack: Vec<Cell> = Vec::new();
+        for region in regions {
+            let (xs, ys) = ring(region);
+            let bbox = region.iter().fold(Bbox::EMPTY, |b, &(x, y)| {
+                b.include(Dbu::new_unchecked(x), Dbu::new_unchecked(y))
+            });
+            for count in [1usize, 3, 20, 90] {
+                let taps = random_taps(&mut draw, count, 80);
+                let mut grid = TapGrid::default();
+                TapGrid::build_into(&taps, &mut grid);
+                let want = brute_furthest(&xs, &ys, bbox, &taps);
+                for floor in [DbuArea::new(0), want, DbuArea::new(want.raw() + 1)] {
+                    let (at, worst) = furthest_from_taps(&xs, &ys, bbox, floor, &grid, &mut stack);
+                    assert_eq!(
+                        worst,
+                        want.max(floor),
+                        "{region:?}, {count} taps, floor {floor:?}"
+                    );
+                    if want > floor {
+                        assert!(
+                            point_in_region(&xs, &ys, at),
+                            "{at:?} is outside {region:?}"
+                        );
+                        assert_eq!(brute_nearest(&taps, at), want, "{at:?} is not that far");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Membership, boundary included, of a rectangle, an L, and a
+    /// triangle with a sloped edge, at every integer point around them.
+    ///
+    /// Oracle: closed form: the rectangle is `0 <= x <= 20, 0 <= y <= 10`;
+    /// the L is that rectangle with `x > 8, y > 4` cut away; the triangle
+    /// `(0,0) (12,0) (0,12)` is `x >= 0, y >= 0, x + y <= 12`, either way
+    /// round. Fewer than three vertices is no region.
+    #[test]
+    fn point_in_region_is_the_closed_set_of_each_shape() {
+        let rect = ring(&[(0, 0), (20, 0), (20, 10), (0, 10)]);
+        let l = ring(&[(0, 0), (20, 0), (20, 4), (8, 4), (8, 10), (0, 10)]);
+        let tri = ring(&[(0, 0), (12, 0), (0, 12)]);
+        let tri_cw = ring(&[(0, 0), (0, 12), (12, 0)]);
+        for x in -3..=23 {
+            for y in -3..=14 {
+                let p = pt(x, y);
+                let in_rect = (0..=20).contains(&x) && (0..=10).contains(&y);
+                assert_eq!(
+                    point_in_region(&rect.0, &rect.1, p),
+                    in_rect,
+                    "rect {x},{y}"
+                );
+                let in_l = in_rect && !(x > 8 && y > 4);
+                assert_eq!(point_in_region(&l.0, &l.1, p), in_l, "L {x},{y}");
+                let in_tri = x >= 0 && y >= 0 && x + y <= 12;
+                assert_eq!(point_in_region(&tri.0, &tri.1, p), in_tri, "tri {x},{y}");
+                assert_eq!(
+                    point_in_region(&tri_cw.0, &tri_cw.1, p),
+                    in_tri,
+                    "cw {x},{y}"
+                );
+            }
+        }
+        let two = ring(&[(0, 0), (5, 5)]);
+        assert!(!point_in_region(&two.0, &two.1, pt(0, 0)));
+    }
+
+    /// `isqrt_ceil(a)` is the least `r` with `r² >= a`.
+    ///
+    /// Oracle: the definition, `(r - 1)² < a <= r²`, over every area to
+    /// 10 000 and at a large perfect square and its neighbours.
+    #[test]
+    fn isqrt_ceil_is_the_least_root_whose_square_covers_the_area() {
+        assert_eq!(isqrt_ceil(0), 0);
+        for a in (1..=10_000i128).chain([(1 << 60) - 1, 1 << 60, (1 << 60) + 1]) {
+            let r = i128::from(isqrt_ceil(a));
+            assert!((r - 1) * (r - 1) < a && a <= r * r, "{a} -> {r}");
+        }
+    }
+}

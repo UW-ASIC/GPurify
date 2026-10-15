@@ -3073,4 +3073,162 @@ mod tests {
             assert_eq!(discarded_budget(&grid, &intent), naive);
         }
     }
+
+    /// A xorshift draw in `lo ..= hi`.
+    fn draws(seed: u64) -> impl FnMut(i64, i64) -> i64 {
+        let mut state = seed;
+        move |lo, hi| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let span = u64::try_from(hi - lo + 1).expect("a non-empty range");
+            lo + i64::try_from(state % span).expect("a draw below the span fits an i64")
+        }
+    }
+
+    /// The ring search stays exact for markers inside the grid's extent,
+    /// where its stop test (the scanned block's slack) decides, over grids
+    /// of large cells (few taps, wide spans) and small ones.
+    ///
+    /// Oracle: differential against `brute_force`, the exhaustive scan.
+    #[test]
+    fn the_ring_search_agrees_with_an_exhaustive_scan_inside_the_extent() {
+        let mut draw = draws(0x5851_F42D_4C95_7F2D);
+        for taps in [2usize, 4, 9, 30, 150] {
+            for (span_x, span_y) in [(40i64, 40i64), (3000, 200), (200, 3000), (5000, 5000)] {
+                let at: Vec<Point> = (0..taps)
+                    .map(|_| Point {
+                        x: Dbu::new_unchecked(draw(-span_x, span_x)),
+                        y: Dbu::new_unchecked(draw(-span_y, span_y)),
+                    })
+                    .collect();
+                let index = index_of(&at);
+                for _ in 0..200 {
+                    let marker = Point {
+                        x: Dbu::new_unchecked(draw(-span_x, span_x)),
+                        y: Dbu::new_unchecked(draw(-span_y, span_y)),
+                    };
+                    assert_eq!(
+                        index.nearest(marker),
+                        brute_force(&at, marker),
+                        "{taps} taps over {span_x}x{span_y}, marker {marker:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// [`TapIndex::host`] over random boxes: of the boxes touching the
+    /// marker's box (edges and corners count), the one whose centre is
+    /// nearest the marker's centre, the lower index on a tie; touching
+    /// none, the nearest centre of all.
+    ///
+    /// Oracle: differential against that definition evaluated over every
+    /// box, with markers of every size, some touching nothing.
+    #[test]
+    fn host_agrees_with_an_exhaustive_scan_of_the_touching_boxes() {
+        let mut draw = draws(0x9E6C_63D0_676A_9A99);
+        let mut index = TapIndex::default();
+        for count in [1usize, 2, 5, 12, 60] {
+            for _ in 0..20 {
+                let boxes: Vec<Bbox> = (0..count)
+                    .map(|_| {
+                        let (x, y) = (draw(-500, 500), draw(-500, 500));
+                        Bbox {
+                            xlo: Dbu::new_unchecked(x),
+                            ylo: Dbu::new_unchecked(y),
+                            xhi: Dbu::new_unchecked(x + draw(0, 300)),
+                            yhi: Dbu::new_unchecked(y + draw(0, 300)),
+                        }
+                    })
+                    .collect();
+                index.boxes.clone_from(&boxes);
+                index.at = boxes.iter().map(|&b| super::centre(b)).collect();
+                index.grid();
+                for _ in 0..40 {
+                    let (x, y) = (draw(-700, 700), draw(-700, 700));
+                    let marker = Bbox {
+                        xlo: Dbu::new_unchecked(x),
+                        ylo: Dbu::new_unchecked(y),
+                        xhi: Dbu::new_unchecked(x + draw(0, 120)),
+                        yhi: Dbu::new_unchecked(y + draw(0, 120)),
+                    };
+                    let c = super::centre(marker);
+                    let d2 = |p: Point| {
+                        let (dx, dy) = (
+                            i128::from(p.x.raw() - c.x.raw()),
+                            i128::from(p.y.raw() - c.y.raw()),
+                        );
+                        dx * dx + dy * dy
+                    };
+                    let want = (0u32..)
+                        .zip(&boxes)
+                        .filter(|(_, b)| {
+                            b.xlo <= marker.xhi
+                                && marker.xlo <= b.xhi
+                                && b.ylo <= marker.yhi
+                                && marker.ylo <= b.yhi
+                        })
+                        .map(|(i, &b)| (d2(super::centre(b)), i))
+                        .min()
+                        .map_or_else(|| brute_force(&index.at, c), |(_, i)| i);
+                    assert_eq!(index.host(marker), want, "{boxes:?} against {marker:?}");
+                }
+            }
+        }
+    }
+
+    /// Cholesky inversion of a symmetric positive definite matrix is its
+    /// inverse, and a matrix with a pivot that is not positive is refused.
+    ///
+    /// Oracle: law: `A · A⁻¹ = I` (to 1e-9) for `A = B Bᵀ + I` over random
+    /// `B`, sizes 1 to 6; hand-derived refusals: `[[1, 2], [2, 1]]` has
+    /// second pivot `1 - 2² = -3`, `[[0]]` a zero pivot, `[[NaN]]` none.
+    #[test]
+    fn cholesky_inversion_inverts_a_positive_definite_matrix_and_refuses_others() {
+        use super::cholesky_inverse_into;
+        let mut draw = draws(0x1234_5678_9ABC_DEF1);
+        let mut out = Vec::new();
+        for n in 1..=6usize {
+            for _ in 0..10 {
+                let b: Vec<f64> = (0..n * n)
+                    .map(|_| f64::from(i32::try_from(draw(-9, 9)).expect("small")) / 3.0)
+                    .collect();
+                let mut a = vec![0.0f64; n * n];
+                for i in 0..n {
+                    for j in 0..n {
+                        let s: f64 = (0..n).map(|k| b[i * n + k] * b[j * n + k]).sum();
+                        a[i * n + j] = s + if i == j { 1.0 } else { 0.0 };
+                    }
+                }
+                let keep = a.clone();
+                assert!(cholesky_inverse_into(&mut a, n, &mut out));
+                assert_eq!(out.len(), n * n);
+                for i in 0..n {
+                    for j in 0..n {
+                        let p: f64 = (0..n).map(|k| keep[i * n + k] * out[k * n + j]).sum();
+                        let want = if i == j { 1.0 } else { 0.0 };
+                        assert!((p - want).abs() < 1e-9, "n={n} ({i},{j}): {p}");
+                    }
+                }
+            }
+        }
+        assert!(!cholesky_inverse_into(
+            &mut [1.0, 2.0, 2.0, 1.0],
+            2,
+            &mut out
+        ));
+        assert!(!cholesky_inverse_into(&mut [0.0], 1, &mut out));
+        assert!(!cholesky_inverse_into(&mut [f64::NAN], 1, &mut out));
+        assert!(!cholesky_inverse_into(&mut [f64::INFINITY], 1, &mut out));
+        // A 2 x 2 by hand: [[4, 2], [2, 3]] has inverse [[3, -2], [-2, 4]] / 8.
+        let mut a = [4.0, 2.0, 2.0, 3.0];
+        assert!(cholesky_inverse_into(&mut a, 2, &mut out));
+        for (got, want) in out
+            .iter()
+            .zip([3.0 / 8.0, -2.0 / 8.0, -2.0 / 8.0, 4.0 / 8.0])
+        {
+            assert!((got - want).abs() < 1e-12, "{out:?}");
+        }
+    }
 }
