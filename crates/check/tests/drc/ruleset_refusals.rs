@@ -172,6 +172,58 @@ fn an_allowed_width_must_be_positive() {
     assert!(widths("1nm").is_ok());
 }
 
+/// Oracle: each count a rule stores in a narrower integer is a value of
+/// that integer: a via stack's height is a `u16` (65535 builds, 65536 is
+/// the wrong kind of value), a patterning's colour count a `u8` (255
+/// builds, 256 is refused).
+#[test]
+fn a_count_must_fit_the_rule_that_stores_it() {
+    let stack = |height: u32| {
+        compile(&new_deck(
+            &["v1", "v2"],
+            &format!("rule s via_stack(v1, v2) <= {height}"),
+        ))
+    };
+    assert!(stack(65_535).is_ok());
+    assert_eq!(
+        stack(65_536).unwrap_err(),
+        DrcError::WrongParamType {
+            rule: "s".to_owned(),
+            param: "max_height",
+        }
+    );
+    let colours = |n: u32| {
+        compile(&one_layer_deck(&format!(
+            "rule p patterning(met1; colors: {n}) >= 100nm"
+        )))
+    };
+    assert!(colours(255).is_ok());
+    assert_eq!(
+        colours(256).unwrap_err(),
+        DrcError::WrongParamType {
+            rule: "p".to_owned(),
+            param: "colors",
+        }
+    );
+}
+
+/// Oracle: `pattern`'s shapes and don't-care boxes are rectangles by two
+/// opposite corners each: an odd count of corners is no list of
+/// rectangles (a bad table); the even L of the root fixture builds.
+#[test]
+fn a_pattern_lists_rectangles_by_corner_pairs() {
+    let pattern = |shapes: &str| {
+        compile(&one_layer_deck(&format!(
+            "rule p pattern(met1; window: 300nm x 300nm, shapes: [{shapes}], ignore: none)"
+        )))
+    };
+    assert!(pattern("0nm x 0nm, 300nm x 100nm, 0nm x 100nm, 100nm x 300nm").is_ok());
+    assert_eq!(
+        pattern("0nm x 0nm, 300nm x 100nm, 0nm x 100nm").unwrap_err(),
+        DrcError::BadTable("p".to_owned())
+    );
+}
+
 /// Oracle: `RuleSet::first_derived`'s rustdoc: "`Rule::OffGrid` ... check
 /// drawn rows only". A 100 square on a 10 nm pitch grown by 5 nm is a
 /// derived layer whose every vertex is off the pitch; the drawn square is

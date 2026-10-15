@@ -1588,3 +1588,50 @@ fn span_length_except_skips_short_crosswise_spans() {
         &[("s", vec![Finding::length(150).at(75, 50)])],
     );
 }
+
+/// A diamond of radius `r` centred at `(x, y)`, counter-clockwise.
+fn diamond(x: i64, y: i64, r: i64) -> [(i64, i64); 4] {
+    [(x, y - r), (x + r, y), (x, y + r), (x - r, y)]
+}
+
+/// `space(a, b) >= 20nm` (`min_spacing_diff`) where a shape has 45-degree
+/// edges: the Euclidean gap, marked at the midpoint of the nearest pair of
+/// points, the touch where boundaries touch, and the middle of the boxes'
+/// overlap for a nested pair (0 with its boundaries apart), as `whole_at`'s
+/// rustdoc states.
+///
+/// Oracle: points by construction: two diamonds of radius 10, tips (10, 0)
+/// and (20, 0), 10 apart, marked at (15, 0); a diamond and a square whose
+/// left side is at x = 20, the tip 10 from it, marked at (15, 0); diamonds
+/// touching tip to tip at (10, 0), 0 there; a radius-5 diamond inside a
+/// radius-30 one, 0, at the boxes' common centre (0, 0).
+#[test]
+fn a_45_degree_pair_is_marked_at_its_nearest_points() {
+    let deck = new_deck(&["a", "b"], "rule s space(a, b) >= 20nm\n");
+    let case = |name: &str, layout: Layout, findings: Vec<Finding>| {
+        check_everywhere(name, &deck, &layout, &[("s", findings)]);
+    };
+    let a = Layout::default().polygon("a", &diamond(0, 0, 10));
+    case(
+        "tip_to_tip",
+        a.clone().polygon("b", &diamond(30, 0, 10)),
+        vec![Finding::length(10).at(15, 0)],
+    );
+    case(
+        "tip_to_side",
+        a.clone().rect("b", 20, -5, 30, 5),
+        vec![Finding::length(10).at(15, 0)],
+    );
+    case(
+        "touching",
+        a.polygon("b", &diamond(20, 0, 10)),
+        vec![Finding::length(0).at(10, 0)],
+    );
+    case(
+        "nested",
+        Layout::default()
+            .polygon("a", &diamond(0, 0, 30))
+            .polygon("b", &diamond(0, 0, 5)),
+        vec![Finding::length(0).at(0, 0)],
+    );
+}
