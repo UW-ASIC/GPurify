@@ -618,7 +618,7 @@ fn an_octilinear_keyhole_decomposes_into_its_outer_and_its_hole() {
     let xs = [0, 10, 0, -10, 0, 0, -2, -2, 2, 2, 0];
     let ys = [-10, 0, 10, 0, -10, -2, -2, 2, 2, -2, -2];
     let (mut rx, mut ry, mut start) = (Vec::new(), Vec::new(), Vec::new());
-    canonical_rings_into(&xs, &ys, &mut rx, &mut ry, &mut start).expect("octilinear");
+    canonical_rings_into(&xs, &ys, &mut rx, &mut ry, &mut start);
     let mut signed: Vec<i128> = start
         .windows(2)
         .map(|w| {

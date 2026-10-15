@@ -1228,16 +1228,8 @@ pub mod gds {
             return false;
         }
         let (mut rx, mut ry, mut starts) = (Vec::new(), Vec::new(), Vec::new());
-        if canonical_rings_into(
-            &lib.xs[first..],
-            &lib.ys[first..],
-            &mut rx,
-            &mut ry,
-            &mut starts,
-        )
-        .is_err()
-            || starts.len() < 2
-        {
+        canonical_rings_into(xs, ys, &mut rx, &mut ry, &mut starts);
+        if starts.len() < 2 {
             return false;
         }
         lib.xs.truncate(first);

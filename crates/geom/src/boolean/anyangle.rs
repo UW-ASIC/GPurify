@@ -362,9 +362,8 @@ fn add(w: [i32; 2], v: [i32; 2], sign: i32) -> [i32; 2] {
 pub(super) fn combine_into(a: &Rings, b: &Rings, op: impl Fn(bool, bool) -> bool, out: &mut Rings) {
     let mut edges = Vec::new();
     for (rings, right) in [(a, false), (b, true)] {
-        for ring in 0..rings.start.len().saturating_sub(1) {
-            let (lo, hi) = (rings.start[ring] as usize, rings.start[ring + 1] as usize);
-            let n = hi - lo;
+        for ring in rings.ranges() {
+            let (lo, n) = (ring.start, ring.len());
             for i in 0..n {
                 let (s, t) = (lo + i, lo + (i + 1) % n);
                 edges.push(Edge {

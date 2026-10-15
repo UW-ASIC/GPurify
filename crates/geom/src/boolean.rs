@@ -141,6 +141,33 @@ struct Rings {
     start: Vec<u32>,
 }
 
+impl Rings {
+    /// Empty, ready for the first ring, keeping the allocations.
+    fn reset(&mut self) {
+        self.xs.clear();
+        self.ys.clear();
+        self.start.clear();
+        self.start.push(0);
+    }
+
+    /// Ends the ring whose vertices were pushed since the last one ended.
+    fn close_ring(&mut self) {
+        self.start.push(crate::narrow(self.xs.len()));
+    }
+
+    /// Each ring's run of vertex rows, in order.
+    fn ranges(&self) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
+        self.start.windows(2).map(|w| w[0] as usize..w[1] as usize)
+    }
+
+    /// Every coordinate times two: the octilinear sweep's scale.
+    fn double(&mut self) {
+        for c in self.xs.iter_mut().chain(self.ys.iter_mut()) {
+            *c *= 2;
+        }
+    }
+}
+
 /// One vertical edge: the half-open y-range it spans and the winding it adds to
 /// every cut to its right. Horizontal edges contribute nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,7 +210,7 @@ impl Slabs {
             slab.iter().all(|&(lo, hi)| lo < hi) && slab.windows(2).all(|w| w[0].1 < w[1].0),
             "a slab's intervals are non-empty, ascending and apart: {slab:?}"
         );
-        self.start.push(ring_mark(self.ivals.len()));
+        self.start.push(crate::narrow(self.ivals.len()));
     }
 
     fn slab(&self, c: usize) -> &[(i64, i64)] {
@@ -211,14 +238,9 @@ struct Sweep {
     order: Vec<u32>,
     by_end: Vec<u32>,
     next: Vec<u32>,
-    /// `link`'s output columns and its visited mask.
-    link_x: Vec<i64>,
-    link_y: Vec<i64>,
-    link_start: Vec<u32>,
+    /// `link`'s output rings and its visited mask.
+    linked: Rings,
     used: Vec<bool>,
-    /// `emit`'s per-ring `map_into` destinations.
-    col_x: Vec<Dbu>,
-    col_y: Vec<Dbu>,
 }
 
 fn sort_dedup(values: &mut Vec<i64>) {
@@ -236,25 +258,16 @@ fn axis_into(edges: &[VEdge], out: &mut Vec<i64>) {
     sort_dedup(out);
 }
 
-fn ring_mark(len: usize) -> u32 {
-    u32::try_from(len).expect("a layer's vertex count is a u32 index space")
-}
-
 /// Flatten every ring of every polygon of one operand. Validated rings are
 /// rectilinear already, so nothing is re-checked.
 fn collect_rings(layer: &ValidatedLayer, rings: &mut Rings) {
-    rings.xs.clear();
-    rings.ys.clear();
-    rings.start.clear();
-    rings.start.push(0);
-
-    let polys = u32::try_from(layer.len()).expect("a layer's polygon count is a u32 index space");
-    for idx in 0..polys {
+    rings.reset();
+    for idx in 0..crate::narrow(layer.len()) {
         for ring in layer.get(idx).rings() {
             let (xs, ys) = ring.coords();
             rings.xs.extend(xs.iter().map(|x| x.raw()));
             rings.ys.extend(ys.iter().map(|y| y.raw()));
-            rings.start.push(ring_mark(rings.xs.len()));
+            rings.close_ring();
         }
     }
 }
@@ -264,9 +277,8 @@ fn vedges_into(rings: &Rings, out: &mut Vec<VEdge>) {
     out.clear();
     out.reserve(rings.xs.len());
 
-    for ring in 0..rings.start.len().saturating_sub(1) {
-        let (lo, hi) = (rings.start[ring] as usize, rings.start[ring + 1] as usize);
-        let n = hi - lo;
+    for ring in rings.ranges() {
+        let (lo, n) = (ring.start, ring.len());
         for i in 0..n {
             let (a, b) = (lo + i, lo + (i + 1) % n);
             if rings.xs[a] != rings.xs[b] {
@@ -545,7 +557,7 @@ fn tail_of(seg: Seg) -> (i64, i64) {
 /// starts, never which cycles there are.
 fn successors_into(segs: &[Seg], order: &mut Vec<u32>, by_end: &mut Vec<u32>, next: &mut Vec<u32>) {
     order.clear();
-    order.extend(0..ring_mark(segs.len()));
+    order.extend(0..crate::narrow(segs.len()));
     by_end.clear();
     by_end.extend_from_slice(order);
     order.sort_unstable_by_key(|&i| head_of(segs[i as usize]));
@@ -592,21 +604,11 @@ fn successors_into(segs: &[Seg], order: &mut Vec<u32>, by_end: &mut Vec<u32>, ne
     }
 }
 
-/// Walk the successor permutation into closed rings: flat columns plus CSR `start`.
-fn link(
-    segs: &[Seg],
-    next: &[u32],
-    xs: &mut Vec<i64>,
-    ys: &mut Vec<i64>,
-    start: &mut Vec<u32>,
-    used: &mut Vec<bool>,
-) {
-    xs.clear();
-    xs.reserve(segs.len());
-    ys.clear();
-    ys.reserve(segs.len());
-    start.clear();
-    start.push(0);
+/// Walk the successor permutation into closed rings, into `out` (cleared and refilled).
+fn link(segs: &[Seg], next: &[u32], out: &mut Rings, used: &mut Vec<bool>) {
+    out.reset();
+    out.xs.reserve(segs.len());
+    out.ys.reserve(segs.len());
     used.clear();
     used.resize(segs.len(), false);
 
@@ -617,8 +619,8 @@ fn link(
         let mut cur = seed;
         loop {
             used[cur] = true;
-            xs.push(segs[cur].sx);
-            ys.push(segs[cur].sy);
+            out.xs.push(segs[cur].sx);
+            out.ys.push(segs[cur].sy);
 
             let step = next[cur] as usize;
             if step == seed {
@@ -631,18 +633,18 @@ fn link(
             );
             cur = step;
         }
-        start.push(ring_mark(xs.len()));
+        out.close_ring();
     }
 
     // Release assert: a segment in no ring is area missing from the result.
     assert_eq!(
-        xs.len(),
+        out.xs.len(),
         segs.len(),
         "every boundary segment lands in exactly one ring"
     );
 }
 
-/// Segments, successors, and link: the region's rings into `sweep.link_*`.
+/// Segments, successors, and link: the region's rings into `sweep.linked`.
 fn trace(xs: &[i64], region: &Slabs, sweep: &mut Sweep) {
     segments(xs, region, sweep);
     successors_into(
@@ -651,21 +653,14 @@ fn trace(xs: &[i64], region: &Slabs, sweep: &mut Sweep) {
         &mut sweep.by_end,
         &mut sweep.next,
     );
-    link(
-        &sweep.segs,
-        &sweep.next,
-        &mut sweep.link_x,
-        &mut sweep.link_y,
-        &mut sweep.link_start,
-        &mut sweep.used,
-    );
+    link(&sweep.segs, &sweep.next, &mut sweep.linked, &mut sweep.used);
     // The checks live inside the assertions, where they cost nothing in
     // release and cargo-mutants (which does not look inside macros) does not
     // count them as code to test.
+    let linked = &sweep.linked;
     debug_assert!(
-        sweep.link_start.windows(2).all(|run| {
-            let (lo, hi) = (run[0] as usize, run[1] as usize);
-            let (rx, ry) = (&sweep.link_x[lo..hi], &sweep.link_y[lo..hi]);
+        linked.ranges().all(|run| {
+            let (rx, ry) = (&linked.xs[run.clone()], &linked.ys[run]);
             let n = rx.len();
             n >= 4
                 && n.is_multiple_of(2)
@@ -679,18 +674,16 @@ fn trace(xs: &[i64], region: &Slabs, sweep: &mut Sweep) {
          one included) alternating horizontal and vertical, so every collinear run merged"
     );
     debug_assert_eq!(
-        sweep
-            .link_start
-            .windows(2)
+        linked
+            .ranges()
             .map(|run| {
-                let (lo, hi) = (run[0] as usize, run[1] as usize);
-                (lo..hi)
-                    .map(|i| {
-                        let j = if i + 1 == hi { lo } else { i + 1 };
-                        i128::from(sweep.link_x[i]) * i128::from(sweep.link_y[j])
-                            - i128::from(sweep.link_x[j]) * i128::from(sweep.link_y[i])
-                    })
-                    .sum::<i128>()
+                let (lo, hi) = (run.start, run.end);
+                run.map(|i| {
+                    let j = if i + 1 == hi { lo } else { i + 1 };
+                    i128::from(linked.xs[i]) * i128::from(linked.ys[j])
+                        - i128::from(linked.xs[j]) * i128::from(linked.ys[i])
+                })
+                .sum::<i128>()
             })
             .sum::<i128>(),
         2 * region_area(xs, region),
@@ -699,46 +692,24 @@ fn trace(xs: &[i64], region: &Slabs, sweep: &mut Sweep) {
     );
 }
 
-/// Trace the region and validate its rings into `out`.
-fn emit(
-    xs: &[i64],
-    region: &Slabs,
-    sweep: &mut Sweep,
-    out: &mut ValidatedLayer,
-) -> Result<(), BooleanError> {
-    trace(xs, region, sweep);
-    let Sweep {
-        link_x,
-        link_y,
-        link_start,
-        col_x,
-        col_y,
-        ..
-    } = sweep;
-    emit_rings(link_x, link_y, link_start, (col_x, col_y), out)
-}
-
-/// Validate flat rings (CSR `start`) into `out`, through a one-layer store so
-/// hole binding is `view`'s single implementation. `cols` are scratch.
-fn emit_rings(
-    xs: &[i64],
-    ys: &[i64],
-    start: &[u32],
-    cols: (&mut Vec<Dbu>, &mut Vec<Dbu>),
-    out: &mut ValidatedLayer,
-) -> Result<(), BooleanError> {
-    let (col_x, col_y) = cols;
-    let ring_count = start.len().saturating_sub(1);
-    let mut builder = GeometryStoreBuilder::with_capacity(ring_count, xs.len());
-    for ring in 0..ring_count {
-        let (lo, hi) = (start[ring] as usize, start[ring + 1] as usize);
+/// Validate flat rings into `out`, through a one-layer store so hole binding
+/// is `view`'s single implementation.
+fn emit_rings(rings: &Rings, out: &mut ValidatedLayer) -> Result<(), BooleanError> {
+    let mut builder =
+        GeometryStoreBuilder::with_capacity(rings.start.len().saturating_sub(1), rings.xs.len());
+    let (mut col_x, mut col_y) = (Vec::new(), Vec::new());
+    for ring in rings.ranges() {
         // Copies of in-domain operand coordinates, offsets of them clamped to
         // the domain, or grid points next to such a point.
         col_x.clear();
-        col_x.extend(xs[lo..hi].iter().map(|&x| Dbu::new_unchecked(x)));
+        col_x.extend(
+            rings.xs[ring.clone()]
+                .iter()
+                .map(|&x| Dbu::new_unchecked(x)),
+        );
         col_y.clear();
-        col_y.extend(ys[lo..hi].iter().map(|&y| Dbu::new_unchecked(y)));
-        builder.push(RESULT_LAYER, col_x, col_y);
+        col_y.extend(rings.ys[ring].iter().map(|&y| Dbu::new_unchecked(y)));
+        builder.push(RESULT_LAYER, &col_x, &col_y);
     }
 
     let (store, _permutation) = builder.finish(1);
@@ -751,14 +722,6 @@ fn emit_rings(
     );
     valid?;
     Ok(())
-}
-
-/// Every ring of one operand, flattened, each coordinate doubled.
-fn collect_doubled(layer: &ValidatedLayer, rings: &mut Rings) {
-    collect_rings(layer, rings);
-    for c in rings.xs.iter_mut().chain(rings.ys.iter_mut()) {
-        *c *= 2;
-    }
 }
 
 /// The rings of `op(a, b)` for operands at doubled scale, by the octilinear
@@ -791,37 +754,22 @@ fn combine_into(
     out: &mut ValidatedLayer,
     op: impl Fn(bool, bool) -> bool,
 ) -> Result<(), BooleanError> {
-    let mut sweep = Sweep::default();
     let mut ra = Rings::default();
     let mut rb = Rings::default();
-    if !(a.is_octilinear() && b.is_octilinear()) {
-        collect_rings(a, &mut ra);
-        collect_rings(b, &mut rb);
-        let mut result = Rings::default();
-        anyangle::combine_into(&ra, &rb, op, &mut result);
-        return emit_rings(
-            &result.xs,
-            &result.ys,
-            &result.start,
-            (&mut sweep.col_x, &mut sweep.col_y),
-            out,
-        );
-    }
-    if !(a.is_rectilinear() && b.is_rectilinear()) {
-        collect_doubled(a, &mut ra);
-        collect_doubled(b, &mut rb);
-        let mut result = Rings::default();
-        octilinear_rings(&ra, &rb, op, &mut result);
-        return emit_rings(
-            &result.xs,
-            &result.ys,
-            &result.start,
-            (&mut sweep.col_x, &mut sweep.col_y),
-            out,
-        );
-    }
     collect_rings(a, &mut ra);
     collect_rings(b, &mut rb);
+    if !(a.is_octilinear() && b.is_octilinear()) {
+        let mut result = Rings::default();
+        anyangle::combine_into(&ra, &rb, op, &mut result);
+        return emit_rings(&result, out);
+    }
+    if !(a.is_rectilinear() && b.is_rectilinear()) {
+        ra.double();
+        rb.double();
+        let mut result = Rings::default();
+        octilinear_rings(&ra, &rb, op, &mut result);
+        return emit_rings(&result, out);
+    }
 
     let mut ea = Vec::new();
     let mut eb = Vec::new();
@@ -835,6 +783,7 @@ fn combine_into(
     xs.extend_from_slice(&bxs);
     sort_dedup(&mut xs);
 
+    let mut sweep = Sweep::default();
     let mut sa = Slabs::default();
     let mut sb = Slabs::default();
     occupancy(&ea, &xs, &mut sweep, &mut sa);
@@ -847,7 +796,8 @@ fn combine_into(
         region_area(&xs, &result) <= region_area(&xs, &sa) + region_area(&xs, &sb),
         "area(result) <= area(a) + area(b)"
     );
-    emit(&xs, &result, &mut sweep, out)
+    trace(&xs, &result, &mut sweep);
+    emit_rings(&sweep.linked, out)
 }
 
 /// The canonical rings of one raw GDS ring: outers CCW, holes CW.
@@ -864,12 +814,7 @@ fn combine_into(
 /// flat: ring `i` is `out_xs[out_start[i]..out_start[i + 1]]` (and the same of
 /// `out_ys`), so `out_start` is one longer than the ring count. All three
 /// outputs are cleared first. Vertices are reordered, so vertex 0 of the
-/// result need not be the input's.
-///
-/// # Errors
-///
-/// None at present: every angle is read. The `Result` is kept for callers
-/// that already handle a refusal.
+/// result need not be the input's. Every angle is read, so nothing is refused.
 ///
 /// # Panics
 ///
@@ -881,7 +826,7 @@ pub fn canonical_rings_into(
     out_xs: &mut Vec<i64>,
     out_ys: &mut Vec<i64>,
     out_start: &mut Vec<u32>,
-) -> Result<(), BooleanError> {
+) {
     assert_eq!(xs.len(), ys.len(), "a ring's two columns are parallel");
     assert!(
         xs.iter()
@@ -905,56 +850,32 @@ pub fn canonical_rings_into(
         dx != 0 && dy != 0 && dx.abs() != dy.abs()
     });
     let mut rings = Rings::default();
-    rings.start.push(0);
+    rings.reset();
     rings.xs.extend_from_slice(xs);
     rings.ys.extend_from_slice(ys);
-    rings.start.push(ring_mark(rings.xs.len()));
-
-    if steep {
-        let mut result = Rings::default();
-        anyangle::combine_into(&rings, &Rings::default(), |p, _| p, &mut result);
-        out_xs.clone_from(&result.xs);
-        out_ys.clone_from(&result.ys);
-        out_start.clone_from(&result.start);
-        return Ok(());
-    }
-
-    if skew {
-        for c in rings.xs.iter_mut().chain(rings.ys.iter_mut()) {
-            *c *= 2;
-        }
-        let mut result = Rings::default();
-        octilinear_rings(&rings, &Rings::default(), |p, _| p, &mut result);
-        out_xs.clear();
-        out_ys.clear();
-        out_start.clear();
-        out_xs.extend_from_slice(&result.xs);
-        out_ys.extend_from_slice(&result.ys);
-        out_start.extend_from_slice(&result.start);
-        return Ok(());
-    }
+    rings.close_ring();
 
     let mut sweep = Sweep::default();
-    let mut edges = Vec::new();
-    vedges_into(&rings, &mut edges);
-
-    let mut axis = Vec::new();
-    axis_into(&edges, &mut axis);
-
-    let mut region = Slabs::default();
-    occupancy(&edges, &axis, &mut sweep, &mut region);
-    trace(&axis, &region, &mut sweep);
-
-    out_xs.clear();
-    out_ys.clear();
-    out_start.clear();
-    out_xs.extend_from_slice(&sweep.link_x);
-    out_ys.extend_from_slice(&sweep.link_y);
-    out_start.extend_from_slice(&sweep.link_start);
-    Ok(())
+    if steep {
+        anyangle::combine_into(&rings, &Rings::default(), |p, _| p, &mut sweep.linked);
+    } else if skew {
+        rings.double();
+        octilinear_rings(&rings, &Rings::default(), |p, _| p, &mut sweep.linked);
+    } else {
+        let mut edges = Vec::new();
+        vedges_into(&rings, &mut edges);
+        let mut axis = Vec::new();
+        axis_into(&edges, &mut axis);
+        let mut region = Slabs::default();
+        occupancy(&edges, &axis, &mut sweep, &mut region);
+        trace(&axis, &region, &mut sweep);
+    }
+    out_xs.clone_from(&sweep.linked.xs);
+    out_ys.clone_from(&sweep.linked.ys);
+    out_start.clone_from(&sweep.linked.start);
 }
 
-/// The layer of the one-layer store `emit` builds; never leaves this module.
+/// The layer of the one-layer store `emit_rings` builds; never leaves this module.
 const RESULT_LAYER: LayerId = LayerId(0);
 
 #[cfg(test)]
@@ -966,7 +887,7 @@ mod tests {
     /// Area of a result layer, read from its own rings.
     fn area(layer: &ValidatedLayer) -> i128 {
         let mut doubled = 0i128;
-        for idx in 0..u32::try_from(layer.len()).expect("a test layer fits a u32") {
+        for idx in 0..crate::narrow(layer.len()) {
             for ring in layer.get(idx).rings() {
                 doubled += ring.area2().raw();
             }
@@ -1025,8 +946,7 @@ mod tests {
         let ys = [0, 700, 700, 300, 300, 700, 700, 1000, 1000, 0];
 
         let (mut rx, mut ry, mut start) = (Vec::new(), Vec::new(), Vec::new());
-        canonical_rings_into(&xs, &ys, &mut rx, &mut ry, &mut start)
-            .expect("a keyhole is rectilinear");
+        canonical_rings_into(&xs, &ys, &mut rx, &mut ry, &mut start);
 
         assert_eq!(start.len() - 1, 2, "one outer and one hole");
 
@@ -1070,7 +990,7 @@ mod tests {
         let ys = [0, 0, 400, 400];
 
         let (mut rx, mut ry, mut start) = (Vec::new(), Vec::new(), Vec::new());
-        canonical_rings_into(&xs, &ys, &mut rx, &mut ry, &mut start).expect("a square");
+        canonical_rings_into(&xs, &ys, &mut rx, &mut ry, &mut start);
 
         assert_eq!(start.len() - 1, 1, "a square is one ring");
         assert_eq!(rx.len(), 4, "and it keeps its four corners");
