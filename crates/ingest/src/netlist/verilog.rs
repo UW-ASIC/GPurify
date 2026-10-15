@@ -80,49 +80,11 @@ fn tokens(source: &str) -> Result<Vec<(Tok, SourceSpan)>, NetlistError> {
                 }
             }
             b'/' if bytes.get(at + 1) == Some(&b'*') => {
-                let start = line;
-                at += 2;
-                loop {
-                    match bytes.get(at) {
-                        None => {
-                            return Err(NetlistError::Unexpected(
-                                span(start),
-                                "an unclosed /* comment".to_owned(),
-                            ))
-                        }
-                        Some(b'*') if bytes.get(at + 1) == Some(&b'/') => {
-                            at += 2;
-                            break;
-                        }
-                        Some(&b) => {
-                            line += u32::from(b == b'\n');
-                            at += 1;
-                        }
-                    }
-                }
+                skip_block(bytes, &mut at, &mut line, b'/', "an unclosed /* comment")?;
             }
+            // An attribute, `(* keep *)`: says nothing about connectivity.
             b'(' if bytes.get(at + 1) == Some(&b'*') && bytes.get(at + 2) != Some(&b')') => {
-                // An attribute, `(* keep *)`: says nothing about connectivity.
-                let start = line;
-                at += 2;
-                loop {
-                    match bytes.get(at) {
-                        None => {
-                            return Err(NetlistError::Unexpected(
-                                span(start),
-                                "an unclosed (* attribute".to_owned(),
-                            ))
-                        }
-                        Some(b'*') if bytes.get(at + 1) == Some(&b')') => {
-                            at += 2;
-                            break;
-                        }
-                        Some(&b) => {
-                            line += u32::from(b == b'\n');
-                            at += 1;
-                        }
-                    }
-                }
+                skip_block(bytes, &mut at, &mut line, b')', "an unclosed (* attribute")?;
             }
             b'`' => {
                 let end = source[at..]
@@ -154,9 +116,10 @@ fn tokens(source: &str) -> Result<Vec<(Tok, SourceSpan)>, NetlistError> {
                     })
                     .map_or(bytes.len(), |n| at + n);
                 let text = &source[at..end];
+                // `text` holds no sign, so only plain digits parse.
                 let tok = match text.parse::<u32>() {
-                    Ok(n) if text.bytes().all(|b| b.is_ascii_digit()) => Tok::Number(n),
-                    _ => Tok::Constant(text.to_owned()),
+                    Ok(n) => Tok::Number(n),
+                    Err(_) => Tok::Constant(text.to_owned()),
                 };
                 out.push((tok, span(line)));
                 at = end;
@@ -174,6 +137,38 @@ fn tokens(source: &str) -> Result<Vec<(Tok, SourceSpan)>, NetlistError> {
         }
     }
     Ok(out)
+}
+
+/// Skips the `/* */` comment or `(* *)` attribute opening at `at`, through
+/// the `*` and `close` that end it, counting the lines it spans; `what`
+/// names it when it is never closed.
+fn skip_block(
+    bytes: &[u8],
+    at: &mut usize,
+    line: &mut u32,
+    close: u8,
+    what: &str,
+) -> Result<(), NetlistError> {
+    let start = *line;
+    *at += 2;
+    loop {
+        match bytes.get(*at) {
+            None => {
+                return Err(NetlistError::Unexpected(
+                    SourceSpan { line: start },
+                    what.to_owned(),
+                ))
+            }
+            Some(b'*') if bytes.get(*at + 1) == Some(&close) => {
+                *at += 2;
+                return Ok(());
+            }
+            Some(&b) => {
+                *line += u32::from(b == b'\n');
+                *at += 1;
+            }
+        }
+    }
 }
 
 /// A declared net: its range, `None` for a scalar.
@@ -263,14 +258,18 @@ impl Parser {
         self.toks.get(self.at).map(|t| &t.0)
     }
 
-    fn unexpected(&self) -> NetlistError {
-        let text = match self.peek() {
+    /// The token at the cursor as written.
+    fn text(&self) -> String {
+        match self.peek() {
             None => "the end of the file".to_owned(),
             Some(Tok::Ident(s) | Tok::Constant(s)) => s.clone(),
             Some(Tok::Number(n)) => n.to_string(),
             Some(Tok::Punct(c)) => c.to_string(),
-        };
-        NetlistError::Unexpected(self.span(), text)
+        }
+    }
+
+    fn unexpected(&self) -> NetlistError {
+        NetlistError::Unexpected(self.span(), self.text())
     }
 
     fn eat(&mut self, c: char) -> bool {
@@ -349,29 +348,9 @@ impl Parser {
     /// A keyword outside the subset is `Unsupported`; anything else is
     /// unexpected.
     fn unsupported_or_unexpected(&self) -> NetlistError {
-        match self.peek() {
-            Some(Tok::Ident(word))
-                if matches!(
-                    word.as_str(),
-                    "always"
-                        | "initial"
-                        | "reg"
-                        | "integer"
-                        | "function"
-                        | "task"
-                        | "generate"
-                        | "parameter"
-                        | "localparam"
-                        | "defparam"
-                        | "specify"
-                        | "primitive"
-                        | "tri"
-                        | "wand"
-                        | "wor"
-                        | "logic"
-                ) =>
-            {
-                NetlistError::Unsupported(self.span(), word.clone())
+        match self.keyword() {
+            Some(word) if out_of_subset(word) => {
+                NetlistError::Unsupported(self.span(), word.to_owned())
             }
             _ => self.unexpected(),
         }
@@ -456,35 +435,26 @@ impl Parser {
                     }
                     self.expect(';')?;
                 }
-                Some(_) if self.unsupported_or_unexpected_is_keyword() => {
-                    return Err(self.unsupported_or_unexpected());
+                Some(word) if !KEYWORDS.contains(&word) && !out_of_subset(word) => {
+                    self.instances(&mut module)?;
                 }
-                Some(word) if !KEYWORDS.contains(&word) => self.instances(&mut module)?,
                 _ => return Err(self.unsupported_or_unexpected()),
             }
         }
     }
 
-    /// Whether the word at the cursor is a keyword outside the subset.
-    fn unsupported_or_unexpected_is_keyword(&self) -> bool {
-        matches!(
-            self.unsupported_or_unexpected(),
-            NetlistError::Unsupported(..)
-        )
-    }
-
     /// `input|output|inout|wire|supply0|supply1 [range] name [= expr], ...;`
     fn declaration(&mut self, module: &mut Module) -> Result<(), NetlistError> {
-        let word = self.keyword().unwrap_or_default().to_owned();
+        let wire = self.keyword() == Some("wire");
         self.at += 1;
-        if word != "wire" && self.keyword() == Some("wire") {
+        if !wire && self.keyword() == Some("wire") {
             self.at += 1;
         }
         let range = self.range()?;
         loop {
             let name = self.ident()?;
             module.declared.insert(name.clone(), range);
-            if word == "wire" && self.eat('=') {
+            if wire && self.eat('=') {
                 let rhs = self.expression(module)?;
                 self.pair(module, bit_names(&name, range), rhs)?;
             }
@@ -524,16 +494,10 @@ impl Parser {
                 self.expect(',')?;
             }
         }
-        if let Some(Tok::Constant(text)) = self.peek() {
+        if let Some(Tok::Constant(_) | Tok::Number(_)) = self.peek() {
             return Err(NetlistError::Unsupported(
                 self.span(),
-                format!("the constant {text} in a connection"),
-            ));
-        }
-        if let Some(Tok::Number(n)) = self.peek() {
-            return Err(NetlistError::Unsupported(
-                self.span(),
-                format!("the constant {n} in a connection"),
+                format!("the constant {} in a connection", self.text()),
             ));
         }
         let span = self.span();
@@ -618,6 +582,29 @@ impl Parser {
     }
 }
 
+/// Whether `word` is a Verilog keyword outside the subset.
+fn out_of_subset(word: &str) -> bool {
+    matches!(
+        word,
+        "always"
+            | "initial"
+            | "reg"
+            | "integer"
+            | "function"
+            | "task"
+            | "generate"
+            | "parameter"
+            | "localparam"
+            | "defparam"
+            | "specify"
+            | "primitive"
+            | "tri"
+            | "wand"
+            | "wor"
+            | "logic"
+    )
+}
+
 /// The base of a port bit's name, `D` for `D[3]`, and whether it is a bit.
 fn base(port: &str) -> (&str, bool) {
     match port.strip_suffix(']').and_then(|p| p.rsplit_once('[')) {
@@ -657,20 +644,11 @@ pub fn read_into(
         };
         modules.extend(parser.modules()?);
     }
-    let mut out = std::mem::take(netlist);
-    let result = append(&modules, strings, &mut out);
-    match result {
-        Ok(range) => {
-            debug_assert!(tables_hold(&out), "the appended tables hold");
-            *netlist = out;
-            Ok(range)
-        }
-        Err(why) => {
-            // `append` adds rows only once everything resolved.
-            *netlist = out;
-            Err(why)
-        }
-    }
+    // `append` writes rows only once everything resolved, so an error
+    // leaves `netlist` as it was.
+    let range = append(&modules, strings, netlist)?;
+    debug_assert!(tables_hold(netlist), "the appended tables hold");
+    Ok(range)
 }
 
 /// Resolves every module and appends it; nothing is written before the last
@@ -685,10 +663,8 @@ fn append(
     let mut by_name: HashMap<String, SubcktId> = HashMap::new();
     let mut ports: Vec<Vec<String>> = Vec::new();
     for cell in 0..narrow(out.subckt_count()) {
-        let rows = out.subckt_port_start[cell as usize] as usize
-            ..out.subckt_port_start[cell as usize + 1] as usize;
         ports.push(
-            out.port_net[rows]
+            out.ports_of(SubcktId(cell))
                 .iter()
                 .map(|net| strings.resolve(out.net_name[net.0 as usize]).to_owned())
                 .collect(),
@@ -744,8 +720,8 @@ fn append(
         for (a, b) in &module.assigns {
             nets.join(a, b);
         }
-        for bit in module.port_bits() {
-            let net = nets.net(&bit, id, strings, out);
+        for bit in &ports[id.0 as usize] {
+            let net = nets.net(bit, id, strings, out);
             out.port_net.push(net);
         }
         out.subckt_port_start.push(narrow(out.port_net.len()));
@@ -758,10 +734,15 @@ fn append(
             out.instance_subckt.push(id);
             out.instance_name.push(strings.intern(&inst.name));
             for (port, bit) in ports[callee.0 as usize].iter().zip(bits) {
-                let name = bit
-                    .clone()
-                    .unwrap_or_else(|| format!("{}.{port}", inst.name));
-                let net = nets.net(&name, id, strings, out);
+                // An open port is a net of its own, `instance.port`.
+                let open;
+                let name = if let Some(bit) = bit {
+                    bit.as_str()
+                } else {
+                    open = format!("{}.{port}", inst.name);
+                    &open
+                };
+                let net = nets.net(name, id, strings, out);
                 out.instance_net.push(net);
             }
             out.instance_net_start.push(narrow(out.instance_net.len()));
@@ -875,12 +856,12 @@ struct Nets {
 }
 
 impl Nets {
-    fn root(&self, name: &str) -> String {
+    fn root<'a>(&'a self, name: &'a str) -> &'a str {
         let mut at = name;
         while let Some(up) = self.parent.get(at) {
             at = up;
         }
-        at.to_owned()
+        at
     }
 
     /// The net row of `name`'s class in `subckt`, appended to `out` on its
@@ -893,9 +874,10 @@ impl Nets {
         out: &mut Netlist,
     ) -> RefNetId {
         let root = self.root(name);
-        if let Some(&row) = self.row.get(&root) {
+        if let Some(&row) = self.row.get(root) {
             return row;
         }
+        let root = root.to_owned();
         let row = RefNetId(narrow(out.net_name.len()));
         out.net_name.push(strings.intern(&root));
         out.net_subckt.push(subckt);
@@ -909,6 +891,7 @@ impl Nets {
         let (ra, rb) = (self.root(a), self.root(b));
         if ra != rb {
             let (low, high) = if ra < rb { (ra, rb) } else { (rb, ra) };
+            let (low, high) = (low.to_owned(), high.to_owned());
             self.parent.insert(high, low);
         }
     }

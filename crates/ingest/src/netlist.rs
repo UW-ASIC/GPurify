@@ -268,6 +268,10 @@ impl Netlist {
     pub fn subckt_count(&self) -> usize {
         self.subckt_name.len()
     }
+    /// The port nets of `cell`, in port order.
+    fn ports_of(&self, cell: SubcktId) -> &[RefNetId] {
+        &self.port_net[csr(&self.subckt_port_start, cell.0 as usize)]
+    }
     /// Returns the device rows a subcircuit holds directly, not through its
     /// instances. Panics on an id past [`Self::subckt_count`].
     pub fn devices_of(&self, subckt: SubcktId) -> std::ops::Range<u32> {
@@ -371,9 +375,7 @@ impl Netlist {
             out.net_name.push(self.net_name[net as usize]);
             out.net_subckt.push(SubcktId(0));
         }
-        let ports = self.subckt_port_start[top.0 as usize] as usize
-            ..self.subckt_port_start[top.0 as usize + 1] as usize;
-        for &port in &self.port_net[ports] {
+        for &port in self.ports_of(top) {
             out.port_net.push(RefNetId(map[port.0 as usize]));
         }
         out.subckt_port_start.push(narrow(out.port_net.len()));
@@ -483,16 +485,13 @@ impl Netlist {
             let device = device as usize;
             out.device_model.push(self.device_model[device]);
             out.device_kind.push(self.device_kind[device]);
-            let terminals = self.device_terminal_start[device] as usize
-                ..self.device_terminal_start[device + 1] as usize;
-            for &net in &self.terminal_net[terminals] {
+            for &net in &self.terminal_net[csr(&self.device_terminal_start, device)] {
                 out.terminal_net.push(RefNetId(map[net.0 as usize]));
             }
             out.device_terminal_start
                 .push(narrow(out.terminal_net.len()));
-            let params = self.device_param_start[device] as usize
-                ..self.device_param_start[device + 1] as usize;
-            out.param.extend_from_slice(&self.param[params]);
+            out.param
+                .extend_from_slice(&self.param[csr(&self.device_param_start, device)]);
             out.device_param_start.push(narrow(out.param.len()));
         }
         for &instance in hierarchy.instances_of(cell) {
@@ -505,8 +504,7 @@ impl Netlist {
                 format!("{path}.{name}")
             };
             // Ports first: each takes the caller's net the instance passes.
-            let passed = self.instance_net_start[instance] as usize
-                ..self.instance_net_start[instance + 1] as usize;
+            let passed = csr(&self.instance_net_start, instance);
             if hierarchy.is_kept(callee) {
                 let first = narrow(out.device_model.len());
                 out.placements.push(Placement {
@@ -517,9 +515,7 @@ impl Netlist {
                 self.keep_whole(callee, &self.instance_net[passed], map, out);
                 continue;
             }
-            let ports = self.subckt_port_start[callee.0 as usize] as usize
-                ..self.subckt_port_start[callee.0 as usize + 1] as usize;
-            for (&port, &net) in self.port_net[ports].iter().zip(&self.instance_net[passed]) {
+            for (&port, &net) in self.ports_of(callee).iter().zip(&self.instance_net[passed]) {
                 map[port.0 as usize] = map[net.0 as usize];
             }
             // Every other net of the callee is new, named under the path.
@@ -559,9 +555,8 @@ impl Netlist {
             .push(narrow(out.terminal_net.len()));
         out.device_param_start.push(narrow(out.param.len()));
         if !out.black_box_ports.iter().any(|(kept, _)| *kept == name) {
-            let ports = self.subckt_port_start[cell.0 as usize] as usize
-                ..self.subckt_port_start[cell.0 as usize + 1] as usize;
-            let names = self.port_net[ports]
+            let names = self
+                .ports_of(cell)
                 .iter()
                 .map(|port| self.net_name[port.0 as usize])
                 .collect();
@@ -642,15 +637,18 @@ impl Hierarchy {
 
     /// The instance rows `cell` places, in file order.
     fn instances_of(&self, cell: SubcktId) -> &[u32] {
-        let row = cell.0 as usize;
-        &self.instance[self.instance_start[row] as usize..self.instance_start[row + 1] as usize]
+        &self.instance[csr(&self.instance_start, cell.0 as usize)]
     }
 
     /// The net rows of `cell`, ascending.
     fn nets_of(&self, cell: SubcktId) -> &[u32] {
-        let row = cell.0 as usize;
-        &self.net[self.net_start[row] as usize..self.net_start[row + 1] as usize]
+        &self.net[csr(&self.net_start, cell.0 as usize)]
     }
+}
+
+/// Row `row`'s run in a CSR start column: `start[row]..start[row + 1]`.
+fn csr(start: &[u32], row: usize) -> std::ops::Range<usize> {
+    start[row] as usize..start[row + 1] as usize
 }
 
 /// The rows of `owner` grouped by the subcircuit each names, ascending
@@ -772,15 +770,17 @@ fn lex(source: &str, dialect: Dialect) -> (Vec<Tok<'_>>, Vec<u32>) {
 fn spice_number(text: &str) -> Option<f64> {
     let bytes = text.as_bytes();
     let mut at = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    // Past the run of digits starting at `from`.
+    let digits_end = |from: usize| {
+        from + bytes[from..]
+            .iter()
+            .take_while(|b| b.is_ascii_digit())
+            .count()
+    };
     let digits = at;
-    while at < bytes.len() && bytes[at].is_ascii_digit() {
-        at += 1;
-    }
+    at = digits_end(at);
     if bytes.get(at) == Some(&b'.') {
-        at += 1;
-        while at < bytes.len() && bytes[at].is_ascii_digit() {
-            at += 1;
-        }
+        at = digits_end(at + 1);
     }
     if at == digits {
         return None;
@@ -791,10 +791,7 @@ fn spice_number(text: &str) -> Option<f64> {
         let mut exponent = at + 1;
         exponent += usize::from(matches!(bytes.get(exponent), Some(b'+' | b'-')));
         if bytes.get(exponent).is_some_and(u8::is_ascii_digit) {
-            at = exponent;
-            while at < bytes.len() && bytes[at].is_ascii_digit() {
-                at += 1;
-            }
+            at = digits_end(exponent);
         }
     }
 
@@ -1351,7 +1348,7 @@ fn read_dialect(
         instances: Vec::new(),
     };
 
-    let card = |c: usize| &toks[card_start[c] as usize..card_start[c + 1] as usize];
+    let card = |c: usize| &toks[csr(&card_start, c)];
 
     for c in 0..cards {
         let card = card(c);
