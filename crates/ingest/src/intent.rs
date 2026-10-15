@@ -406,7 +406,12 @@ fn checked_switching(
     } else {
         return Ok(switching);
     };
-    Err(IntentError::Malformed(format!("net {net}: dynamic {why}")))
+    malformed(format!("net {net}: dynamic {why}"))
+}
+
+/// [`IntentError::Malformed`] with `why`.
+fn malformed<T>(why: String) -> Result<T, IntentError> {
+    Err(IntentError::Malformed(why))
 }
 
 /// Parse and validate design intent from memory.
@@ -458,28 +463,28 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
     if let Some(degrees) = file.temperature_c {
         let kelvin = celsius(degrees);
         if !(kelvin.is_finite() && kelvin.raw() > 0.0) {
-            return Err(IntentError::Malformed(format!(
+            return malformed(format!(
                 "temperature_c is {degrees}, not a temperature above absolute zero"
-            )));
+            ));
         }
         out.temperature = Some(kelvin);
     }
 
     // ponytail: a domain is one bit of a u64 in ERC's voltage propagation; widen the mask past 64.
     if file.domains.len() > 64 {
-        return Err(IntentError::Malformed(format!(
+        return malformed(format!(
             "{} domains declared; at most 64 are supported",
             file.domains.len()
-        )));
+        ));
     }
     // A domain's index in the `BTreeMap` *is* its `DomainId`.
     let domain_names: Vec<&str> = file.domains.keys().map(String::as_str).collect();
     for (name, spec) in &file.domains {
         if !spec.voltage_mv.is_finite() {
-            return Err(IntentError::Malformed(format!(
+            return malformed(format!(
                 "domain {name}: voltage_mv is {} rather than a number",
                 spec.voltage_mv
-            )));
+            ));
         }
         strings.intern(name); // Not stored; interning order is report order.
         out.domain_voltage.push(Qty::new(spec.voltage_mv));
@@ -489,10 +494,10 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
     let mut domain_has_supply = vec![false; domain_names.len()];
     for spec in &file.supplies {
         let Ok(index) = domain_names.binary_search(&spec.domain.as_str()) else {
-            return Err(IntentError::Malformed(format!(
+            return malformed(format!(
                 "supply {} names domain {}, which the file does not declare",
                 spec.net, spec.domain
-            )));
+            ));
         };
         let role = match spec.role {
             RoleSpec::Power => SupplyRole::Power,
@@ -522,47 +527,35 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
 
     let mut limit = Vec::with_capacity(file.limits.len());
     for spec in &file.limits {
+        let net = spec.net.as_str();
+        let checked = |value, key| checked_limit(value, net, key);
+        // Checked in field order: the first bad value is the one reported.
         limit.push((
-            strings.intern(&spec.net),
+            strings.intern(net),
             NetLimits {
-                max_drop: checked_limit(spec.max_drop_mv, &spec.net, "max_drop_mv")?.map(Qty::new),
-                max_drop_fraction: checked_limit(
-                    spec.max_drop_fraction,
-                    &spec.net,
-                    "max_drop_fraction",
-                )?,
-                max_overvoltage: checked_limit(
-                    spec.max_overvoltage_mv,
-                    &spec.net,
-                    "max_overvoltage_mv",
-                )?
-                .map(Qty::new),
-                budget_current_ua: checked_limit(
-                    spec.budget_current_ua,
-                    &spec.net,
-                    "budget_current_ua",
-                )?,
-                dynamic: match &spec.dynamic {
-                    None => None,
-                    Some(dynamic) => Some(checked_switching(
-                        dynamic,
-                        &spec.net,
-                        spec.budget_current_ua,
-                    )?),
-                },
-                rms_current_ua: checked_limit(spec.rms_current_ua, &spec.net, "rms_current_ua")?,
-                peak_current_ua: checked_limit(spec.peak_current_ua, &spec.net, "peak_current_ua")?,
-                frequency_mhz: checked_limit(spec.frequency_mhz, &spec.net, "frequency_mhz")?,
+                max_drop: checked(spec.max_drop_mv, "max_drop_mv")?.map(Qty::new),
+                max_drop_fraction: checked(spec.max_drop_fraction, "max_drop_fraction")?,
+                max_overvoltage: checked(spec.max_overvoltage_mv, "max_overvoltage_mv")?
+                    .map(Qty::new),
+                budget_current_ua: checked(spec.budget_current_ua, "budget_current_ua")?,
+                dynamic: spec
+                    .dynamic
+                    .as_ref()
+                    .map(|dynamic| checked_switching(dynamic, net, spec.budget_current_ua))
+                    .transpose()?,
+                rms_current_ua: checked(spec.rms_current_ua, "rms_current_ua")?,
+                peak_current_ua: checked(spec.peak_current_ua, "peak_current_ua")?,
+                frequency_mhz: checked(spec.frequency_mhz, "frequency_mhz")?,
             },
         ));
     }
 
     limit.sort_unstable_by_key(|&(net, _)| net);
     if let Some(pair) = limit.windows(2).find(|pair| pair[0].0 == pair[1].0) {
-        return Err(IntentError::Malformed(format!(
+        return malformed(format!(
             "net {} has two limits entries",
             strings.resolve(pair[0].0)
-        )));
+        ));
     }
 
     out.limits = limit;
@@ -570,19 +563,16 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
     for spec in &file.states {
         let name = strings.intern(&spec.name);
         if out.states.iter().any(|state| state.name == name) {
-            return Err(IntentError::Malformed(format!(
-                "power state {} is declared twice",
-                spec.name
-            )));
+            return malformed(format!("power state {} is declared twice", spec.name));
         }
         let mut off = Vec::with_capacity(spec.off.len());
         for net in &spec.off {
             let id = strings.intern(net);
             if out.supply_role(id).is_none() {
-                return Err(IntentError::Malformed(format!(
+                return malformed(format!(
                     "power state {} turns off {net}, which no supply declares",
                     spec.name
-                )));
+                ));
             }
             off.push(id);
         }
@@ -590,17 +580,17 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
             Vec::with_capacity(spec.inputs.len());
         for input in &spec.inputs {
             if !input.voltage_mv.is_finite() {
-                return Err(IntentError::Malformed(format!(
+                return malformed(format!(
                     "power state {}: input {} has voltage_mv {}, not a number",
                     spec.name, input.net, input.voltage_mv
-                )));
+                ));
             }
             let id = strings.intern(&input.net);
             if inputs.iter().any(|&(seen, _)| seen == id) {
-                return Err(IntentError::Malformed(format!(
+                return malformed(format!(
                     "power state {}: input {} is held twice",
                     spec.name, input.net
-                )));
+                ));
             }
             inputs.push((id, Qty::new(input.voltage_mv)));
         }
@@ -614,19 +604,16 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
             (Some(nets), None) if spec.pins.is_empty() => NetTypeBy::Names(nets.clone()),
             (None, Some(models)) => {
                 if let Some(pin) = spec.pins.iter().find(|p| !PIN_NAMES.contains(&p.as_str())) {
-                    return Err(IntentError::Malformed(format!(
+                    return malformed(format!(
                         "net type {}: pin {pin} is none of {}",
                         spec.name,
                         PIN_NAMES.join(", ")
-                    )));
+                    ));
                 }
                 let negate = models.first().is_some_and(|m| m == "!");
                 let models = &models[usize::from(negate)..];
                 if models.is_empty() {
-                    return Err(IntentError::Malformed(format!(
-                        "net type {}: models names no model",
-                        spec.name
-                    )));
+                    return malformed(format!("net type {}: models names no model", spec.name));
                 }
                 NetTypeBy::Devices {
                     models: models.iter().map(|m| strings.intern(m)).collect(),
@@ -635,10 +622,10 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
                 }
             }
             _ => {
-                return Err(IntentError::Malformed(format!(
+                return malformed(format!(
                     "net type {}: states either nets, or models with optional pins",
                     spec.name
-                )))
+                ))
             }
         };
         if !names.contains(&name) {
@@ -649,19 +636,16 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
     for spec in &file.type_sets {
         let name = strings.intern(&spec.set);
         if names.contains(&name) {
-            return Err(IntentError::Malformed(format!(
-                "type set {} repeats a type or set name",
-                spec.set
-            )));
+            return malformed(format!("type set {} repeats a type or set name", spec.set));
         }
         let mut types = Vec::with_capacity(spec.types.len());
         for member in &spec.types {
             let id = strings.intern(member);
             if !names.contains(&id) {
-                return Err(IntentError::Malformed(format!(
+                return malformed(format!(
                     "type set {} names {member}, no type or earlier set",
                     spec.set
-                )));
+                ));
             }
             types.push(id);
         }
@@ -669,10 +653,10 @@ pub fn parse_intent(source: &str, strings: &mut StrTable) -> Result<DesignIntent
         out.type_sets.push(TypeSet { name, types });
     }
     if names.len() > MAX_NET_TYPES {
-        return Err(IntentError::Malformed(format!(
+        return malformed(format!(
             "{} net types and type sets declared; at most {MAX_NET_TYPES}",
             names.len()
-        )));
+        ));
     }
     Ok(out)
 }
