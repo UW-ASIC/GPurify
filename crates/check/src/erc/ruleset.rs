@@ -2109,3 +2109,39 @@ impl RuleSet {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::vertical_gap;
+    use gpurify_geom::LayerId;
+    use gpurify_ingest::deck::ProcessStack;
+
+    /// The dielectric between two stack layers: the upper's height less the
+    /// lower's top, either way round, `None` when they touch or overlap or
+    /// either layer has no thickness or no row.
+    ///
+    /// Oracle: closed form, by hand. Layers (height, thickness): 0 at
+    /// (0, 100), 1 at (300, 50), 2 at (50, 100), 3 with no thickness, 4 at
+    /// (100, 10). 1 over 0: 300 - 100 = 200; 1 over 2: 300 - 150 = 150; 2
+    /// overlaps 0 (50 < 100); 4 sits on 0's top (gap 0).
+    #[test]
+    fn vertical_gap_is_the_dielectric_between_two_layers() {
+        let stack = ProcessStack {
+            thickness_nm: vec![100.0, 50.0, 100.0, 0.0, 10.0],
+            height_nm: vec![0.0, 300.0, 50.0, 500.0, 100.0],
+            ..ProcessStack::default()
+        };
+        let gap = |a: u16, b: u16| vertical_gap(&stack, LayerId(a), LayerId(b));
+        assert_eq!(gap(0, 1), Some(200.0));
+        assert_eq!(gap(1, 0), Some(200.0));
+        assert_eq!(gap(2, 1), Some(150.0));
+        assert_eq!(gap(1, 2), Some(150.0));
+        assert_eq!(gap(0, 2), None, "overlapping in height");
+        assert_eq!(gap(2, 0), None, "overlapping in height");
+        assert_eq!(gap(0, 4), None, "touching");
+        assert_eq!(gap(4, 0), None, "touching");
+        assert_eq!(gap(0, 3), None, "no thickness");
+        assert_eq!(gap(3, 1), None, "no thickness");
+        assert_eq!(gap(0, 9), None, "no row");
+    }
+}
