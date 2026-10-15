@@ -599,9 +599,17 @@ fn free_of_any(a: &ValidatedLayer, parts: &ValidatedLayer) -> Vec<bool> {
     free
 }
 
+/// Whether the grid point `p` lies in a polygon's material and on none of
+/// its rings.
+fn strictly_in(poly: PolygonRef<'_>, p: Point) -> bool {
+    !poly_segs(poly).any(|s| segments_intersect(s, Seg { a: p, b: p }))
+        && inside_scaled(std::iter::once(poly), p.x.raw(), p.y.raw(), 1)
+}
+
 /// Every `(i, j)` where polygon `i` of `a` and polygon `j` of `b` share
-/// area, ascending: one boolean per polygon of `a` against the polygons of
-/// `b` whose boxes meet it, then each of those against the shared part.
+/// area, ascending, among the pairs whose boxes meet: a vertex of either
+/// strictly inside the other shares (the polygon has area at its vertex);
+/// otherwise the intersection of the two polygons alone decides.
 fn sharing_area(a: &ValidatedLayer, b: &ValidatedLayer) -> Vec<(u32, u32)> {
     let mut pairs = Vec::new();
     box_pairs(a.bboxes(), b.bboxes(), &mut pairs);
@@ -611,18 +619,21 @@ fn sharing_area(a: &ValidatedLayer, b: &ValidatedLayer) -> Vec<(u32, u32)> {
         ValidatedLayer::default(),
         ValidatedLayer::default(),
     );
+    let first = |poly: PolygonRef<'_>| {
+        let (xs, ys) = poly.outer().coords();
+        Point { x: xs[0], y: ys[0] }
+    };
     let mut out = Vec::new();
     for &(i, j) in &pairs {
-        let mut pick = vec![false; a.len()];
-        pick[i as usize] = true;
-        a.select_into(&pick, &mut one);
-        let mut pick = vec![false; b.len()];
-        pick[j as usize] = true;
-        b.select_into(&pick, &mut other);
-        // A boolean of validated layers only fails on an internal fault.
-        if crate::boolean::intersection_into(&one, &other, &mut common)
-            .map_or(true, |()| !common.is_empty())
-        {
+        let (p, q) = (a.get(i), b.get(j));
+        let shares = strictly_in(p, first(q)) || strictly_in(q, first(p)) || {
+            a.copy_polygon_into(i, &mut one);
+            b.copy_polygon_into(j, &mut other);
+            // A boolean of validated layers only fails on an internal fault.
+            crate::boolean::intersection_into(&one, &other, &mut common)
+                .map_or(true, |()| !common.is_empty())
+        };
+        if shares {
             out.push((i, j));
         }
     }
