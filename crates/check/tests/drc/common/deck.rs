@@ -50,7 +50,7 @@ pub fn rect(layer: &'static str, xlo: i64, ylo: i64, xhi: i64, yhi: i64) -> Shap
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Want {
     pub rule: &'static str,
-    pub measured: Measurement,
+    pub measured: Option<Measurement>,
     pub at: Option<(i64, i64)>,
 }
 
@@ -58,7 +58,7 @@ pub struct Want {
 pub fn len(rule: &'static str, nm: i64) -> Want {
     Want {
         rule,
-        measured: Measurement::Length(dbu(nm)),
+        measured: Some(Measurement::Length(dbu(nm))),
         at: None,
     }
 }
@@ -67,7 +67,7 @@ pub fn len(rule: &'static str, nm: i64) -> Want {
 pub fn area(rule: &'static str, nm2: i128) -> Want {
     Want {
         rule,
-        measured: Measurement::Area(gpurify_geom::DbuArea::new(nm2)),
+        measured: Some(Measurement::Area(gpurify_geom::DbuArea::new(nm2))),
         at: None,
     }
 }
@@ -76,7 +76,16 @@ pub fn area(rule: &'static str, nm2: i128) -> Want {
 pub fn ratio(rule: &'static str, value: f64) -> Want {
     Want {
         rule,
-        measured: Measurement::Ratio(value),
+        measured: Some(Measurement::Ratio(value)),
+        at: None,
+    }
+}
+
+/// A finding whose measured value the case does not state.
+pub fn any(rule: &'static str) -> Want {
+    Want {
+        rule,
+        measured: None,
         at: None,
     }
 }
@@ -85,7 +94,7 @@ pub fn ratio(rule: &'static str, value: f64) -> Want {
 pub fn count(rule: &'static str, n: u32) -> Want {
     Want {
         rule,
-        measured: Measurement::Count(n),
+        measured: Some(Measurement::Count(n)),
         at: None,
     }
 }
@@ -232,9 +241,9 @@ pub fn check_under(
                 wanted.sort_by_key(|w| w.at.is_none());
                 for w in &wanted {
                     let at = w.at.map(map);
-                    let hit = got
-                        .iter()
-                        .position(|f| f.1 == w.measured && at.is_none_or(|at| f.2 == at));
+                    let hit = got.iter().position(|f| {
+                        w.measured.is_none_or(|m| f.1 == m) && at.is_none_or(|at| f.2 == at)
+                    });
                     match hit {
                         Some(k) => {
                             got.swap_remove(k);
