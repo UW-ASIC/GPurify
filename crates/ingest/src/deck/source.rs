@@ -58,6 +58,8 @@ pub struct DeckSource {
     pub waivers: Vec<(String, String)>,
     /// The parasitic models beyond the stack (`pex_fill`, …).
     pub pex_models: super::PexModels,
+    /// The layout edits (`fill`, `widen`).
+    pub edits: super::Edits,
 }
 
 /// One `corner` line: `corner <corner> <layer> <key> <value> ..`.
@@ -387,6 +389,7 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
     };
 
     let pex_models = check_pex_models(&doc.pex_models, &layers, &connectivity, strings)?;
+    let edits = check_edits(&doc.edits, &layers, strings)?;
     for (at, device) in pex_models.device.iter().enumerate() {
         let mos = doc
             .devices
@@ -424,7 +427,41 @@ pub fn lower(doc: &DeckSource, strings: &mut StrTable) -> Result<Deck, DeckError
         stages,
         waivers,
         pex_models,
+        edits,
     })
+}
+
+/// The edits, checked: every layer named is the deck's, and the layers an
+/// edit draws on are drawn layers, which have a stream pair to write.
+///
+/// # Errors
+///
+/// [`DeckError::Malformed`] naming the line's layer.
+fn check_edits(
+    edits: &super::Edits,
+    layers: &LayerTable,
+    strings: &StrTable,
+) -> Result<super::Edits, DeckError> {
+    let drawn = |name: &str, what: &str| {
+        let id = layer_of(layers, strings, name, what)?;
+        if layers.is_derived(id) {
+            return Err(DeckError::Malformed(format!(
+                "{what} {name}: a derived layer, which a layout cannot draw on"
+            )));
+        }
+        Ok(())
+    };
+    for fill in &edits.fill {
+        drawn(&fill.layer, "fill")?;
+        layer_of(layers, strings, &fill.density, "fill")?;
+        for layer in &fill.avoid {
+            layer_of(layers, strings, layer, "fill")?;
+        }
+    }
+    for widen in &edits.widen {
+        drawn(&widen.layer, "widen")?;
+    }
+    Ok(edits.clone())
 }
 
 /// The models, checked: each `pex_fill` names a conductor once.
