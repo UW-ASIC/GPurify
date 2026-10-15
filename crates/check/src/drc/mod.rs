@@ -102,8 +102,10 @@ pub enum DrcError {
     /// table fails its kind's check
     /// ([`ClassTable::is_valid_tips`](ruleset::ClassTable::is_valid_tips),
     /// [`ClassTable::is_valid_two_widths`](ruleset::ClassTable::is_valid_two_widths)),
-    /// its forbidden range starts above its end, or its cut-class table
-    /// fails [`CutClassTable::is_valid`].
+    /// its forbidden range starts above its end, its cut-class table
+    /// fails [`CutClassTable::is_valid`], or any other table, band list or
+    /// pattern its kind names fails that type's `is_valid` (each
+    /// [`Rule`] variant names the check its table must pass).
     #[error("rule {0}: its table or range is not well formed")]
     BadTable(String),
 }

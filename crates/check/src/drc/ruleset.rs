@@ -3712,7 +3712,6 @@ pub struct RuleSet {
     /// The width lists each [`Rule::AllowedWidth`] names: grid units, each
     /// positive, sorted, without repeats, never empty.
     pub widths: Vec<Vec<Dbu>>,
-    /// The tables [`Rule::TipSpacingTable`] names.
     /// The tables [`Rule::TipSpacingTable`] and
     /// [`Rule::TwoWidthSpacingTable`] name.
     pub class_tables: Vec<ClassTable>,
@@ -5127,6 +5126,11 @@ impl RuleSet {
 
     /// [`Self::run_with_nets`] without nets: a [`Rule::NetSpacing`] row records
     /// [`Outcome::Refused`].
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::run_with_nets`], on a table or list a row names that is
+    /// missing or invalid.
     pub fn run(&self, store: &GeometryStore, out: &mut Violations, runs: &mut Vec<RuleRun>) {
         self.run_with_nets(store, None, out, runs);
     }
@@ -6338,6 +6342,10 @@ impl Rule {
     /// itself calls, so a router reading this and the checker cannot
     /// disagree. A [`Rule::SpacingTable`] names a table of `tables`.
     ///
+    /// # Panics
+    ///
+    /// When a [`Rule::SpacingTable`]'s table index is past `tables`.
+    ///
     /// # Examples
     ///
     /// ```
@@ -6484,9 +6492,11 @@ impl Rule {
         }
     }
 
-    /// Every layer the rule reads: one to three, `None` past them (an
+    /// The rule's main layers: one to three, `None` past them (an
     /// [`Rule::OffGrid`] reads none of its own; an [`Rule::Angle`] without a
-    /// layer reads every drawn one).
+    /// layer reads every drawn one). Not every layer it reads: anchors,
+    /// density boundaries and [`Rule::CutAreaChange`]'s upper layer are
+    /// read besides, and a [`Rule::ViaStack`]'s layers are its stack's.
     pub fn layers(&self) -> [Option<LayerId>; 3] {
         match *self {
             Rule::MinWidth { layer, .. }

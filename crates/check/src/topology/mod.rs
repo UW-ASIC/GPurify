@@ -52,7 +52,7 @@ pub(crate) fn csr_run(start: &[u32], row: usize) -> (usize, usize) {
 /// ids of `nets`, which index nothing meaningful in another table.
 #[derive(Debug, Clone, Copy)]
 pub struct Extraction<'a> {
-    /// The nets.
+    /// The nets whose ids `devices` and `ports` hold.
     pub nets: &'a NetTable,
     /// The devices, recognised against `nets`.
     pub devices: &'a DeviceTable,

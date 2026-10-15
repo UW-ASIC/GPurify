@@ -200,12 +200,14 @@ pub struct RunInputs<'a> {
     pub switched: &'a [NetId],
     /// The per-net networks, or why they could not be built.
     pub networks: Result<&'a NetNetworks, PowerError>,
-    /// The solved supply grid, or `None` when intent declared no supplies.
+    /// The solved supply grid: `Ok(None)` when intent declared no supplies,
+    /// `Err` when it could not be built or solved, which refuses only the
+    /// rows that read it.
     pub power: Power<'a>,
     /// The supply grid loaded with each net's RMS current, and the intent
     /// whose budgets are those currents
-    /// ([`IntentMap::with_budget`]); `None` when no `em_rms` row or no net
-    /// states one.
+    /// ([`IntentMap::with_budget`]); `Ok(None)` when no `em_rms` row or no
+    /// net states one, `Err` when that grid failed to build or solve.
     pub rms: (&'a IntentMap, Power<'a>),
     /// As `rms`, for each net's peak current and the `em_peak` rows.
     pub peak: (&'a IntentMap, Power<'a>),
