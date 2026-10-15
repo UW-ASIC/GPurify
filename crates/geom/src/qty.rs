@@ -180,27 +180,3 @@ impl<D: Dimension, const P: i8> std::fmt::Debug for Qty<D, P> {
         std::fmt::Display::fmt(self, f)
     }
 }
-
-/// Serialises as the bare number; the dimension and prefix are schema, not data.
-impl<D: Dimension, const P: i8> serde::Serialize for Qty<D, P> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // Fail closed. `serde_json` writes NaN and infinity as `null` with no
-        // error, and a `null` limit reads to every consumer as "no limit".
-        if !self.is_finite() {
-            return Err(serde::ser::Error::custom(format_args!(
-                "{} is not a finite measurement",
-                self.raw
-            )));
-        }
-        serializer.serialize_f64(self.raw)
-    }
-}
-
-/// Deserialises from a bare number.
-impl<'de, D: Dimension, const P: i8> serde::Deserialize<'de> for Qty<D, P> {
-    fn deserialize<De: serde::Deserializer<'de>>(deserializer: De) -> Result<Self, De::Error> {
-        // Fail closed: anything that is not a number is the deserializer's own
-        // typed error, never a default.
-        <f64 as serde::Deserialize>::deserialize(deserializer).map(Self::new)
-    }
-}
