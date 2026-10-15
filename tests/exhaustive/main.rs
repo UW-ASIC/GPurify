@@ -124,6 +124,16 @@ const PROVED_BY_TEST: &[(&str, &str)] = &[
         "DRC-115",
         "crates/check/tests/deck/custom.rs::an_equation_based_limit_is_a_custom_rule",
     ),
+    // Cell edge types are LEF macro properties, read from a DEF design.
+    (
+        "DRC-127",
+        "src/engine/integration.rs::a_mirrored_cell_brings_its_typed_edge_onto_its_neighbours",
+    ),
+    // A fix hint is a report field beside the measured value a fixture states.
+    (
+        "ERC-A15",
+        "crates/check/tests/erc/antenna_and_density.rs::an_antenna_fix_hint_is_the_drm_rule_solved_for_the_diode_area",
+    ),
     // A system is several dies, which one fixture's single layout cannot hold.
     (
         "DRC-129",
