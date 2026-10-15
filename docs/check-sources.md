@@ -66,7 +66,7 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 | LVS | 31 | 1 | 12 | 4 | 0 | 0 |
 | ERC | 63 | 4 | 10 | 4 | 0 | 0 |
 | PEX | 9 | 0 | 6 | 1 | 0 | 0 |
-| Flow | 2 | 0 | 5 | 3 | 0 | 0 |
+| Flow | 2 | 0 | 8 | 0 | 0 | 0 |
 
 These numbers come from the TSV. Once `tests/catalog.rs` exists, it computes
 them, so this table cannot go stale unnoticed (the plan's F5 problem).
@@ -399,6 +399,8 @@ single oracle is a named gap that ledger P1 closes.
 | FLOW-002 | Early / dirty-design staged runs | implemented | CAL:Recon; ICV:Explorer | SY; MR |
 | FLOW-003 | SoC integration (macro sync, ports off grid, fill outside boundary, block/pad-ring overlap) | partial | ICV | SY; CF |
 | FLOW-005 | In-design / live DRC | partial | CAL:RealTime; ICV:Live; PEG | FR; MR |
+| FLOW-008 | Incremental / ECO re-verification (changed regions or nets only) | partial | PEG; SRC:datasheet | MR; SY |
+| FLOW-009 | Automated DRC-clean layout enhancement (via and power-grid insertion) | partial | CAL:DesignEnhancer | SY; MR |
 | FLOW-010 | Clustering and triage of very large result sets | partial | CAL:Vision AI | SY; NV |
 
 <!-- end of generated block -->

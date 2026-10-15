@@ -114,6 +114,20 @@ const PROVED_BY_TEST: &[(&str, &str)] = &[
         "FLOW-005",
         "tests/engine/main.rs::a_consumer_checks_each_edit_against_one_shared_deck",
     ),
+    // Layout edits and incremental runs: each compares two layouts or two
+    // runs, which one fixture's single layout cannot hold.
+    (
+        "FLOW-007",
+        "tests/engine/edits.rs::fill_tops_a_window_up_to_its_minimum_and_the_result_is_drc_clean",
+    ),
+    (
+        "FLOW-008",
+        "tests/engine/incremental.rs::a_recheck_finds_what_a_full_check_finds",
+    ),
+    (
+        "FLOW-009",
+        "tests/engine/edits.rs::a_dead_via_gets_a_second_cut_and_its_metal_and_the_rate_rises",
+    ),
     // A custom rule is the user's Rust function, run by the engine.
     (
         "FLOW-006",
