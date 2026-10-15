@@ -127,10 +127,11 @@ struct Element {
 /// What both readers collect before the network is built.
 #[derive(Default)]
 struct Collect {
+    /// Every net's name, in file order, escapes removed.
     nets: Vec<String>,
-    /// Node name to the net that declares it, and whether it drives.
+    /// Node name to the net that declares it (its first declaration wins).
     declared: HashMap<String, usize>,
-    /// Per net: its declared nodes in order, the driver first once known.
+    /// Per net: its driver, the first node declared to drive.
     driver: Vec<Option<String>>,
     elements: Vec<Element>,
     delimiter: char,

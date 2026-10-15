@@ -41,7 +41,10 @@ fn area(store: &GeometryStore, poly: PolyId) -> i128 {
     twice.abs() / 2
 }
 
-/// The liner capacitance in fF of one TSV of `area_um2` drawn area.
+/// The liner capacitance in fF of one TSV whose drawn cut covers
+/// `area_um2` µm²: the coaxial closed form of the module docs, the via a
+/// cylinder of that cross-section. A liner of zero thickness reads
+/// infinite.
 pub fn liner_capacitance_ff(model: &TsvModel, area_um2: f64) -> f64 {
     let r = (area_um2 / std::f64::consts::PI).sqrt();
     let (length, liner) = (model.length_nm / 1000.0, model.liner_nm / 1000.0);
