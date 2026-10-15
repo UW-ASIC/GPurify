@@ -478,9 +478,8 @@ fn run_drc(loaded: &Loaded, extracted: &Extracted, out: &mut Outputs) -> StageSt
 
 /// Classify nets, resolve intent, build and solve the supply grid, then run the
 /// rules. A supply grid that cannot be built or solved refuses only the rows
-/// that read it; `erc::check` refusing the whole stage maps to
-/// [`StageStatus::Refused`], and so does design intent on a layout with a net
-/// carrying two labels.
+/// that read it; design intent on a layout with a net carrying two labels
+/// refuses the whole stage ([`StageStatus::Refused`]).
 fn run_erc(loaded: &Loaded, extracted: &Extracted, out: &mut Outputs) -> StageStatus {
     // Intent finds nets by label, and a net with two labels is two named nets
     // shorted: resolving it by one name would drop the other's supply.
@@ -528,14 +527,10 @@ fn run_erc(loaded: &Loaded, extracted: &Extracted, out: &mut Outputs) -> StageSt
         antenna_pins: &pins,
         strings: &loaded.strings,
     };
-    let mut result = Ok(());
     append_stage(out, |violations, runs| {
-        result = gpurify_check::erc::check(&loaded.deck.erc, inputs, violations, runs);
+        gpurify_check::erc::check(&loaded.deck.erc, inputs, violations, runs);
     });
-    result.map_or_else(
-        |error| StageStatus::Refused(error.to_string()),
-        |()| StageStatus::Ran,
-    )
+    StageStatus::Ran
 }
 
 /// Every placed macro pin's LEF antenna data on the deck's layers (ERC-A14,

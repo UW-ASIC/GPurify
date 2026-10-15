@@ -13,13 +13,15 @@ use crate::erc::facts::IntentMap;
 use crate::erc::power::{
     extract_stress_into, solve_into, EdgeKind, PowerSolution, Process, Stress, StressGrid,
 };
-use crate::erc::rules::domain::{device_id, push_device, terminal};
+use crate::erc::rules::domain::{push_device, terminal};
 use crate::erc::rules::electrical::allowed_current;
 use crate::erc::rules::latchup::{pad_nets, poly_dist2};
 use crate::erc::rules::supply::{clamp_rails, clamp_reach_into, reverse_biased};
 use crate::erc::ruleset::RuleHead;
 use crate::erc::voltage::NetVoltage;
-use crate::erc::{first_vertex, push_net_violations, record_run, skip_rows, Design, Scratch};
+use crate::erc::{
+    device_id, first_vertex, push_net_violations, record_run, skip_rows, Design, Scratch,
+};
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use crate::topology::device::{DeviceMeasure, DeviceParam};
 use crate::topology::{DeviceId, NetId, TerminalRole};
@@ -755,7 +757,7 @@ pub(crate) fn coupling_groups(
         if devices.kind[index] != DeviceKind::Diode || !diodes.contains(&devices.model[index]) {
             continue;
         }
-        let device = DeviceId(u32::try_from(index).expect("a device table indexes with u32"));
+        let device = device_id(index);
         let (on, roles) = devices.terminals_of(device);
         let pin = |k: u8| {
             on.iter()
@@ -1438,17 +1440,17 @@ fn series_resistance(
         for value in &mut m[col] {
             *value /= scale;
         }
-        for row in 0..n {
-            if row != col {
-                let factor = m[row][col];
-                if factor != 0.0 {
-                    let pivot_row = m[col].clone();
-                    for (value, p) in m[row].iter_mut().zip(&pivot_row) {
-                        *value -= factor * p;
-                    }
+        // Lent out while the other rows are reduced against it: no row is `col`.
+        let pivot_row = std::mem::take(&mut m[col]);
+        for row in (0..n).filter(|&row| row != col) {
+            let factor = m[row][col];
+            if factor != 0.0 {
+                for (value, p) in m[row].iter_mut().zip(&pivot_row) {
+                    *value -= factor * p;
                 }
             }
         }
+        m[col] = pivot_row;
     }
     Some(
         (0..nets.net_count())

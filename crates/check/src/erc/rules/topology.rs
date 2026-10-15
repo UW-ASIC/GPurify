@@ -9,9 +9,11 @@
 use crate::drc::rules::{owners_of, LayerRects, SortedRects};
 use crate::erc::facts::{IntentMap, NetFacts, NetTypes, RoleMask};
 use crate::erc::ruleset::RuleHead;
-use crate::erc::{first_vertex, push_net_violations, record_run, skip_rows, Design, Scratch};
+use crate::erc::{
+    device_id, first_vertex, push_net_violations, record_run, skip_rows, Design, Scratch,
+};
 use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
-use crate::topology::{DeviceId, NetId, PortTable, TerminalRole};
+use crate::topology::{NetId, PortTable, TerminalRole};
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::rects::{clipped_area, covered_area, decompose_into};
@@ -99,7 +101,7 @@ pub fn check_fanout(
         if devices.kind[device] != DeviceKind::Mos {
             continue;
         }
-        let id = DeviceId(u32::try_from(device).expect("a device id is a u32"));
+        let id = device_id(device);
         let (nets, roles) = devices.terminals_of(id);
         for (&net, &role) in nets.iter().zip(roles) {
             if role == TerminalRole::Gate && net != NetId::NONE && net.idx() < gates.len() {
@@ -406,7 +408,7 @@ pub fn check_multiple_drivers(
     let mut ends = vec![[NO_GATE; 2]; devices.len()];
     let mut channel: Vec<(u32, u32)> = Vec::new();
     for device in 0..devices.len() {
-        let id = DeviceId(u32::try_from(device).expect("a device index is a u32"));
+        let id = device_id(device);
         let (nets, roles) = devices.terminals_of(id);
         for (&net, role) in nets.iter().zip(roles) {
             let end = match role {
@@ -709,7 +711,7 @@ fn path_edges(design: Design<'_>) -> Vec<(u32, u32)> {
             DeviceKind::Resistor => matches!(role, TerminalRole::Pin(_)),
             _ => false,
         };
-        let id = DeviceId(u32::try_from(device).expect("a device id is a u32"));
+        let id = device_id(device);
         let (nets, roles) = devices.terminals_of(id);
         let mut ends = nets
             .iter()
@@ -838,7 +840,7 @@ pub fn check_gate_path(
         if devices.kind[device] != DeviceKind::Mos {
             continue;
         }
-        let id = DeviceId(u32::try_from(device).expect("a device id is a u32"));
+        let id = device_id(device);
         let (nets, roles) = devices.terminals_of(id);
         for (&net, &role) in nets.iter().zip(roles) {
             if role == TerminalRole::Gate && net != NetId::NONE && net.idx() < count {
@@ -1144,7 +1146,7 @@ pub fn check_combinational_loop(
         if devices.kind[device] != DeviceKind::Mos {
             continue;
         }
-        let id = DeviceId(u32::try_from(device).expect("a device id is a u32"));
+        let id = device_id(device);
         let (nets, roles) = devices.terminals_of(id);
         let mut gate = None;
         let mut ends = Vec::new();

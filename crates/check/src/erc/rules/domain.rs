@@ -8,10 +8,10 @@
 use crate::erc::facts::IntentMap;
 use crate::erc::ruleset::RuleHead;
 use crate::erc::voltage::{is_channel, NetVoltage};
-use crate::erc::{first_vertex, record_run, skip_rows, Design};
+use crate::erc::{device_id, first_vertex, record_run, skip_rows, Design};
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Severity, Violation, Violations};
 use crate::topology::device::{DeviceMeasure, DeviceParam};
-use crate::topology::{DeviceId, NetId, TerminalRole};
+use crate::topology::{NetId, TerminalRole};
 use gpurify_geom::{prefix, Dbu, LayerId, Qty, Voltage};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::intent::SupplyRole;
@@ -393,10 +393,6 @@ pub(crate) fn terminal(nets: &[NetId], roles: &[TerminalRole], role: TerminalRol
         .iter()
         .position(|&r| r == role)
         .map_or(NetId::NONE, |at| nets[at])
-}
-
-pub(crate) fn device_id(index: usize) -> DeviceId {
-    DeviceId(u32::try_from(index).expect("a device table indexes with u32"))
 }
 
 /// One violation at a device's marker polygon.

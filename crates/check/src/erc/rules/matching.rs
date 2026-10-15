@@ -6,11 +6,11 @@
 
 use crate::erc::rules::supply::point_in_region;
 use crate::erc::ruleset::RuleHead;
-use crate::erc::{first_vertex, record_run, Design};
+use crate::erc::{device_id, first_vertex, record_run, Design};
 use crate::report::{LimitSense, Measurement, Outcome, RuleRun, Violation, Violations};
 use crate::topology::device::{DeviceMeasure, DeviceParam};
-use crate::topology::{DeviceId, NetId, TerminalRole};
-use gpurify_geom::ops::{winding_of, Point, Winding};
+use crate::topology::{NetId, TerminalRole};
+use gpurify_geom::ops::{winding_of, Winding};
 use gpurify_geom::{Dbu, LayerId, PolyId};
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrId;
@@ -157,13 +157,10 @@ pub fn check_matching(
                 if devices.kind[device] != DeviceKind::Mos {
                     continue;
                 }
-                let id = DeviceId(u32::try_from(device).expect("a device id is a u32"));
+                let id = device_id(device);
                 let marker = devices.marker[device];
                 let b = store.poly_bbox(marker);
-                let centre = Point {
-                    x: Dbu::new_unchecked(i64::midpoint(b.xlo.raw(), b.xhi.raw())),
-                    y: Dbu::new_unchecked(i64::midpoint(b.ylo.raw(), b.yhi.raw())),
-                };
+                let centre = crate::erc::centre(b);
                 if !point_in_region(gx, gy, centre) {
                     continue;
                 }

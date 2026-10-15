@@ -654,23 +654,19 @@ fn blech_products(power: &PowerGrid, solution: &PowerSolution) -> Vec<f64> {
 }
 
 /// Compare every branch on a limited layer against its allowed current times
-/// `derate`. Returns `examined`: in-scope edges the Blech exemption did not
-/// remove.
+/// `derate`. `blech` is [`blech_products`] of the grid, or empty when no row
+/// states a Blech limit. Returns `examined`: in-scope edges the Blech
+/// exemption did not remove.
 fn check_branches(
     solved: Solved<'_>,
     grid: Grid,
     head: (StrId, Severity),
-    limits: &LayerLimits<'_>,
+    (limits, blech): (&LayerLimits<'_>, &[f64]),
     derate: f64,
     out: &mut Violations,
 ) -> u64 {
     // `power` is the network; `grid` is the manufacturing grid.
     let (power, solution) = (solved.grid, solved.solution);
-    let blech = if limits.blech.is_empty() {
-        Vec::new()
-    } else {
-        blech_products(power, solution)
-    };
     let mut examined = 0u64;
     for edge in 0..power.edge_count() {
         // First mention of a repeated layer wins; other layers are out of scope.
@@ -703,16 +699,7 @@ fn check_branches(
         if immortal || !measured.violates(limit, LimitSense::Maximum) {
             continue;
         }
-        let (from, to) = (power.edge_from[edge] as usize, power.edge_to[edge] as usize);
-        out.push(Violation {
-            rule: head.0,
-            layer: power.edge_layer[edge],
-            severity: head.1,
-            at: power.node_at[from],
-            measured,
-            limit,
-            shapes: (power.node_poly[from], Some(power.node_poly[to])),
-        });
+        out.push(edge_violation(power, edge, head, measured, limit));
     }
     examined
 }
@@ -729,6 +716,12 @@ fn check_current_rows(
     runs: &mut Vec<RuleRun>,
 ) {
     let (layer_start, all) = limits;
+    // The products depend on the solved grid alone, not on the row.
+    let blech = if all.blech.is_empty() {
+        Vec::new()
+    } else {
+        blech_products(solved.grid, solved.solution)
+    };
     for row in 0..head.len() {
         let before = out.len();
         let id = head.rule[row];
@@ -752,7 +745,14 @@ fn check_current_rows(
                 &all.narrow[span]
             },
         };
-        let examined = check_branches(solved, grid, (id, head.severity[row]), &limits, derate, out);
+        let examined = check_branches(
+            solved,
+            grid,
+            (id, head.severity[row]),
+            (&limits, &blech),
+            derate,
+            out,
+        );
         record_run(runs, out, before, id, Outcome::Ran, examined);
     }
 }
@@ -880,18 +880,31 @@ fn interpolate(points: &[f64], values: &[f64], at: f64) -> f64 {
 }
 
 /// A row's table at `(frequency, width)`: each frequency row interpolated
-/// at the width, then those across the frequency.
+/// at the width, then those across the frequency. `by_frequency` is scratch,
+/// cleared and refilled.
+fn table_density(
+    frequencies: &[f64],
+    widths: &[f64],
+    density: &[f64],
+    (f, w): (f64, f64),
+    by_frequency: &mut Vec<f64>,
+) -> f64 {
+    by_frequency.clear();
+    by_frequency.extend(
+        density
+            .chunks(widths.len())
+            .map(|row| interpolate(widths, row, w)),
+    );
+    interpolate(frequencies, by_frequency, f)
+}
+
+/// A width in database units as a table's `f64` axis value.
 #[allow(
     clippy::cast_precision_loss,
     reason = "a width in database units is far below 2^53"
 )]
-fn table_density(frequencies: &[f64], widths: &[Dbu], density: &[f64], f: f64, w: Dbu) -> f64 {
-    let widths: Vec<f64> = widths.iter().map(|w| w.raw() as f64).collect();
-    let by_frequency: Vec<f64> = density
-        .chunks(widths.len())
-        .map(|row| interpolate(&widths, row, w.raw() as f64))
-        .collect();
-    interpolate(frequencies, &by_frequency, f)
+fn width_f64(w: Dbu) -> f64 {
+    w.raw() as f64
 }
 
 /// Runs every `em_rms` or `em_peak` row ([`EmAcTable`]) over the supply grid
@@ -925,21 +938,22 @@ pub fn check_em_ac(
         let (rule, severity) = (table.head.rule[row], table.head.severity[row]);
         let layers = &table.layer[span(&table.layer_start, row)];
         let frequencies = &table.frequency[span(&table.frequency_start, row)];
-        let widths = &table.width[span(&table.width_start, row)];
+        let widths: Vec<f64> = table.width[span(&table.width_start, row)]
+            .iter()
+            .map(|&w| width_f64(w))
+            .collect();
         let density: Vec<f64> = table.density[span(&table.density_start, row)]
             .iter()
             .map(|d| d.raw())
             .collect();
         let mut examined = 0u64;
         let mut outcome = Outcome::Ran;
+        let mut by_frequency = Vec::new();
         for edge in 0..network.edge_count() {
             if !layers.contains(&network.edge_layer[edge]) {
                 continue;
             }
-            let (from, to) = (
-                network.edge_from[edge] as usize,
-                network.edge_to[edge] as usize,
-            );
+            let from = network.edge_from[edge] as usize;
             let width = network.edge_width[edge];
             let allowed = match network.edge_kind[edge] {
                 EdgeKind::Via => table.max_current_per_cut[row],
@@ -954,7 +968,13 @@ pub fn check_em_ac(
                             f
                         }
                     };
-                    let per_width = table_density(frequencies, widths, &density, frequency, width);
+                    let per_width = table_density(
+                        frequencies,
+                        &widths,
+                        &density,
+                        (frequency, width_f64(width)),
+                        &mut by_frequency,
+                    );
                     allowed_current(
                         EdgeKind::Metal,
                         width,
@@ -973,15 +993,13 @@ pub fn check_em_ac(
             if !measured.violates(limit, LimitSense::Maximum) {
                 continue;
             }
-            out.push(Violation {
-                rule,
-                layer: network.edge_layer[edge],
-                severity,
-                at: network.node_at[from],
+            out.push(edge_violation(
+                network,
+                edge,
+                (rule, severity),
                 measured,
                 limit,
-                shapes: (network.node_poly[from], Some(network.node_poly[to])),
-            });
+            ));
         }
         record_run(runs, out, before, rule, outcome, examined);
     }
@@ -1531,21 +1549,16 @@ mod tests {
     /// table each axis holds its end.
     #[test]
     fn an_ac_table_is_bilinear_between_its_corners() {
-        use gpurify_geom::Dbu;
-        let (f, w, d) = (
-            [100.0, 300.0],
-            [Dbu::new_unchecked(500), Dbu::new_unchecked(1_500)],
-            [1.0, 2.0, 3.0, 4.0],
-        );
+        let (f, w, d) = ([100.0, 300.0], [500.0, 1_500.0], [1.0, 2.0, 3.0, 4.0]);
         for (freq, width, want) in [
-            (200.0, 1_000, 2.5),
-            (100.0, 1_000, 1.5),
-            (300.0, 750, 3.25),
-            (150.0, 500, 1.5),
-            (50.0, 2_000, 2.0),
-            (900.0, 0, 3.0),
+            (200.0, 1_000.0, 2.5),
+            (100.0, 1_000.0, 1.5),
+            (300.0, 750.0, 3.25),
+            (150.0, 500.0, 1.5),
+            (50.0, 2_000.0, 2.0),
+            (900.0, 0.0, 3.0),
         ] {
-            let got = super::table_density(&f, &w, &d, freq, Dbu::new_unchecked(width));
+            let got = super::table_density(&f, &w, &d, (freq, width), &mut Vec::new());
             assert!(
                 (got - want).abs() < 1e-12,
                 "({freq}, {width}): {got}, want {want}"
