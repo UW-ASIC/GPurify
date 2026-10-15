@@ -287,6 +287,66 @@ fn cut_class_space_holds_each_pair_to_its_cell() {
     );
 }
 
+/// A cut-class table whose square class has an END unlike its SIDE: a
+/// 100 x 100 square and a 100 x 300 slot, rows and columns square END,
+/// square SIDE, slot END, slot SIDE.
+const SQUARE_AND_SLOT: &str = "rule cs cut_class_space(cut;\n\
+     short: [100nm, 100nm], long: [100nm, 300nm],\n\
+     space: [[200nm, 300nm, 400nm, 400nm], [300nm, 300nm, 400nm, 400nm],\n\
+     [400nm, 400nm, 350nm, 500nm], [400nm, 400nm, 500nm, 500nm]])\n";
+
+/// Oracle: `Rule::CutClassSpacing`'s rustdoc: "A square cut always faces
+/// with its END", and "A pair that touches or overlaps is held to the
+/// largest cell of its two classes", the finding's `limit` the cell. Two
+/// squares 250 apart face END to END, 200: clean (SIDE to SIDE would need
+/// 300). Two slots touching end to end are not apart along either axis:
+/// held to the largest slot-slot cell, 500, not the END-END 350 an apart
+/// pair would take; the finding measures 0.
+#[test]
+fn cut_class_space_reads_squares_as_ends_and_touching_pairs_at_the_largest_cell() {
+    let deck = new_deck(&["cut"], SQUARE_AND_SLOT);
+    check_everywhere(
+        "squares",
+        &deck,
+        &Layout::default().rects("cut", &[(0, 0, 100, 100), (0, 350, 100, 450)]),
+        &[("cs", vec![])],
+    );
+    check_everywhere(
+        "squares_closer",
+        &deck,
+        &Layout::default().rects("cut", &[(0, 0, 100, 100), (0, 299, 100, 399)]),
+        &[("cs", vec![Finding::length(199).held(200)])],
+    );
+    check_everywhere(
+        "touching_slots",
+        &deck,
+        &Layout::default().rects("cut", &[(0, 0, 100, 300), (0, 300, 100, 600)]),
+        &[("cs", vec![Finding::length(0).held(500)])],
+    );
+}
+
+/// Oracle: `Rule::MaxCutSpacing`'s rustdoc: the nearest centre distance
+/// rounded up. A 100 cut and a 100 x 101 cut 1000 along: centres (50, 50)
+/// and (1050, 50.5), `√(1000² + 0.5²) ≈ 1000.0001` apart: lonely, measuring
+/// 1001. A 100 cut and a 101 x 100 cut 1001 along: centres 1101.5 apart,
+/// rounded up to 1102.
+#[test]
+fn max_space_rounds_a_half_unit_distance_up() {
+    let deck = new_deck(&["v1"], "rule lone max_space(v1) <= 1000nm\n");
+    check_everywhere(
+        "half_unit_off_axis",
+        &deck,
+        &Layout::default().rects("v1", &[(0, 0, 100, 100), (1000, 0, 1100, 101)]),
+        &[("lone", vec![Finding::length(1001); 2])],
+    );
+    check_everywhere(
+        "half_unit_along",
+        &deck,
+        &Layout::default().rects("v1", &[(0, 0, 100, 100), (1101, 0, 1202, 100)]),
+        &[("lone", vec![Finding::length(1102); 2])],
+    );
+}
+
 /// Cut-to-cut spacing `space(cut) >= 100nm` (DRC-060) and cross-layer
 /// `space(via1, via2) >= 100nm` (DRC-065): one finding per pair closer than
 /// the limit, measuring the Euclidean gap floored.
