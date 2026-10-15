@@ -201,15 +201,40 @@ pub fn layout_from_netlist(
         );
         let column = i64::try_from(index).expect("a spec written by hand is small");
         let x = plan.column_pitch * column + plan.column_pitch / 2;
-        emit_column(
-            &mut layout,
-            spec,
-            &layers,
-            plan,
-            x,
-            device,
-            &mut net_handles,
-        );
+        // A stub per terminal, and the cut joining it to the rail it lands on.
+        for &(role, net) in &device.terminals {
+            assert!(
+                net < spec.nets,
+                "a terminal names net {net}, but there are only {} nets",
+                spec.nets
+            );
+            let slot = layers
+                .roles
+                .iter()
+                .position(|&r| r == role)
+                .expect("every role in the spec was assigned a layer");
+            let y = i64::from(net) * plan.band_pitch;
+            // Inside the rail's band and overlapping it, so the cut between them
+            // has material on both sides.
+            let stub = layout.rect(
+                layers.role_layer[slot],
+                x,
+                y,
+                x + plan.column_width,
+                y + plan.rail_height,
+            );
+            net_handles[net as usize].push(stub);
+            // The cut, centred in the overlap.
+            let cx = x + plan.column_width / 2 - plan.cut_size / 2;
+            let cy = y + plan.rail_height / 2 - plan.cut_size / 2;
+            layout.rect(
+                layers.cut_layer[slot],
+                cx,
+                cy,
+                cx + plan.cut_size,
+                cy + plan.cut_size,
+            );
+        }
 
         // Spans the column across every band, so it overlaps this device's
         // stubs and, because columns do not share x, no other's.
@@ -261,52 +286,6 @@ pub fn layout_from_netlist(
         recognition,
         expected_net_polys,
         expected_devices,
-    }
-}
-
-/// Emit one device's column: a stub per terminal, and the cut joining each stub
-/// to the rail it lands on.
-fn emit_column(
-    layout: &mut LayoutBuilder,
-    spec: &NetlistSpec,
-    layers: &NetlistLayers,
-    plan: Floorplan,
-    x: i64,
-    device: &DeviceSpec,
-    net_handles: &mut [Vec<Handle>],
-) {
-    for &(role, net) in &device.terminals {
-        assert!(
-            net < spec.nets,
-            "a terminal names net {net}, but there are only {} nets",
-            spec.nets
-        );
-        let slot = layers
-            .roles
-            .iter()
-            .position(|&r| r == role)
-            .expect("every role in the spec was assigned a layer");
-        let y = i64::from(net) * plan.band_pitch;
-        // Inside the rail's band and overlapping it, so the cut between them
-        // has material on both sides.
-        let stub = layout.rect(
-            layers.role_layer[slot],
-            x,
-            y,
-            x + plan.column_width,
-            y + plan.rail_height,
-        );
-        net_handles[net as usize].push(stub);
-        // The cut, centred in the overlap.
-        let cx = x + plan.column_width / 2 - plan.cut_size / 2;
-        let cy = y + plan.rail_height / 2 - plan.cut_size / 2;
-        layout.rect(
-            layers.cut_layer[slot],
-            cx,
-            cy,
-            cx + plan.cut_size,
-            cy + plan.cut_size,
-        );
     }
 }
 
