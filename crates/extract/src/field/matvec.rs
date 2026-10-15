@@ -400,9 +400,11 @@ mod tests {
     use gpurify_testgen::Rng;
 
     fn random(rng: &mut Rng, n: usize) -> (CpuMatVec, Vec<f64>) {
-        let mut m = CpuMatVec::default();
         // Every row written, none with a near pair.
-        m.near = super::NearPairs::from_rows(vec![Vec::new(); n]);
+        let mut m = CpuMatVec {
+            near: super::NearPairs::from_rows(vec![Vec::new(); n]),
+            ..CpuMatVec::default()
+        };
         let mut x = Vec::with_capacity(n);
         for i in 0..n {
             // Every fourth panel coincides with its predecessor: r2 is the softening alone.

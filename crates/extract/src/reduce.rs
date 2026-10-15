@@ -119,7 +119,7 @@ fn lump(network: &mut ParasiticNetwork) {
             node_net.push(net);
             node_layer.push(network.node_layer[row]);
         }
-        merged.push(node(node_net.len() - 1));
+        merged.push(NodeId::at(node_net.len() - 1));
     }
     // Summed in element order, a strict fold, keyed by (near, far or ground).
     let mut ground: BTreeMap<NodeId, f64> = BTreeMap::new();
@@ -152,8 +152,4 @@ fn lump(network: &mut ParasiticNetwork) {
             Parasitic::CouplingCap(Qty::new(femtofarads)),
         );
     }
-}
-
-fn node(index: usize) -> NodeId {
-    NodeId(u32::try_from(index).expect("a node index is a u32"))
 }

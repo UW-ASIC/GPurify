@@ -19,7 +19,7 @@
 //! interposer wiring. Every value is the stack's, supplied by the deck: no
 //! open PDK has a TSV.
 
-use crate::network::{NodeId, Parasitic, ParasiticNetwork};
+use crate::network::{Parasitic, ParasiticNetwork};
 use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::{GeometryStore, Grid, LayerId, PolyId, Qty};
 use gpurify_ingest::deck::{Connectivity, TsvModel};
@@ -63,11 +63,6 @@ pub fn add_into(
     if tsvs.is_empty() {
         return;
     }
-    let first_node = |net: NetId| {
-        let at = network.node_net.partition_point(|&n| n < net);
-        (network.node_net.get(at) == Some(&net))
-            .then(|| NodeId(u32::try_from(at).expect("a NodeId")))
-    };
     #[expect(clippy::cast_precision_loss, reason = "a resolution is a small count")]
     let per_um = grid.dbu_per_um() as f64;
     let mut added = Vec::new();
@@ -95,7 +90,7 @@ pub fn add_into(
                     .map(|poly| nets.net_of(poly))
                     .filter(|&net| net != NetId::NONE)
             });
-            let Some(node) = net.and_then(first_node) else {
+            let Some(node) = net.and_then(|net| network.first_node(net)) else {
                 continue;
             };
             #[expect(clippy::cast_precision_loss, reason = "an area in database units")]

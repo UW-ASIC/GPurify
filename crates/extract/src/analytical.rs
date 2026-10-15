@@ -584,7 +584,7 @@ fn regions_into(
         let net = regions.net[first];
         let end = first + regions.net[first..].partition_point(|&other| other == net);
         for region in first..end {
-            let node = NodeId(u32::try_from(out.node_net.len()).expect("a NodeId is a u32"));
+            let node = NodeId::at(out.node_net.len());
             out.node_net.push(net);
             out.node_layer.push(regions.layer[region]);
             node_of.push(node);
