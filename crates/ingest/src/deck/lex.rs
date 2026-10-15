@@ -80,7 +80,10 @@ pub(crate) fn lex(source: &str, errors: &mut Vec<Diagnostic>) -> Vec<Token> {
             _ if c.is_ascii_digit() => {
                 at = number_end(bytes, at);
                 let unit_at = at;
-                if at < bytes.len() && (bytes[at].is_ascii_alphabetic() || bytes[at] == b'%') {
+                // A unit is a word, `%`, or a per-unit such as `/K`.
+                if at < bytes.len()
+                    && (bytes[at].is_ascii_alphabetic() || b"%/".contains(&bytes[at]))
+                {
                     at += 1;
                     while at < bytes.len()
                         && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'/')
@@ -96,7 +99,7 @@ pub(crate) fn lex(source: &str, errors: &mut Vec<Diagnostic>) -> Vec<Token> {
                     at += 1;
                 }
                 push(&mut out, Tok::Ident, start, at);
-                if &source[start..at] == "rule" {
+                if matches!(&source[start..at], "rule" | "waive") {
                     // The id: everything up to the next blank.
                     while at < bytes.len() && matches!(bytes[at], b' ' | b'\t') {
                         at += 1;

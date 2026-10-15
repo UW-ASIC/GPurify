@@ -5,25 +5,114 @@
 //! discrepancy order is user-visible: class imbalances, then per-pair joins in
 //! layout order, then unpaired layout nodes, then unpaired reference nodes.
 
-use crate::lvs::graph::{drop_unextracted_bulk, narrow, Graph};
+use crate::lvs::controls::{
+    assign_roles, bound, drop_ignored_devices, drop_ignored_params, filter_unused, port_names,
+    port_seeds, report_roles, restore_rows,
+};
+use crate::lvs::graph::{channel_ends, drop_unextracted_bulk, keep_declared_params, narrow, Graph};
 use crate::lvs::reduce::{reduce_with, Merge, ParamNames};
 use crate::lvs::refine::{refine_into, role_code, Partition};
 use crate::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
 use crate::topology::TerminalRole;
+use gpurify_ingest::deck::LvsControls;
 use gpurify_ingest::StrId;
 use std::cmp::Ordering;
 
+/// Debug-asserts the invariants [`Graph`] lists, at the seams that read a
+/// graph as given: column lengths, CSR offsets, net rows in range, and the
+/// net side the transpose of the device side. A macro, so the checks live
+/// only inside assertions, where cargo-mutants (which does not look inside
+/// macros) does not count them as code to test.
+macro_rules! debug_assert_graph {
+    ($graph:expr) => {{
+        let graph: &Graph = $graph;
+        let (devices, nets) = (graph.device_count(), graph.net_count());
+        debug_assert!(
+            {
+                // An empty table may leave its offsets empty (the `Default` graph).
+                let csr = |start: &[u32], rows: usize, len: usize| {
+                    (start.is_empty() && rows == 0 && len == 0)
+                        || (start.len() == rows + 1
+                            && start[0] == 0
+                            && start.windows(2).all(|w| w[0] <= w[1])
+                            && start[rows] as usize == len)
+                };
+                graph.device_model.len() == devices
+                    && graph.terminal_role.len() == graph.terminal_net.len()
+                    && csr(
+                        &graph.device_terminal_start,
+                        devices,
+                        graph.terminal_net.len(),
+                    )
+                    && csr(&graph.device_param_start, devices, graph.param.len())
+                    && csr(&graph.net_terminal_start, nets, graph.net_terminal.len())
+            },
+            "a graph's columns are as long as its tables, and its offsets CSR over them"
+        );
+        debug_assert!(
+            graph
+                .terminal_net
+                .iter()
+                .all(|&net| net == u32::MAX || (net as usize) < nets)
+                && graph.port_net.iter().all(|&net| (net as usize) < nets),
+            "every terminal is on a net row or on none, and every port is a net row"
+        );
+        debug_assert!(
+            (0..narrow(nets)).all(|net| {
+                let on = graph.terminals_on(net);
+                on.windows(2).all(|w| w[0].0 <= w[1].0)
+                    && on.iter().all(|&(device, role)| {
+                        (device as usize) < devices && {
+                            let (to, roles) = graph.terminals_of(device);
+                            to.iter().zip(roles).any(|(&n, &r)| n == net && r == role)
+                        }
+                    })
+            }),
+            "each net's terminals ascend by device and name a terminal of that device on it"
+        );
+        debug_assert_eq!(
+            graph.net_terminal.len(),
+            graph
+                .terminal_net
+                .iter()
+                .filter(|&&net| net != u32::MAX)
+                .count(),
+            "the net side lists every terminal on a net exactly once"
+        );
+    }};
+}
+
 /// How to run a comparison.
+///
+/// The default is 1000 rounds, a 2% tolerance and no parameter names. The
+/// `gpurify` binary keeps the first two and names `w`, `l`, `nf`, `m`, `as`,
+/// `ad`, `ps` and `pd`.
 #[derive(Debug, Clone, Copy)]
 pub struct CompareOptions {
-    /// Bound on refinement rounds in a row between tie-breaks; exceeding it is
-    /// [`Inconclusive::RoundLimit`].
+    /// The most refinement passes in a row that may split a class without the
+    /// partition settling; one more is [`Inconclusive::RoundLimit`]. The count
+    /// restarts at each symmetry tie-break, and at each pairing a tie-break
+    /// tries, so the number of symmetries does not spend it.
     pub max_rounds: u32,
-    /// Relative parameter tolerance: `|a - b| <= tol * max(|a|, |b|)`.
+    /// Relative tolerance `tol` for every parameter of a paired device but
+    /// its counts: values `a` and `b` agree when
+    /// `|a - b| <= tol * max(|a|, |b|)`. `NaN` never agrees. A count, the
+    /// parameter [`ParamNames`] names `m` or `nf`, is a whole number and
+    /// agrees only exactly (testing-plan F99): `m = 50` against `m = 51`,
+    /// 1.96 % apart, is a mismatch. A deck's `lvs tolerance` row replaces it
+    /// for one parameter of one model, with a relative part, an absolute
+    /// one, or both ([`compare_with`], catalog LVS-014), a count's too. It
+    /// does not apply to reduction, whose merges need the other parameters
+    /// bit-identical.
+    ///
+    /// Netgen's counterpart is `property ... tolerance`, `KLayout`'s `tolerance`.
+    /// Netgen measures the difference against the mean of the two values, not
+    /// the larger, so its `2 tol / (2 - tol)` is this `tol` exactly; the Netgen
+    /// differential (testing-plan F3) sets it so.
     pub param_tolerance: f64,
-    /// Which parameters are `W`, `L`, `nf` and `m`, so sized devices can be
-    /// merged in parallel and series. Default: none, and sized devices never
-    /// merge.
+    /// Which parameters are `W`, `L`, `nf`, `m` and the diffusions, so
+    /// devices can be merged in parallel and series, and a diffusion read at
+    /// its channel end. Default: none, and nothing merges.
     pub params: ParamNames,
 }
 
@@ -37,43 +126,418 @@ impl Default for CompareOptions {
     }
 }
 
-/// Compare one cell. Reference `Bulk` terminals are dropped when the layout
-/// extracts none (a 3-terminal MOS recogniser), then both sides are reduced.
-/// A symmetry refinement cannot break pairs the lowest node index on each side.
+/// Compares one cell: the extracted `layout` against one `reference`
+/// subcircuit, as the [`lvs` module docs](crate::lvs) describe.
+///
+/// Reference `Bulk` terminals are dropped when no layout terminal is `Bulk`
+/// (a three-terminal MOS recogniser), and a layout device keeps a parameter
+/// through reduction only when the reference declares it on some device of
+/// the same kind and model (a reference that sizes its diodes by `area` says
+/// nothing about its transistors' areas, which must not block their merges).
+/// Then both sides are reduced and refined together. A paired device's
+/// parameters are compared per device: those its reference card states,
+/// whatever other cards of the model state (testing-plan F68), and its count
+/// `m`, 1 where a side states none, once the `m` name is given. A
+/// symmetry pairs its lowest layout node with the reference node whose
+/// parameters are closest, and between nets the one its label names, so a
+/// stall resolves by property value and by name rather than by row order,
+/// and a pairing that leaves a class short of layout nodes or
+/// pairs devices that disagree is taken back for the next closest, so card
+/// order does not decide a match either. Neither input is modified.
+///
+/// The verdict is deterministic: the same graphs and options give the same
+/// verdict and the same discrepancy order on every run.
+///
+/// # Panics
+///
+/// Panics, or compares wrongly, when either graph breaks the [`Graph`]
+/// invariants, or holds `u32::MAX` or more devices plus nets.
 pub fn compare(layout: &Graph, reference: &Graph, options: CompareOptions) -> Verdict {
     compare_logged(layout, reference, options).0
 }
 
+/// Makes every reference net a layout label names a port of `reference`.
+///
+/// A label makes a layout port, and a series merge never crosses a port. The
+/// reference's net of the same name must stop the merge too, or a stack with a
+/// labelled internal node reduces on one side only (testing-plan F12).
+fn protect_labelled(layout: &Graph, reference: &mut Graph) {
+    let mut labels: Vec<StrId> = layout
+        .port_net
+        .iter()
+        .filter_map(|&net| layout.net_name[net as usize])
+        .collect();
+    labels.sort_unstable();
+    let mut is_port = vec![false; reference.net_count()];
+    for &net in &reference.port_net {
+        is_port[net as usize] = true;
+    }
+    for (net, &port) in is_port.iter().enumerate() {
+        let named = reference.net_name[net].is_some_and(|name| labels.binary_search(&name).is_ok());
+        if named && !port {
+            reference.port_net.push(narrow(net));
+        }
+    }
+}
+
 /// [`compare`], and every series or parallel merge each side's reduction made,
 /// layout's first.
+///
+/// A [`Merge`]'s device rows are rows of the graph that side was given (the
+/// reference's rows are unchanged by the bulk drop). A device merged in two
+/// passes, say series then parallel, appears in both merges. This is how a
+/// [`Discrepancy`] row, which is a row of the reduced graph, is traced back
+/// to what was drawn.
+///
+/// # Panics
+///
+/// As [`compare`].
 pub fn compare_logged(
     layout: &Graph,
     reference: &Graph,
     options: CompareOptions,
 ) -> (Verdict, Vec<(Side, Merge)>) {
+    compare_with(layout, reference, options, &LvsControls::default())
+}
+
+/// [`compare_logged`] under the deck's `lvs` statements, which the `gpurify`
+/// binary passes from the deck it loaded. With no statement it is
+/// [`compare_logged`].
+///
+/// - **`lvs tolerance`** (catalog LVS-014): a paired device's parameter
+///   named by a row for its model agrees when `|a - b| <= absolute +
+///   relative * max(|a|, |b|)`, the row's parts in place of
+///   [`CompareOptions::param_tolerance`]; a part the row leaves out is zero.
+///   The two parts add, as in `KLayout`'s `tolerance` ("absolute and
+///   relative tolerances add"); Netgen's `property ... tolerance` is a
+///   relative one, measured against the mean of the two values. A
+///   symmetry's trial pairing is held to the same bound.
+/// - **`lvs ignore_parameter`** (catalog LVS-014): the parameter is dropped
+///   from every device of the model on both sides before reduction, so it
+///   is neither compared nor read by a merge, as `KLayout`'s
+///   `ignore_parameter` and Netgen's `property ... remove` leave it out.
+/// - **`lvs asymmetric`** (catalog LVS-031): a transistor of the model has
+///   a source and a drain that do not trade places, `KLayout`'s DMOS: its
+///   source pairs only with a source and its drain with a drain, in
+///   refinement, in the terminal comparison and in a parallel merge, and a
+///   diffusion is compared at the end it is named for. Such transistors
+///   never merge in series (`KLayout` merges no transistor in series, and
+///   Netgen 1.5.323 none at all), so a stack of them does not match one
+///   long card: a false mismatch, never a false match.
+/// - **`lvs permute`** (catalog LVS-030): the two pins of every device of
+///   the model are interchangeable, joined with its default classes (a
+///   transistor's source and drain, unless asymmetric, and a resistor's
+///   ends) as Netgen's `permute` and `KLayout`'s `equivalent_pins` declare
+///   them. The pins of one class compare under one role, in refinement, the
+///   terminal comparison and a parallel merge; a class other than a
+///   transistor's channel is no channel, so no series merge takes it, and a
+///   terminal mismatch on it is reported under its lowest pin's role.
+/// - **`lvs ignore`** (catalog LVS-034): every device of the model is
+///   dropped from both sides before reduction, as Netgen's `ignore class`
+///   and `KLayout`'s `same_device_classes` with `nil` remove it, and so is
+///   a net only those devices reached, unless it is a port of the reference
+///   or a labelled layout net, which must still pair. A [`Merge`] still
+///   lists rows of the graphs given.
+/// - **`lvs ports_by_name`** (catalog LVS-016, LVS-001): each port of the
+///   reference starts refinement in a class of its own with the layout nets
+///   its name labels, so it pairs with no other net, as `KLayout`'s
+///   `flag_missing_ports` holds a top circuit's pins to their labels ("this
+///   prevents swapping of port labels or pads"). A port with no label, or
+///   whose label sits on a net wired otherwise, is then unpaired
+///   ([`Discrepancy::UnpairedNet`]). Seeding only splits classes, so it
+///   never turns a mismatch into a match.
+/// - **`lvs topology relaxed`** (catalog LVS-043, LVS-044, LVS-049):
+///   [`ParamNames::relaxed`], so a passive or bipolar stating its value
+///   merges in parallel by the value's law, and a resistor or capacitor in
+///   series by the opposite one ([`reduce`](crate::lvs::reduce)),
+///   Netgen's `property topology relaxed`; the strict policy, the default,
+///   counts instead.
+/// - **`lvs ignore_shorted`** (catalog LVS-035): a device of the model with
+///   every terminal it has on one net is dropped the same way, as Netgen's
+///   `ignore shorted` removes dummies. Its terminals are those compared: a
+///   reference bulk the layout does not extract is already gone, so a dummy
+///   with gate, source and drain on one net is shorted on both sides.
+/// - **`lvs recognize_gates`** (catalog LVS-047): [`ParamNames::gates`],
+///   so once nothing else merges, plain identical transistors stacked on
+///   different gates, or in parallel on them, become one device whose
+///   gates are interchangeable, Silvaco Guardian's reduction for logic
+///   gate recognition.
+/// - **`lvs max_res`, `lvs min_caps`** (catalog LVS-034): a resistor
+///   stating an `r` above the one, or a capacitor stating a `c` below the
+///   other, is dropped the same way on either side, as `KLayout`'s
+///   `max_res` and `min_caps` ignore them; the layout's own value counts,
+///   whether or not the reference states one. A device stating no value
+///   stays.
+/// - **`lvs same_nets`** (catalog LVS-032): the layout net labelled with a
+///   row's first name and the reference net of its second start refinement
+///   in a class of their own, as `KLayout`'s `same_nets!` holds them
+///   together; a pair whose wiring disagrees, or a row only one side has a
+///   net for, leaves its nets unpaired. Seeding only splits classes.
+/// - **`lvs filter_unused`** (catalog LVS-048): each layout transistor an
+///   option matches ([`UnusedFilter`](gpurify_ingest::deck::UnusedFilter))
+///   is dropped before anything else is, with the nets only it reached,
+///   each judged once on the layout as given; the reference keeps its own.
+///
+/// # Panics
+///
+/// As [`compare`].
+pub fn compare_with(
+    layout: &Graph,
+    reference: &Graph,
+    options: CompareOptions,
+    controls: &LvsControls,
+) -> (Verdict, Vec<(Side, Merge)>) {
+    let traced = compare_traced(layout, reference, options, controls);
+    (traced.verdict, traced.merges)
+}
+
+/// What [`compare_traced`] returns: the verdict and merges of
+/// [`compare_with`], and the rows of the reference graph each device of the
+/// reduced reference stands for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Traced {
+    /// The verdict, as [`compare_with`] gives it.
+    pub verdict: Verdict,
+    /// Every merge, as [`compare_with`] gives them.
+    pub merges: Vec<(Side, Merge)>,
+    /// `reference_rows[d]`: the rows of the reference graph given that
+    /// reduced reference device `d`, the row a [`Discrepancy`] names, stands
+    /// for, ascending. A row the deck's `lvs ignore` left out is in none.
+    pub reference_rows: Vec<Vec<u32>>,
+}
+
+/// [`compare_with`], and how each reduced reference device traces back to
+/// the rows it was given: what
+/// [`unpaired_instances`](crate::lvs::unpaired_instances) reads to name the
+/// instances a mismatch leaves without a partner.
+///
+/// # Panics
+///
+/// As [`compare`].
+pub fn compare_traced(
+    layout: &Graph,
+    reference: &Graph,
+    options: CompareOptions,
+    controls: &LvsControls,
+) -> Traced {
+    debug_assert_graph!(layout);
+    debug_assert_graph!(reference);
+    let options = CompareOptions {
+        params: ParamNames {
+            relaxed: options.params.relaxed || controls.relaxed,
+            gates: options.params.gates || controls.recognize_gates,
+            ..options.params
+        },
+        ..options
+    };
+    // The reference's own ports, before a layout label makes another net a
+    // port, are what `lvs ports_by_name` pairs by.
+    let ports = controls.ports_by_name.then(|| port_names(reference));
+    let given = reference.device_count();
     let mut declared = reference.clone();
     drop_unextracted_bulk(layout, &mut declared);
-    let (layout, layout_merges) = reduce_with(layout, options.params);
-    let (reference, reference_merges) = reduce_with(&declared, options.params);
+    let values = (options.params.values[0], options.params.values[1]);
+    let reference_rows = drop_ignored_devices(&mut declared, controls, values);
+    // The stress distances are a pair, smaller first, as the layout's are
+    // measured (`lde`).
+    crate::lvs::lde::sort_stress_pair(
+        &mut declared,
+        (options.params.stress[0], options.params.stress[1]),
+    );
+    protect_labelled(layout, &mut declared);
+    let mut measured = layout.clone();
+    // Unused transistors are judged as drawn, before anything else leaves.
+    let filtered = filter_unused(&mut measured, controls);
+    // A threshold reads the layout's own value, whether or not the
+    // reference states one, so devices go before measures do.
+    let ignored = drop_ignored_devices(&mut measured, controls, values);
+    let layout_rows = match (filtered, ignored) {
+        (Some(first), Some(then)) => Some(then.iter().map(|&row| first[row as usize]).collect()),
+        (first, then) => first.or(then),
+    };
+    keep_declared_params(reference, &mut measured);
+    drop_ignored_params(&mut measured, controls);
+    drop_ignored_params(&mut declared, controls);
+    assign_roles(&mut measured, controls);
+    assign_roles(&mut declared, controls);
+    let (mut layout, mut layout_merges) = reduce_with(&measured, options.params);
+    let (mut reference, mut reference_merges) = reduce_with(&declared, options.params);
+    restore_rows(&mut layout_merges, layout_rows.as_deref());
+    restore_rows(&mut reference_merges, reference_rows.as_deref());
+    let traced_rows = origin(given, reference_rows.as_deref(), &reference_merges);
+    debug_assert_eq!(
+        traced_rows.len(),
+        reference.device_count(),
+        "one group of given rows per reduced reference device"
+    );
+    if let Some(multiplier) = options.params.multiplier {
+        state_count(&mut layout, multiplier);
+        state_count(&mut reference, multiplier);
+    }
+    // Reduction returns graphs that keep the invariants refinement reads.
+    debug_assert_graph!(&layout);
+    debug_assert_graph!(&reference);
     let merges = layout_merges
         .into_iter()
         .map(|m| (Side::Layout, m))
         .chain(reference_merges.into_iter().map(|m| (Side::Reference, m)))
         .collect();
+    let seeds = if ports.is_some() || !controls.same_nets.is_empty() {
+        port_seeds(
+            (&layout, &reference),
+            ports.as_deref().unwrap_or_default(),
+            &controls.same_nets,
+        )
+    } else {
+        Vec::new()
+    };
     let mut partition = Partition::default();
-    if !refine_into(&layout, &reference, options.max_rounds, &mut partition) {
-        return (Verdict::Inconclusive(Inconclusive::RoundLimit), merges);
+    let budget = (options.max_rounds, options.param_tolerance);
+    if !refine_into(
+        (&layout, &reference),
+        budget,
+        (options.params, controls, &seeds, false),
+        &mut partition,
+    ) {
+        return Traced {
+            verdict: Verdict::Inconclusive(Inconclusive::RoundLimit),
+            merges,
+            reference_rows: traced_rows,
+        };
     }
-    (
-        interpret(&layout, &reference, &partition, options.param_tolerance),
+    let mut verdict = interpret((&layout, &reference), &partition, (options, controls));
+    if let Verdict::Mismatch(found) = &verdict {
+        if unpaired_on_both_sides(found) {
+            let sides = (&layout, &reference);
+            if let Some(found) = models_aside(sides, budget, (options, controls, &seeds)) {
+                verdict = Verdict::Mismatch(found);
+            }
+        }
+    }
+    if let Verdict::Mismatch(found) = &mut verdict {
+        report_roles(found, &reference, controls);
+    }
+    Traced {
+        verdict,
         merges,
-    )
+        reference_rows: traced_rows,
+    }
+}
+
+/// The given rows each reduced device stands for: the `kept` rows (every
+/// one of `devices` when `None`) grouped by the `merges` that joined them,
+/// in the order [`reduce_with`] emits its groups, ascending by each
+/// group's lowest row. A device merged in two passes is in two merges,
+/// which join the same group.
+fn origin(devices: usize, kept: Option<&[u32]>, merges: &[Merge]) -> Vec<Vec<u32>> {
+    let all: Vec<u32> = (0..narrow(devices)).collect();
+    let kept = kept.unwrap_or(&all);
+    let mut root = all.clone();
+    let find = |root: &mut Vec<u32>, mut at: u32| {
+        while root[at as usize] != at {
+            let up = root[root[at as usize] as usize];
+            root[at as usize] = up;
+            at = up;
+        }
+        at
+    };
+    for merge in merges {
+        let Some((&head, rest)) = merge.devices.split_first() else {
+            continue;
+        };
+        for &row in rest {
+            let (a, b) = (find(&mut root, head), find(&mut root, row));
+            root[a.max(b) as usize] = a.min(b);
+        }
+    }
+    let mut group_of = vec![u32::MAX; devices];
+    let mut out: Vec<Vec<u32>> = Vec::new();
+    for &row in kept {
+        let head = find(&mut root, row) as usize;
+        if group_of[head] == u32::MAX {
+            group_of[head] = narrow(out.len());
+            out.push(Vec::new());
+        }
+        out[group_of[head] as usize].push(row);
+    }
+    out
+}
+
+/// Whether `found` holds an unpaired device on each side: what a device
+/// whose model alone differs leaves, since refinement starts devices of
+/// different models apart.
+fn unpaired_on_both_sides(found: &[Discrepancy]) -> bool {
+    let unpaired = |want: Side| {
+        found
+            .iter()
+            .any(|d| matches!(d, Discrepancy::UnpairedDevice { side, .. } if *side == want))
+    };
+    unpaired(Side::Layout) && unpaired(Side::Reference)
+}
+
+/// The comparison again with every device of one kind starting in one class,
+/// models aside. When that pairs every node and the only differences left
+/// are pairs of different models, those pairs are the report, each a
+/// [`Discrepancy::ModelMismatch`], as `KLayout` reports two devices
+/// "identified but have different device classes" (catalog LVS-013).
+/// Otherwise `None`, and the comparison by model stands. Either way the
+/// verdict is a mismatch.
+fn models_aside(
+    sides: (&Graph, &Graph),
+    budget: (u32, f64),
+    (options, controls, seeds): (CompareOptions, &LvsControls, &[u32]),
+) -> Option<Vec<Discrepancy>> {
+    let mut partition = Partition::default();
+    if !refine_into(
+        sides,
+        budget,
+        (options.params, controls, seeds, true),
+        &mut partition,
+    ) {
+        return None;
+    }
+    match interpret(sides, &partition, (options, controls)) {
+        Verdict::Mismatch(found)
+            if found
+                .iter()
+                .all(|d| matches!(d, Discrepancy::ModelMismatch { .. })) =>
+        {
+            Some(found)
+        }
+        _ => None,
+    }
+}
+
+/// Writes the count every card has, `m = 1`, on each device that states
+/// none. A card without `m` is one device whatever other cards state, so
+/// its count is compared like any stated one: per-device presence
+/// (testing-plan F68) is for measures, and a count is none. Without this, two
+/// devices merged into `m = 2` matched a card stating no `m` once any card
+/// named it.
+fn state_count(graph: &mut Graph, multiplier: StrId) {
+    let mut param = Vec::with_capacity(graph.param.len() + graph.device_count());
+    let mut start = Vec::with_capacity(graph.device_count() + 1);
+    start.push(0);
+    for device in 0..narrow(graph.device_count()) {
+        let params = graph.params_of(device);
+        param.extend_from_slice(params);
+        if !params.iter().any(|&(name, _)| name == multiplier) {
+            param.push((multiplier, 1.0));
+        }
+        start.push(narrow(param.len()));
+    }
+    graph.param = param;
+    graph.device_param_start = start;
 }
 
 /// A node no class paired with anything.
 const UNPAIRED: u32 = u32::MAX;
 
-fn interpret(layout: &Graph, reference: &Graph, partition: &Partition, tolerance: f64) -> Verdict {
+fn interpret(
+    (layout, reference): (&Graph, &Graph),
+    partition: &Partition,
+    (options, controls): (CompareOptions, &LvsControls),
+) -> Verdict {
     let layout_devices = narrow(layout.device_count());
     let ref_devices = narrow(reference.device_count());
     let mut found: Vec<Discrepancy> = Vec::new();
@@ -99,6 +563,13 @@ fn interpret(layout: &Graph, reference: &Graph, partition: &Partition, tolerance
         .filter(|&(_, class)| resolved[class.0 as usize])
         .map(|(node, class)| (narrow(node), partition.ref_first[class.0 as usize]))
         .collect();
+    // Classes seed devices apart from nets and only ever split.
+    debug_assert!(
+        pairs.iter().all(|&(layout_node, ref_node)| {
+            ref_node != u32::MAX && (layout_node < layout_devices) == (ref_node < ref_devices)
+        }),
+        "a resolved class pairs a device with a device and a net with a net"
+    );
 
     let mut layout_mate = vec![UNPAIRED; layout.device_count() + layout.net_count()];
     let mut ref_mate = vec![UNPAIRED; reference.device_count() + reference.net_count()];
@@ -110,7 +581,7 @@ fn interpret(layout: &Graph, reference: &Graph, partition: &Partition, tolerance
     // A proposed pairing is a candidate until terminals and parameters agree.
     let mut scratch = JoinScratch::default();
     for &(layout_node, ref_node) in pairs.iter().filter(|pair| pair.0 < layout_devices) {
-        compare_identity(layout, reference, (layout_node, ref_node), &mut found);
+        let same_model = compare_identity(layout, reference, (layout_node, ref_node), &mut found);
         compare_terminals(
             layout,
             reference,
@@ -120,14 +591,22 @@ fn interpret(layout: &Graph, reference: &Graph, partition: &Partition, tolerance
             &mut scratch,
             &mut found,
         );
-        compare_params(
-            layout,
-            reference,
+        let crossed = crossed(
+            (layout, reference),
             (layout_node, ref_node),
-            tolerance,
-            &mut scratch,
-            &mut found,
+            (layout_devices, ref_devices),
+            &layout_mate,
         );
+        // Two models' parameters are not one model's to compare.
+        if same_model {
+            compare_params(
+                (layout, reference),
+                (layout_node, ref_node),
+                (options, controls, crossed),
+                &mut scratch,
+                &mut found,
+            );
+        }
     }
 
     report_unpaired(layout, &layout_mate, Side::Layout, &mut found);
@@ -150,17 +629,31 @@ struct JoinScratch {
 }
 
 /// A paired device must also agree on kind and model (a hash agreeing is not a
-/// comparison); if not, both sides are reported unpaired.
+/// comparison). Two of one kind and different models are a
+/// [`Discrepancy::ModelMismatch`], which only a refinement with models aside
+/// pairs; two of different kinds, which no refinement pairs, are both
+/// reported unpaired. Returns whether the models agree, so the parameters
+/// are comparable.
 fn compare_identity(
     layout: &Graph,
     reference: &Graph,
     pair: (u32, u32),
     found: &mut Vec<Discrepancy>,
-) {
+) -> bool {
     let (mine, theirs) = (pair.0 as usize, pair.1 as usize);
     let (layout_model, ref_model) = (layout.device_model[mine], reference.device_model[theirs]);
-    if layout.device_kind[mine] == reference.device_kind[theirs] && layout_model == ref_model {
-        return;
+    let same_kind = layout.device_kind[mine] == reference.device_kind[theirs];
+    if same_kind && layout_model == ref_model {
+        return true;
+    }
+    if same_kind {
+        found.push(Discrepancy::ModelMismatch {
+            layout_device: pair.0,
+            ref_device: pair.1,
+            layout_model,
+            ref_model,
+        });
+        return false;
     }
     found.push(Discrepancy::UnpairedDevice {
         side: Side::Layout,
@@ -172,6 +665,7 @@ fn compare_identity(
         device: pair.1,
         model: ref_model,
     });
+    false
 }
 
 const fn unmatched_terminal(pair: (u32, u32), role: TerminalRole) -> Discrepancy {
@@ -250,19 +744,61 @@ fn compare_terminals(
     }
 }
 
-/// Parameters joined by name within relative tolerance (`NaN` fails); a name only
-/// one side declares is [`Discrepancy::UndeclaredParam`], never a pass.
-fn compare_params(
-    layout: &Graph,
-    reference: &Graph,
+/// Whether a paired MOS's layout source is on its reference drain's net:
+/// then the layout's `as` is the card's `ad`, and so on. A device whose
+/// source and drain share a net, or that is no MOS, is never crossed.
+fn crossed(
+    (layout, reference): (&Graph, &Graph),
     pair: (u32, u32),
-    tolerance: f64,
+    (layout_devices, ref_devices): (u32, u32),
+    layout_mate: &[u32],
+) -> bool {
+    let ((Some(source), Some(drain)), (_, Some(ref_drain))) = (
+        channel_ends(layout, pair.0),
+        channel_ends(reference, pair.1),
+    ) else {
+        return false;
+    };
+    let mate = |net: u32| {
+        layout_devices
+            .checked_add(net)
+            .and_then(|node| layout_mate.get(node as usize).copied())
+    };
+    source != drain && mate(source) == ref_devices.checked_add(ref_drain)
+}
+
+/// The parameters the reference card states, each joined by name to the
+/// layout's within its tolerance (`NaN` fails): the deck's row for the
+/// reference model and that name, or the run's relative one, a count's
+/// exactly ([`ParamNames::tolerance`]). The layout's
+/// diffusions are read the other way round when the pair is `crossed`. One
+/// the layout does not measure is [`Discrepancy::UndeclaredParam`], never a
+/// pass. One only the layout measures is not compared: presence is per
+/// device, and a card that omits a parameter states nothing about it
+/// (testing-plan F68).
+fn compare_params(
+    (layout, reference): (&Graph, &Graph),
+    pair: (u32, u32),
+    (options, controls, crossed): (CompareOptions, &LvsControls, bool),
     scratch: &mut JoinScratch,
     found: &mut Vec<Discrepancy>,
 ) {
+    let model = reference.device_model[pair.1 as usize];
     let (mine, theirs) = (&mut scratch.layout_params, &mut scratch.ref_params);
     mine.clear();
-    mine.extend_from_slice(layout.params_of(pair.0));
+    mine.extend(
+        layout
+            .params_of(pair.0)
+            .iter()
+            .filter_map(|&(name, value)| {
+                let name = if crossed {
+                    options.params.across(name)?
+                } else {
+                    name
+                };
+                Some((name, value))
+            }),
+    );
     theirs.clear();
     theirs.extend_from_slice(reference.params_of(pair.1));
 
@@ -274,28 +810,26 @@ fn compare_params(
     while at_mine < mine.len() && at_theirs < theirs.len() {
         let ((layout_param, layout_value), (ref_param, ref_value)) =
             (mine[at_mine], theirs[at_theirs]);
-        if layout_param != ref_param {
-            let mine_first = layout_param < ref_param;
-            found.push(undeclared_param(
-                pair,
-                if mine_first {
-                    Side::Layout
-                } else {
-                    Side::Reference
-                },
-                if mine_first { layout_param } else { ref_param },
-            ));
-            at_mine += usize::from(mine_first);
-            at_theirs += usize::from(!mine_first);
+        if layout_param < ref_param {
+            // Measured, but this card says nothing about it.
+            at_mine += 1;
+            continue;
+        }
+        if layout_param > ref_param {
+            found.push(undeclared_param(pair, ref_param));
+            at_theirs += 1;
             continue;
         }
         at_mine += 1;
         at_theirs += 1;
 
-        let spread = (layout_value - ref_value).abs();
-        let scale = layout_value.abs().max(ref_value.abs());
-        let agree = spread <= tolerance * scale;
-        if !agree {
+        let within = bound(
+            controls,
+            options.params.tolerance(ref_param, options.param_tolerance),
+            model,
+            ref_param,
+        );
+        if !within.agree(layout_value, ref_value) {
             found.push(Discrepancy::ParameterMismatch {
                 layout_device: pair.0,
                 ref_device: pair.1,
@@ -306,18 +840,16 @@ fn compare_params(
         }
     }
 
-    for &(param, _) in &mine[at_mine..] {
-        found.push(undeclared_param(pair, Side::Layout, param));
-    }
     for &(param, _) in &theirs[at_theirs..] {
-        found.push(undeclared_param(pair, Side::Reference, param));
+        found.push(undeclared_param(pair, param));
     }
 }
 
-/// One parameter of a paired device that only `side` declares.
-const fn undeclared_param(pair: (u32, u32), side: Side, param: StrId) -> Discrepancy {
+/// One parameter the reference card of a paired device states and the layout
+/// does not measure.
+const fn undeclared_param(pair: (u32, u32), param: StrId) -> Discrepancy {
     Discrepancy::UndeclaredParam {
-        side,
+        side: Side::Reference,
         layout_device: pair.0,
         ref_device: pair.1,
         param,

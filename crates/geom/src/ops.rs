@@ -1,19 +1,28 @@
 //! Exact geometric predicates and measurements, integer-only (products in `i128`).
 
+use core::cmp::Ordering;
+
 use crate::view::RingRef;
 use crate::{Dbu, DbuArea, MAX_ABS_DBU};
 
 /// A coordinate pair, passed by value to a predicate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Point {
+    /// Horizontal coordinate, in database units.
     pub x: Dbu,
+    /// Vertical coordinate, in database units.
     pub y: Dbu,
 }
 
-/// A closed line segment between two points.
+/// A closed line segment between two points, both ends included.
+///
+/// On an edge layer the direction carries meaning: the shape's material lies
+/// to the left of travel from `a` to `b`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Seg {
+    /// Start point.
     pub a: Point,
+    /// End point.
     pub b: Point,
 }
 
@@ -34,6 +43,17 @@ fn cross(a: Point, b: Point, c: Point) -> i128 {
     let vx = i128::from(c.x.raw() - a.x.raw());
     let vy = i128::from(c.y.raw() - a.y.raw());
     ux * vy - uy * vx
+}
+
+/// The counter-clockwise order of two non-zero direction vectors by their
+/// angle from `+x` in `[0, 2π)`: exact, by half-plane and then by the sign of
+/// their cross product. Components up to `2^62` in magnitude.
+pub(crate) fn angle_cmp(a: (i64, i64), b: (i64, i64)) -> Ordering {
+    let lower = |(x, y): (i64, i64)| y < 0 || (y == 0 && x < 0);
+    lower(a).cmp(&lower(b)).then_with(|| {
+        let turn = i128::from(a.0) * i128::from(b.1) - i128::from(a.1) * i128::from(b.0);
+        0i128.cmp(&turn)
+    })
 }
 
 /// With a zero [`cross`], exactly "`p` is on the segment `s`".
@@ -143,16 +163,25 @@ fn swept_edge(xs: &[Dbu], ys: &[Dbu], from: usize, to: usize, id: u32) -> SweptE
     }
 }
 
-/// Whether a closed coordinate run crosses itself (non-adjacent edges share a point).
+/// Whether a closed coordinate run crosses itself: two non-adjacent edges
+/// share a point, touching included. A run of fewer than four vertices never does.
 ///
-/// Sweep by `xlo`, testing only edges whose x-intervals overlap: same verdict as
-/// all pairs. Not Shamos–Hoey, whose neighbour argument fails on rectilinear degeneracies.
+/// Gives the all-pairs verdict at the cost of the pairs whose x-intervals
+/// overlap: `O(n log n)` for typical rings, `O(n²)` when every edge spans a
+/// common x.
 pub fn self_intersects(xs: &[Dbu], ys: &[Dbu]) -> bool {
-    self_intersects_with(xs, ys, &mut Vec::new())
+    self_intersects_with(xs, ys, false, &mut Vec::new())
 }
 
-/// [`self_intersects`] with the edge buffer passed in, for a caller looping over rings.
-pub(crate) fn self_intersects_with(xs: &[Dbu], ys: &[Dbu], edges: &mut Vec<SweptEdge>) -> bool {
+/// [`self_intersects`] with the edge buffer passed in, for a caller looping over
+/// rings. With `pinches`, a vertex the run passes twice as a pinch
+/// ([`pinches_are_corners`]) is a touch the run may make, not a crossing.
+pub(crate) fn self_intersects_with(
+    xs: &[Dbu],
+    ys: &[Dbu],
+    pinches: bool,
+    edges: &mut Vec<SweptEdge>,
+) -> bool {
     let n = xs.len();
     // Under four edges, every pair shares a vertex.
     if n < 4 {
@@ -167,7 +196,7 @@ pub(crate) fn self_intersects_with(xs: &[Dbu], ys: &[Dbu], edges: &mut Vec<Swept
     edges.push(swept_edge(xs, ys, n - 1, 0, last));
     edges.sort_unstable_by_key(|e| e.xlo);
 
-    let mut found = false;
+    let (mut found, mut touched) = (false, false);
     for (i, &e) in edges.iter().enumerate() {
         let rest = &edges[i + 1..];
         let window = rest.partition_point(|o| o.xlo <= e.xhi);
@@ -175,17 +204,84 @@ pub(crate) fn self_intersects_with(xs: &[Dbu], ys: &[Dbu], edges: &mut Vec<Swept
         for &o in &rest[..window] {
             let apart = e.id.abs_diff(o.id);
             let adjacent = (apart == 1) | (apart == last);
-            found |= !adjacent & segments_intersect(e.seg, o.seg);
+            let hit = !adjacent && segments_intersect(e.seg, o.seg);
+            let touch = hit && pinches && meet_only_at_an_end(e.seg, o.seg);
+            found |= hit & !touch;
+            touched |= touch;
         }
     }
 
-    found
+    // Edges meeting end to end put one point at two places in the run.
+    found || (touched && !pinches_are_corners(xs, ys))
+}
+
+/// Whether two segments share one endpoint of each and no other point: the
+/// shared end, and no stretch of a common line out of it.
+fn meet_only_at_an_end(p: Seg, q: Seg) -> bool {
+    let mut shared = 0;
+    let mut overlap = false;
+    for (end, far) in [(p.a, p.b), (p.b, p.a)] {
+        for (other_end, other_far) in [(q.a, q.b), (q.b, q.a)] {
+            if end == other_end {
+                shared += 1;
+                let along = i128::from(far.x.raw() - end.x.raw())
+                    * i128::from(other_far.x.raw() - end.x.raw())
+                    + i128::from(far.y.raw() - end.y.raw())
+                        * i128::from(other_far.y.raw() - end.y.raw());
+                overlap |= cross(end, far, other_far) == 0 && along > 0;
+            }
+        }
+    }
+    shared == 1 && !overlap
+}
+
+/// Whether every point a closed run visits more than once is a **pinch**,
+/// where parts of one figure meet at a point: the edges out of it point in
+/// distinct directions, and taken counter-clockwise round it they alternate
+/// between a way back (toward a visit's previous vertex) and a way on.
+///
+/// Material lies left of travel, so going round the point it starts after
+/// each way on and ends after each way back: alternation is exactly "no point
+/// near the vertex is covered twice". Two visits as corners turning the same
+/// way alternate (a checkerboard corner, either way it is traced); a straight
+/// pass through a touch, turns that differ, or a crossing put two ways back,
+/// or two ways on, next to each other. Edges at any angle are read exactly.
+fn pinches_are_corners(xs: &[Dbu], ys: &[Dbu]) -> bool {
+    let n = xs.len();
+    let mut visits: Vec<(Dbu, Dbu, usize)> = (0..n).map(|i| (xs[i], ys[i], i)).collect();
+    visits.sort_unstable();
+    let toward = |from: usize, to: usize| ((xs[to] - xs[from]).raw(), (ys[to] - ys[from]).raw());
+    // Each ray out of the point, and whether it is a way on.
+    let mut rays: Vec<((i64, i64), bool)> = Vec::new();
+    visits
+        .chunk_by(|a, b| (a.0, a.1) == (b.0, b.1))
+        .all(|visit| {
+            if visit.len() < 2 {
+                return true;
+            }
+            rays.clear();
+            for &(.., i) in visit {
+                rays.push((toward(i, (i + n - 1) % n), false));
+                rays.push((toward(i, (i + 1) % n), true));
+            }
+            rays.sort_by(|a, b| angle_cmp(a.0, b.0));
+            let m = rays.len();
+            (0..m).all(|k| {
+                let (here, next) = (rays[k], rays[(k + 1) % m]);
+                angle_cmp(here.0, next.0) != Ordering::Equal && here.1 != next.1
+            })
+        })
 }
 
 /// Twice the signed area of a closed coordinate run, by the shoelace formula.
 ///
 /// Positive for counter-clockwise.
+///
+/// # Panics
+///
+/// When `xs` and `ys` differ in length.
 pub fn area2(xs: &[Dbu], ys: &[Dbu]) -> DbuArea {
+    assert_eq!(xs.len(), ys.len(), "one y per x");
     let n = xs.len();
     if n < 3 {
         return DbuArea::new(0);
@@ -218,8 +314,14 @@ pub fn winding_of(xs: &[Dbu], ys: &[Dbu]) -> Option<Winding> {
     }
 }
 
-/// Squared distance from a point to a closed segment, rounded up: zero only when
-/// `p` is on the segment.
+/// Squared distance from a point to a closed segment, rounded up to a whole
+/// square unit: zero only when `p` is on the segment, so a comparison against
+/// a squared limit never passes a point that is too close.
+///
+/// # Panics
+///
+/// In debug builds, when a skew segment's distance reaches `2^42`, which
+/// only points outside `±`[`crate::MAX_ABS_DBU`] can.
 pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
     let vx = i128::from(seg.b.x.raw() - seg.a.x.raw());
     let vy = i128::from(seg.b.y.raw() - seg.a.y.raw());
@@ -256,6 +358,11 @@ pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
         // `cross²` reaches 166 bits at the domain corners: divide at 256 bits.
         None => ceil_sq_div(drop, scale),
     };
+    // At most the squared diagonal of the `±2^40` domain, `2^83`.
+    debug_assert!(
+        dist2 < 1 << 84,
+        "a squared distance in the domain is under 2^84"
+    );
 
     #[expect(
         clippy::cast_possible_wrap,
@@ -268,6 +375,7 @@ pub fn point_seg_dist2(p: Point, seg: Seg) -> DbuArea {
 /// `ceil(a² / d)` exactly, for `d > 0`: `a²` as a 256-bit pair, restoring division.
 fn ceil_sq_div(a: u128, d: u128) -> u128 {
     const HALF: u128 = u64::MAX as u128;
+    debug_assert!(d > 0, "a divisor is positive");
 
     // `a = h·2^64 + l`, so `a² = h²·2^128 + 2hl·2^64 + l²`.
     let (l, h) = (a & HALF, a >> 64);
@@ -315,4 +423,125 @@ pub fn seg_seg_dist2(p: Seg, q: Seg) -> DbuArea {
         .min(point_seg_dist2(p.b, q))
         .min(point_seg_dist2(q.a, p))
         .min(point_seg_dist2(q.b, p))
+}
+
+/// Twice the squared distance from `p` to the closed segment `seg`, and the
+/// segment's nearest point, both coordinates doubled.
+///
+/// Exact when the segment is horizontal, vertical or at 45 degrees: twice a
+/// squared distance to such a line through grid points is an integer, and
+/// the foot of the perpendicular is a half-grid point. For a segment at any
+/// other angle the distance is twice [`point_seg_dist2`] (rounded up) and the
+/// point is rounded.
+pub fn point_seg_near2(p: Point, seg: Seg) -> (i128, (i64, i64)) {
+    let (ax, ay) = (seg.a.x.raw(), seg.a.y.raw());
+    let (vx, vy) = (seg.b.x.raw() - ax, seg.b.y.raw() - ay);
+    let (wx, wy) = (p.x.raw() - ax, p.y.raw() - ay);
+    let to = |x: i64, y: i64| {
+        let (dx, dy) = (i128::from(p.x.raw() - x), i128::from(p.y.raw() - y));
+        (2 * (dx * dx + dy * dy), (2 * x, 2 * y))
+    };
+    let along = i128::from(vx) * i128::from(wx) + i128::from(vy) * i128::from(wy);
+    let len2 = i128::from(vx) * i128::from(vx) + i128::from(vy) * i128::from(vy);
+    if along <= 0 {
+        return to(ax, ay);
+    }
+    if along >= len2 {
+        return to(seg.b.x.raw(), seg.b.y.raw());
+    }
+    if vx == 0 || vy == 0 {
+        // The foot keeps `p`'s coordinate along the segment.
+        let (fx, fy) = if vx == 0 {
+            (ax, p.y.raw())
+        } else {
+            (p.x.raw(), ay)
+        };
+        return to(fx, fy);
+    }
+    if vx.abs() == vy.abs() {
+        let (sx, sy) = (vx.signum(), vy.signum());
+        // `v = k·s`: twice the squared offset is `(s × w)²`, and the foot,
+        // doubled, is `2a + (s·w)·s`.
+        let side = i128::from(sx * wy - sy * wx);
+        let t = sx * wx + sy * wy;
+        return (side * side, (2 * ax + t * sx, 2 * ay + t * sy));
+    }
+    let d2 = point_seg_dist2(p, seg).raw();
+    let scaled = |a: i64, v: i64| {
+        let num = 2 * along * i128::from(v);
+        i64::try_from(i128::from(2 * a) + num.div_euclid(len2)).expect("in domain")
+    };
+    (2 * d2, (scaled(ax, vx), scaled(ay, vy)))
+}
+
+/// Twice the squared distance from `p` to the closed segment `seg`, at any
+/// angle, exactly: its floor and whether the true value lies above it. Twice
+/// a squared distance to a skew line is a fraction; its floor compares
+/// against a whole bound `B` as the true value does under `<` (`v < B` iff
+/// `floor(v) < B`), its ceiling (`floor + inexact`) under `<=` and `>`, and
+/// floored it gives the floored length. On axis and 45-degree segments it is
+/// whole: `(point_seg_near2(p, seg).0, false)`.
+#[must_use]
+pub fn point_seg_twice2(p: Point, seg: Seg) -> (i128, bool) {
+    let (ax, ay) = (seg.a.x.raw(), seg.a.y.raw());
+    let (vx, vy) = (
+        i128::from(seg.b.x.raw() - ax),
+        i128::from(seg.b.y.raw() - ay),
+    );
+    let (wx, wy) = (i128::from(p.x.raw() - ax), i128::from(p.y.raw() - ay));
+    let along = vx * wx + vy * wy;
+    let len2 = vx * vx + vy * vy;
+    let to = |x: Dbu, y: Dbu| {
+        let (dx, dy) = (i128::from((p.x - x).raw()), i128::from((p.y - y).raw()));
+        (2 * (dx * dx + dy * dy), false)
+    };
+    if along <= 0 {
+        return to(seg.a.x, seg.a.y);
+    }
+    if along >= len2 {
+        return to(seg.b.x, seg.b.y);
+    }
+    let side = crate::wide::I256::from_i128(cross(seg.a, seg.b, p));
+    crate::wide::twice_ratio(side.mul(side), crate::wide::I256::from_i128(len2))
+}
+
+/// [`point_seg_twice2`] between two closed segments: `(0, false)` when they
+/// touch or cross.
+#[must_use]
+pub fn seg_seg_twice2(p: Seg, q: Seg) -> (i128, bool) {
+    if segments_intersect(p, q) {
+        return (0, false);
+    }
+    point_seg_twice2(p.a, q)
+        .min(point_seg_twice2(p.b, q))
+        .min(point_seg_twice2(q.a, p))
+        .min(point_seg_twice2(q.b, p))
+}
+
+/// Twice the squared distance between two closed segments, with a nearest
+/// point on each, doubled: `(twice d², on p, on q)`. Zero, at a shared point,
+/// when they touch or cross. Exact for horizontal, vertical and 45-degree
+/// segments, as [`point_seg_near2`].
+pub fn seg_seg_near2(p: Seg, q: Seg) -> (i128, (i64, i64), (i64, i64)) {
+    let doubled = |pt: Point| (2 * pt.x.raw(), 2 * pt.y.raw());
+    let candidates = [
+        (point_seg_near2(p.a, q), doubled(p.a), true),
+        (point_seg_near2(p.b, q), doubled(p.b), true),
+        (point_seg_near2(q.a, p), doubled(q.a), false),
+        (point_seg_near2(q.b, p), doubled(q.b), false),
+    ];
+    let ((d2, foot), end, from_p) = candidates
+        .into_iter()
+        .min_by_key(|&((d2, _), _, _)| d2)
+        .expect("four candidates");
+    if d2 > 0 && segments_intersect(p, q) {
+        // A proper crossing; its point is reported as the nearer ends' middle.
+        let mid = (i64::midpoint(end.0, foot.0), i64::midpoint(end.1, foot.1));
+        return (0, mid, mid);
+    }
+    if from_p {
+        (d2, end, foot)
+    } else {
+        (d2, foot, end)
+    }
 }

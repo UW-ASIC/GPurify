@@ -90,6 +90,14 @@ fn a_label_binds_to_its_split_flank_and_one_on_the_channel_refuses_the_load() {
         &[(ids.of(source), s_name), (ids.of(drain), d_name)],
         "each pin bound to the split piece under it, not to the other flank"
     );
+    // F35: binding again rebinds; it does not bind every label a second time.
+    provenance
+        .resolve_labels(&store, &connectivity)
+        .expect("the same pins bind again");
+    assert_eq!(
+        provenance.labels(),
+        &[(ids.of(source), s_name), (ids.of(drain), d_name)]
+    );
 
     // A third pin over the channel gap sits on no conductor shape at all.
     let mut provenance = Provenance::default();

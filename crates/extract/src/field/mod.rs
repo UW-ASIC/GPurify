@@ -3,45 +3,98 @@
 //! Data in: selected nets' polygons and the process stack.
 //! Data out: the Maxwell [`CapMatrix`] — one GMRES solve per conductor at unit
 //! potential gives one column. The dense system is never formed; the matvec is the cost.
+//!
+//! The pipeline is [`mesh::build_into`], then one [`solve::refine`] per
+//! column. The kernel images every panel in the substrate, a grounded plane
+//! at height 0, so ground is the substrate. In a uniform stack every panel
+//! carries its free charge in the stack's one dielectric. In a stratified
+//! one (the dielectric changes with height, `pex` row by row) every panel
+//! carries its total charge in vacuum and each interface between two
+//! dielectrics is meshed too, its rows holding the continuity of the
+//! displacement across it: `FastCap`'s formulation for several dielectrics
+//! (Nabors & White, 1992); the interfaces' collocated rows make that
+//! operator not symmetric, so the matrix is reciprocal to its
+//! discretisation ([`STRATIFIED_RECIPROCITY`]) and reported symmetrised.
+//! A shape on a layer at height 0 (a well, a diffusion) is a
+//! junction in that plane, not a conductor above it: it is left out of the
+//! mesh, and its closed-form capacitance `Ca·A + Cf·P` (the layer's `pex`
+//! row) sits on its conductor's diagonal. A shape on a global layer (the
+//! substrate as a net) carries no parasitics: it is left out too, and needs
+//! no `pex` row. See the
+//! [crate docs](crate#accuracy-and-known-gaps).
+//!
+//! # Time complexity
+//!
+//! Each GMRES iteration is a dense product over every pair of panels,
+//! *O*(P²) for P panels, and there is one solve per selected net. The panel
+//! count is capped at 2²⁰: [`extract_into`] coarsens the panels until an
+//! estimate of the count fits, and the mesh is refused with
+//! [`mesh::MeshError::TooManyPanels`] if the real count still exceeds the cap.
 
+mod dielectric;
 pub mod filament;
 pub mod henry;
 mod matvec;
 pub mod mesh;
 pub mod solve;
 
+use crate::analytical::region_ground_ff;
+use crate::conductor::Regions;
 use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::GeometryStore;
-use gpurify_geom::{Dbu, Grid, MAX_ABS_DBU};
-use gpurify_ingest::deck::ProcessStack;
+use gpurify_geom::{Bbox, Dbu, Grid, MAX_ABS_DBU};
+use gpurify_ingest::deck::{Connectivity, ProcessStack};
 
 /// The Maxwell capacitance matrix, full square so symmetry is checkable.
+///
+/// `C[i][i]` is positive, `C[i][j]` for `i ≠ j` is minus the coupling between
+/// nets `i` and `j`, and a row sums to net `i`'s capacitance to the
+/// substrate (a grounded plane at height 0). `C[i][i]` also holds the
+/// closed-form junction capacitance of net `i`'s shapes on the substrate,
+/// which are not in the field (so a net of only such shapes has that alone
+/// on its diagonal and no coupling). A
+/// converged solve is symmetric to about its tolerance (reciprocity), which is
+/// what [`Self::asymmetry`] measures.
 #[derive(Debug, Default)]
 pub struct CapMatrix {
-    /// Which net each row and column belongs to.
+    /// Which net each row and column belongs to, in ascending [`NetId`] order.
     pub net: Vec<NetId>,
-    /// Row-major, `n × n`, in farads.
+    /// Row-major, in farads. `n × n` from [`extract_into`]; `n` rows by one
+    /// column per driven set from [`extract_columns_into`].
     pub value: Vec<f64>,
 }
 
 impl CapMatrix {
+    /// Returns the number of rows, one per net.
     pub fn dim(&self) -> usize {
         self.net.len()
     }
 
-    /// Largest relative asymmetry `|C[i][j] − C[j][i]| / |C[i][j]|`; NaN if any
-    /// entry is non-finite, so a poisoned matrix fails every tolerance.
+    /// Largest asymmetry `|C[i][j] − C[j][i]| / √(C[i][i]·C[j][j])`, relative
+    /// to the pair's self-capacitances; NaN if any entry is non-finite, so a
+    /// poisoned matrix fails every tolerance.
+    ///
+    /// The scale is the diagonal, not the entry: a solve converged to a
+    /// relative residual leaves an error of that order in the diagonal, and a
+    /// weakly coupled pair's tiny off-diagonal would otherwise read that same
+    /// error as a large relative asymmetry (testing-plan F47).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `value` holds fewer than `n × n` entries, which a
+    /// non-square matrix from [`extract_columns_into`] can.
     pub fn asymmetry(&self) -> f64 {
         let n = self.dim();
         let mut worst = 0.0_f64;
-        // `f64::max` drops NaN (folding away 0/0 from two exact zeros), so
+        // `f64::max` drops NaN (folding away 0/0 from a zero diagonal), so
         // poison is carried separately: `x * 0.0` is NaN only for non-finite `x`.
         let mut poison = 0.0_f64;
         for i in 0..n {
             for j in 0..n {
                 let entry = self.value[i * n + j];
                 let mirror = self.value[j * n + i];
-                worst = worst.max((entry - mirror).abs() / entry.abs());
+                let scale = (self.value[i * n + i] * self.value[j * n + j]).abs().sqrt();
+                worst = worst.max((entry - mirror).abs() / scale);
                 poison += entry * 0.0 + mirror * 0.0;
             }
         }
@@ -52,20 +105,53 @@ impl CapMatrix {
 /// What a solve achieved, measured in `f64`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Accuracy {
-    /// Residual asked for.
+    /// Relative residual every column was solved to.
     pub tolerance: f64,
+    /// GMRES iterations summed over every column, saturating at `u32::MAX`.
     pub iterations: u32,
-    /// [`CapMatrix::asymmetry`] of the result.
+    /// [`CapMatrix::asymmetry`] of the result before it was symmetrised;
+    /// `0.0` for a matrix that is not square, where it is undefined.
     pub asymmetry: f64,
+    /// The asymmetry a reciprocal result may show: the solve's
+    /// [`tolerance`](Self::tolerance) when its operator is symmetric (a
+    /// uniform dielectric), [`STRATIFIED_RECIPROCITY`] when dielectric
+    /// interfaces make it not (their rows hold a field, collocated).
+    pub reciprocity: f64,
 }
 
-/// Field-solve `selected` into `matrix`, rows in ascending [`NetId`] order.
+/// The asymmetry a capacitance matrix solved with dielectric interfaces may
+/// show and still be reciprocal: the interfaces' rows are collocated at
+/// panel centroids, so the discrete operator is not symmetric and the
+/// matrix is reciprocal only to its discretisation, as `FastCap`'s
+/// multi-dielectric matrices are. The matrix reported is the mean of it and
+/// its transpose.
+pub const STRATIFIED_RECIPROCITY: f64 = 5e-2;
+
+/// Field-solves `selected` into `matrix`, rows in ascending [`NetId`] order.
 ///
 /// Duplicates are kept: two conductors on one net is a singular system the
 /// solver refuses, rather than a silently smaller matrix.
+///
+/// The panel edge is the smallest length the stack states (a layer
+/// thickness or a gap between layers), coarsened until the estimated mesh
+/// fits 2²⁰ panels. Every column is solved to [`solve::Options::default`].
+///
+/// Shapes on a global layer ([`Connectivity::global`]) are left out, as
+/// junctions are, and need no stack row.
+///
+/// # Errors
+///
+/// [`solve::SolveError::Mesh`] when the selection cannot be meshed: a net
+/// with no polygons, a polygon in the field (off the global layers and above
+/// the substrate) on a layer the stack gives no thickness, height or
+/// permittivity, a layer whose geometry (a
+/// junction's included) does not validate as rectilinear, or too many
+/// panels. The other variants when a column does not converge, breaks down
+/// or goes non-finite.
 pub fn extract_into(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     selected: &[NetId],
     stack: &ProcessStack,
     grid: Grid,
@@ -73,14 +159,29 @@ pub fn extract_into(
 ) -> Result<Accuracy, solve::SolveError> {
     let mut order = selected.to_vec();
     order.sort_unstable();
-    let meshing = mesh_options(store, nets, &order, stack, grid);
-    extract_meshed_into(store, nets, &order, stack, grid, meshing, matrix)
+    let meshing = mesh_options(store, nets, connectivity, &order, stack, grid);
+    extract_meshed_into(
+        store,
+        nets,
+        connectivity,
+        &order,
+        stack,
+        grid,
+        meshing,
+        matrix,
+    )
 }
 
 /// [`extract_into`] at a caller's panel size rather than the stack-derived one.
+///
+/// # Errors
+///
+/// As [`extract_into`]. `meshing.max_panels` is the cap that
+/// [`mesh::MeshError::TooManyPanels`] enforces.
 pub fn extract_meshed_into(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     selected: &[NetId],
     stack: &ProcessStack,
     grid: Grid,
@@ -92,7 +193,16 @@ pub fn extract_meshed_into(
     let driven: Vec<Vec<usize>> = (0..order.len()).map(|i| vec![i]).collect();
     let options = solve::Options::default();
     columns_meshed_into(
-        store, nets, &order, &driven, stack, grid, meshing, options, matrix,
+        store,
+        nets,
+        connectivity,
+        &order,
+        &driven,
+        stack,
+        grid,
+        meshing,
+        options,
+        matrix,
     )
 }
 
@@ -104,9 +214,19 @@ pub fn extract_meshed_into(
 /// the sum of their single columns, in one solve; a row is the charge induced
 /// on that conductor, which is what a windowed extraction wants: a net's row
 /// is its column, by reciprocity.
+///
+/// A driven net that is not in `selected` is ignored, so a set of only such
+/// nets gives a zero column. Returns the GMRES iterations summed over every
+/// column.
+///
+/// # Errors
+///
+/// As [`extract_into`], with `options` in place of the default tolerance and
+/// budgets.
 pub fn extract_columns_into(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     selected: &[NetId],
     driven: &[Vec<NetId>],
     stack: &ProcessStack,
@@ -126,7 +246,16 @@ pub fn extract_columns_into(
         })
         .collect();
     columns_meshed_into(
-        store, nets, &order, &columns, stack, grid, meshing, options, matrix,
+        store,
+        nets,
+        connectivity,
+        &order,
+        &columns,
+        stack,
+        grid,
+        meshing,
+        options,
+        matrix,
     )
     .map(|accuracy| accuracy.iterations)
 }
@@ -134,6 +263,7 @@ pub fn extract_columns_into(
 fn columns_meshed_into(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     order: &[NetId],
     columns: &[Vec<usize>],
     stack: &ProcessStack,
@@ -146,14 +276,62 @@ fn columns_meshed_into(
     matrix.value.clear();
 
     let mut mesh = mesh::Mesh::default();
-    mesh::build_into(store, nets, order, stack, meshing, grid, &mut mesh)?;
+    mesh::build_into(
+        store,
+        nets,
+        connectivity,
+        order,
+        stack,
+        meshing,
+        grid,
+        &mut mesh,
+    )?;
+    let junction = junctions_farad(store, nets, connectivity, order, stack, grid)?;
 
     let n = order.len();
+    let width = columns.len();
     matrix.net.extend_from_slice(order);
-    matrix.value.resize(n * columns.len(), 0.0);
+    matrix.value.resize(n * width, 0.0);
 
-    let operator = matvec::CpuMatVec::build(&mesh);
-    let iterations = columns_into(&operator, &mesh, options, columns, matrix)?;
+    let stratified = !mesh.interface.is_empty();
+    let iterations = if stratified {
+        // Every charge in vacuum; the interfaces' rows hold the dielectrics.
+        let vacuum = vec![1.0; mesh.panel.len()];
+        let operator = matvec::CpuMatVec::with_permittivity(&mesh.panel, &vacuum);
+        let first = mesh.conductor_start[n] as usize;
+        let field = dielectric::FieldRows::build(&mesh.panel, first, &mesh.interface);
+        let apply = |x: &[f64], y: &mut [f64]| {
+            operator.apply(x, y);
+            field.apply(&mesh.panel, x, y);
+        };
+        columns_into(apply, &mesh, options, columns, matrix)?
+    } else {
+        let operator = matvec::CpuMatVec::build(&mesh);
+        let apply = |x: &[f64], y: &mut [f64]| operator.apply(x, y);
+        columns_into(apply, &mesh, options, columns, matrix)?
+    };
+    // The field's part, before the junctions: `columns_into` refuses a
+    // non-finite charge, and a lone conductor at one volt over grounded
+    // neighbours holds a non-negative charge (a Maxwell diagonal).
+    debug_assert!(
+        matrix.value.iter().all(|c| c.is_finite()),
+        "a solved capacitance matrix is finite"
+    );
+    debug_assert!(
+        columns.iter().enumerate().all(|(slot, column)| {
+            column.len() != 1 || matrix.value[column[0] * width + slot] >= 0.0
+        }),
+        "a lone driven conductor's field self-capacitance is non-negative"
+    );
+    // A junction is a capacitor from its conductor to the substrate, in
+    // parallel with the field: at one volt it adds its own charge.
+    for (slot, column) in columns.iter().enumerate() {
+        for (row, &farads) in junction.iter().enumerate() {
+            if column.contains(&row) {
+                matrix.value[row * width + slot] += farads;
+            }
+        }
+    }
 
     // Asymmetry is only defined on a square matrix.
     let asymmetry = if columns.len() == n {
@@ -161,17 +339,66 @@ fn columns_meshed_into(
     } else {
         0.0
     };
+    // Reciprocal only to the discretisation: report the symmetric part.
+    if stratified && columns.len() == n {
+        for i in 0..n {
+            for j in i + 1..n {
+                let mean = matrix.value[i * n + j].midpoint(matrix.value[j * n + i]);
+                matrix.value[i * n + j] = mean;
+                matrix.value[j * n + i] = mean;
+            }
+        }
+    }
     Ok(Accuracy {
         tolerance: options.tolerance,
         iterations,
         asymmetry,
+        reciprocity: if stratified {
+            STRATIFIED_RECIPROCITY
+        } else {
+            options.tolerance
+        },
     })
 }
 
+/// Each conductor's junction capacitance in farads: the closed form
+/// `Ca·A + Cf·P` of its regions on layers the stack puts on the substrate,
+/// which the mesh leaves out ([`mesh::build_into`]). A global layer carries
+/// no parasitics, so none of its shapes is a junction.
+fn junctions_farad(
+    store: &GeometryStore,
+    nets: &NetTable,
+    connectivity: &Connectivity,
+    order: &[NetId],
+    stack: &ProcessStack,
+    grid: Grid,
+) -> Result<Vec<f64>, mesh::MeshError> {
+    let mut regions = Regions::default();
+    let mut out = Vec::with_capacity(order.len());
+    for &net in order {
+        let first = regions.len();
+        regions
+            .push_net(store, nets, net, |layer| {
+                mesh::on_substrate(stack, layer) && !connectivity.global.contains(&layer)
+            })
+            .map_err(mesh::MeshError::InvalidGeometry)?;
+        let mut femtofarads = 0.0_f64;
+        for region in first..regions.len() {
+            femtofarads += region_ground_ff(&regions, region, stack, grid);
+        }
+        out.push(femtofarads * 1e-15);
+    }
+    Ok(out)
+}
+
 /// One solve per conductor into a sized [`CapMatrix`]; returns the total
-/// iteration count.
+/// iteration count. A conductor's charge is its panels' total charge each
+/// times the permittivity outside it ([`mesh::Mesh::epsilon`]) in a
+/// stratified stack, where the unknown is total charge; their plain sum
+/// otherwise, where it is free charge already. Interface panels are held to
+/// zero, the continuity their rows state.
 fn columns_into(
-    operator: &matvec::CpuMatVec,
+    apply: impl Fn(&[f64], &mut [f64]) + Copy,
     mesh: &mesh::Mesh,
     options: solve::Options,
     columns: &[Vec<usize>],
@@ -180,6 +407,8 @@ fn columns_into(
     let n = mesh.conductor_net.len();
     let width = columns.len();
     let panels = mesh.panel.len();
+    let conductors_end = mesh.conductor_start[n] as usize;
+    let stratified = !mesh.interface.is_empty();
     let mut workspace = solve::Workspace::default();
     let mut potential = Vec::with_capacity(panels);
     let mut charge = vec![0.0_f64; panels];
@@ -191,28 +420,44 @@ fn columns_into(
         for &conductor in column {
             driven[conductor] = true;
         }
-        // One volt on the driven conductors, ground on the rest.
+        // One volt on the driven conductors, ground on the rest, and zero
+        // on every interface panel's continuity row.
         potential.clear();
         potential.extend(
-            mesh.panel
+            mesh.panel[..conductors_end]
                 .iter()
                 .map(|panel| f64::from(driven[panel.conductor as usize])),
         );
+        potential.resize(panels, 0.0);
 
         // Zero initial guess, never a warm start: columns stay independent.
         charge.fill(0.0);
-        let apply = |x: &[f64], y: &mut [f64]| operator.apply(x, y);
         let converged = solve::refine(apply, &potential, options, &mut charge, &mut workspace)?;
+        // `Converged` means the tolerance was reached, never a spent budget.
+        debug_assert!(
+            converged.residual <= options.tolerance,
+            "a converged column's residual {} is within the tolerance {}",
+            converged.residual,
+            options.tolerance
+        );
         iterations = iterations.saturating_add(converged.iterations);
 
         for row in 0..n {
             let start = mesh.conductor_start[row] as usize;
             let end = mesh.conductor_start[row + 1] as usize;
             // The unknown is total panel charge, so a conductor's charge is the
-            // plain band sum (an area weight would break reciprocity).
+            // plain band sum (an area weight would break reciprocity); in a
+            // stratified stack, each panel's free charge, its permittivity
+            // outside times its total.
             let mut total = 0.0_f64;
-            for &q in &charge[start..end] {
-                total += q;
+            if stratified {
+                for (&q, &epsilon) in charge[start..end].iter().zip(&mesh.epsilon[start..end]) {
+                    total += epsilon * q;
+                }
+            } else {
+                for &q in &charge[start..end] {
+                    total += q;
+                }
             }
             if !total.is_finite() {
                 return Err(solve::SolveError::NonFinite(iterations));
@@ -237,12 +482,29 @@ const UNSTATED: i64 = i64::MAX;
 fn mesh_options(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     selected: &[NetId],
     stack: &ProcessStack,
     grid: Grid,
 ) -> mesh::MeshOptions {
     let feature = finest_feature(stack, grid);
-    let surface = surface_area(store, nets, selected, thickest_layer(stack, grid));
+    let in_field = |layer| mesh::in_field(stack, connectivity, layer);
+    let mut surface = surface_area(store, nets, selected, in_field, thickest_layer(stack, grid));
+    // Each dielectric interface is meshed across the selection's footprint.
+    let interfaces =
+        dielectric::Profile::of(stack).map_or(0, |profile| profile.interfaces().count());
+    if interfaces > 0 {
+        let reach = selected
+            .iter()
+            .flat_map(|&net| nets.polys_of(net))
+            .filter(|&&poly| in_field(store.poly_layer(poly)))
+            .fold(Bbox::EMPTY, |reach, &poly| {
+                reach.union(store.poly_bbox(poly))
+            });
+        let w = i128::from(reach.width().raw().max(0));
+        let h = i128::from(reach.height().raw().max(0));
+        surface += w * h * i128::try_from(interfaces).unwrap_or(i128::MAX);
+    }
     let max_edge = feature.max(budget_edge(surface)).clamp(1, MAX_ABS_DBU);
     mesh::MeshOptions {
         max_edge: Dbu::new_unchecked(max_edge),
@@ -279,18 +541,23 @@ fn thickest_layer(stack: &ProcessStack, grid: Grid) -> i64 {
     thickest
 }
 
-/// Surface area of the selected conductors in dbu², each polygon boxed and
-/// extruded — an estimate that bounds a panel count.
+/// Surface area of the selected conductors in dbu², each polygon the mesh
+/// takes (`in_field`) boxed and extruded — an estimate that bounds a panel
+/// count.
 fn surface_area(
     store: &GeometryStore,
     nets: &NetTable,
     selected: &[NetId],
+    in_field: impl Fn(gpurify_geom::LayerId) -> bool,
     thickness: i64,
 ) -> i128 {
     let t = i128::from(thickness);
     let mut surface = 0_i128;
     for &net in selected {
         for &poly in nets.polys_of(net) {
+            if !in_field(store.poly_layer(poly)) {
+                continue;
+            }
             let bbox = store.poly_bbox(poly);
             let w = i128::from(bbox.width().raw().max(0));
             let h = i128::from(bbox.height().raw().max(0));

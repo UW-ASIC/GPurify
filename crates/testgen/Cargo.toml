@@ -3,7 +3,7 @@ name = "gpurify-testgen"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Seeded generators and oracles for the GPUVerify test suite."
+description = "Seeded generators and oracles for the GPurify test suite."
 
 [dependencies]
 gpurify-geom = { workspace = true }

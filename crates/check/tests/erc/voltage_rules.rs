@@ -14,13 +14,19 @@ use gpurify_check::erc::rules::domain::{
     check_domain_crossing, check_drain_source, check_gate_oxide, check_missing_level_shifter,
     check_well_bias, DomainCrossingTable, MissingLevelShifterTable, ModelLimitTable, WellBiasTable,
 };
+use gpurify_check::erc::rules::esd::{
+    check_esd_cross_domain, check_esd_exposed, EsdCrossDomainTable, EsdExposedTable,
+};
+use gpurify_check::erc::rules::latchup::{
+    check_forward_diode, check_guard_ring_bias, ForwardDiodeTable, GuardRingBiasTable,
+};
 use gpurify_check::erc::rules::supply::{check_esd_topological, EsdTopologicalTable};
 use gpurify_check::erc::voltage::{propagate_into, NetVoltage};
 use gpurify_check::erc::Design;
 use gpurify_check::report::{Measurement, Outcome, RuleRun, Violations};
 use gpurify_check::topology::{DeviceTable, NetId, NetTable, TerminalRole};
 use gpurify_geom::PolyId;
-use gpurify_ingest::deck::{DeviceKind, DeviceRecognition};
+use gpurify_ingest::deck::{DeviceKind, DeviceRecognition, DeviceValue};
 use gpurify_ingest::intent::{DomainId, SupplyRole};
 use gpurify_ingest::{StrId, StrTable};
 use gpurify_testgen::{layout_from_netlist, DeviceSpec, Floorplan, NetlistCase, NetlistSpec};
@@ -207,6 +213,10 @@ fn two_domains(circuit: &Circuit) -> IntentMap {
     ])
 }
 
+/// Oracle: construct-from-answer, read off `direct`'s schematic: VDD33 is 3.3 V
+/// in the IO domain, VSS 0 V in none, A swings 0 to 3.3 V (the IO inverter's
+/// rails), Y 0 to 1.8 V, and IN, driven by nothing through a channel, is
+/// unknown.
 #[test]
 fn propagation_gives_each_inverter_output_its_own_rails() {
     let circuit = direct();
@@ -236,6 +246,10 @@ fn propagation_gives_each_inverter_output_its_own_rails() {
 /// The 1.8 V devices see A's 3.3 V on the gate while their drain Y can sit at
 /// 0 V: 3.3 V across the oxide, over a 1.98 V rating. The 3.3 V devices'
 /// gate IN reaches no supply, so they are not examined.
+///
+/// Oracle: construct-from-answer, read off `direct`'s schematic: both 1.8 V
+/// devices see A's 3.3 V across the oxide against a 1.98 V rating, both lack a
+/// shifter, and their own channels see only 1.8 V.
 #[test]
 fn a_3v3_signal_on_a_1v8_gate_overstresses_it_and_lacks_a_level_shifter() {
     let circuit = direct();
@@ -301,6 +315,10 @@ fn a_3v3_signal_on_a_1v8_gate_overstresses_it_and_lacks_a_level_shifter() {
 
 /// A 1.98 V-rated model placed in the 3.3 V inverter: its drain A can sit at
 /// 3.3 V while its source is at 0 V (nfet33) or the reverse (pfet33).
+///
+/// Oracle: construct-from-answer. The 1.98 V-rated models sit in the 3.3 V
+/// inverter, whose drain A swings to 3.3 V against a 0 V source, so both are
+/// flagged at 3.3 V.
 #[test]
 fn a_thin_device_across_3v3_is_a_drain_source_overvoltage() {
     let circuit = direct();
@@ -341,6 +359,10 @@ fn shifted() -> Circuit {
     )
 }
 
+/// Oracle: construct-from-answer, read off `shifted`'s schematic: B swings 0 to
+/// 1.8 V, A's 3.3 V is within the shifter's 3.63 V, the declared shifter needs
+/// no shifter of its own, an undeclared one is the crossing, and no channel
+/// joins the two supplies.
 #[test]
 fn the_same_signal_through_a_declared_level_shifter_is_clean() {
     let circuit = shifted();
@@ -431,6 +453,11 @@ fn the_same_signal_through_a_declared_level_shifter_is_clean() {
 /// drives OUT from 3.3 V: its source junction forward-biases by 1.5 V. An
 /// nfet then passes OUT to X, which a 1.8 V pfet also drives: one channel
 /// path from 3.3 V to 1.8 V.
+///
+/// Oracle: construct-from-answer, read off the schematic above: OUT and X reach
+/// 3.3 V through the pass gate, so both 1.8 V-well pfets are 1.5 V
+/// forward-biased, and every channel touches OUT or X, which reaches both
+/// domains.
 #[test]
 fn a_well_below_its_source_and_a_pass_gate_between_domains_are_flagged() {
     let circuit = build(
@@ -499,6 +526,8 @@ fn a_well_below_its_source_and_a_pass_gate_between_domains_are_flagged() {
     assert_eq!(violations.measured[0], Measurement::Count(2));
 }
 
+/// Oracle: the documented contract of an intent-gated row: with no supply
+/// declared it records `Skipped(NoDesignIntent)` and reports nothing.
 #[test]
 fn the_voltage_rules_skip_without_intent() {
     let circuit = direct();
@@ -558,6 +587,10 @@ fn run_esd(circuit: &Circuit, id: StrId) -> (Violations, Vec<RuleRun>) {
 
 /// With no rail clamp, VDD and VSS reach only themselves and PAD2 only VDD:
 /// three pads short of a rail. PAD has a clamp to each and is clean.
+///
+/// Oracle: construct-from-answer, read off `pads`: PAD has a clamp to each
+/// rail, PAD2 only to VDD (its resistor is no clamp model), and the rails reach
+/// only themselves: three of four pads flagged.
 #[test]
 fn a_pad_missing_its_vss_clamp_is_flagged_and_one_with_both_is_clean() {
     let circuit = pads(false);
@@ -576,6 +609,9 @@ fn a_pad_missing_its_vss_clamp_is_flagged_and_one_with_both_is_clean() {
 
 /// A rail clamp from VDD to VSS completes PAD2's path (up diode, then the
 /// rail clamp) and each supply pad's.
+///
+/// Oracle: construct-from-answer. The rail clamp joins VDD to VSS, which
+/// completes PAD2's path and each rail's: four pads, none flagged.
 #[test]
 fn a_rail_clamp_completes_every_pad_path() {
     let circuit = pads(true);
@@ -584,4 +620,470 @@ fn a_rail_clamp_completes_every_pad_path() {
     let run = common::run_of(&runs, id);
     assert_eq!((run.examined, run.violations), (4, 0));
     assert!(violations.rule.is_empty());
+}
+
+// ----------------------------------------- conditional propagation (ERC-F1)
+
+/// `circuit` with device `device`'s gate condition set as a deck row would:
+/// `on_gate_min` or `on_gate_max`, mV.
+fn switched(mut circuit: Circuit, device: usize, min: Option<f64>, max: Option<f64>) -> Circuit {
+    let count = circuit.devices.len();
+    circuit.devices.value.resize(count, DeviceValue::default());
+    circuit.devices.value[device] = DeviceValue {
+        on_gate_min_mv: min,
+        on_gate_max_mv: max,
+        ..DeviceValue::default()
+    };
+    circuit
+}
+
+/// Nets: 0 VH (3.3 V), 1 G, 2 X, 3 VSS. One transistor from VH to X, its gate
+/// on G, which the test ties to a supply of its own (or to nothing).
+fn one_switch(min: Option<f64>, max: Option<f64>) -> Circuit {
+    switched(build(4, vec![mos("sw", 1, 0, 2, 3)]), 0, min, max)
+}
+
+/// The intent of [`one_switch`]: VH and VSS, and G held at `gate` mV (a
+/// ground at 0 V, a power supply of its own domain otherwise), or `None`
+/// for a gate no supply reaches.
+fn gate_at(circuit: &Circuit, gate: Option<f64>) -> IntentMap {
+    let mut supplies = vec![
+        (0, SupplyRole::Power, IO, 3_300.0),
+        (3, SupplyRole::Ground, IO, 3_300.0),
+    ];
+    match gate {
+        None => {}
+        Some(mv) if mv > 0.0 => supplies.push((1, SupplyRole::Power, CORE, mv)),
+        Some(_) => supplies.push((1, SupplyRole::Ground, CORE, 1_000.0)),
+    }
+    circuit.intent(&supplies)
+}
+
+/// Oracle: the public Calibre PERC white paper (Siemens 81822, figure 1):
+/// "The NMOS is ON when the voltage at gate pin is >= 1 V, and OFF when the
+/// voltage at gate pin is < 1 V"; "The PMOS is ON when the voltage at gate
+/// pin is <= 0 V, and OFF when the voltage at gate pin is > 0 V". An ON
+/// switch passes VH (3.3 V) to X; an OFF one leaves X unreached. Each
+/// threshold is swept a millivolt either side, and a gate no supply reaches
+/// may be anything, so its switch conducts.
+#[test]
+fn a_switch_passes_voltage_only_when_its_gate_can_turn_it_on() {
+    let reaches = |circuit: &Circuit, gate: Option<f64>| {
+        let voltage = circuit.voltage(&gate_at(circuit, gate));
+        let x = circuit.net(2);
+        voltage
+            .known(x)
+            .then(|| (voltage.lo[x.idx()], voltage.hi[x.idx()]))
+    };
+    let nmos = one_switch(Some(1_000.0), None);
+    for (gate, on) in [
+        (999.0, false),
+        (1_000.0, true),
+        (1_001.0, true),
+        (0.0, false),
+    ] {
+        assert_eq!(
+            reaches(&nmos, Some(gate)),
+            on.then_some((3_300.0, 3_300.0)),
+            "an on_gate_min 1V switch with its gate at {gate} mV"
+        );
+    }
+    assert_eq!(
+        reaches(&nmos, None),
+        Some((3_300.0, 3_300.0)),
+        "an undriven gate"
+    );
+    let pmos = one_switch(None, Some(0.0));
+    for (gate, on) in [(0.0, true), (1.0, false), (3_300.0, false)] {
+        assert_eq!(
+            reaches(&pmos, Some(gate)),
+            on.then_some((3_300.0, 3_300.0)),
+            "an on_gate_max 0V switch with its gate at {gate} mV"
+        );
+    }
+    let plain = build(4, vec![mos("sw", 1, 0, 2, 3)]);
+    assert_eq!(
+        reaches(&plain, Some(0.0)),
+        Some((3_300.0, 3_300.0)),
+        "a transistor with no condition conducts whatever its gate"
+    );
+}
+
+/// Nets: 0 VH (3.3 V), 1 VSS, 2 G, 3 X. Switch 0 (`on_gate_min 1V`, gate on
+/// VSS) can never turn on; it is G's only path to a supply. Switch 1 (the
+/// same condition, gate on G) joins VH to X.
+///
+/// Oracle: construct-from-answer. With every channel conducting, G would
+/// reach VH, so G is not an input to the cell; but switch 0 is always off,
+/// so G floats, may be anything, and switch 1 may conduct: X reaches 3.3 V
+/// and G stays unreached. A wrong model either leaves switch 1 off (X
+/// unreached) or lets switch 0 conduct (G reached).
+#[test]
+fn a_gate_behind_a_switch_that_never_turns_on_floats_and_its_switch_conducts() {
+    let circuit = build(4, vec![mos("sw", 1, 0, 2, 1), mos("sw", 2, 0, 3, 1)]);
+    let circuit = switched(circuit, 0, Some(1_000.0), None);
+    let circuit = switched(circuit, 1, Some(1_000.0), None);
+    let voltage = circuit.voltage(&circuit.intent(&[
+        (0, SupplyRole::Power, IO, 3_300.0),
+        (1, SupplyRole::Ground, IO, 3_300.0),
+    ]));
+    assert!(!voltage.known(circuit.net(2)), "G floats");
+    let x = circuit.net(3).idx();
+    assert_eq!((voltage.lo[x], voltage.hi[x]), (3_300.0, 3_300.0));
+}
+
+/// Nets: 0 VDD (1.8 V), 1 VSS, 2 VH (3.3 V), 3 IN, 4 A, 5 OUT, 6 B. A 1.8 V
+/// inverter (IN to A) drives the gates of an `on_gate_min 2.5V` switch from
+/// VH to OUT and an `on_gate_min 1V` switch from VH to B.
+///
+/// Oracle: construct-from-answer. A swings 0 to 1.8 V in the core domain,
+/// which never reaches 2.5 V, so the first switch is off and OUT is
+/// unreached; it reaches 1 V, so the second conducts and B sits at VH's
+/// 3.3 V in the I/O domain. The inverter's own transistors have no
+/// condition, and IN no supply.
+#[test]
+fn a_gate_range_from_propagation_decides_the_switch_it_drives() {
+    let circuit = build(
+        7,
+        vec![
+            mos("pfet18", 3, 0, 4, 0),
+            mos("nfet18", 3, 1, 4, 1),
+            mos("sw", 4, 2, 5, 1),
+            mos("sw", 4, 2, 6, 1),
+        ],
+    );
+    let circuit = switched(circuit, 2, Some(2_500.0), None);
+    let circuit = switched(circuit, 3, Some(1_000.0), None);
+    let voltage = circuit.voltage(&circuit.intent(&[
+        (0, SupplyRole::Power, CORE, 1_800.0),
+        (1, SupplyRole::Ground, CORE, 1_800.0),
+        (2, SupplyRole::Power, IO, 3_300.0),
+    ]));
+    assert!(
+        !voltage.known(circuit.net(5)),
+        "OUT: its switch never turns on"
+    );
+    let a = circuit.net(4).idx();
+    assert_eq!((voltage.lo[a], voltage.hi[a]), (0.0, 1_800.0));
+    assert_eq!(voltage.power[a], 1 << CORE.0);
+    let b = circuit.net(6).idx();
+    assert_eq!((voltage.lo[b], voltage.hi[b]), (3_300.0, 3_300.0));
+    assert_eq!(voltage.power[b], 1 << IO.0);
+}
+
+/// Nets: 0 VDD1, 1 VSS1, 2 VDD2, 3 VSS2, 4 SIG, 5 OUT, 6 IN (driven by
+/// nothing). An IO inverter (IN to SIG) on VDD1/VSS1 drives a core inverter
+/// (SIG to OUT) on VDD2/VSS2; `coupled` adds anti-parallel `dio` diodes
+/// between the two grounds.
+fn crossing(coupled: bool) -> Circuit {
+    let mut devices = vec![
+        mos("pfet", 6, 0, 4, 0),
+        mos("nfet", 6, 1, 4, 1),
+        mos("pfet", 4, 2, 5, 2),
+        mos("nfet", 4, 3, 5, 3),
+        // A rail diode, so `dio` is named either way.
+        two_pin(DeviceKind::Diode, "dio", 1, 0),
+    ];
+    if coupled {
+        devices.push(two_pin(DeviceKind::Diode, "dio", 1, 3));
+        devices.push(two_pin(DeviceKind::Diode, "dio", 3, 1));
+    }
+    build(7, devices)
+}
+
+fn run_crossing(circuit: &Circuit, id: StrId) -> (Violations, Vec<RuleRun>) {
+    let intent = circuit.intent(&[
+        (0, SupplyRole::Power, IO, 1_800.0),
+        (1, SupplyRole::Ground, IO, 1_800.0),
+        (2, SupplyRole::Power, CORE, 1_800.0),
+        (3, SupplyRole::Ground, CORE, 1_800.0),
+    ]);
+    let (mut violations, mut runs) = report();
+    // No series or ground limit: the process is never read.
+    check_esd_cross_domain(
+        circuit.design(),
+        &intent,
+        &circuit.voltage(&intent),
+        gpurify_check::erc::Process {
+            grid: crate::common::manufacturing_grid(),
+            stack: &gpurify_ingest::deck::ProcessStack::default(),
+            connectivity: &gpurify_ingest::deck::Connectivity::default(),
+        },
+        &EsdCrossDomainTable {
+            head: head(id),
+            diode_start: vec![0, 1],
+            diode: circuit.models(&["dio"]),
+            local_start: vec![0, 0],
+            local: Vec::new(),
+            resistor_start: vec![0, 0],
+            resistor: Vec::new(),
+            min_series: vec![None],
+            max_ground_resistance: vec![None],
+            coupling_resistance: vec![None],
+        },
+        &mut gpurify_check::erc::Scratch::default(),
+        &mut violations,
+        &mut runs,
+    );
+    (violations, runs)
+}
+
+/// The two core transistors take their gate from the IO domain: with the
+/// grounds coupled both directions they are protected, and with no local
+/// clamp named none is needed.
+///
+/// Oracle: construct-from-answer, read off `crossing`: SIG swings on VDD1,
+/// which neither core channel reaches, so both core transistors are
+/// receivers; the IO pair's gate IN reaches no supply and is none. The
+/// anti-parallel pair puts VSS1 and VSS2 in one group.
+#[test]
+fn a_crossing_with_coupled_grounds_is_protected() {
+    let circuit = crossing(true);
+    let id = rule(15);
+    let (violations, runs) = run_crossing(&circuit, id);
+    let run = common::run_of(&runs, id);
+    assert_eq!((run.examined, run.violations), (2, 0));
+    assert!(violations.rule.is_empty());
+}
+
+/// The same crossing with its grounds uncoupled flags both receivers.
+///
+/// Oracle: construct-from-answer: VSS1 and VSS2 share no diode, so each of
+/// the two receivers measures 0 coupled pairs against 1.
+#[test]
+fn a_crossing_with_uncoupled_grounds_flags_each_receiver() {
+    let circuit = crossing(false);
+    let id = rule(16);
+    let (violations, runs) = run_crossing(&circuit, id);
+    let run = common::run_of(&runs, id);
+    assert_eq!((run.examined, run.violations), (2, 2));
+    assert!(violations
+        .measured
+        .iter()
+        .all(|&m| m == Measurement::Count(0)));
+}
+
+/// Nets: 0 VDD, 1 VSS, 2 PAD, 3 IN2. PAD is the one net with an emitter
+/// (the pad layer); a series `rs` resistor carries it to IN2, the gate of
+/// an nfet. `clamped` adds an up diode IN2 to VDD and a down diode VSS to
+/// IN2.
+fn exposed(clamped: bool) -> Circuit {
+    let mut devices = vec![
+        DeviceSpec {
+            kind: DeviceKind::Bjt,
+            model: "npn".to_owned(),
+            terminals: vec![
+                (TerminalRole::Base, 2),
+                (TerminalRole::Emitter, 2),
+                (TerminalRole::Collector, 2),
+            ],
+        },
+        two_pin(DeviceKind::Resistor, "rs", 2, 3),
+        mos("nfet", 3, 1, 1, 1),
+        two_pin(DeviceKind::Diode, "dio", 1, 0),
+    ];
+    if clamped {
+        devices.push(two_pin(DeviceKind::Diode, "dio", 3, 0));
+        devices.push(two_pin(DeviceKind::Diode, "dio", 1, 3));
+    }
+    build(4, devices)
+}
+
+fn run_exposed(circuit: &Circuit, id: StrId) -> (Violations, Vec<RuleRun>) {
+    let intent = rails(circuit);
+    let (mut violations, mut runs) = report();
+    check_esd_exposed(
+        circuit.design(),
+        &intent,
+        &EsdExposedTable {
+            head: head(id),
+            pad: vec![circuit.case.layers.layer_of(TerminalRole::Emitter)],
+            clamp_start: vec![0, 1],
+            clamp: circuit.models(&["dio"]),
+            resistor_start: vec![0, 1],
+            resistor: circuit.models(&["rs"]),
+            rated_start: vec![0, 0],
+            rated: Vec::new(),
+            min_series: vec![None],
+        },
+        &mut violations,
+        &mut runs,
+    );
+    (violations, runs)
+}
+
+/// A gate behind a series resistor from a pad is exposed: bare it is
+/// flagged, clamped to both rails it is clean.
+///
+/// Oracle: construct-from-answer, read off `exposed`: the resistor carries
+/// PAD to IN2, so the nfet's gate is exposed; bare, its clamps reach 0 rail
+/// kinds of the 2 it needs, and with the up and the down diode both.
+#[test]
+fn a_gate_behind_a_series_resistor_needs_both_clamps() {
+    let id = rule(17);
+    let (violations, runs) = run_exposed(&exposed(false), id);
+    assert_eq!(violations.measured, vec![Measurement::Count(0)]);
+    assert_eq!(common::run_of(&runs, id).examined, 1);
+    let (violations, runs) = run_exposed(&exposed(true), id);
+    assert!(violations.rule.is_empty(), "{:?}", violations.measured);
+    assert_eq!(common::run_of(&runs, id).examined, 1);
+}
+
+/// Nets: 0 VDD, 1 VSS, 2 SIG; a `dio` diode with its anode on VDD and its
+/// cathode on VSS, and a resistor from SIG to VSS.
+fn backwards() -> Circuit {
+    build(
+        3,
+        vec![
+            two_pin(DeviceKind::Diode, "dio", 0, 1),
+            two_pin(DeviceKind::Resistor, "rs", 2, 1),
+        ],
+    )
+}
+
+fn rails(circuit: &Circuit) -> IntentMap {
+    circuit.intent(&[
+        (0, SupplyRole::Power, CORE, 1_800.0),
+        (1, SupplyRole::Ground, CORE, 1_800.0),
+    ])
+}
+
+/// A diode from VDD to VSS is forward-biased by the full supply.
+///
+/// Oracle: construct-from-answer: anode at 1.8 V, cathode at 0 V, and no
+/// polygon of the marker layer (the rails) encloses the diode's marker, so
+/// it is flagged at 1800 mV.
+#[test]
+fn a_diode_from_vdd_to_vss_is_forward_biased() {
+    let circuit = backwards();
+    let intent = rails(&circuit);
+    let id = rule(18);
+    let (mut violations, mut runs) = report();
+    check_forward_diode(
+        circuit.design(),
+        &intent,
+        &circuit.voltage(&intent),
+        &ForwardDiodeTable {
+            head: head(id),
+            marker: vec![circuit.case.layers.rail],
+            model_start: vec![0, 1],
+            model: circuit.models(&["dio"]),
+        },
+        &mut violations,
+        &mut runs,
+    );
+    assert_eq!(
+        violations.measured,
+        vec![Measurement::Voltage(millivolts(1_800.0))]
+    );
+}
+
+/// A p-type ring drawn on the rail layer: the VDD rail is above 0 V, the
+/// SIG rail is on no supply, the VSS rail is right.
+///
+/// Oracle: construct-from-answer, read off `backwards`: the rails are the
+/// ring polygons; VDD measures 1800 mV against 0, SIG 0 supplies against 1,
+/// VSS nothing.
+#[test]
+fn a_p_ring_belongs_on_a_ground() {
+    let circuit = backwards();
+    let id = rule(19);
+    let (mut violations, mut runs) = report();
+    check_guard_ring_bias(
+        circuit.design(),
+        &rails(&circuit),
+        &GuardRingBiasTable {
+            head: head(id),
+            ring: vec![circuit.case.layers.rail],
+            power: vec![false],
+        },
+        &mut violations,
+        &mut runs,
+    );
+    let on = |n: usize| circuit.case.expected_net_polys[n][0];
+    let mut flagged: Vec<_> = violations
+        .shape_a
+        .iter()
+        .copied()
+        .zip(violations.measured.iter().copied())
+        .collect();
+    flagged.sort_by_key(|f| f.0);
+    assert_eq!(
+        flagged,
+        vec![
+            (on(0), Measurement::Voltage(millivolts(1_800.0))),
+            (on(2), Measurement::Count(0)),
+        ]
+    );
+}
+
+/// A supply or terminal on no net, or on the first id past the extraction,
+/// is ignored by propagation, as its contract states: adding one changes
+/// no net's range.
+///
+/// Oracle: metamorphic: the same circuit (a resistor from a 1.8 V supply
+/// to a second net, which so reaches 1.8 V) propagated again with a
+/// resistor between `NetId(count)` and `NetId::NONE` appended and
+/// `NetId(count)` declared a supply gives the same ranges on every net.
+#[test]
+fn a_supply_or_terminal_past_the_extraction_is_ignored() {
+    let mut circuit = build(2, vec![two_pin(DeviceKind::Resistor, "r", 0, 1)]);
+    let intent = circuit.intent(&[(0, SupplyRole::Power, CORE, 1_800.0)]);
+    let before = circuit.voltage(&intent);
+    assert_eq!(
+        before.hi[circuit.net(1).idx()],
+        1_800.0,
+        "the resistor conducts"
+    );
+
+    let past = NetId(u32::try_from(circuit.nets.net_count()).expect("a few nets"));
+    let devices = &mut circuit.devices;
+    let first = *devices.terminal_start.last().expect("one device");
+    devices.kind.push(DeviceKind::Resistor);
+    devices.marker.push(devices.marker[0]);
+    devices.model.push(devices.model[0]);
+    devices.terminal_net.extend([past, NetId::NONE]);
+    devices
+        .terminal_role
+        .extend([TerminalRole::Pin(0), TerminalRole::Pin(1)]);
+    devices.terminal_start.push(first + 2);
+    let mut widened = intent;
+    widened.supply_net.push(past);
+    widened.supply_role.push(SupplyRole::Power);
+    widened.supply_domain.push(IO);
+    widened.supply_voltage.push(millivolts(5_000.0));
+    let after = circuit.voltage(&widened);
+    assert_eq!(after.lo, before.lo);
+    assert_eq!(after.hi, before.hi);
+    assert_eq!(after.nominal_lo, before.nominal_lo);
+    assert_eq!(after.nominal_hi, before.nominal_hi);
+}
+
+/// A pad diode wired forward is no clamp: an anode on VDD, or a cathode on
+/// VSS, conducts in operation and carries no discharge, so a pad whose only
+/// diodes are wired that way reaches neither rail.
+///
+/// Oracle: construct-from-answer, per `reverse_biased`'s contract: nets 0
+/// VDD, 1 VSS, 2 PAD; a diode VDD → PAD (anode at 1.8 V) and one PAD → VSS
+/// (cathode at 0 V), plus the rail clamp so the rails themselves are clean:
+/// three pads examined, PAD alone flagged, reaching 0 rail kinds of 2.
+#[test]
+fn a_pad_with_only_forward_wired_diodes_reaches_no_rail() {
+    let circuit = build(
+        3,
+        vec![
+            two_pin(DeviceKind::Diode, "esd_diode", 0, 2),
+            two_pin(DeviceKind::Diode, "esd_diode", 2, 1),
+            mos("rail_clamp", 1, 1, 0, 1),
+        ],
+    );
+    let id = rule(15);
+    let (violations, runs) = run_esd(&circuit, id);
+    let run = common::run_of(&runs, id);
+    assert_eq!((run.examined, run.violations), (3, 1));
+    assert_eq!(
+        violations.shape_a,
+        vec![circuit.case.expected_net_polys[2][0]]
+    );
+    assert_eq!(violations.measured, vec![Measurement::Count(0)]);
 }

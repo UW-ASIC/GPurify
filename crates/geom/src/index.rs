@@ -62,8 +62,13 @@ fn cell_span(lo: i64, hi: i64, origin: i64, cell: i64, cells: u32) -> (u32, u32)
 }
 
 impl SpatialIndex {
-    /// Build over one layer into `out` (cleared and refilled). Each row goes to
-    /// exactly one level, dispatched on box extent.
+    /// Builds over one layer of `store` into `out` (cleared and refilled), in
+    /// `O(n)` space and `O(n)` expected time for `n` polygons. The index answers
+    /// for that store only: rebuild it after the store changes.
+    ///
+    /// # Panics
+    ///
+    /// On a layer past [`GeometryStore::layer_count`].
     pub fn build_into(store: &GeometryStore, layer: LayerId, out: &mut Self) {
         let bboxes = store.layer_bboxes(layer);
         let rows = store.polys_on_layer(layer);
@@ -106,6 +111,8 @@ impl SpatialIndex {
         }
     }
 
+    /// Returns whether the index holds no rows: its layer has no polygons, or
+    /// it was never built.
     pub fn is_empty(&self) -> bool {
         self.fine.rows.is_empty() && self.coarse.rows.is_empty()
     }
@@ -199,6 +206,17 @@ impl Level {
         // Each cursor now holds its bucket's end: shift right to restore offsets.
         bucket_start.copy_within(0..buckets, 1);
         bucket_start[0] = 0;
+        debug_assert_eq!(
+            bucket_start[buckets] as usize,
+            rows.len(),
+            "the bucket offsets end at the filing count"
+        );
+        debug_assert!(
+            bucket_start
+                .windows(2)
+                .all(|w| w[0] <= w[1] && rows[w[0] as usize..w[1] as usize].is_sorted()),
+            "bucket offsets are monotone and each bucket's rows ascend"
+        );
         self.bucket_start = bucket_start;
         self.rows = rows;
     }
@@ -225,8 +243,18 @@ fn built(index: &SpatialIndex) -> LayerId {
     )
 }
 
-/// Every pair of polygons on one layer whose boxes are within `distance`, with
-/// `a < b`, ascending and deduplicated.
+/// Every pair of polygons on the index's layer whose bounding boxes are within
+/// `distance` on both axes (touching at `0`), into `out` (cleared and
+/// refilled), with `a < b`, ascending and deduplicated.
+///
+/// Box proximity is necessary for shape proximity, so this is a superset of
+/// the pairs whose shapes are within `distance`: a caller measures each pair
+/// exactly, and no true pair is ever missing. `store` must be the one `index`
+/// was built from.
+///
+/// # Panics
+///
+/// When `index` was never built, so an empty answer always means "no pairs".
 pub fn candidate_pairs_into(
     store: &GeometryStore,
     index: &SpatialIndex,
@@ -241,7 +269,14 @@ pub fn candidate_pairs_into(
     prune_pairs::<true>(store, index, layer, distance, out);
 }
 
-/// Every pair between two *different* layers within `distance`, `a` from `a_index`.
+/// Every pair between two *different* layers whose boxes are within
+/// `distance`, `a` from `a_index`'s layer and `b` from `b_index`'s, into `out`
+/// (cleared and refilled), ascending and deduplicated. The same superset
+/// contract as [`candidate_pairs_into`].
+///
+/// # Panics
+///
+/// When either index was never built.
 pub fn cross_layer_pairs_into(
     store: &GeometryStore,
     a_index: &SpatialIndex,
@@ -281,6 +316,28 @@ fn prune_pairs<const SAME: bool>(
     // A box filed under several cells is gathered several times.
     out.sort_unstable();
     out.dedup();
+    // On up to 4096 row pairs, the brute-force scan the index exists to
+    // avoid: the first pair of boxes within `distance` that is no candidate.
+    // Inside the assertion, so cargo-mutants does not count it as code.
+    debug_assert_eq!(
+        {
+            let (a_rows, b_rows) = (
+                store.polys_on_layer(layer),
+                store.polys_on_layer(built(index)),
+            );
+            let small = a_rows.len() * b_rows.len() <= 1 << 12;
+            a_rows
+                .filter(|_| small)
+                .flat_map(|a| b_rows.clone().map(move |b| (PolyId(a), PolyId(b))))
+                .find(|&(a, b)| {
+                    (!SAME || a < b)
+                        && store.poly_bbox(a).within(store.poly_bbox(b), distance)
+                        && out.binary_search(&(a, b)).is_err()
+                })
+        },
+        None,
+        "the candidate pairs hold every pair of boxes within the distance"
+    );
 }
 
 /// Every row of one level that `a_box` grown by `distance` can reach, appended

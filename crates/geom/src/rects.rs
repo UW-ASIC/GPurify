@@ -29,7 +29,17 @@ fn collect_ring(ring: RingRef<'_>, edges: &mut Vec<Span>, slabs: &mut Vec<Dbu>) 
 /// Decompose every polygon on a validated layer into disjoint rectangles by
 /// vertical slabs (canonical). Polygon `i` owns `rects[poly_start[i] ..
 /// poly_start[i + 1]]`; each slab's rectangles ascend in y.
+///
+/// # Panics
+///
+/// On a layer with an edge at 45 degrees
+/// ([`ValidatedLayer::is_rectilinear`]): it has no such decomposition, and a
+/// wrong one would be a silent wrong area.
 pub fn decompose_into(layer: &ValidatedLayer, rects: &mut Vec<Bbox>, poly_start: &mut Vec<u32>) {
+    assert!(
+        layer.is_rectilinear(),
+        "only a rectilinear layer decomposes into rectangles"
+    );
     rects.clear();
     poly_start.clear();
     poly_start.push(0);
@@ -71,6 +81,10 @@ pub fn decompose_into(layer: &ValidatedLayer, rects: &mut Vec<Bbox>, poly_start:
             cuts.clear();
             cuts.extend(active.iter().map(|&(_, _, y)| y));
             cuts.sort_unstable();
+            debug_assert!(
+                cuts.len().is_multiple_of(2),
+                "a slab crosses a closed polygon's boundary an even number of times"
+            );
 
             // Even-odd fill: interior between crossings 1-2, 3-4, ...
             rects.extend(cuts.chunks_exact(2).map(|pair| Bbox {
@@ -81,6 +95,12 @@ pub fn decompose_into(layer: &ValidatedLayer, rects: &mut Vec<Bbox>, poly_start:
             }));
         }
 
+        let first = *poly_start.last().expect("seeded with 0") as usize;
+        debug_assert_eq!(
+            2 * covered_area(&rects[first..]).raw(),
+            poly.outer().area2().raw() + poly.holes().map(|h| h.area2().raw()).sum::<i128>(),
+            "a polygon's rectangles cover exactly its area, holes excluded"
+        );
         poly_start.push(u32::try_from(rects.len()).expect("a decomposition fits a u32"));
     }
 }

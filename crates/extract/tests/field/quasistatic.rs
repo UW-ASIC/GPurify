@@ -123,6 +123,7 @@ fn refining_a_mesh_subdivides_it_without_changing_any_conductors_area() {
     build_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &stack(),
         mesh_options(500, 1 << 20),
@@ -134,6 +135,7 @@ fn refining_a_mesh_subdivides_it_without_changing_any_conductors_area() {
     build_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &stack(),
         mesh_options(250, 1 << 20),
@@ -182,6 +184,7 @@ fn a_built_mesh_partitions_its_panels_across_the_nets_it_was_given() {
     build_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &stack(),
         mesh_options(400, 1 << 20),
@@ -255,6 +258,7 @@ fn a_mesh_that_would_exceed_the_panel_limit_is_refused_rather_than_truncated() {
         build_into(
             case.store(),
             &case.nets,
+            case.connectivity(),
             &case.selected,
             &stack(),
             mesh_options(400, 1),
@@ -271,6 +275,7 @@ fn a_mesh_that_would_exceed_the_panel_limit_is_refused_rather_than_truncated() {
     build_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &stack(),
         mesh_options(400, 1 << 20),
@@ -283,6 +288,33 @@ fn a_mesh_that_would_exceed_the_panel_limit_is_refused_rather_than_truncated() {
         "the corpus meshed into {} panels, so the limit of one refused nothing",
         roomy.panel.len()
     );
+}
+
+/// Oracle: definition (F73). The solve holds the substrate at ground as a
+/// plane at height 0, so a shape on a layer at height 0 is a junction in that
+/// plane, not a conductor above it: the mesh gives it no panels (its
+/// capacitance is the closed form's) and refuses nothing. With every layer
+/// at height 0, every conductor's band is empty.
+#[test]
+fn a_conductor_on_the_substrate_gets_no_panels() {
+    let case = extracted(163, 24, 2);
+    let mut grounded = stack();
+    grounded.height_nm = vec![0.0; 3];
+    let mut mesh = Mesh::default();
+    build_into(
+        case.store(),
+        &case.nets,
+        case.connectivity(),
+        &case.selected,
+        &grounded,
+        mesh_options(400, 1 << 20),
+        grid(),
+        &mut mesh,
+    )
+    .expect("a junction is left out, not refused");
+    assert!(mesh.panel.is_empty(), "{} panels", mesh.panel.len());
+    assert_eq!(mesh.conductor_start, vec![0; case.selected.len() + 1]);
+    assert_eq!(mesh.conductor_net, case.selected);
 }
 
 /// Oracle: determinism. Panels are sorted into spatial tree order by a key
@@ -300,6 +332,7 @@ fn meshing_is_byte_identical_across_runs_and_across_a_reused_buffer() {
     build_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &stack(),
         options,
@@ -314,6 +347,7 @@ fn meshing_is_byte_identical_across_runs_and_across_a_reused_buffer() {
     build_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &stack(),
         options,
@@ -330,6 +364,7 @@ fn meshing_is_byte_identical_across_runs_and_across_a_reused_buffer() {
     build_into(
         case.store(),
         &case.nets,
+        case.connectivity(),
         &case.selected,
         &stack(),
         options,
@@ -359,33 +394,11 @@ fn node(index: u32) -> usize {
     usize::try_from(index).expect("a panel index is a u32 and usize is at least that wide")
 }
 
-/// Oracle: construct-from-answer. The matrix is stored row-major as the full
-/// square, so `get(i, j)` is `value[i * n + j]` and `dim` is the side. Storing
-/// a triangle would make the symmetry law below vacuous, which is why the
-/// layout is worth pinning down first.
-#[test]
-fn a_capacitance_matrix_reads_back_row_major_at_the_dimension_it_reports() {
-    let rows: [[f64; 3]; 3] = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]];
-    let m = matrix(&[&rows[0], &rows[1], &rows[2]]);
-    assert_eq!(m.dim(), 3);
-    for (i, row) in rows.iter().enumerate() {
-        for (j, &expected) in row.iter().enumerate() {
-            assert_close(
-                &format!("entry ({i}, {j})"),
-                m.value[i * m.dim() + j],
-                expected,
-                1e-12,
-            );
-        }
-    }
-    assert_eq!(CapMatrix::default().dim(), 0, "an empty matrix has no rows");
-}
-
-/// Oracle: closed form. Asymmetry is the largest relative difference between an
-/// entry and its transpose. A symmetric matrix has none; a matrix whose `(0,1)`
-/// entry is one and whose `(1,0)` entry is 1.1 is off by a tenth, relative to
-/// the smaller of the two, which is a number computed here and not read off a
-/// run.
+/// Oracle: closed form. Asymmetry is the largest difference between an entry
+/// and its transpose, relative to the geometric mean of the two diagonals. A
+/// symmetric matrix has none; a matrix whose `(0,1)` entry is one and whose
+/// `(1,0)` entry is 1.1, on a diagonal of 4 and 3, is off by `0.1 / √12`, a
+/// number computed here and not read off a run.
 #[test]
 fn asymmetry_is_zero_on_a_symmetric_matrix_and_the_relative_gap_otherwise() {
     let symmetric = matrix(&[&[4.0, -1.0, -0.5], &[-1.0, 3.0, -2.0], &[-0.5, -2.0, 5.0]]);
@@ -393,9 +406,9 @@ fn asymmetry_is_zero_on_a_symmetric_matrix_and_the_relative_gap_otherwise() {
 
     let skewed = matrix(&[&[4.0, 1.0], &[1.1, 3.0]]);
     assert_close_relative(
-        "one tenth out of reciprocity",
+        "one tenth out of reciprocity, on a diagonal of 4 and 3",
         skewed.asymmetry(),
-        0.1,
+        0.1 / 12.0_f64.sqrt(),
         1e-9,
     );
 }

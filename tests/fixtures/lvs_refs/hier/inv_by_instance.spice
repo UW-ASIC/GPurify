@@ -1,0 +1,9 @@
+* LVS_INV's inverter, placed by instance: the same circuit as
+* lvs_refs/LVS_CLEAN_MATCH.spice, one level down. It must match the flat cell.
+.subckt INV A Y VDD VSS
+M0 Y A VSS VSS nfet_01v8
+M1 Y A VDD VDD pfet_01v8
+.ends
+.subckt TOP A Y VDD VSS
+X1 A Y VDD VSS INV
+.ends

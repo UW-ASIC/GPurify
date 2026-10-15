@@ -22,12 +22,24 @@ pub(crate) enum Dim {
     Temperature,
     /// eV.
     Energy,
+    /// W/(m·K), written `W/mK`.
+    ThermalConductivity,
     /// h.
     Time,
+    /// V/um, an electric field (numerically mV/nm).
+    Field,
     /// aF/um2 (PEX only).
     CapPerArea,
     /// aF/um (PEX only).
     CapPerLength,
+    /// 1/K, a first-order temperature coefficient (PEX only).
+    PerKelvin,
+    /// 1/K², a second-order temperature coefficient (PEX only).
+    PerKelvin2,
+    /// aF (an LVS tolerance on a capacitance).
+    Capacitance,
+    /// nH (an inductor's inductance, an LVS tolerance on one).
+    Inductance,
     /// 0..=1, written bare or as `%`.
     Fraction,
     /// deg, a whole number.
@@ -46,14 +58,47 @@ pub(crate) enum Dim {
     AngleList,
     /// `["model", ..]`, device model names; one engine param per element.
     Models,
+    /// `["name", ..]`, quoted names that are not device models (net types,
+    /// type sets, `"!"`); one engine param per element, read as
+    /// [`Dim::Models`] is but never looked up among the `device` statements.
+    Names,
     /// `(name: value, ..)`, a nested set of params.
     Group(&'static [Param]),
     /// `same` or `different`; `same` is the engine flag.
     Nets,
     /// `[a, b, ..]`, lengths; one engine param per element.
     LengthList,
+    /// `[a, b, ..]`, voltages; one engine param per element, in mV.
+    VoltageList,
+    /// MHz, a frequency.
+    Frequency,
+    /// `[a, b, ..]`, frequencies; one engine param per element, in MHz.
+    FrequencyList,
+    /// `[[a, b, ..], ..]`, rows of current per width; one engine param per
+    /// cell, row by row, in A/m.
+    CurrentPerWidthRows,
+    /// `[a, b, ..]`, fractions written bare or as `%`; one engine param per
+    /// element, from 0 to 1.
+    FractionList,
+    /// `[a, b, ..]`, bare whole numbers; one engine param per element.
+    CountList,
+    /// `[a, b, ..]`, areas; one engine param per element, in square grid
+    /// units.
+    AreaList,
     /// `[[a, b, ..], ..]`, rows of lengths; one engine param per cell, row by row.
     LengthRows,
+    /// `[a x b, ..]`, pairs of lengths; per pair, the first to the param's
+    /// engine name and the second to the named one.
+    LengthPairList(&'static str),
+    /// One of the listed bare words; the engine param is its index, a count.
+    Word(&'static [&'static str]),
+    /// `[(area, n), ..]`, a piecewise-linear table (LEF's `PWL`) with areas
+    /// rising strictly; per point, the area goes to the param's engine name
+    /// and the number to the named one.
+    AreaTable(&'static str),
+    /// `[none, a, ..]`, lengths or `none`; one engine param per element, a
+    /// length or, for `none`, the flag `false`.
+    OptLengthList,
 }
 
 /// Units, the dimension each belongs to, and the power of ten to the engine unit.
@@ -74,17 +119,33 @@ pub(crate) const UNITS: &[(&str, Dim, i32)] = &[
     ("uA/um", Dim::CurrentPerWidth, 0),
     ("mA/um", Dim::CurrentPerWidth, 3),
     ("A/m", Dim::CurrentPerWidth, 0),
+    ("Hz", Dim::Frequency, -6),
+    ("kHz", Dim::Frequency, -3),
+    ("MHz", Dim::Frequency, 0),
+    ("GHz", Dim::Frequency, 3),
     ("mohm", Dim::Resistance, -3),
     ("ohm", Dim::Resistance, 0),
     ("kohm", Dim::Resistance, 3),
     ("Mohm", Dim::Resistance, 6),
     ("K", Dim::Temperature, 0),
     ("eV", Dim::Energy, 0),
+    ("W/mK", Dim::ThermalConductivity, 0),
     ("h", Dim::Time, 0),
+    ("V/um", Dim::Field, 0),
+    ("V/nm", Dim::Field, 3),
+    ("MV/cm", Dim::Field, 2),
     ("aF/um2", Dim::CapPerArea, 0),
     ("fF/um2", Dim::CapPerArea, 3),
     ("aF/um", Dim::CapPerLength, 0),
     ("fF/um", Dim::CapPerLength, 3),
+    ("/K", Dim::PerKelvin, 0),
+    ("/K2", Dim::PerKelvin2, 0),
+    ("aF", Dim::Capacitance, 0),
+    ("fF", Dim::Capacitance, 3),
+    ("pF", Dim::Capacitance, 6),
+    ("pH", Dim::Inductance, -3),
+    ("nH", Dim::Inductance, 0),
+    ("uH", Dim::Inductance, 3),
     ("%", Dim::Fraction, -2),
     ("deg", Dim::Angle, 0),
 ];
@@ -131,8 +192,6 @@ pub(crate) struct Kind {
     pub params: &'static [Param],
     /// Engine flag params the row implies.
     pub fixed: &'static [(&'static str, bool)],
-    /// Accepts `warning` after the rule id.
-    pub warns: bool,
 }
 
 const fn p(name: &'static str, engine: &'static str, dim: Dim) -> Param {
@@ -153,7 +212,7 @@ const fn opt(name: &'static str, engine: &'static str, dim: Dim) -> Param {
     }
 }
 
-/// A DRC row: one comparison, no `warning`.
+/// A DRC row: one comparison.
 const fn drc(
     name: &'static str,
     cmp: Cmp,
@@ -172,11 +231,10 @@ const fn drc(
         limit,
         params,
         fixed: &[],
-        warns: false,
     }
 }
 
-/// An ERC row: named arguments only, `warning` allowed.
+/// An ERC row: named arguments only.
 const fn erc(
     name: &'static str,
     layers: &'static [u8],
@@ -193,7 +251,6 @@ const fn erc(
         limit: None,
         params,
         fixed: &[],
-        warns: true,
     }
 }
 
@@ -204,9 +261,195 @@ const DENSITY: &[Param] = &[
     p("step", "step", Dim::Length),
 ];
 const DENSITY_LIMIT: Option<Param> = Some(p("", "limit", Dim::Fraction));
+const COUNT: Option<Param> = Some(p("", "limit", Dim::Count));
+/// The checks a DFM score reads, in the order of the engine's index.
+const DFM_CHECKS: &[&str] = &["space", "width", "enclosure"];
+/// MINSTEP's corner kinds, in the order of the engine's index.
+const STEP_CORNERS: &[&str] = &["outside", "inside", "step"];
+/// A voltage-dependent spacing table: the step voltages and the spacing from
+/// each one up.
+const VOLTAGE_SPACE: &[Param] = &[
+    p("voltage", "voltage", Dim::VoltageList),
+    p("space", "space", Dim::LengthList),
+];
+/// A narrow-line current band: a metal line at most `width` wide may carry
+/// `current` (IHP SG13G2 §2.15's IMAX beside JMAX).
+const EM_NARROW: &[Param] = &[
+    p("width", "narrow_width", Dim::Length),
+    p("current", "narrow_current", Dim::Current),
+];
+/// The current-density limits of `em_current_density`, `em_rms` and
+/// `em_peak`.
+const EM_DENSITY: &[Param] = &[
+    p("max_density", "max_density", Dim::CurrentPerWidth),
+    p("max_current_per_cut", "max_current_per_cut", Dim::Current),
+    opt("narrow", "", Dim::Group(EM_NARROW)),
+];
+/// The AC current-density table of `em_rms` and `em_peak`: LEF's
+/// `ACCURRENTDENSITY {PEAK | RMS} FREQUENCY .. WIDTH .. TABLEENTRIES ..`,
+/// one row of densities per frequency, one cell per width.
+const EM_AC: &[Param] = &[
+    p("frequency", "frequency", Dim::FrequencyList),
+    p("width", "width", Dim::LengthList),
+    p("density", "density", Dim::CurrentPerWidthRows),
+    p("max_current_per_cut", "max_current_per_cut", Dim::Current),
+];
+/// `esd_path`'s parameters, the same with a source layer or without.
+const ESD_PATH: &[Param] = &[
+    opt("clamps", "clamp", Dim::Models),
+    p("current", "current", Dim::Current),
+    p("clamp_resistance", "clamp_resistance", Dim::Resistance),
+    opt("max_resistance", "max_resistance", Dim::Resistance),
+    opt("clamp_it2", "clamp_it2", Dim::CurrentPerWidth),
+    opt("max_density", "max_density", Dim::CurrentPerWidth),
+    opt("max_current_per_cut", "max_current_per_cut", Dim::Current),
+    opt("max_voltage", "max_voltage", Dim::Voltage),
+    opt("min_width", "min_width", Dim::Length),
+    opt("clamp_voltage", "clamp_voltage", Dim::Voltage),
+];
+/// An enclosure's wire band: the wire widths the rule holds.
+const WIRE_WIDTH: &[Param] = &[p("width", "wire_width", Dim::Length)];
+const WIRE_BELOW: &[Param] = &[p("below", "wire_below", Dim::Length)];
+const WIRE: &[Param] = &[
+    p("width", "wire_width", Dim::Length),
+    p("below", "wire_below", Dim::Length),
+];
+/// LEF `ENCLOSURE ... WIDTH minWidth EXCEPTEXTRACUT cutWithin`, the metal on
+/// the cuts' far side named: `except_extra_cut:` on the `WIDTH` row, which
+/// then holds no cut with a redundant one, and `extra_cut:` on the
+/// minimum-width rows written again for the excepted band, which then hold
+/// only such cuts (`extra_cut_only`).
+const EXCEPT_EXTRA: &[Param] = &[
+    p("width", "wire_width", Dim::Length),
+    p("except_extra_cut", "extra_cut_within", Dim::Length),
+    p("other", "extra_cut_other", Dim::Layer),
+];
+const EXCEPT_EXTRA_BELOW: &[Param] = &[
+    p("width", "wire_width", Dim::Length),
+    p("below", "wire_below", Dim::Length),
+    p("except_extra_cut", "extra_cut_within", Dim::Length),
+    p("other", "extra_cut_other", Dim::Layer),
+];
+const ONLY_EXTRA: &[Param] = &[
+    p("width", "wire_width", Dim::Length),
+    p("extra_cut", "extra_cut_within", Dim::Length),
+    p("other", "extra_cut_other", Dim::Layer),
+];
+const ONLY_EXTRA_BELOW: &[Param] = &[
+    p("width", "wire_width", Dim::Length),
+    p("below", "wire_below", Dim::Length),
+    p("extra_cut", "extra_cut_within", Dim::Length),
+    p("other", "extra_cut_other", Dim::Layer),
+];
+/// LEF `ENCLOSURE ... LENGTH minLength` (`length:`), and the vias whose
+/// overhang length falls short of it (`length_below:`), with or without a
+/// wire band's `below:`.
+const LENGTH: &[Param] = &[p("length", "length_from", Dim::Length)];
+const LENGTH_BELOW: &[Param] = &[
+    p("length", "length_from", Dim::Length),
+    p("below", "wire_below", Dim::Length),
+];
+const SHORT: &[Param] = &[p("length_below", "length_below", Dim::Length)];
+const SHORT_BELOW: &[Param] = &[
+    p("length_below", "length_below", Dim::Length),
+    p("below", "wire_below", Dim::Length),
+];
+/// The enclosure rows beyond the plain wire bands: `(params, fixed flags)`.
+const QUALIFIED: [(&[Param], &[(&str, bool)]); 8] = [
+    (EXCEPT_EXTRA, &[("extra_cut_only", false)]),
+    (EXCEPT_EXTRA_BELOW, &[("extra_cut_only", false)]),
+    (ONLY_EXTRA, &[("extra_cut_only", true)]),
+    (ONLY_EXTRA_BELOW, &[("extra_cut_only", true)]),
+    (LENGTH, &[]),
+    (LENGTH_BELOW, &[]),
+    (SHORT, &[]),
+    (SHORT_BELOW, &[]),
+];
+
+/// `enclosure(inner, outer) >= len` with the `n`th [`QUALIFIED`] row.
+const fn every_side(n: usize) -> Kind {
+    Kind {
+        fixed: QUALIFIED[n].1,
+        ..drc(
+            "enclosure",
+            Cmp::Ge,
+            "min_enclosure",
+            &[1, 0],
+            LIMIT,
+            QUALIFIED[n].0,
+        )
+    }
+}
+
+/// `enclosure(inner, outer, opposite) >= len` with the `n`th [`QUALIFIED`]
+/// row.
+const fn opposite_qualified(n: usize) -> Kind {
+    Kind {
+        fixed: QUALIFIED[n].1,
+        ..opposite(QUALIFIED[n].0)
+    }
+}
+
+/// `enclosure(inner, outer, opposite) >= len` with `params`.
+const fn opposite(params: &'static [Param]) -> Kind {
+    Kind {
+        modifier: Some("opposite"),
+        ..drc(
+            "enclosure",
+            Cmp::Ge,
+            "asymmetric_enclosure",
+            &[1, 0],
+            Some(p("", "min_one_side", Dim::Length)),
+            params,
+        )
+    }
+}
+const ADJACENT: &[Param] = &[
+    p("cuts", "adjacent", Dim::Count),
+    p("within", "within", Dim::Length),
+];
+/// LEF `PARALLELEDGE parSpace WITHIN parWithin [TWOEDGES]`.
+const EOL_PARALLEL: &[Param] = &[
+    p("space", "par_space", Dim::Length),
+    p("within", "par_within", Dim::Length),
+    p("two_edges", "two_edges", Dim::Bool),
+];
+/// `LEF58_SPACING ENDOFLINE`'s `MINLENGTH [TWOSIDES]` / `MAXLENGTH`.
+const EOL_SIDE_LENGTH: &[Param] = &[
+    p("length", "side_length", Dim::Length),
+    p("maximum", "side_length_maximum", Dim::Bool),
+    p("two_sides", "side_length_two_sides", Dim::Bool),
+];
+/// `PARALLELEDGE [SUBTRACTEOLWIDTH] .. [MINLENGTH minLength]`.
+const EOL_PARALLEL_MORE: &[Param] = &[
+    p("subtract_eol_width", "par_subtract_eol_width", Dim::Bool),
+    opt("min_length", "par_min_length", Dim::Length),
+];
+/// `LEF58_EOLKEEPOUT ... EXCEPTWITHIN withinLow withinHigh`.
+const KEEP_OUT_EXCEPT: &[Param] = &[
+    p("low", "within_low", Dim::Length),
+    p("high", "within_high", Dim::Length),
+];
+/// `ENDPRLSPACING endPrlSpace PRL endPrl`.
+const EOL_END_PRL: &[Param] = &[
+    p("space", "end_prl_space", Dim::Length),
+    p("prl", "end_prl", Dim::Length),
+];
+/// `WRONGDIRSPACING wrongDirSpace`, with the layer's preferred direction.
+const EOL_WRONG_DIR: &[Param] = &[
+    p("space", "wrong_dir_space", Dim::Length),
+    p("horizontal", "wrong_dir_horizontal", Dim::Bool),
+];
+/// `ENCLOSECUT [BELOW | ABOVE] encloseDist CUTSPACING cutToMetalSpace
+/// [ALLCUTS]`, the cut layer named.
+const EOL_ENCLOSE_CUT: &[Param] = &[
+    p("cut", "enclose_cut_layer", Dim::Layer),
+    p("within", "enclose_cut_within", Dim::Length),
+    p("space", "enclose_cut_space", Dim::Length),
+    p("all_cuts", "enclose_cut_all", Dim::Bool),
+];
 const CMP_MODEL: &[Param] = &[
     p("target", "cmp_target_density", Dim::Fraction),
-    p("thickness", "cmp_nominal_thickness", Dim::Length),
     p("sensitivity", "cmp_thickness_sensitivity", Dim::Length),
     p("max_delta", "cmp_max_abs_thickness_delta", Dim::Length),
 ];
@@ -226,9 +469,108 @@ pub(crate) const KINDS: &[Kind] = &[
         &[],
     ),
     drc("edge_length", Cmp::Ge, "min_edge_length", &[0], LIMIT, &[]),
+    // LEF MINSTEP's variants: more than `max_edges` short edges in a row, or a
+    // run of short edges at an outside corner, an inside corner or a step,
+    // with LENGTHSUM's allowance (`length_sum: none` for none).
+    drc(
+        "min_step",
+        Cmp::Ge,
+        "min_step",
+        &[0],
+        LIMIT,
+        &[p("max_edges", "max_edges", Dim::Count)],
+    ),
+    drc(
+        "min_step",
+        Cmp::Ge,
+        "min_step",
+        &[0],
+        LIMIT,
+        &[
+            p("corner", "corner", Dim::Word(STEP_CORNERS)),
+            opt("length_sum", "length_sum", Dim::Length),
+        ],
+    ),
+    // LEF58_MINSTEP's qualifiers as OpenROAD's TritonRoute checks them: a
+    // short edge beside a short edge (MINADJACENTLENGTH, with NOADJACENTEOL
+    // an end of line too, EXCEPTRECTANGLE), or two short edges either side of
+    // a short end of line (NOBETWEENEOL).
+    drc(
+        "min_step",
+        Cmp::Ge,
+        "min_step_adjacent",
+        &[0],
+        LIMIT,
+        &[
+            p("adjacent", "adjacent", Dim::Length),
+            p("except_rectangle", "except_rectangle", Dim::Bool),
+        ],
+    ),
+    drc(
+        "min_step",
+        Cmp::Ge,
+        "min_step_adjacent",
+        &[0],
+        LIMIT,
+        &[
+            p("adjacent", "adjacent", Dim::Length),
+            p("adjacent_eol", "adjacent_eol", Dim::Length),
+            p("except_rectangle", "except_rectangle", Dim::Bool),
+        ],
+    ),
+    drc(
+        "min_step",
+        Cmp::Ge,
+        "min_step_adjacent",
+        &[0],
+        LIMIT,
+        &[p("between_eol", "between_eol", Dim::Length)],
+    ),
+    // A set of legal widths, `width(L; allowed: [350nm, 690nm])` (sky130
+    // rpm.1b-1f): each merged figure's narrowest width is one of them.
+    drc(
+        "width",
+        Cmp::Absent,
+        "allowed_width",
+        &[0],
+        None,
+        &[p("allowed", "width", Dim::LengthList)],
+    ),
+    // The layer's box starts at the origin (sky130 x.19, the seal ring).
+    drc("origin", Cmp::Absent, "origin", &[0], None, &[]),
+    // A protrusion narrower than the limit from a wire at least `wide` wide
+    // (LEF `PROTRUSIONWIDTH width1 LENGTH 0 WIDTH width2`).
+    drc(
+        "protrusion_width",
+        Cmp::Ge,
+        "protrusion_width",
+        &[0],
+        LIMIT,
+        &[p("wide", "wide", Dim::Length)],
+    ),
+    // The same with the last width open (LEF58 `WIDTHTABLE`: "all the given
+    // widths are exact width values, except for the last one, which is equal
+    // to or greater than the value"): `open_last: true`.
+    drc(
+        "width",
+        Cmp::Absent,
+        "allowed_width",
+        &[0],
+        None,
+        &[
+            p("allowed", "width", Dim::LengthList),
+            p("open_last", "open_last", Dim::Bool),
+        ],
+    ),
     drc("notch", Cmp::Ge, "notch", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "min_spacing", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "min_spacing_diff", &[0, 1], LIMIT, &[]),
+    // Facing edges only, KLayout's `projection` metric:
+    // `space(lvtn, sd, projection) >= 235nm` (sky130 lvtn.3b).
+    Kind {
+        modifier: Some("projection"),
+        ..drc("space", Cmp::Ge, "projection_spacing", &[0, 1], LIMIT, &[])
+    },
     drc(
         "eol_space",
         Cmp::Ge,
@@ -236,6 +578,43 @@ pub(crate) const KINDS: &[Kind] = &[
         &[0],
         LIMIT,
         &[p("eol_width", "eol_width", Dim::Length)],
+    ),
+    // LEF `SPACING ENDOFLINE`: a keep-out reaching `within` past the end's
+    // sides, optionally only beside parallel edges, with its own space
+    // between two ends (`LEF58_SPACING ENDOFLINE ... ENDTOEND`).
+    drc(
+        "eol_space",
+        Cmp::Ge,
+        "eol_within_spacing",
+        &[0],
+        LIMIT,
+        &[
+            p("eol_width", "eol_width", Dim::Length),
+            p("within", "eol_within", Dim::Length),
+            opt("parallel", "", Dim::Group(EOL_PARALLEL)),
+            opt("end_to_end", "end_to_end", Dim::Length),
+        ],
+    ),
+    // With the `LEF58_SPACING ENDOFLINE` qualifiers, each `none` or stated.
+    drc(
+        "eol_space",
+        Cmp::Ge,
+        "eol_within_spacing",
+        &[0],
+        LIMIT,
+        &[
+            p("eol_width", "eol_width", Dim::Length),
+            p("within", "eol_within", Dim::Length),
+            opt("parallel", "", Dim::Group(EOL_PARALLEL)),
+            opt("end_to_end", "end_to_end", Dim::Length),
+            opt("side_length", "", Dim::Group(EOL_SIDE_LENGTH)),
+            opt("opposite_width", "opposite_width", Dim::Length),
+            opt("parallel_more", "", Dim::Group(EOL_PARALLEL_MORE)),
+            opt("end_prl", "", Dim::Group(EOL_END_PRL)),
+            opt("wrong_dir", "", Dim::Group(EOL_WRONG_DIR)),
+            opt("extension", "eol_extension", Dim::Length),
+            opt("enclose_cut", "", Dim::Group(EOL_ENCLOSE_CUT)),
+        ],
     ),
     drc(
         "prl_space",
@@ -252,6 +631,20 @@ pub(crate) const KINDS: &[Kind] = &[
         &[0],
         LIMIT,
         &[],
+    ),
+    // `LEF58_CORNERSPACING CONVEXCORNER`: the larger axis gap between facing
+    // convex corners (or Euclidean, `CORNERTOCORNER`), ends of line exempt
+    // with `EXCEPTEOL`.
+    drc(
+        "corner_space",
+        Cmp::Ge,
+        "convex_corner_spacing",
+        &[0],
+        LIMIT,
+        &[
+            p("corner_to_corner", "corner_to_corner", Dim::Bool),
+            opt("except_eol", "except_eol", Dim::Length),
+        ],
     ),
     drc(
         "wide_space",
@@ -307,20 +700,268 @@ pub(crate) const KINDS: &[Kind] = &[
             &[],
         )
     },
-    // The engine takes the outer layer first; the deck writes `enclosure(inner, outer)`.
-    drc("enclosure", Cmp::Ge, "min_enclosure", &[1, 0], LIMIT, &[]),
+    // Coverage of a layer inside each shape of a region layer (sky130 vpp.5a
+    // "max pattern density of met3 over capacitor", vpp.11).
     Kind {
-        modifier: Some("opposite"),
+        fixed: &[("maximum", false)],
+        ..drc(
+            "region_density",
+            Cmp::Ge,
+            "region_density",
+            &[0, 1],
+            DENSITY_LIMIT,
+            &[],
+        )
+    },
+    Kind {
+        fixed: &[("maximum", true)],
+        ..drc(
+            "region_density",
+            Cmp::Le,
+            "region_density",
+            &[0, 1],
+            DENSITY_LIMIT,
+            &[],
+        )
+    },
+    // The number of merged shapes on the layer in the whole layout, a minimum
+    // or a maximum (IHP npn13G2.bR; one seal ring per chip).
+    Kind {
+        fixed: &[("maximum", false)],
+        ..drc("count", Cmp::Ge, "count", &[0], COUNT, &[])
+    },
+    Kind {
+        fixed: &[("maximum", true)],
+        ..drc("count", Cmp::Le, "count", &[0], COUNT, &[])
+    },
+    // Several legal cut sizes, `size(via; allowed: [150nm x 150nm, 230nm x
+    // 230nm])` (sky130 via.1b, LEF58_CUTCLASS): each merged figure is one of
+    // them, either way round.
+    drc(
+        "size",
+        Cmp::Absent,
+        "cut_class",
+        &[0],
+        None,
+        &[p("allowed", "width", Dim::LengthPairList("height"))],
+    ),
+    // The area a layer covers in the whole layout (IHP MIM.gR).
+    drc("total_area", Cmp::Le, "total_area", &[0], AREA, &[]),
+    // A shape's bounding box, its longer side over its shorter (sky130 capm.6).
+    drc(
+        "aspect_ratio",
+        Cmp::Le,
+        "aspect_ratio",
+        &[0],
+        Some(p("", "limit", Dim::Scalar)),
+        &[],
+    ),
+    // Short-circuit critical area for a square defect of half-side `radius`:
+    // `critical_area(met1; radius: 100nm) <= 50um2`; with `radii` and
+    // `weights`, the mean over a defect-size distribution the deck samples.
+    drc(
+        "critical_area",
+        Cmp::Le,
+        "mean_critical_area",
+        &[0],
+        AREA,
+        &[
+            p("radii", "radii", Dim::LengthList),
+            p("weights", "weights", Dim::FractionList),
+        ],
+    ),
+    // `critical_area(met1; radius: 100nm) <= 50um2`.
+    drc(
+        "critical_area",
+        Cmp::Le,
+        "critical_area",
+        &[0],
+        AREA,
+        &[p("radius", "radius", Dim::Length)],
+    ),
+    // Two masks' coverage balanced per window, an optional third layer the
+    // die: `density_balance(m1_c1, m1_c2; window: 10um, step: 5um) >= 0.8`.
+    Kind {
+        more: true,
+        ..drc(
+            "density_balance",
+            Cmp::Ge,
+            "density_balance",
+            &[0, 1],
+            DENSITY_LIMIT,
+            DENSITY,
+        )
+    },
+    // The redundant-via rate, 1 - dead / vias (Xu et al., ASP-DAC 2005): a
+    // single-cut via is dead when no cut fits beside it at `pitch`.
+    drc(
+        "via_redundancy",
+        Cmp::Ge,
+        "via_redundancy",
+        &[0, 1, 2],
+        DENSITY_LIMIT,
+        &[
+            p("pitch", "pitch", Dim::Length),
+            p("space", "space", Dim::Length),
+        ],
+    ),
+    // A DFM score over a recommended rule's findings, each 0 at the required
+    // value and 1 at the recommended one, combined with a failure rate:
+    // `dfm_score(met1; check: space, required: 180nm, recommended: 220nm,
+    // rate: 1%) >= 0.99`. An enclosure takes the outer layer second.
+    Kind {
+        more: true,
+        ..drc(
+            "dfm_score",
+            Cmp::Ge,
+            "dfm_score",
+            &[0],
+            DENSITY_LIMIT,
+            &[
+                p("check", "check", Dim::Word(DFM_CHECKS)),
+                p("required", "required", Dim::Length),
+                p("recommended", "recommended", Dim::Length),
+                p("rate", "rate", Dim::Fraction),
+            ],
+        )
+    },
+    // A deck-supplied pattern found wherever the layer matches it, in any of
+    // the eight orientations, with don't-care boxes (pattern-matching DRC).
+    drc(
+        "pattern",
+        Cmp::Absent,
+        "pattern_match",
+        &[0],
+        None,
+        &[
+            p("window", "window_w", Dim::LengthPair("window_h")),
+            p("shapes", "shape_x", Dim::LengthPairList("shape_y")),
+            opt("ignore", "ignore_x", Dim::LengthPairList("ignore_y")),
+        ],
+    ),
+    // A connector's cut area held between two databases drawn as two layers,
+    // by its cut count (sky130 ct.irdrop, via.irdrop; every value the deck's).
+    drc(
+        "cut_area_change",
+        Cmp::Absent,
+        "cut_area_change",
+        &[0, 1, 2, 3],
+        None,
+        &[
+            p("cuts", "cuts", Dim::CountList),
+            p("change", "change", Dim::AreaList),
+        ],
+    ),
+    // A layer's density per window, held to the band its coverage by a second
+    // layer falls in (sky130 m1.- to m4.-, the waffle-drop rule), an optional
+    // third layer the die. Every value is the deck's.
+    Kind {
+        more: true,
+        ..drc(
+            "cover_density",
+            Cmp::Absent,
+            "cover_density",
+            &[0, 1],
+            None,
+            &[
+                p("window", "window", Dim::Length),
+                p("step", "step", Dim::Length),
+                p("cover", "cover", Dim::FractionList),
+                p("density", "density", Dim::FractionList),
+                p("inclusive", "inclusive", Dim::Bool),
+            ],
+        )
+    },
+    // The engine takes the outer layer first; the deck writes `enclosure(inner, outer)`.
+    // A wire band (`width:`, `below:`, LEF `ENCLOSURE ... WIDTH`) is one more
+    // row per combination, the plain row first: a row knowing every given
+    // name wins, the first on a tie.
+    drc("enclosure", Cmp::Ge, "min_enclosure", &[1, 0], LIMIT, &[]),
+    drc(
+        "enclosure",
+        Cmp::Ge,
+        "min_enclosure",
+        &[1, 0],
+        LIMIT,
+        WIRE_WIDTH,
+    ),
+    drc(
+        "enclosure",
+        Cmp::Ge,
+        "min_enclosure",
+        &[1, 0],
+        LIMIT,
+        WIRE_BELOW,
+    ),
+    drc("enclosure", Cmp::Ge, "min_enclosure", &[1, 0], LIMIT, WIRE),
+    every_side(0),
+    every_side(1),
+    every_side(2),
+    every_side(3),
+    every_side(4),
+    every_side(5),
+    every_side(6),
+    every_side(7),
+    // Coincident edges exempt, `enclosure(lvtn, nwell, noncoincident)`
+    // (sky130 lvtn.10).
+    Kind {
+        modifier: Some("noncoincident"),
         ..drc(
             "enclosure",
             Cmp::Ge,
-            "asymmetric_enclosure",
+            "noncoincident_enclosure",
+            &[1, 0],
+            LIMIT,
+            &[],
+        )
+    },
+    // The inner spans its host along one axis: `full_width(V1, M2)` (ASAP7
+    // V1.M2.AUX.2).
+    drc("full_width", Cmp::Absent, "full_width", &[1, 0], None, &[]),
+    // A maximum enclosure, `enclosure(licon, npc) <= 95nm` (sky130 npc.5).
+    drc("enclosure", Cmp::Le, "max_enclosure", &[1, 0], LIMIT, &[]),
+    opposite(&[]),
+    opposite(WIRE_WIDTH),
+    opposite(WIRE_BELOW),
+    opposite(WIRE),
+    opposite_qualified(0),
+    opposite_qualified(1),
+    opposite_qualified(2),
+    opposite_qualified(3),
+    opposite_qualified(4),
+    opposite_qualified(5),
+    opposite_qualified(6),
+    opposite_qualified(7),
+    Kind {
+        modifier: Some("adjacent"),
+        ..drc(
+            "enclosure",
+            Cmp::Ge,
+            "adjacent_enclosure",
             &[1, 0],
             Some(p("", "min_one_side", Dim::Length)),
             &[],
         )
     },
     drc("extension", Cmp::Ge, "min_extension", &[0, 1], LIMIT, &[]),
+    // A gate's shape: `bend(poly, diff)` (poly turning on diff, sky130
+    // poly.11) and `covers_corner(poly, diff)` (poly over an inner corner of
+    // diff, poly.10).
+    Kind {
+        fixed: &[("of_reference", false)],
+        ..drc("bend", Cmp::Absent, "gate_corner", &[0, 1], None, &[])
+    },
+    Kind {
+        fixed: &[("of_reference", true)],
+        ..drc(
+            "covers_corner",
+            Cmp::Absent,
+            "gate_corner",
+            &[0, 1],
+            None,
+            &[],
+        )
+    },
     drc("overlap", Cmp::Ge, "overlap", &[0, 1], LIMIT, &[]),
     drc(
         "tap_distance",
@@ -363,6 +1004,130 @@ pub(crate) const KINDS: &[Kind] = &[
         Some(p("", "min_count", Dim::Count)),
         &[p("within", "within", Dim::Length)],
     ),
+    // LEF MINIMUMCUT on the wide layer, the via's far metal third:
+    // `min_cuts(via1, met2, met1; width: 1um) >= 2` is MINIMUMCUT 2 WIDTH 1.0
+    // FROMBELOW on met2.
+    drc(
+        "min_cuts",
+        Cmp::Ge,
+        "minimum_cut",
+        &[0, 1, 2],
+        Some(p("", "min_count", Dim::Count)),
+        &[p("width", "width", Dim::Length)],
+    ),
+    drc(
+        "min_cuts",
+        Cmp::Ge,
+        "minimum_cut",
+        &[0, 1, 2],
+        Some(p("", "min_count", Dim::Count)),
+        &[
+            p("width", "width", Dim::Length),
+            p("within", "within", Dim::Length),
+        ],
+    ),
+    // LEF MINIMUMCUT ... LENGTH length WITHIN distance: the thin wires
+    // beside a wide one longer than `length`, with or without `within`.
+    drc(
+        "min_cuts",
+        Cmp::Ge,
+        "minimum_cut",
+        &[0, 1, 2],
+        Some(p("", "min_count", Dim::Count)),
+        &[
+            p("width", "width", Dim::Length),
+            p("length", "length", Dim::Length),
+            p("distance", "distance", Dim::Length),
+        ],
+    ),
+    drc(
+        "min_cuts",
+        Cmp::Ge,
+        "minimum_cut",
+        &[0, 1, 2],
+        Some(p("", "min_count", Dim::Count)),
+        &[
+            p("width", "width", Dim::Length),
+            p("within", "within", Dim::Length),
+            p("length", "length", Dim::Length),
+            p("distance", "distance", Dim::Length),
+        ],
+    ),
+    // One `LEF58_METALWIDTHVIAMAP` entry: a cut between a `below` wire and an
+    // `above` wire of the given widths must be the mapped via's cut,
+    // `via_map(via1, met1, met2; below_min: .., below_max: .., above_min: ..,
+    // above_max: .., cut: 50nm x 50nm)`.
+    drc(
+        "via_map",
+        Cmp::Absent,
+        "metal_width_via",
+        &[0, 1, 2],
+        None,
+        &[
+            p("below_min", "below_min", Dim::Length),
+            p("below_max", "below_max", Dim::Length),
+            p("above_min", "above_min", Dim::Length),
+            p("above_max", "above_max", Dim::Length),
+            p("cut", "cut_width", Dim::LengthPair("cut_height")),
+        ],
+    ),
+    // LEF `SPACING cutSpacing [SAMENET] LAYER second STACK`: cuts on two
+    // layers spaced unless one net's cuts are stacked (one covering the
+    // other), the cuts' nets read off the metal both land on:
+    // `stack_space(via2, via1, met2) >= 200nm`, `same_net: true` for
+    // `SAMENET`.
+    drc(
+        "stack_space",
+        Cmp::Ge,
+        "stack_spacing",
+        &[0, 1, 2],
+        LIMIT,
+        &[],
+    ),
+    drc(
+        "stack_space",
+        Cmp::Ge,
+        "stack_spacing",
+        &[0, 1, 2],
+        LIMIT,
+        &[p("same_net", "same_net", Dim::Bool)],
+    ),
+    // A cut with no other cut within the limit, centre to centre
+    // (`LEF58_MAXSPACING`): `max_space(via1) <= 2um`, or a cut class's cuts
+    // against the whole cut layer, `max_space(via1_class, via1) <= 2um`.
+    drc("max_space", Cmp::Le, "max_cut_spacing", &[0], LIMIT, &[]),
+    drc("max_space", Cmp::Le, "max_cut_spacing", &[0, 1], LIMIT, &[]),
+    // LEF MAXVIASTACK over the cut layers listed, bottom to top:
+    // `via_stack(via1, via2, via3) <= 2`.
+    Kind {
+        more: true,
+        fixed: &[("single", false)],
+        ..drc(
+            "via_stack",
+            Cmp::Le,
+            "via_stack",
+            &[0],
+            Some(p("", "max_height", Dim::Count)),
+            &[],
+        )
+    },
+    // Single-cut vias only, the metals between the cuts named so that a
+    // via of two or more cuts interrupts the stack (LEF: "A double-cut or
+    // larger via interrupts the stack"): `via_stack(m1, via1, m2, via2, m3,
+    // single) <= 2`.
+    Kind {
+        more: true,
+        modifier: Some("single"),
+        fixed: &[("single", true)],
+        ..drc(
+            "via_stack",
+            Cmp::Le,
+            "via_stack",
+            &[0],
+            Some(p("", "max_height", Dim::Count)),
+            &[],
+        )
+    },
     drc(
         "via_array_space",
         Cmp::Ge,
@@ -371,6 +1136,50 @@ pub(crate) const KINDS: &[Kind] = &[
         LIMIT,
         &[p("array", "array_threshold", Dim::Count)],
     ),
+    // LEF cut-layer SPACING: `space(via1, center)` is CENTERTOCENTER, and
+    // `adjacent_space(via1; cuts: 3, within: 250nm)` ADJACENTCUTS 3 WITHIN.
+    Kind {
+        modifier: Some("center"),
+        fixed: &[("center", true)],
+        ..drc("space", Cmp::Ge, "cut_spacing", &[0], LIMIT, &[])
+    },
+    Kind {
+        fixed: &[("center", false)],
+        ..drc(
+            "adjacent_space",
+            Cmp::Ge,
+            "cut_spacing",
+            &[0],
+            LIMIT,
+            ADJACENT,
+        )
+    },
+    Kind {
+        modifier: Some("center"),
+        fixed: &[("center", true)],
+        ..drc(
+            "adjacent_space",
+            Cmp::Ge,
+            "cut_spacing",
+            &[0],
+            LIMIT,
+            ADJACENT,
+        )
+    },
+    // LEF58_SPACINGTABLE on a cut layer, by cut class: `short`/`long` are the
+    // classes' sizes, `space` two rows and columns per class (END, SIDE).
+    drc(
+        "cut_class_space",
+        Cmp::Absent,
+        "cut_class_spacing",
+        &[0],
+        None,
+        &[
+            p("short", "class_short", Dim::LengthList),
+            p("long", "class_long", Dim::LengthList),
+            p("space", "space", Dim::LengthRows),
+        ],
+    ),
     drc(
         "patterning",
         Cmp::Ge,
@@ -378,6 +1187,75 @@ pub(crate) const KINDS: &[Kind] = &[
         &[0],
         Some(p("", "color_spacing", Dim::Length)),
         &[p("colors", "colors", Dim::Count)],
+    ),
+    // A corner whose angle inside its shape is under the limit (IHP 3.1
+    // "acute angles <87 degree"); with no layer, every drawn layer.
+    drc(
+        "interior_angle",
+        Cmp::Ge,
+        "min_interior_angle",
+        &[],
+        Some(p("", "limit", Dim::Angle)),
+        &[],
+    ),
+    drc(
+        "interior_angle",
+        Cmp::Ge,
+        "min_interior_angle",
+        &[0],
+        Some(p("", "limit", Dim::Angle)),
+        &[],
+    ),
+    // A drawn polygon that crosses itself or encloses no area (IHP 3.1
+    // "self-intersecting polygons must be avoided"); with no layer, every
+    // drawn layer.
+    drc("valid", Cmp::Absent, "polygon_validity", &[], None, &[]),
+    drc("valid", Cmp::Absent, "polygon_validity", &[0], None, &[]),
+    // Pre-coloured shapes, one anchor layer per mask after the patterned one:
+    // `patterning(met1, met1_mask1, met1_mask2; colors: 2) >= 50nm`.
+    Kind {
+        more: true,
+        ..drc(
+            "patterning",
+            Cmp::Ge,
+            "anchored_patterning",
+            &[0, 1],
+            Some(p("", "color_spacing", Dim::Length)),
+            &[p("colors", "colors", Dim::Count)],
+        )
+    },
+    // Self-aligned double patterning, US 2015/0286764 A1's colour bands and
+    // odd-track widths: `sadp(m4; different: 72nm, same: 120nm,
+    // track_width: 24nm, track_space: 24nm)`.
+    drc(
+        "sadp",
+        Cmp::Absent,
+        "sadp",
+        &[0],
+        None,
+        &[
+            p("different", "different", Dim::Length),
+            p("same", "same", Dim::Length),
+            opt("track_width", "track_width", Dim::Length),
+            opt("track_space", "track_space", Dim::Length),
+        ],
+    ),
+    // Gridded SADP line ends, Xu et al. (TCAD 2015) rules 1-4:
+    // `sadp_line_end(m4; adjacent: 24nm, tip: 32nm, overlap: 58nm,
+    // corner: 22nm, offset: 44nm)`.
+    drc(
+        "sadp_line_end",
+        Cmp::Absent,
+        "sadp_line_end",
+        &[0],
+        None,
+        &[
+            p("adjacent", "adjacent", Dim::Length),
+            p("tip", "tip", Dim::Length),
+            p("overlap", "overlap", Dim::Length),
+            p("corner", "corner", Dim::Length),
+            p("offset", "offset", Dim::Length),
+        ],
     ),
     // Every shape (or edge) of the layer is a violation: `forbidden(licon and poly and diff)`.
     drc("forbidden", Cmp::Absent, "forbidden", &[0], None, &[]),
@@ -390,14 +1268,41 @@ pub(crate) const KINDS: &[Kind] = &[
         Some(p("", "min_count", Dim::Count)),
         &[],
     ),
+    // At most `count` (sky130 rpm.1g "only 1 licon is allowed in ..."), or
+    // exactly `count`.
+    drc(
+        "contains",
+        Cmp::Le,
+        "must_contain",
+        &[0, 1],
+        Some(p("", "max_count", Dim::Count)),
+        &[],
+    ),
+    drc(
+        "contains",
+        Cmp::Eq,
+        "must_contain",
+        &[0, 1],
+        Some(p("", "count", Dim::Count)),
+        &[],
+    ),
     // Every inner shape lies entirely inside the outer layer: `inside(poly_licon, npc)`.
     drc("inside", Cmp::Absent, "must_be_inside", &[0, 1], None, &[]),
-    // Spacing between shapes on the same net, or on different nets (gf180 NW.2a/2b).
+    // Spacing between shapes on the same net, or on different nets (gf180 NW.2a/2b),
+    // on one layer or between two (sky130 nwell.7).
     drc(
         "space",
         Cmp::Ge,
         "net_spacing",
         &[0],
+        LIMIT,
+        &[p("nets", "same_net", Dim::Nets)],
+    ),
+    drc(
+        "space",
+        Cmp::Ge,
+        "net_spacing",
+        &[0, 1],
         LIMIT,
         &[p("nets", "same_net", Dim::Nets)],
     ),
@@ -427,11 +1332,164 @@ pub(crate) const KINDS: &[Kind] = &[
             p("attached", "attached", Dim::Length),
         ],
     ),
+    // Space between facing edges by the length class of each (ASAP7 M1.S.1
+    // to M1.S.5): a square, symmetric table of cells, one row and column per
+    // class threshold.
+    drc(
+        "tip_space_table",
+        Cmp::Absent,
+        "tip_spacing_table",
+        &[0],
+        None,
+        &[
+            p("length", "length", Dim::LengthList),
+            p("space", "space", Dim::LengthRows),
+        ],
+    ),
+    // Spacing by the widths of both shapes and, per width, a run: LEF
+    // `SPACINGTABLE TWOWIDTHS {WIDTH width [PRL runLength] {spacing}...}`.
+    drc(
+        "two_width_table",
+        Cmp::Absent,
+        "two_width_spacing_table",
+        &[0],
+        None,
+        &[
+            p("width", "width", Dim::LengthList),
+            p("prl", "prl", Dim::OptLengthList),
+            p("space", "space", Dim::LengthRows),
+        ],
+    ),
+    // Every span (chord) of a shape is a legal length: one of the list, or at
+    // least its last (`LEF58_SPANLENGTHTABLE`).
+    drc(
+        "span_length",
+        Cmp::Absent,
+        "span_length",
+        &[0],
+        None,
+        &[
+            p("x", "x_spans", Dim::LengthList),
+            p("y", "y_spans", Dim::LengthList),
+        ],
+    ),
+    // With `EXCEPTOTHERSPAN` per list, `none` for a list without one.
+    drc(
+        "span_length",
+        Cmp::Absent,
+        "span_length",
+        &[0],
+        None,
+        &[
+            p("x", "x_spans", Dim::LengthList),
+            p("y", "y_spans", Dim::LengthList),
+            opt("x_except", "x_except", Dim::Length),
+            opt("y_except", "y_except", Dim::Length),
+        ],
+    ),
+    // The exact centre-to-centre pitch of neighbouring rectangles along one
+    // axis (ASAP7 FIN.S.1, GATE.S.1): `pitch(fin, vertical) == 27nm`.
+    Kind {
+        modifier: Some("vertical"),
+        fixed: &[("vertical", true)],
+        ..drc("pitch", Cmp::Eq, "exact_pitch", &[0], LIMIT, &[])
+    },
+    Kind {
+        modifier: Some("horizontal"),
+        fixed: &[("vertical", false)],
+        ..drc("pitch", Cmp::Eq, "exact_pitch", &[0], LIMIT, &[])
+    },
+    // Another shape inside the keep-out box of an end of line
+    // (`LEF58_EOLKEEPOUT eolWidth EXTENSION backward side forward`).
+    drc(
+        "eol_keep_out",
+        Cmp::Absent,
+        "eol_keep_out",
+        &[0],
+        None,
+        &[
+            p("eol_width", "eol_width", Dim::Length),
+            p("backward", "backward", Dim::Length),
+            p("side", "side", Dim::Length),
+            p("forward", "forward", Dim::Length),
+        ],
+    ),
+    // With `EXCEPTWITHIN withinLow withinHigh` and `CORNERONLY`.
+    drc(
+        "eol_keep_out",
+        Cmp::Absent,
+        "eol_keep_out",
+        &[0],
+        None,
+        &[
+            p("eol_width", "eol_width", Dim::Length),
+            p("backward", "backward", Dim::Length),
+            p("side", "side", Dim::Length),
+            p("forward", "forward", Dim::Length),
+            opt("except_within", "", Dim::Group(KEEP_OUT_EXCEPT)),
+            p("corner_only", "corner_only", Dim::Bool),
+        ],
+    ),
+    // Another cut inside a cut class's keep-out zones (`LEF58_KEEPOUTZONE
+    // CUTCLASS c1 [TO c2] ENDEXTENSION .. SIDEEXTENSION ..`).
+    drc(
+        "keep_out_zone",
+        Cmp::Absent,
+        "keep_out_zone",
+        &[0],
+        None,
+        &[
+            p("class", "short", Dim::LengthPair("long")),
+            opt("to", "to_short", Dim::LengthPair("to_long")),
+            p("end_side", "end_side", Dim::Length),
+            p("end_forward", "end_forward", Dim::Length),
+            p("side_side", "side_side", Dim::Length),
+            p("side_forward", "side_forward", Dim::Length),
+        ],
+    ),
+    // A gap in a forbidden range between facing edges that run alongside
+    // (`LEF58_TWOWIRESFORBIDDENSPACING`).
+    drc(
+        "forbidden_space",
+        Cmp::Absent,
+        "forbidden_spacing",
+        &[0],
+        None,
+        &[
+            p("min", "min", Dim::Length),
+            p("max", "max", Dim::Length),
+            p("prl", "prl", Dim::Length),
+        ],
+    ),
     // Edge layers.
     drc("length", Cmp::Ge, "edge_min_length", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "edge_spacing", &[0], LIMIT, &[]),
     drc("space", Cmp::Ge, "edge_spacing", &[0, 1], LIMIT, &[]),
     drc("enclosure", Cmp::Ge, "edge_enclosure", &[0, 1], LIMIT, &[]),
+    // Edges facing each other across their shapes' material (back to back), as
+    // a channel's length and width (sky130 poly.1b, difftap.2) or a width in
+    // one direction (ASAP7 M4.W.1 on `met4.edges().horizontal()`).
+    drc("width", Cmp::Ge, "edge_width", &[0], LIMIT, &[]),
+    // Edges whose outer sides face each other (face to face): a spacing in one
+    // direction (ASAP7 M4.S.2 on `met4.edges().vertical()`).
+    drc(
+        "facing_space",
+        Cmp::Ge,
+        "edge_facing_space",
+        &[0],
+        LIMIT,
+        &[],
+    ),
+    // The same for pairs running alongside each other longer than `prl`
+    // (`LEF58_SPACING ... WRONGDIRECTION PRL`).
+    drc(
+        "facing_space",
+        Cmp::Ge,
+        "edge_facing_space",
+        &[0],
+        LIMIT,
+        &[p("prl", "prl", Dim::Length)],
+    ),
     // ERC.
     erc(
         "antenna",
@@ -440,6 +1498,9 @@ pub(crate) const KINDS: &[Kind] = &[
         &[
             p("max_ratio", "max_ratio", Dim::Scalar),
             opt("sidewall", "sidewall_thickness", Dim::Length),
+            opt("diode", "diode_layer", Dim::Layer),
+            opt("diode_area", "diode_area", Dim::Area),
+            opt("diode_min", "diode_min", Dim::Area),
         ],
     ),
     erc(
@@ -448,9 +1509,34 @@ pub(crate) const KINDS: &[Kind] = &[
         true,
         &[
             p("max_ratio", "max_ratio", Dim::Scalar),
+            opt("sidewall", "sidewall_thickness", Dim::Length),
+            p("cut_factor", "cut_factor", Dim::Scalar),
             opt("diode", "diode_layer", Dim::Layer),
             p("diode_credit", "diode_credit", Dim::Scalar),
             p("diode_bonus", "diode_bonus", Dim::Scalar),
+            p("area_minus_diode", "area_minus_diode", Dim::Scalar),
+            p("gate_plus_diode", "gate_plus_diode", Dim::Scalar),
+            opt(
+                "diode_reduce",
+                "diode_reduce_area",
+                Dim::AreaTable("diode_reduce"),
+            ),
+            opt(
+                "diode_max_ratio",
+                "diode_max_ratio_area",
+                Dim::AreaTable("diode_max_ratio"),
+            ),
+            opt("exempt", "exempt_layer", Dim::Layer),
+        ],
+    ),
+    erc(
+        "conditional_tie",
+        &[0, 1, 2, 3],
+        false,
+        &[
+            p("within", "within", Dim::Length),
+            p("spacing", "spacing", Dim::LengthList),
+            p("max_distance", "max_distance", Dim::LengthList),
         ],
     ),
     erc(
@@ -484,15 +1570,9 @@ pub(crate) const KINDS: &[Kind] = &[
             p("current_exponent", "current_exponent", Dim::Scalar),
         ],
     ),
-    erc(
-        "em_current_density",
-        &[0],
-        true,
-        &[
-            p("max_density", "max_density", Dim::CurrentPerWidth),
-            p("max_current_per_cut", "max_current_per_cut", Dim::Current),
-        ],
-    ),
+    erc("em_current_density", &[0], true, EM_DENSITY),
+    erc("em_rms", &[0], true, EM_AC),
+    erc("em_peak", &[0], true, EM_AC),
     erc(
         "esd_latchup",
         &[0, 1],
@@ -503,6 +1583,54 @@ pub(crate) const KINDS: &[Kind] = &[
             p("clamps", "clamp", Dim::Models),
         ],
     ),
+    erc(
+        "esd_cross_domain",
+        &[],
+        false,
+        &[
+            p("diodes", "diode", Dim::Models),
+            opt("local", "local", Dim::Models),
+            opt("resistors", "resistor", Dim::Models),
+            opt("min_series", "min_series", Dim::Resistance),
+            opt(
+                "max_ground_resistance",
+                "max_ground_resistance",
+                Dim::Resistance,
+            ),
+            opt(
+                "coupling_resistance",
+                "coupling_resistance",
+                Dim::Resistance,
+            ),
+        ],
+    ),
+    erc(
+        "esd_exposed",
+        &[0],
+        false,
+        &[
+            p("clamps", "clamp", Dim::Models),
+            opt("resistors", "resistor", Dim::Models),
+            opt("rated", "rated", Dim::Models),
+            opt("min_series", "min_series", Dim::Resistance),
+        ],
+    ),
+    erc(
+        "esd_ground_coupling",
+        &[],
+        false,
+        &[p("diodes", "diode", Dim::Models)],
+    ),
+    erc(
+        "esd_parasitic",
+        &[0, 1],
+        false,
+        &[p("min_spacing", "min_spacing", Dim::Length)],
+    ),
+    erc("esd_path", &[0], false, ESD_PATH),
+    // The current enters at a second layer's polygons: a guard ring under an
+    // injection stress (JESD78).
+    erc("esd_path", &[0, 1], false, ESD_PATH),
     erc(
         "esd_topological",
         &[0],
@@ -516,6 +1644,95 @@ pub(crate) const KINDS: &[Kind] = &[
         &[p("labels_are_ports", "labels_are_ports", Dim::Bool)],
     ),
     erc("floating_well", &[0, 1], false, &[]),
+    erc("fanout", &[], false, &[p("max", "max_gates", Dim::Count)]),
+    erc(
+        "net_type",
+        &[],
+        false,
+        &[
+            opt("net", "net", Dim::Names),
+            opt("path", "path", Dim::Names),
+            opt("break", "break", Dim::Names),
+            opt("exclude", "exclude", Dim::Names),
+        ],
+    ),
+    erc(
+        "gate_path",
+        &[],
+        false,
+        &[
+            p("ground", "ground", Dim::Bool),
+            p("max_devices", "max_devices", Dim::Count),
+        ],
+    ),
+    erc(
+        "supply_path",
+        &[],
+        false,
+        &[
+            p("both", "both", Dim::Bool),
+            p("labels_are_ports", "labels_are_ports", Dim::Bool),
+        ],
+    ),
+    erc("combinational_loop", &[], false, &[]),
+    erc("floating_supply", &[], false, &[]),
+    erc(
+        "power_switch",
+        &[],
+        false,
+        &[p("models", "model", Dim::Models)],
+    ),
+    erc(
+        "matching",
+        &[0],
+        false,
+        &[p("tolerance", "tolerance", Dim::Length)],
+    ),
+    erc(
+        "esd_pin_pair",
+        &[0],
+        false,
+        &[
+            p("clamps", "clamp", Dim::Models),
+            p("current", "current", Dim::Current),
+            p("clamp_resistance", "clamp_resistance", Dim::Resistance),
+            p("max_resistance", "max_resistance", Dim::Resistance),
+        ],
+    ),
+    erc(
+        "esd_clamp_resistance",
+        &[0],
+        false,
+        &[
+            p("clamps", "clamp", Dim::Models),
+            p("max_resistance", "max_resistance", Dim::Resistance),
+        ],
+    ),
+    erc(
+        "forward_diode",
+        &[0],
+        false,
+        &[p("models", "model", Dim::Models)],
+    ),
+    erc(
+        "guard_ring",
+        &[0, 1],
+        false,
+        &[
+            opt("max_space", "max_space", Dim::Length),
+            opt("min_width", "min_width", Dim::Length),
+            opt("pad", "pad", Dim::Layer),
+            opt("near", "near", Dim::Layer),
+            opt("within", "within", Dim::Length),
+            opt("clear", "clear", Dim::Layer),
+        ],
+    ),
+    erc(
+        "guard_ring_bias",
+        &[0],
+        false,
+        &[p("power", "power", Dim::Bool)],
+    ),
     erc(
         "hv_domain",
         &[],
@@ -526,6 +1743,45 @@ pub(crate) const KINDS: &[Kind] = &[
         ],
     ),
     erc("ir_drop", &[], false, &[]),
+    erc("dynamic_ir_drop", &[], false, &[]),
+    erc(
+        "em_thermal",
+        &[0],
+        true,
+        &[
+            p("max_density", "max_density", Dim::CurrentPerWidth),
+            p("max_current_per_cut", "max_current_per_cut", Dim::Current),
+            p("blech_limit", "blech_limit", Dim::Current),
+            p(
+                "reference_temperature",
+                "reference_temperature",
+                Dim::Temperature,
+            ),
+            p("activation_energy", "activation_energy_ev", Dim::Energy),
+            p("current_exponent", "current_exponent", Dim::Scalar),
+            p(
+                "thermal_conductivity",
+                "thermal_conductivity",
+                Dim::ThermalConductivity,
+            ),
+            p("spreading", "heat_spreading", Dim::Scalar),
+            p("sigma", "sigma", Dim::Scalar),
+            p("limit_failure", "limit_failure", Dim::Fraction),
+            p("max_failure", "max_failure", Dim::Fraction),
+        ],
+    ),
+    erc(
+        "latchup_victim",
+        &[0, 1, 2],
+        false,
+        &[
+            p("within", "within", Dim::Length),
+            p("max_distance", "max_distance", Dim::Length),
+            opt("pad", "pad", Dim::Layer),
+            opt("bias", "bias", Dim::Layer),
+            opt("forward", "forward", Dim::Word(&["above", "below"])),
+        ],
+    ),
     erc(
         "missing_tie",
         &[0, 1],
@@ -566,6 +1822,12 @@ pub(crate) const KINDS: &[Kind] = &[
     erc("soft_connection", &[0], true, &[]),
     erc("supply_short", &[0, 1], false, &[]),
     erc("supply_short", &[0, 1, 2], false, &[]),
+    erc(
+        "tie_area",
+        &[0, 1, 2],
+        false,
+        &[p("min_ratio", "min_ratio", Dim::Fraction)],
+    ),
     erc("tie_high_low", &[], false, &[]),
     erc("unconnected_pin", &[0], true, &[]),
     erc(
@@ -587,6 +1849,24 @@ pub(crate) const KINDS: &[Kind] = &[
         ],
     ),
     erc(
+        "hot_carrier",
+        &[],
+        false,
+        &[
+            p("models", "model", Dim::Models),
+            p("max_length", "max_length", Dim::Length),
+        ],
+    ),
+    erc(
+        "well_sharing",
+        &[],
+        false,
+        &[
+            p("models", "model", Dim::Models),
+            p("resistors", "resistors", Dim::Bool),
+        ],
+    ),
+    erc(
         "well_bias",
         &[],
         false,
@@ -602,17 +1882,69 @@ pub(crate) const KINDS: &[Kind] = &[
         &[opt("shifters", "shifter", Dim::Models)],
     ),
     erc("domain_crossing", &[], false, &[]),
+    // A high-voltage figure of a conductor lies inside its tag (sky130 hv.X.1,
+    // hv.X.4, hvnwell.11); a net holds no tagged and untagged figure at once
+    // (hvnwell.10).
+    erc(
+        "hv_tag",
+        &[0, 1],
+        false,
+        &[p("voltage", "voltage", Dim::Voltage)],
+    ),
+    erc("mixed_tag", &[0, 1], false, &[]),
+    // In the intent's power states: a gate left floating (ERC-F8), and a
+    // powered transistor with a floating gate, not an isolation cell (ERC-F7).
+    erc("undriven_gate", &[], false, &[]),
+    erc(
+        "missing_isolation",
+        &[],
+        false,
+        &[opt("isolation", "isolation", Dim::Models)],
+    ),
+    // The field across the dielectric between two nets' shapes (JEP159A,
+    // IC Validator): lateral on one layer, through the stack between two.
+    erc(
+        "dielectric_field",
+        &[0],
+        false,
+        &[p("max_field", "max_field", Dim::Field)],
+    ),
+    erc(
+        "dielectric_field",
+        &[0, 1],
+        false,
+        &[p("max_field", "max_field", Dim::Field)],
+    ),
+    // Spacing that grows with the worst-case voltage between two nets
+    // (LEF58_VOLTAGESPACING, sky130 hvnwell.8): one layer, or two.
+    Kind {
+        engine: "voltage_spacing",
+        ..erc("voltage_space", &[0], false, VOLTAGE_SPACE)
+    },
+    Kind {
+        engine: "voltage_spacing",
+        ..erc("voltage_space", &[0, 1], false, VOLTAGE_SPACE)
+    },
 ];
 
-/// The six PEX keys, each required once per `pex` statement.
-pub(crate) const PEX: [(&str, Dim); 6] = [
+/// The PEX keys, each given at most once per `pex` statement, and every one
+/// but the [`OPTIONAL_PEX_KEYS`] required.
+pub(crate) const PEX: [(&str, Dim); 8] = [
     ("thickness", Dim::Length),
     ("height", Dim::Length),
     ("sheet", Dim::Resistance),
     ("dielectric", Dim::Scalar),
     ("area_cap", Dim::CapPerArea),
     ("fringe_cap", Dim::CapPerLength),
+    ("tc1", Dim::PerKelvin),
+    ("tc2", Dim::PerKelvin2),
 ];
+
+/// The [`PEX`] keys a row may leave out: a dielectric the process does not
+/// state (stated, it must be positive, testing-plan F74), and the temperature
+/// coefficients, which a row gives together and exactly when the deck states
+/// a `temperature`.
+pub(crate) const OPTIONAL_PEX_KEYS: [&str; 3] = ["dielectric", "tc1", "tc2"];
 
 /// Engine kinds whose layer arguments may be edge layers, and what each engine
 /// layer slot takes: `Some(true)` edges, `Some(false)` polygons, `None` either.
@@ -623,4 +1955,6 @@ pub(crate) const EDGE_KINDS: &[(&str, &[Option<bool>])] = &[
     ("edge_min_length", &[Some(true)]),
     ("edge_spacing", &[Some(true), Some(true)]),
     ("edge_enclosure", &[Some(true), Some(false)]),
+    ("edge_width", &[Some(true)]),
+    ("edge_facing_space", &[Some(true)]),
 ];

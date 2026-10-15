@@ -1,28 +1,98 @@
-//! Exact rectilinear booleans by an x-sweep with nonzero-winding occupancy.
+//! Booleans of layers at any angle by an x-sweep with nonzero-winding
+//! occupancy: exact on rectilinear and octilinear layers, snap-rounded at
+//! any other angle.
 //!
 //! Data in: [`ValidatedLayer`] operands (or one raw GDS ring for [`canonical_rings_into`]).
 //! Data out: a [`ValidatedLayer`], outer rings CCW, holes CW; its rows are the
-//! scratch store's, not the operands'. Non-rectilinear input is refused, never approximated.
+//! scratch store's, not the operands'.
+//!
+//! Two sweeps share the corner model. Rectilinear operands take the slab sweep
+//! below, whose occupancy is a list of y-intervals per slab. Operands with an
+//! edge at 45 degrees take a trapezoid sweep (the private `octilinear` module)
+//! at doubled scale, where every crossing is an integer; a result vertex that lies
+//! between grid points is then snapped onto the grid by the rule
+//! [`union_into`] states. Operands with an edge at any other angle take a
+//! snap-rounded sweep (the private `anyangle` module), whose rounding
+//! [`union_into`] states too.
 
 use core::cmp::Ordering;
 
 use crate::ids::LayerId;
 use crate::store::GeometryStoreBuilder;
-use crate::view::{validate_layer_into, ValidatedLayer, ValidityError};
+use crate::view::{validate_layer_with, Angles, ValidatedLayer, ValidityError};
 use crate::{Dbu, MAX_ABS_DBU};
+
+mod anyangle;
+mod octilinear;
 
 /// Why a boolean could not be computed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum BooleanError {
-    #[error("input is not rectilinear; arbitrary-angle geometry is unsupported")]
+    /// An operation that builds axis-parallel boxes along edges
+    /// ([`crate::derive::extended_into`]) was given a 45-degree edge.
+    #[error("a 45-degree edge cannot be extended into an axis-parallel box")]
     NotRectilinear,
+    /// Growing a shape ([`crate::derive::sized_into`]) would put a coordinate
+    /// past `±`[`MAX_ABS_DBU`].
     #[error("a sized coordinate leaves the representable range")]
     OutOfRange,
+    /// An operand read from a store failed validation; from a traced result,
+    /// an internal fault.
     #[error(transparent)]
     Validity(#[from] ValidityError),
 }
 
 /// Union of two validated layers into `out` (cleared and refilled).
+///
+/// Every result is merged, one polygon per figure: overlapping and abutting
+/// input polygons come out as one.
+///
+/// **The corner model is "connected".** Material that meets only at a corner
+/// is joined there: two cells touching at a corner are one polygon, whose
+/// outer ring passes the corner twice, and the corner is a neck of width 0.
+/// Empty space does not pass a corner, so a ring of material closed only at a
+/// corner encloses a hole, which touches the outer ring there. A polygon is
+/// thus one 8-connected component of the material, and each hole one
+/// 4-connected component of the space it encloses; neither depends on how the
+/// input was drawn or wound. At any angle the rule is the same: material
+/// meeting at a point is one figure, and empty space meeting at a point is
+/// kept apart. [`crate::view::ValidatedLayer`] states what such rings may do.
+///
+/// **Off-grid vertices are snapped.** With edges at 45 degrees a result vertex
+/// can fall between grid points: where a rising and a falling diagonal cross
+/// at a half-grid point `(i + ½, j + ½)`. Such a vertex is replaced by the two
+/// grid points half a diagonal step from it along its two edges, joined by a
+/// unit horizontal or vertical edge: the tip of the right angle between its
+/// edges is cut off. A convex corner loses, and a concave corner gains, a
+/// triangle of a quarter square unit; a pinch there becomes a neck one unit
+/// wide, so the connected model holds after snapping. Every result edge stays
+/// horizontal, vertical or at 45 degrees and every vertex on the grid, as IHP
+/// SG13G2 rule 3.1 requires of drawn data ("all features are on a drawing
+/// grid", "design elements, which are snapped to grid must not violate any
+/// geometries"). `KLayout` instead rounds such a point to the nearest grid
+/// point, which leaves its edges slightly off 45 degrees; the two results
+/// differ only inside the unit square around the point.
+///
+/// **At any other angle, crossings are rounded.** Where either operand has
+/// an edge at an angle other than a multiple of 45 degrees, a point where two
+/// edges cross is rounded to its nearest grid point, a half away from zero,
+/// as `KLayout` rounds it, and every edge passing within that point's pixel
+/// (the points that round to it) is bent through it: snap rounding (Hobby
+/// 1999; Guibas and Marimont 1998), so rounding moves no boundary across a
+/// rounded point and creates no crossing. An edge end lying in a bent edge's
+/// pixel span bends it too, as `KLayout` makes such an end an attractor; an
+/// edge no rounding bends keeps its shape exactly, so merging shapes that do
+/// not cross returns them as drawn. Every boundary point moves less than half
+/// a unit along each axis. The 45-degree tip cutting above does not apply on
+/// this path.
+///
+/// The result's store rows name a scratch store, not a layout shape
+/// ([`crate::view::PolygonRef::provenance`]).
+///
+/// # Errors
+///
+/// [`BooleanError::Validity`] only on an internal fault: validated operands
+/// always produce valid rings.
 pub fn union_into(
     a: &ValidatedLayer,
     b: &ValidatedLayer,
@@ -31,7 +101,13 @@ pub fn union_into(
     combine_into(a, b, out, |in_a, in_b| in_a | in_b)
 }
 
-/// Intersection of two validated layers into `out` (cleared and refilled).
+/// Intersection of two validated layers into `out` (cleared and refilled),
+/// merged as [`union_into`]'s. A shared edge or corner has no area and is not
+/// in the result.
+///
+/// # Errors
+///
+/// As [`union_into`].
 pub fn intersection_into(
     a: &ValidatedLayer,
     b: &ValidatedLayer,
@@ -40,7 +116,12 @@ pub fn intersection_into(
     combine_into(a, b, out, |in_a, in_b| in_a & in_b)
 }
 
-/// `a` minus `b` into `out` (cleared and refilled).
+/// `a` minus `b` into `out` (cleared and refilled), merged as
+/// [`union_into`]'s.
+///
+/// # Errors
+///
+/// As [`union_into`].
 pub fn subtraction_into(
     a: &ValidatedLayer,
     b: &ValidatedLayer,
@@ -96,6 +177,12 @@ impl Slabs {
     }
 
     fn close_slab(&mut self) {
+        let from = *self.start.last().expect("`open` seeds the offsets") as usize;
+        let slab = &self.ivals[from..];
+        debug_assert!(
+            slab.iter().all(|&(lo, hi)| lo < hi) && slab.windows(2).all(|w| w[0].1 < w[1].0),
+            "a slab's intervals are non-empty, ascending and apart: {slab:?}"
+        );
         self.start.push(ring_mark(self.ivals.len()));
     }
 
@@ -241,6 +328,22 @@ fn intervals_into(ymap: &[(i64, i32)], out: &mut Vec<(i64, i64)>) {
             out.push((open, y));
         }
     }
+    // Every edge adds its delta at `ylo` and takes it back at `yhi`.
+    debug_assert_eq!(sum, 0, "the winding returns to zero above the top edge");
+}
+
+/// The area of a slab list over its axis, exact.
+fn region_area(xs: &[i64], region: &Slabs) -> i128 {
+    (0..xs.len().saturating_sub(1))
+        .map(|c| {
+            let height: i128 = region
+                .slab(c)
+                .iter()
+                .map(|&(lo, hi)| i128::from(hi - lo))
+                .sum();
+            i128::from(xs[c + 1] - xs[c]) * height
+        })
+        .sum()
 }
 
 /// Occupancy of every x-slab, by the nonzero-winding rule. `xs` holds every
@@ -429,9 +532,17 @@ fn tail_of(seg: Seg) -> (i64, i64) {
 /// Which segment continues the walk from each segment's tail: a linear merge of
 /// segments ordered by head against the same ordered by tail.
 ///
-/// Vertices have degree two or four. At a degree-four pinch the **left turn** is
-/// taken, keeping two cells meeting at a corner as two simple rings; that makes
-/// `next` a permutation, so the walk is a cycle decomposition.
+/// Vertices have degree two or four. A degree-four vertex is a **pinch**: two
+/// cells of the region meet there only at a corner, and the corner joins them
+/// (the corner model, see [`union_into`]). The walk takes the **right turn**
+/// there, staying with the region's material across the corner and keeping
+/// the two empty quadrants apart. That makes `next` a permutation, so the walk
+/// is a cycle decomposition, and each cycle is the one boundary a figure has
+/// against one empty component: its outer ring, or one of its holes. A cycle
+/// passes a pinch twice when both empty quadrants are that one component; a
+/// figure's outer and its hole, or two of its holes, each pass it once when
+/// they are two. Which segment seeds a cycle changes where its vertex list
+/// starts, never which cycles there are.
 fn successors_into(segs: &[Seg], order: &mut Vec<u32>, by_end: &mut Vec<u32>, next: &mut Vec<u32>) {
     order.clear();
     order.extend(0..ring_mark(segs.len()));
@@ -465,8 +576,9 @@ fn successors_into(segs: &[Seg], order: &mut Vec<u32>, by_end: &mut Vec<u32>, ne
 
         for &arrival in &by_end[tail..tail_end] {
             let (dx, dy) = dir_of(segs[arrival as usize]);
-            let want = (-dy, dx);
-            // Left turn if present, else the group's first (a degree-two corner).
+            let want = (dy, -dx);
+            // Right turn if present (a pinch), else the group's first (a
+            // degree-two corner, whichever way it turns).
             let mut pick = order[head];
             for &departure in &order[head..head_end] {
                 let hit = dir_of(segs[departure as usize]) == want;
@@ -547,10 +659,47 @@ fn trace(xs: &[i64], region: &Slabs, sweep: &mut Sweep) {
         &mut sweep.link_start,
         &mut sweep.used,
     );
+    // The checks live inside the assertions, where they cost nothing in
+    // release and cargo-mutants (which does not look inside macros) does not
+    // count them as code to test.
+    debug_assert!(
+        sweep.link_start.windows(2).all(|run| {
+            let (lo, hi) = (run[0] as usize, run[1] as usize);
+            let (rx, ry) = (&sweep.link_x[lo..hi], &sweep.link_y[lo..hi]);
+            let n = rx.len();
+            n >= 4
+                && n.is_multiple_of(2)
+                && (0..n).all(|i| {
+                    let (j, k) = ((i + 1) % n, (i + 2) % n);
+                    let horizontal = ry[i] == ry[j];
+                    horizontal != (rx[i] == rx[j]) && horizontal != (ry[j] == ry[k])
+                })
+        }),
+        "every traced ring is closed, of at least four vertices, its edges (the closing \
+         one included) alternating horizontal and vertical, so every collinear run merged"
+    );
+    debug_assert_eq!(
+        sweep
+            .link_start
+            .windows(2)
+            .map(|run| {
+                let (lo, hi) = (run[0] as usize, run[1] as usize);
+                (lo..hi)
+                    .map(|i| {
+                        let j = if i + 1 == hi { lo } else { i + 1 };
+                        i128::from(sweep.link_x[i]) * i128::from(sweep.link_y[j])
+                            - i128::from(sweep.link_x[j]) * i128::from(sweep.link_y[i])
+                    })
+                    .sum::<i128>()
+            })
+            .sum::<i128>(),
+        2 * region_area(xs, region),
+        "the traced rings' signed areas (outers CCW, holes CW) are twice the region's: \
+         no boundary lost, doubled or wound the wrong way"
+    );
 }
 
-/// Trace the region and validate its rings into `out`, through a one-layer store
-/// so hole binding is `view`'s single implementation.
+/// Trace the region and validate its rings into `out`.
 fn emit(
     xs: &[i64],
     region: &Slabs,
@@ -558,32 +707,84 @@ fn emit(
     out: &mut ValidatedLayer,
 ) -> Result<(), BooleanError> {
     trace(xs, region, sweep);
+    let Sweep {
+        link_x,
+        link_y,
+        link_start,
+        col_x,
+        col_y,
+        ..
+    } = sweep;
+    emit_rings(link_x, link_y, link_start, (col_x, col_y), out)
+}
 
-    let ring_count = sweep.link_start.len() - 1;
-    let mut builder = GeometryStoreBuilder::with_capacity(ring_count, sweep.link_x.len());
+/// Validate flat rings (CSR `start`) into `out`, through a one-layer store so
+/// hole binding is `view`'s single implementation. `cols` are scratch.
+fn emit_rings(
+    xs: &[i64],
+    ys: &[i64],
+    start: &[u32],
+    cols: (&mut Vec<Dbu>, &mut Vec<Dbu>),
+    out: &mut ValidatedLayer,
+) -> Result<(), BooleanError> {
+    let (col_x, col_y) = cols;
+    let ring_count = start.len().saturating_sub(1);
+    let mut builder = GeometryStoreBuilder::with_capacity(ring_count, xs.len());
     for ring in 0..ring_count {
-        let (lo, hi) = (
-            sweep.link_start[ring] as usize,
-            sweep.link_start[ring + 1] as usize,
-        );
-        // Copies of in-domain operand coordinates, or clamped offsets of them.
-        sweep.col_x.clear();
-        sweep.col_x.reserve(hi - lo);
-        sweep.col_y.clear();
-        sweep.col_y.reserve(hi - lo);
-        for i in lo..hi {
-            sweep.col_x.push(Dbu::new_unchecked(sweep.link_x[i]));
-            sweep.col_y.push(Dbu::new_unchecked(sweep.link_y[i]));
-        }
-        builder.push(RESULT_LAYER, &sweep.col_x, &sweep.col_y);
+        let (lo, hi) = (start[ring] as usize, start[ring + 1] as usize);
+        // Copies of in-domain operand coordinates, offsets of them clamped to
+        // the domain, or grid points next to such a point.
+        col_x.clear();
+        col_x.extend(xs[lo..hi].iter().map(|&x| Dbu::new_unchecked(x)));
+        col_y.clear();
+        col_y.extend(ys[lo..hi].iter().map(|&y| Dbu::new_unchecked(y)));
+        builder.push(RESULT_LAYER, col_x, col_y);
     }
 
     let (store, _permutation) = builder.finish(1);
-    validate_layer_into(&store, RESULT_LAYER, out)?;
+    let valid = validate_layer_with(&store, RESULT_LAYER, Angles::Any, out);
+    // An error here is an internal fault (see `union_into`): crash where a
+    // fuzzer can see it rather than refuse a rule.
+    debug_assert!(
+        valid.is_ok(),
+        "a traced boolean result validates: {valid:?}"
+    );
+    valid?;
     Ok(())
 }
 
-/// Apply a set operation to two operands over one shared sweep axis.
+/// Every ring of one operand, flattened, each coordinate doubled.
+fn collect_doubled(layer: &ValidatedLayer, rings: &mut Rings) {
+    collect_rings(layer, rings);
+    for c in rings.xs.iter_mut().chain(rings.ys.iter_mut()) {
+        *c *= 2;
+    }
+}
+
+/// The rings of `op(a, b)` for operands at doubled scale, by the octilinear
+/// sweep, snapped onto the grid and halved, into `out` (cleared and refilled).
+fn octilinear_rings(a: &Rings, b: &Rings, op: impl Fn(bool, bool) -> bool, out: &mut Rings) {
+    octilinear::combine_into(a, b, op, out);
+    if octilinear::off_grid(out) {
+        let mut snapped = Rings::default();
+        octilinear::snap_into(out, &mut snapped);
+        // The snapped rings may hold a slit or a vanished sliver; tracing them
+        // again leaves only their region.
+        octilinear::combine_into(&snapped, &Rings::default(), |p, _| p, out);
+        // Release assert: a snapped boundary crosses itself only at grid points.
+        assert!(
+            !octilinear::off_grid(out),
+            "a snapped boundary has a vertex between grid points"
+        );
+    }
+    for c in out.xs.iter_mut().chain(out.ys.iter_mut()) {
+        *c /= 2;
+    }
+}
+
+/// Apply a set operation to two operands over one shared sweep axis: the
+/// rectilinear sweep when both are rectilinear, the octilinear one when both
+/// are octilinear, else the snap-rounded one.
 fn combine_into(
     a: &ValidatedLayer,
     b: &ValidatedLayer,
@@ -593,6 +794,32 @@ fn combine_into(
     let mut sweep = Sweep::default();
     let mut ra = Rings::default();
     let mut rb = Rings::default();
+    if !(a.is_octilinear() && b.is_octilinear()) {
+        collect_rings(a, &mut ra);
+        collect_rings(b, &mut rb);
+        let mut result = Rings::default();
+        anyangle::combine_into(&ra, &rb, op, &mut result);
+        return emit_rings(
+            &result.xs,
+            &result.ys,
+            &result.start,
+            (&mut sweep.col_x, &mut sweep.col_y),
+            out,
+        );
+    }
+    if !(a.is_rectilinear() && b.is_rectilinear()) {
+        collect_doubled(a, &mut ra);
+        collect_doubled(b, &mut rb);
+        let mut result = Rings::default();
+        octilinear_rings(&ra, &rb, op, &mut result);
+        return emit_rings(
+            &result.xs,
+            &result.ys,
+            &result.start,
+            (&mut sweep.col_x, &mut sweep.col_y),
+            out,
+        );
+    }
     collect_rings(a, &mut ra);
     collect_rings(b, &mut rb);
 
@@ -615,15 +842,39 @@ fn combine_into(
 
     let mut result = Slabs::default();
     combine_slabs(xs.len(), &sa, &sb, op, &mut sweep, &mut result);
+    // Union, intersection and difference are all empty where neither operand is.
+    debug_assert!(
+        region_area(&xs, &result) <= region_area(&xs, &sa) + region_area(&xs, &sb),
+        "area(result) <= area(a) + area(b)"
+    );
     emit(&xs, &result, &mut sweep, out)
 }
 
-/// The canonical rings of one raw rectilinear GDS ring: outers CCW, holes CW.
+/// The canonical rings of one raw GDS ring: outers CCW, holes CW.
 ///
 /// GDSII writes a polygon with holes as one weakly simple *keyhole* ring, which
-/// [`validate_layer_into`] refuses as self-intersecting. Retracing it through the
-/// sweep cancels the slit and yields the outer and holes, for any number of holes.
-/// Raw `i64` file coordinates; asserted inside `±MAX_ABS_DBU`.
+/// [`crate::view::validate_layer_into`] refuses as self-intersecting. Retracing
+/// it through the sweep cancels the slit and yields the outer and holes, for
+/// any number of holes. A ring with an edge at 45 degrees takes the octilinear
+/// sweep, one with an edge at any other angle the snap-rounded one, and a
+/// vertex where its edges cross between grid points is snapped as
+/// [`union_into`] states.
+///
+/// `xs`/`ys` are one open ring in raw file coordinates. The rings come out
+/// flat: ring `i` is `out_xs[out_start[i]..out_start[i + 1]]` (and the same of
+/// `out_ys`), so `out_start` is one longer than the ring count. All three
+/// outputs are cleared first. Vertices are reordered, so vertex 0 of the
+/// result need not be the input's.
+///
+/// # Errors
+///
+/// None at present: every angle is read. The `Result` is kept for callers
+/// that already handle a refusal.
+///
+/// # Panics
+///
+/// When `xs` and `ys` differ in length, or a coordinate lies outside
+/// `±`[`MAX_ABS_DBU`].
 pub fn canonical_rings_into(
     xs: &[i64],
     ys: &[i64],
@@ -640,20 +891,48 @@ pub fn canonical_rings_into(
     );
 
     let n = xs.len();
-    // An edge (the closing one included) with both deltas non-zero is skew.
-    let skew = (0..n.saturating_sub(1)).fold(false, |acc, i| {
-        acc | ((xs[i] != xs[i + 1]) & (ys[i] != ys[i + 1]))
+    // Each edge's deltas, the closing one included.
+    let delta = |i: usize| {
+        let j = if i + 1 < n { i + 1 } else { 0 };
+        (xs[j] - xs[i], ys[j] - ys[i])
+    };
+    let skew = (0..n).any(|i| {
+        let (dx, dy) = delta(i);
+        dx != 0 && dy != 0
     });
-    let wrap = n > 1 && (xs[n - 1] != xs[0]) && (ys[n - 1] != ys[0]);
-    if skew | wrap {
-        return Err(BooleanError::NotRectilinear);
-    }
-
+    let steep = (0..n).any(|i| {
+        let (dx, dy) = delta(i);
+        dx != 0 && dy != 0 && dx.abs() != dy.abs()
+    });
     let mut rings = Rings::default();
     rings.start.push(0);
     rings.xs.extend_from_slice(xs);
     rings.ys.extend_from_slice(ys);
     rings.start.push(ring_mark(rings.xs.len()));
+
+    if steep {
+        let mut result = Rings::default();
+        anyangle::combine_into(&rings, &Rings::default(), |p, _| p, &mut result);
+        out_xs.clone_from(&result.xs);
+        out_ys.clone_from(&result.ys);
+        out_start.clone_from(&result.start);
+        return Ok(());
+    }
+
+    if skew {
+        for c in rings.xs.iter_mut().chain(rings.ys.iter_mut()) {
+            *c *= 2;
+        }
+        let mut result = Rings::default();
+        octilinear_rings(&rings, &Rings::default(), |p, _| p, &mut result);
+        out_xs.clear();
+        out_ys.clear();
+        out_start.clear();
+        out_xs.extend_from_slice(&result.xs);
+        out_ys.extend_from_slice(&result.ys);
+        out_start.extend_from_slice(&result.start);
+        return Ok(());
+    }
 
     let mut sweep = Sweep::default();
     let mut edges = Vec::new();
@@ -681,6 +960,7 @@ const RESULT_LAYER: LayerId = LayerId(0);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::view::validate_layer_into;
     use crate::DbuArea;
 
     /// Area of a result layer, read from its own rings.
@@ -697,6 +977,9 @@ mod tests {
 
     /// `DbuArea` is the tree's area type and this module's own laws are stated
     /// over it; a rectilinear region's doubled area is even.
+    ///
+    /// Oracle: law, inclusion-exclusion: area(A or B) + area(A and B) = area(A)
+    /// + area(B), with the overlap hand-derived as 50 x 50 and the union one L.
     #[test]
     fn a_union_conserves_area_against_its_intersection() {
         let mut builder = GeometryStoreBuilder::with_capacity(2, 8);
@@ -777,6 +1060,10 @@ mod tests {
     /// A ring that is already simple survives decomposition unchanged in area
     /// and in ring count, so a reader may run every boundary through this
     /// without inventing geometry.
+    ///
+    /// Oracle: construct-from-answer. A 400 square is already simple, so its
+    /// decomposition is one ring of four corners, shoelace area 400^2, positive
+    /// (counter-clockwise).
     #[test]
     fn a_simple_ring_decomposes_to_itself() {
         let xs = [0, 400, 400, 0];

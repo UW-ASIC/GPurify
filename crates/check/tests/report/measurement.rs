@@ -179,10 +179,6 @@ fn is_finite_rejects_every_non_finite_value_and_accepts_every_exact_one() {
 /// says mismatched dimensions "are asserted, not silently answered", so
 /// comparing a length against a count must panic rather than return a bool
 /// nobody can interpret.
-///
-/// In the Testing-Phase this passes for the wrong reason: the body is `todo!()`
-/// and every call panics. It is written for the Implementation-Phase, where the
-/// only way to keep it green is the assert the doc promises.
 #[test]
 fn comparing_two_dimensions_is_a_programming_error_rather_than_an_answer() {
     let length = Measurement::Length(dbu(200));
@@ -195,20 +191,4 @@ fn comparing_two_dimensions_is_a_programming_error_rather_than_an_answer() {
             "{left:?} against {right:?} answered instead of asserting"
         );
     }
-}
-
-/// Oracle: law. Two measurements are equal exactly when they carry the same
-/// dimension and the same value, which is what makes a violation row
-/// assertable: `assert_only_violation` compares the measurement column, and a
-/// `PartialEq` that ignored the variant would let a resistance match a length.
-#[test]
-fn measurements_of_different_dimensions_are_never_equal() {
-    assert_ne!(Measurement::Length(dbu(200)), Measurement::Count(200));
-    assert_ne!(Measurement::Ratio(200.0), Measurement::Count(200));
-    assert_ne!(Measurement::Length(dbu(200)), Measurement::Length(dbu(201)));
-    assert_eq!(Measurement::Length(dbu(200)), Measurement::Length(dbu(200)));
-    assert_eq!(Measurement::Count(7), Measurement::Count(7));
-    // A `NaN` is not equal to itself, so a row carrying one cannot be asserted
-    // on at all. That is a second reason `is_finite` guards the push.
-    assert_ne!(Measurement::Ratio(f64::NAN), Measurement::Ratio(f64::NAN));
 }

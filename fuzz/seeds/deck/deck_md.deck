@@ -1,0 +1,87 @@
+# sky130 (excerpt)
+grid 5nm
+
+layer nwell = gds(64, 20)
+layer diff  = gds(65, 20)
+layer poly  = gds(66, 20)
+layer licon = gds(66, 44)
+layer li    = gds(67, 20)
+layer mcon  = gds(67, 44)
+layer met1  = gds(68, 20)
+layer met2  = gds(69, 20)
+layer met3  = gds(70, 20)
+layer met1_label = gds(68, 5)
+layer nsdm  = gds(93, 44)
+layer psdm  = gds(94, 20)
+
+layer ngate       = poly and diff and nsdm
+layer diff_active = diff not poly
+
+rule nwell.1  width(nwell)            >= 840nm
+rule nwell.2a space(nwell)            >= 1270nm
+rule m1.1     width(met1)             >= 140nm
+rule m1.4     enclosure(mcon, met1)   >= 30nm
+rule m1.5     enclosure(mcon, met1, opposite) >= 60nm
+rule m1.6     area(met1)              >= 0.083um2
+
+let metals = [(met1, 140nm), (met2, 140nm), (met3, 300nm)]
+for (m, w) in metals {
+    rule {m}.width width(m) >= w
+}
+
+rule em.li electromigration(li, licon,
+    max_density: 0.28mA/um, max_current_per_cut: 80uA, blech_limit: 15mA,
+    reference_temperature: 378K, activation_energy: 0.9eV, current_exponent: 2)
+
+connect conductors [diff_active, poly, li, met1]
+connect touch_within_layer
+connect via licon [diff_active, li]
+connect via mcon  [li, met1]
+
+device mos ngate model "sky130_fd_pr__nfet_01v8" terminals [poly, diff_active, diff_active]
+
+connect label met1_label names met1
+
+pex met1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9 area_cap 25.8aF/um2 fringe_cap 40.5aF/um
+layer met1 = gds(68, 20)                 # a drawn layer: GDS layer and datatype
+layer ngate = poly and diff and nsdm     # a derived layer
+layer diff_active = diff not poly
+layer m12 = (met1 or met2) not blockage
+ignore gds(81, 4)                        # a stream pair to drop, not refuse
+layer huge_met1 = met1.sized(-1.5um).sized(1.5um)   # the parts of met1 wider than 3um
+layer tap_gate  = poly.interacting(tap).not_interacting(licon)
+layer big_diff  = (diff not poly).with_area(>= 1um2, < 4um2)
+layer butt      = nsdm.edges() and psdm.edges()
+rule <id> <check>
+rule <id> warning <check>        # ERC only: report as a warning, not an error
+rule m1.eol eol_space(met1; eol_width: 200nm) >= 170nm
+rule grid   off_grid(; pitch: 5nm)
+let metals = [(met1, 140nm), (met2, 140nm), (met3, 300nm)]
+for (m, w) in metals {
+    rule {m}.width width(m) >= w
+    rule {m}.space space(m) >= w
+}
+rule M1.bef space_table(met1;
+    prl:   [0um, 1um, 10um],
+    width: [0um, 0.3um, 10um],
+    space: [[180nm, 180nm, 180nm],
+            [180nm, 220nm, 220nm],
+            [180nm, 220nm, 600nm]])
+let thin = ["sky130_fd_pr__nfet_01v8", "sky130_fd_pr__pfet_01v8"]
+rule ox.thin  gate_oxide(; models: thin, max: 1.98V)
+rule ds.thin  drain_source(; models: thin, max: 1.98V)
+rule wb       well_bias(; pmos: ["sky130_fd_pr__pfet_01v8"], nmos: ["sky130_fd_pr__nfet_01v8"])
+rule ls       missing_level_shifter(; shifters: ["ls_nfet", "ls_pfet"])
+rule xing     domain_crossing()
+rule esd.pad  esd_topological(pad; clamps: ["esd_diode", "rail_clamp"])
+connect conductors [diff_active, poly, li, met1]   # layers that carry signal
+connect touch_within_layer                         # shapes that touch on one layer are one net
+connect via mcon [li, met1]                        # a cut joins the two layers it overlaps
+connect label met1_label names met1                # text on met1_label names the met1 net under it
+connect global psub                                # every psub shape is one net: the substrate
+connect via psub_tie [ptap, psub]                  # taps join it like any cut
+device mos ngate model "sky130_fd_pr__nfet_01v8" terminals [poly, diff_active, diff_active]
+pex met1 thickness 360nm height 1376nm sheet 0.125ohm dielectric 3.9 area_cap 25.8aF/um2 fringe_cap 40.5aF/um
+pdks/sky130.deck:41:28: m1.5: enclosure needs a length, got 60 (no unit)
+rule m1.5 enclosure(mcon, met1, opposite) >= 60
+                                             ^^

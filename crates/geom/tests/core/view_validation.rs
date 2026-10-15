@@ -9,7 +9,11 @@
 //! told the two failures apart.
 
 use gpurify_geom::ops::{self_intersects, winding_of, Winding};
-use gpurify_geom::view::{validate_layer_into, RingRef, ValidatedLayer, ValidityError};
+use gpurify_geom::rects::{covered_area, decompose_into};
+use gpurify_geom::view::{
+    ring_defect, validate_layer_into, validate_layer_with, Angles, RingRef, ValidatedLayer,
+    ValidityError,
+};
 use gpurify_geom::DbuArea;
 use gpurify_geom::{Bbox, GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
 use gpurify_testgen::shapes::polygon_area;
@@ -40,6 +44,34 @@ fn store_of(runs: &[(LayerId, Vec<i64>, Vec<i64>)]) -> GeometryStore {
         builder.push(*layer, &xs, &ys);
     }
     builder.finish(2).0
+}
+
+/// Oracle: differential against the layer validator. On a rectilinear ring,
+/// `ring_defect` names exactly the defect `validate_layer_into` reports for
+/// a layer holding that ring alone, and nothing for a valid ring or a lone
+/// clockwise one (an orphan hole is the layer's defect, not the ring's).
+/// Staircases over a 4 x 4 lattice cross, touch and double back often.
+#[test]
+fn ring_defect_names_what_layer_validation_refuses() {
+    let mut rng = Rng::new(0x51_6e_5f_de);
+    for _ in 0..5000 {
+        let k = usize::try_from(rng.range(1, 6)).expect("small");
+        let px: Vec<i64> = (0..k).map(|_| rng.range(0, 4)).collect();
+        let py: Vec<i64> = (0..k).map(|_| rng.range(0, 4)).collect();
+        let (mut xs, mut ys) = (Vec::new(), Vec::new());
+        for i in 0..k {
+            xs.extend([px[i], px[(i + 1) % k]]);
+            ys.extend([py[i], py[i]]);
+        }
+        let store = store_of(&[(LAYER, xs.clone(), ys.clone())]);
+        let want = match validate(&store, LAYER) {
+            Ok(_) | Err(ValidityError::OrphanHole(_)) => None,
+            Err(defect) => Some(defect),
+        };
+        let row = PolyId(store.polys_on_layer(LAYER).start);
+        let (rx, ry) = store.poly_verts(row);
+        assert_eq!(ring_defect(rx, ry, row), want, "{xs:?} {ys:?}");
+    }
 }
 
 fn validate(store: &GeometryStore, layer: LayerId) -> Result<ValidatedLayer, ValidityError> {
@@ -346,4 +378,100 @@ fn two_validations_of_one_store_agree_ring_for_ring() {
         3,
         "five rows, two of them holes, is three polygons"
     );
+}
+
+/// Oracle: the definition of `Angles`. A diamond's four edges are at 45
+/// degrees: the rectilinear validator refuses it, the octilinear one takes it
+/// as a layer that is not rectilinear, of area `2·10² = 200`. A triangle with
+/// a 2:1 edge is refused by both.
+#[test]
+fn octilinear_validation_takes_45_degree_edges_and_refuses_other_angles() {
+    let store = store_of(&[
+        (LAYER, vec![10, 0, -10, 0], vec![0, 10, 0, -10]),
+        (OTHER, vec![0, 20, 0], vec![0, 10, 10]),
+    ]);
+    assert_eq!(
+        validate(&store, LAYER).map(|_| ()),
+        Err(ValidityError::NotRectilinear(PolyId(0)))
+    );
+    let mut out = ValidatedLayer::default();
+    validate_layer_with(&store, LAYER, Angles::Octilinear, &mut out).expect("a diamond");
+    assert!(!out.is_rectilinear());
+    assert_eq!(total_area(&out), DbuArea::new(200));
+    assert_eq!(
+        validate_layer_with(&store, OTHER, Angles::Octilinear, &mut out),
+        Err(ValidityError::NotOctilinear(PolyId(1)))
+    );
+    let square = store_of(&[(LAYER, vec![0, 10, 10, 0], vec![0, 0, 10, 10])]);
+    validate_layer_with(&square, LAYER, Angles::Octilinear, &mut out).expect("a square");
+    assert!(
+        out.is_rectilinear(),
+        "a square validated octilinear is rectilinear"
+    );
+}
+
+/// Oracle: the pinch rule `ValidityError::SelfIntersecting` states, at 45
+/// degrees. Two triangles meeting tip to tip at (2, 2), drawn as one ring,
+/// leave the point along four directions that alternate in and out: valid,
+/// area `4 + 4`. The ring that passes the point straight once and turns
+/// there once puts two ways out side by side: refused.
+#[test]
+fn a_ring_meeting_itself_at_a_diagonal_vertex_is_a_pinch_only_if_it_alternates() {
+    let tips = store_of(&[(LAYER, vec![0, 4, 2, 4, 0, 2], vec![0, 0, 2, 4, 4, 2])]);
+    let mut out = ValidatedLayer::default();
+    validate_layer_with(&tips, LAYER, Angles::Octilinear, &mut out).expect("a pinch");
+    assert_eq!(total_area(&out), DbuArea::new(8));
+    let straight = store_of(&[(LAYER, vec![0, 2, 4, 4, 2, 0], vec![0, 2, 4, 0, 2, 4])]);
+    assert_eq!(
+        validate_layer_with(&straight, LAYER, Angles::Octilinear, &mut out),
+        Err(ValidityError::SelfIntersecting(PolyId(0)))
+    );
+}
+
+/// N-s2-2: a hole stays with the outer it was stored after when a smaller
+/// outer drawn over it also holds its first vertex, as where a library's top
+/// cells are all placed at the origin (IHP's `sg13g2_stdcell.gds`: the
+/// keyhole Activ of `sg13g2_dfrbpq_2` under other cells' Activ). Bound by
+/// smallest box alone, the hole went to the overlapping shape, which does not
+/// cover it, and the rectangle decomposition of that shape covered more than
+/// its claimed area.
+///
+/// Oracle: construct-from-answer. Row order: a 30-square with a notch from
+/// its top down to its middle (it holds the hole's corners but not its
+/// middle), then a 100-square, then the hole `[40, 60]²` stored after it.
+/// The hole belongs to the 100-square (area `100² - 20²`); the notched
+/// square keeps its own area, `30² - 10·15`; each decomposes into
+/// rectangles of exactly its area.
+#[test]
+fn a_hole_stays_with_the_outer_stored_before_it() {
+    let notched = (
+        LAYER,
+        vec![35, 65, 65, 55, 55, 45, 45, 35],
+        vec![35, 35, 65, 65, 50, 50, 65, 65],
+    );
+    let big = (LAYER, vec![0, 100, 100, 0], vec![0, 0, 100, 100]);
+    let hole = (LAYER, vec![40, 40, 60, 60], vec![40, 60, 60, 40]);
+    let store = store_of(&[notched, big, hole]);
+    let layer = validate(&store, LAYER).expect("both shapes are valid");
+    let areas: Vec<(usize, DbuArea)> = (0..2)
+        .map(|i| {
+            let poly = layer.get(i);
+            (poly.holes().count(), polygon_area(poly))
+        })
+        .collect();
+    assert_eq!(
+        areas,
+        [
+            (0, DbuArea::new(30 * 30 - 10 * 15)),
+            (1, DbuArea::new(100 * 100 - 20 * 20)),
+        ]
+    );
+    let (mut rects, mut start) = (Vec::new(), Vec::new());
+    decompose_into(&layer, &mut rects, &mut start);
+    for (i, &(_, area)) in areas.iter().enumerate() {
+        assert_eq!(
+            covered_area(&rects[start[i] as usize..start[i + 1] as usize]),
+            area
+        );
+    }
 }

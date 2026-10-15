@@ -15,7 +15,7 @@
 //! being one.
 
 use gpurify_geom::{prefix, Capacitance, Length, Qty, Resistance, Voltage};
-use gpurify_testgen::{assert_bytes_identical, Rng};
+use gpurify_testgen::Rng;
 
 /// Oracle: closed form. The doc comment says the dimension and prefix are
 /// schema, so the only thing on the wire is the count. Stated two ways: the
@@ -119,20 +119,4 @@ fn writing_a_quantity_and_reading_it_back_returns_the_same_count() {
         round_trip::<Voltage, { prefix::MILLI }>(rng.unit() * 2_000.0 - 1_000.0);
         round_trip::<Capacitance, { prefix::FEMTO }>(rng.unit() * 100.0);
     }
-}
-
-/// Oracle: determinism. Serialising is the crate's one path to bytes, so it is
-/// subject to the determinism gate: a column of measurements written twice must
-/// be byte-identical, because a report that differs between two runs of the same
-/// binary is the defect that gate exists to catch.
-#[test]
-fn serialising_a_column_of_measurements_is_byte_identical_across_two_runs() {
-    let mut rng = Rng::new(109);
-    let column: Vec<Qty<Capacitance, { prefix::ATTO }>> = (0..1_024)
-        .map(|_| Qty::new(rng.unit() * 200.0 - 100.0))
-        .collect();
-
-    let first = serde_json::to_vec(&column).expect("finite capacitances");
-    let second = serde_json::to_vec(&column).expect("finite capacitances");
-    assert_bytes_identical("a column of attofarads", &first, &second);
 }

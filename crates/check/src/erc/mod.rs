@@ -4,6 +4,10 @@
 //! Data out: violations and one `RuleRun` per configured row, from [`check`].
 //! Kinds that need design intent record themselves skipped, never clean,
 //! without it. The submodules stay public for the integration tests.
+//!
+//! Each kind is defined on its table type in [`rules`], reached from its
+//! [`RuleSet`] field; the crate's [rule reference](crate#electrical-rules)
+//! lists them all with their deck spelling.
 
 pub mod facts;
 pub mod power;
@@ -15,35 +19,57 @@ pub use power::{PowerError, Process};
 pub use ruleset::{RuleSet, KINDS};
 
 use crate::report::{Outcome, RuleRun, Violations};
-use crate::topology::PortTable;
-use facts::{classify_nets_into, resolve_intent_into, IntentMap, NetFacts};
-use gpurify_geom::connectivity::ComponentLabel;
+use crate::topology::{NetId, PortTable};
+use facts::{classify_nets_into, resolve_intent_into, resolve_net_types_into};
+use facts::{IntentMap, NetFacts, NetTypes};
 use gpurify_geom::ops::Point;
 use gpurify_geom::{prefix, Dbu, DbuArea, Qty, Resistance, Temperature};
 use gpurify_geom::{Bbox, GeometryStore, PolyId, ValidatedLayer};
 use gpurify_ingest::intent::DesignIntent;
-use gpurify_ingest::StrId;
+use gpurify_ingest::{StrId, StrTable};
 use power::{NetNetworks, PowerGrid, PowerSolution, Solved};
 use ruleset::{RuleHead, RunInputs};
 
 /// What one ERC run reads, borrowed.
 #[derive(Debug, Clone, Copy)]
 pub struct Inputs<'a> {
+    /// The extracted layout: geometry, nets and devices.
     pub design: Design<'a>,
+    /// Net names from layout labels. They key the intent's supplies and
+    /// limits, and `floating_gate` may read a labelled net as a port.
     pub ports: &'a PortTable,
     /// `None` skips the intent rules.
     pub intent: Option<&'a DesignIntent>,
+    /// The deck's grid, stack and connectivity: sheet resistances for the
+    /// networks, conductors for the antenna stages.
     pub process: Process<'a>,
     /// The die boundary: the denominator of every density.
     pub die: Bbox,
     /// The applied sign-off temperature, absolute.
     pub temperature: Qty<Temperature, { prefix::BASE }>,
+    /// The placed macro pins' LEF antenna data (a DEF layout's), which the
+    /// antenna rows count on the pins' nets; empty for a GDS layout.
+    pub antenna_pins: &'a [rules::antenna::MacroPinAntenna],
+    /// The run's names: label text, which the intent's net types match by
+    /// name.
+    pub strings: &'a StrTable,
 }
 
-/// Classify nets, resolve intent, build the per-net networks and the supply
-/// grid, solve it, then run every row. A network that could not be built (a
-/// conductor whose resistance the deck does not state: unknown, never zero)
-/// or a failed solve refuses only the rows that read it; the rest run.
+/// Runs every row of `rules` over one extracted design, appending violations
+/// to `out` and exactly one [`RuleRun`] per row to `runs`.
+///
+/// Nets are classified, the intent resolved onto them, voltages propagated,
+/// and the per-net networks and the supply grid built and solved once, for
+/// every row to read. A network that could not be built (a conductor whose
+/// resistance the deck does not state: unknown, never zero) or a failed solve
+/// refuses only the rows that read it; the rest run. Rows that need intent
+/// record themselves skipped when `inputs.intent` is `None` or names nothing
+/// this layout has.
+///
+/// # Errors
+///
+/// Never returns `Err`: a network or solve failure is recorded as refused
+/// rows instead.
 pub fn check(
     rules: &RuleSet,
     inputs: Inputs<'_>,
@@ -57,13 +83,43 @@ pub fn check(
         process,
         die,
         temperature,
+        antenna_pins,
+        strings,
     } = inputs;
     let mut facts = NetFacts::default();
     classify_nets_into(design.nets, design.devices, &mut facts);
     let mut intent_map = IntentMap::default();
     resolve_intent_into(intent, ports, design.nets, &mut intent_map);
+    let mut net_types = NetTypes::default();
+    resolve_net_types_into(
+        intent,
+        ports,
+        design.nets,
+        design.devices,
+        &intent_map,
+        strings,
+        &mut net_types,
+    );
     let mut voltage = voltage::NetVoltage::default();
     voltage::propagate_into(design.nets, design.devices, &intent_map, &mut voltage);
+    // One propagation per declared power state, its supplies off and its
+    // inputs held.
+    let resolved = facts::resolve_states(intent, ports, design.nets);
+    let mut switched: Vec<NetId> = resolved
+        .iter()
+        .flat_map(|state| state.off.iter().copied())
+        .collect();
+    switched.sort_unstable();
+    switched.dedup();
+    let state_voltage: Vec<voltage::NetVoltage> = resolved
+        .iter()
+        .map(|state| {
+            let mut reach = voltage::NetVoltage::default();
+            let supplies = intent_map.in_state(state);
+            voltage::propagate_into(design.nets, design.devices, &supplies, &mut reach);
+            reach
+        })
+        .collect();
 
     let mut networks = NetNetworks::default();
     let built = power::extract_nets_into(
@@ -97,18 +153,66 @@ pub fn check(
         }),
     };
 
+    // The AC current rules' grids: the supply grid again, each net loaded with
+    // its RMS, then its peak, current in place of its budget. Built only for
+    // rows that read them, and only when some net states that current.
+    let ac_intent = [
+        intent_map.with_budget(|limits| limits.rms_current_ua),
+        intent_map.with_budget(|limits| limits.peak_current_ua),
+    ];
+    let wanted = [
+        !rules.em_rms.head.is_empty(),
+        !rules.em_peak.head.is_empty(),
+    ];
+    let mut ac_grid = [PowerGrid::default(), PowerGrid::default()];
+    let mut ac_solution = [PowerSolution::default(), PowerSolution::default()];
+    let mut ac_built = [Ok(false), Ok(false)];
+    for k in 0..2 {
+        if !wanted[k] || ac_intent[k].limit_net.is_empty() {
+            continue;
+        }
+        ac_built[k] = power::extract_into(
+            design.store,
+            design.nets,
+            design.devices,
+            &ac_intent[k],
+            process,
+            &mut ac_grid[k],
+        )
+        .and_then(|()| {
+            if ac_grid[k].is_empty() {
+                return Ok(false);
+            }
+            power::solve_into(&ac_grid[k], &mut scratch.solve, &mut ac_solution[k]).map(|()| true)
+        });
+    }
+    let ac: [power::Power<'_>; 2] = std::array::from_fn(|k| match ac_built[k] {
+        Err(error) => Err(error),
+        Ok(false) => Ok(None),
+        Ok(true) => Ok(Some(Solved {
+            grid: &ac_grid[k],
+            solution: &ac_solution[k],
+        })),
+    });
+
     rules.run(
         RunInputs {
             design,
             facts: &facts,
             ports,
             intent: &intent_map,
+            net_types: &net_types,
             voltage: &voltage,
+            states: &state_voltage,
+            switched: &switched,
             networks: built.map(|()| &networks),
             power,
+            rms: (&ac_intent[0], ac[0]),
+            peak: (&ac_intent[1], ac[1]),
             die,
-            grid: process.grid,
+            process,
             operating_temperature: temperature,
+            antenna_pins,
         },
         &mut scratch,
         out,
@@ -121,24 +225,70 @@ pub fn check(
 pub(crate) const BOLTZMANN_EV_PER_K: f64 = 8.617_333_262e-5;
 
 /// Why a deck could not be turned into a [`RuleSet`]. Construction-time only.
+///
+/// Every `rule` field is the deck's rule id, and every parameter name is the
+/// engine's (`sidewall_thickness`, `max_drivers`), not the deck spelling.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ErcError {
+    /// A required parameter is absent, or a row bounds nothing: a
+    /// `density_cmp` row with no limit names `max_density`, a `well_bias` row
+    /// with no model names `pmos`.
     #[error("rule {rule}: missing required parameter {param}")]
-    MissingParam { rule: String, param: &'static str },
+    MissingParam {
+        /// The deck's rule id.
+        rule: String,
+        /// The parameter's engine name.
+        param: &'static str,
+    },
+    /// A parameter holds the wrong kind of value, or a non-finite number.
     #[error("rule {rule}: parameter {param} is not the kind of value this rule takes")]
-    WrongParamType { rule: String, param: &'static str },
+    WrongParamType {
+        /// The deck's rule id.
+        rule: String,
+        /// The parameter's engine name.
+        param: &'static str,
+    },
+    /// The row names the wrong number of layers.
     #[error("rule {rule}: takes {expected} layers, the deck names {found}")]
     WrongLayerCount {
+        /// The deck's rule id.
         rule: String,
+        /// The exact count, or the minimum for a kind taking a layer list.
         expected: u32,
+        /// The count the row names.
         found: u32,
     },
+    /// A limit that must be positive is zero or negative; also a zero
+    /// `max_drivers` or `duty_cycle`, or a negative antenna diode factor.
     #[error("rule {rule}: limit {limit} is not positive")]
-    NonPositiveLimit { rule: String, limit: String },
+    NonPositiveLimit {
+        /// The deck's rule id.
+        rule: String,
+        /// The parameter's engine name.
+        limit: String,
+    },
+    /// A fraction outside `0.0 ..= 1.0`.
     #[error("rule {rule}: {param} must be a fraction in [0, 1]")]
-    NotAFraction { rule: String, param: &'static str },
+    NotAFraction {
+        /// The deck's rule id.
+        rule: String,
+        /// The parameter's engine name.
+        param: &'static str,
+    },
+    /// Two rows of the deck, of any kind, share this id: a run's outcomes are
+    /// attributed by id.
     #[error("duplicate rule id {0}")]
     DuplicateRule(String),
+    /// A table out of order: a `voltage_spacing` row whose voltages are
+    /// negative or do not rise strictly, whose spacings fall as the voltage
+    /// rises, or whose two lists differ in length.
+    #[error("rule {rule}: {why}")]
+    BadTable {
+        /// The deck's rule id.
+        rule: String,
+        /// What is out of order.
+        why: &'static str,
+    },
 }
 
 pub use crate::Design;
@@ -152,7 +302,6 @@ pub struct Scratch {
     net_marks: Vec<u32>,
     areas: Vec<DbuArea>,
     edges: Vec<(u32, u32)>,
-    labels: Vec<ComponentLabel>,
     solve: power::SolveScratch,
     probes: Vec<(u32, u32, Qty<Resistance, { prefix::BASE }>)>,
     boxes: Vec<Bbox>,

@@ -1,0 +1,17 @@
+*|DSPF 1.5
+*|DELIMITER :
+*|GROUND_NET VSS
+.SUBCKT top a b
+*|NET a 0.3PF
+*|P (a I 0.0 0 0)
+*|S (a:1 1 2)
+*|NET b 0.1PF
+*|I (u2:A u2 A I 0.0 0 0)
+R1 a a:1 1.5k
+C1 a:1 VSS 200f
+C2 a:1
++ u2:A 0.1p
+L1 a a:1 3p
+K1 L1 L2 0.5
+Xu2 a b INV
+.ENDS

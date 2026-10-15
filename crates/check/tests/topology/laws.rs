@@ -138,6 +138,7 @@ fn mos_recogniser(strings: &mut StrTable) -> DeviceRecognition {
         terminal_start: vec![0, 3],
         terminal: vec![GATE, SRC, DRN],
         model: vec![strings.intern("nch")],
+        value: Vec::new(),
     }
 }
 
@@ -313,7 +314,11 @@ fn assert_the_base_run_can_fail_a_law(
 /// Assert two device tables agree in every column, with `Area` scaled by
 /// `area_scale` and `Width`/`Length` by `wl_scale = (width, length)` in the
 /// second — `(1, 1)` for an isometry, whose extents (and channel axis, which
-/// moves with the source/drain geometry) are preserved.
+/// moves with the source/drain geometry) are preserved. Every marker here is
+/// a `W` by `L` rectangle, so its `Perimeter` is `2 (W + L)` of the scaled
+/// extents; every source and drain a rectangle 110 along the channel and 100
+/// across it, so its area scales as the marker's and its perimeter is
+/// `2 (110 L-factor + 100 W-factor)`, shared as before.
 ///
 /// Column by column rather than through a derived `PartialEq`, because
 /// `DeviceTable` has none and adding one would be a signature change.
@@ -338,6 +343,8 @@ fn assert_device_columns_agree(
     );
     assert_eq!(base.param_start, other.param_start, "{ctx}: param_start");
 
+    // The device's scaled `(W, L)`, which come before its perimeter.
+    let mut extents = (0, 0);
     let want: Vec<_> = base
         .param
         .iter()
@@ -347,11 +354,23 @@ fn assert_device_columns_agree(
                     DeviceMeasure::Area(DbuArea::new(a.raw() * area_scale))
                 }
                 (DeviceParam::Width, DeviceMeasure::Length(w)) => {
-                    DeviceMeasure::Length(Dbu::new_unchecked(w.raw() * wl_scale.0))
+                    extents.0 = w.raw() * wl_scale.0;
+                    DeviceMeasure::Length(Dbu::new_unchecked(extents.0))
                 }
                 (DeviceParam::Length, DeviceMeasure::Length(l)) => {
-                    DeviceMeasure::Length(Dbu::new_unchecked(l.raw() * wl_scale.1))
+                    extents.1 = l.raw() * wl_scale.1;
+                    DeviceMeasure::Length(Dbu::new_unchecked(extents.1))
                 }
+                (DeviceParam::Perimeter, DeviceMeasure::Length(_)) => {
+                    DeviceMeasure::Length(Dbu::new_unchecked(2 * (extents.0 + extents.1)))
+                }
+                (_, DeviceMeasure::AreaShare(a, ways)) => {
+                    DeviceMeasure::AreaShare(DbuArea::new(a.raw() * area_scale), ways)
+                }
+                (_, DeviceMeasure::LengthShare(_, ways)) => DeviceMeasure::LengthShare(
+                    Dbu::new_unchecked(2 * (110 * wl_scale.1 + 100 * wl_scale.0)),
+                    ways,
+                ),
                 (_, unchanged) => unchanged,
             };
             (param, scaled)
@@ -692,7 +711,8 @@ const SX: i64 = 3;
 const SY: i64 = 5;
 
 /// Oracle: **law** — an integer scale of the geometry, with the deck unchanged,
-/// leaves the netlist alone and multiplies only the measured area.
+/// leaves the netlist alone and multiplies only the measures: the area by the
+/// determinant, `W`, `L` and the perimeter by the factors along them.
 ///
 /// A diagonal map with positive integer factors is an invertible affine
 /// bijection, so it preserves set intersection exactly as an isometry does: the

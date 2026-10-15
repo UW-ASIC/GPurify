@@ -1,46 +1,75 @@
 //! Area family: min area, min enclosed (hole) area, cheesing, windowed and
 //! whole-die density. Density windows tile the die (a boundary layer's extent,
-//! or the whole layout's), never just the measured layer's own extent.
+//! or the drawn layers'), never just the measured layer's own extent.
 //!
 //! Data in: one layer, self-merged into connected figures (exact union) and
 //! decomposed into disjoint rectangles (canonical). Data out: one violation per
 //! offending figure, hole or window.
 
-use super::{centre, Verdict, REFUSED};
+use super::width::rects_layer;
+use super::{centre, figure_point, owners_by_point, owners_of, SortedRects, Verdict, REFUSED};
+use crate::drc::ruleset::{CoverBands, DefectSizes};
 use crate::drc::Scratch;
 use crate::report::{
     LimitSense, Measurement, Outcome, Severity, SkipReason, Violation, Violations,
 };
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::rects::{covered_area, decompose_into};
-use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
+use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, ValidatedLayer};
 use gpurify_geom::{Dbu, DbuArea};
 use gpurify_ingest::StrId;
 use std::ops::Range;
 
-/// Merge a layer into `s.layer_out` and decompose it into `s.rects`, CSR by figure.
-/// `false` is `Refused`.
-fn merge_layer(store: &GeometryStore, layer: LayerId, s: &mut Scratch) -> bool {
-    let Some(drawn) = s.validated.get(store, layer) else {
+/// Merge a layer into `s.layer_out` and, when it is rectilinear, decompose
+/// it into `s.rects`, CSR by figure (else `s.rect_start` is empty). With
+/// `any`, a layer with edges at any angle is taken. `false` is `Refused`.
+fn merge_layer(store: &GeometryStore, layer: LayerId, s: &mut Scratch, any: bool) -> bool {
+    let drawn = if any {
+        s.validated.get_any(store, layer)
+    } else {
+        s.validated.get(store, layer)
+    };
+    let Some(drawn) = drawn else {
         return false;
     };
     if union_into(drawn, drawn, &mut s.layer_out).is_err() {
         return false;
     }
-    decompose_into(&s.layer_out, &mut s.rects, &mut s.rect_start);
+    if drawn.is_rectilinear() {
+        decompose_into(&s.layer_out, &mut s.rects, &mut s.rect_start);
+    } else {
+        s.rects.clear();
+        s.rect_start.clear();
+    }
     true
 }
 
-/// A layer's boxes sorted by `xlo`, built on first use. A query scans only the
-/// boxes whose `xlo` lies in the region's x span.
+/// The lowest drawn row under each figure of `s.layer_out`, which
+/// [`merge_layer`] filled: an outer row whose polygon covers part of the
+/// figure, never an island in its hole.
+fn figure_owners(store: &GeometryStore, layer: LayerId, s: &mut Scratch) -> Vec<PolyId> {
+    let drawn = s
+        .validated
+        .get_any(store, layer)
+        .expect("merge_layer validated the layer");
+    if !drawn.is_rectilinear() {
+        return owners_by_point(&s.layer_out, drawn);
+    }
+    s.rects_a.build(store, layer, drawn);
+    owners_of(&s.layer_out, &s.rects_a)
+}
+
+/// The boxes of a validated layer's outer rows (never a hole row) sorted by
+/// `xlo`, built on first use. A query scans only the boxes whose `xlo` lies
+/// in the region's x span.
 struct Owners<'a> {
     store: &'a GeometryStore,
-    layer: LayerId,
+    layer: &'a ValidatedLayer,
     by_xlo: Vec<(Bbox, u32)>,
 }
 
 impl<'a> Owners<'a> {
-    fn new(store: &'a GeometryStore, layer: LayerId) -> Self {
+    fn new(store: &'a GeometryStore, layer: &'a ValidatedLayer) -> Self {
         Self {
             store,
             layer,
@@ -48,12 +77,17 @@ impl<'a> Owners<'a> {
         }
     }
 
-    /// The lowest store row on the layer whose box `region` contains, or `u32::MAX`.
-    fn lowest_within(&mut self, region: Bbox) -> u32 {
+    /// The lowest outer row whose box `region` contains, else the lowest
+    /// outer row, else `u32::MAX` for an empty layer.
+    fn owner(&mut self, region: Bbox) -> u32 {
         if self.by_xlo.is_empty() {
-            let rows = self.store.polys_on_layer(self.layer);
-            let boxes = self.store.layer_bboxes(self.layer);
-            self.by_xlo.extend(boxes.iter().copied().zip(rows));
+            let outers = (0..self.layer.len()).map(|poly| {
+                let poly = u32::try_from(poly).expect("a layer indexes polygons with a u32");
+                self.layer.get(poly).provenance()
+            });
+            let store = self.store;
+            self.by_xlo
+                .extend(outers.map(|row| (store.poly_bbox(row), row.0)));
             self.by_xlo.sort_unstable_by_key(|&(b, _)| b.xlo);
         }
         let lo = self.by_xlo.partition_point(|&(b, _)| b.xlo < region.xlo);
@@ -63,47 +97,60 @@ impl<'a> Owners<'a> {
             .filter(|&&(b, _)| region.contains(b))
             .map(|&(_, row)| row)
             .min()
+            .or_else(|| self.by_xlo.iter().map(|&(_, row)| row).min())
             .unwrap_or(u32::MAX)
     }
 }
 
 /// One violation per merged figure `violates(area, has_hole)` rejects, at the
-/// centre of its first decomposed rectangle (always inside the figure).
-/// Returns the figure count.
+/// centre of its first decomposed rectangle (always inside the figure); on a
+/// layer with slanted edges, whose area can be a half unit, the area
+/// floored (which compares against a whole minimum exactly as the true area
+/// does) at a point within half a unit of the figure's material (on it, at
+/// any angle: [`figure_point`]). Returns the figure count.
 fn report_figures(
     store: &GeometryStore,
     layer: LayerId,
     rule: StrId,
     limit: DbuArea,
-    s: &Scratch,
+    s: &mut Scratch,
     out: &mut Violations,
     violates: impl Fn(DbuArea, bool) -> bool,
 ) -> u64 {
-    let figures = s.layer_out.len();
-    let mut owners = Owners::new(store, layer);
-    for figure in 0..figures {
-        let rects = &s.rects[s.rect_start[figure] as usize..s.rect_start[figure + 1] as usize];
-        let area = covered_area(rects);
+    let owners = figure_owners(store, layer, s);
+    for (figure, owner) in owners.into_iter().enumerate() {
         let index = u32::try_from(figure).expect("a merged layer's figure count fits a u32");
-        let has_hole = s.layer_out.get(index).holes().next().is_some();
+        let poly = s.layer_out.get(index);
+        let (area, at) = if s.rect_start.is_empty() {
+            let twice: i128 = std::iter::once(poly.outer())
+                .chain(poly.holes())
+                .map(|ring| ring.area2().raw())
+                .sum();
+            (DbuArea::new(twice.div_euclid(2)), figure_point(poly))
+        } else {
+            let rects = &s.rects[s.rect_start[figure] as usize..s.rect_start[figure + 1] as usize];
+            (covered_area(rects), centre(rects[0]))
+        };
+        let has_hole = poly.holes().next().is_some();
         if !violates(area, has_hole) {
             continue;
         }
-        let owner = owners.lowest_within(s.layer_out.bboxes()[figure]);
         out.push(Violation {
             rule,
             layer,
             severity: Severity::Error,
-            at: centre(rects[0]),
+            at,
             measured: Measurement::Area(area),
             limit: Measurement::Area(limit),
-            shapes: (PolyId(owner), None),
+            shapes: (owner, None),
         });
     }
-    figures as u64
+    s.layer_out.len() as u64
 }
 
-/// Minimum area of each merged figure. `examined` counts figures.
+/// Minimum area of each merged figure, edges at any angle included (DRC-038,
+/// DRC-116: an area a half unit short of the limit is short). `examined`
+/// counts figures.
 pub(crate) fn min_area(
     store: &GeometryStore,
     rule: StrId,
@@ -112,7 +159,7 @@ pub(crate) fn min_area(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !merge_layer(store, layer, s) {
+    if !merge_layer(store, layer, s, true) {
         return REFUSED;
     }
     let examined = report_figures(store, layer, rule, limit, s, out, |area, _| {
@@ -130,7 +177,7 @@ pub(crate) fn cheesing(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !merge_layer(store, layer, s) {
+    if !merge_layer(store, layer, s, false) {
         return REFUSED;
     }
     let examined = report_figures(store, layer, rule, limit, s, out, |area, has_hole| {
@@ -139,7 +186,8 @@ pub(crate) fn cheesing(
     (Outcome::Ran, examined)
 }
 
-/// Minimum hole area of the merged figures, reported at the hole's box centre.
+/// Minimum hole area of the merged figures, reported at the hole's box centre,
+/// edges at any angle included (a hole's area floored, as `min_area`'s).
 /// `examined` counts holes.
 pub(crate) fn min_enclosed_area(
     store: &GeometryStore,
@@ -149,22 +197,20 @@ pub(crate) fn min_enclosed_area(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    if !merge_layer(store, layer, s) {
+    if !merge_layer(store, layer, s, true) {
         return REFUSED;
     }
     let mut examined = 0u64;
-    let mut owners = Owners::new(store, layer);
-    for figure in 0..s.layer_out.len() {
-        let index = u32::try_from(figure).expect("a merged layer's figure count fits a u32");
+    let owners = figure_owners(store, layer, s);
+    for (index, owner) in (0..).zip(owners) {
         for hole in s.layer_out.get(index).holes() {
             examined += 1;
-            // A hole winds clockwise; a rectilinear ring's doubled area is even.
+            // A hole winds clockwise; its area floored, a half unit dropped.
             let area = DbuArea::new(-hole.area2().raw() / 2);
             if !Measurement::Area(area).violates(Measurement::Area(limit), LimitSense::Minimum) {
                 continue;
             }
             let (xs, ys) = hole.coords();
-            let owner = owners.lowest_within(s.layer_out.bboxes()[figure]);
             out.push(Violation {
                 rule,
                 layer,
@@ -172,15 +218,17 @@ pub(crate) fn min_enclosed_area(
                 at: centre(Bbox::of_points(xs, ys)),
                 measured: Measurement::Area(area),
                 limit: Measurement::Area(limit),
-                shapes: (PolyId(owner), None),
+                shapes: (owner, None),
             });
         }
     }
     (Outcome::Ran, examined)
 }
 
-/// The die: the `boundary` layer's extent, or every layer's.
-fn die_of(store: &GeometryStore, boundary: Option<LayerId>) -> Bbox {
+/// The die: the `boundary` layer's extent, or that of the drawn layers
+/// `0..drawn`. A derived layer is not layout: grown past it, it would widen
+/// the die.
+fn die_of(store: &GeometryStore, boundary: Option<LayerId>, drawn: usize) -> Bbox {
     let extent = |layer: LayerId| {
         store
             .layer_bboxes(layer)
@@ -189,7 +237,7 @@ fn die_of(store: &GeometryStore, boundary: Option<LayerId>) -> Bbox {
     };
     match boundary {
         Some(layer) => extent(layer),
-        None => (0..store.layer_count()).fold(Bbox::EMPTY, |die, layer| {
+        None => (0..drawn).fold(Bbox::EMPTY, |die, layer| {
             die.union(extent(LayerId(
                 u16::try_from(layer).expect("a LayerId is a u16"),
             )))
@@ -200,7 +248,7 @@ fn die_of(store: &GeometryStore, boundary: Option<LayerId>) -> Bbox {
 /// The merged layer's rectangles clipped to the die, into `s.rects`.
 /// `false` is `Refused`.
 fn merge_within(store: &GeometryStore, layer: LayerId, die: Bbox, s: &mut Scratch) -> bool {
-    if !merge_layer(store, layer, s) {
+    if !merge_layer(store, layer, s, false) {
         return false;
     }
     s.rects.retain_mut(|r| match r.intersection(die) {
@@ -213,8 +261,7 @@ fn merge_within(store: &GeometryStore, layer: LayerId, die: Bbox, s: &mut Scratc
     true
 }
 
-/// A window no polygon claims is blamed on the layer's first row, or on no
-/// shape when the layer is empty.
+/// The layer's first row, or `u32::MAX` (no shape) for an empty layer.
 fn first_row_or_none(store: &GeometryStore, layer: LayerId) -> u32 {
     let rows = store.polys_on_layer(layer);
     if rows.is_empty() {
@@ -234,14 +281,14 @@ fn first_row_or_none(store: &GeometryStore, layer: LayerId) -> u32 {
 pub(crate) fn density(
     store: &GeometryStore,
     rule: StrId,
-    (layer, boundary): (LayerId, Option<LayerId>),
+    (layer, boundary, drawn): (LayerId, Option<LayerId>, usize),
     (window, step): (Dbu, Dbu),
     limit: f64,
     sense: LimitSense,
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let die = die_of(store, boundary);
+    let die = die_of(store, boundary, drawn);
     if die.is_empty() {
         return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
     }
@@ -267,8 +314,11 @@ pub(crate) fn density(
     };
 
     let denominator = to_f64(i128::from(side) * i128::from(side));
-    let mut owners = Owners::new(store, layer);
-    let fallback = first_row_or_none(store, layer);
+    let validated = s
+        .validated
+        .get(store, layer)
+        .expect("merge_within validated the layer");
+    let mut owners = Owners::new(store, validated);
     let grid = WindowGrid {
         x0,
         y0,
@@ -282,10 +332,7 @@ pub(crate) fn density(
         if !Measurement::Ratio(fraction).violates(Measurement::Ratio(limit), sense) {
             return;
         }
-        let owner = match owners.lowest_within(window) {
-            u32::MAX => fallback,
-            row => row,
-        };
+        let owner = owners.owner(window);
         out.push(Violation {
             rule,
             layer,
@@ -299,19 +346,294 @@ pub(crate) fn density(
     (Outcome::Ran, sweep)
 }
 
+/// Two masks' balance per window: the lesser covered area over the greater,
+/// each layer merged and clipped to the die, windows as [`density`]'s. A
+/// window neither layer covers is not judged. One violation per window below
+/// `limit`, at its centre, naming no shape. `examined` counts windows; an
+/// empty die is `Skipped(EmptyLayer)`.
+#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
+pub(crate) fn density_balance(
+    store: &GeometryStore,
+    rule: StrId,
+    (a, b, boundary, drawn): (LayerId, LayerId, Option<LayerId>, usize),
+    (window, step): (Dbu, Dbu),
+    limit: f64,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let die = die_of(store, boundary, drawn);
+    if die.is_empty() {
+        return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
+    }
+    let (side, stride) = (window.raw(), step.raw());
+    let (x0, y0) = (die.xlo.raw(), die.ylo.raw());
+    let cols = positions(die.xhi.raw() - x0, side, stride);
+    let ways = positions(die.yhi.raw() - y0, side, stride);
+    let (xmax, ymax) = (
+        x0 + (cols - 1) * stride + side,
+        y0 + (ways - 1) * stride + side,
+    );
+    if Dbu::new(xmax).is_none() || Dbu::new(ymax).is_none() {
+        return REFUSED;
+    }
+    let Some(sweep) = cols.checked_mul(ways).and_then(|n| u64::try_from(n).ok()) else {
+        return REFUSED;
+    };
+    let grid = WindowGrid {
+        x0,
+        y0,
+        side,
+        stride,
+        cols,
+        ways,
+    };
+    if !merge_within(store, a, die, s) {
+        return REFUSED;
+    }
+    let mut first = Vec::new();
+    window_areas(&s.rects, grid, |_, covered| first.push(covered));
+    if !merge_within(store, b, die, s) {
+        return REFUSED;
+    }
+    let mut at = first.into_iter();
+    window_areas(&s.rects, grid, |window, second| {
+        let first = at.next().expect("both sweeps visit every window");
+        let (lo, hi) = (first.min(second), first.max(second));
+        if hi.raw() == 0 {
+            return;
+        }
+        let balance = to_f64(lo.raw()) / to_f64(hi.raw());
+        if balance < limit {
+            out.push(Violation {
+                rule,
+                layer: a,
+                severity: Severity::Error,
+                at: centre(window),
+                measured: Measurement::Ratio(balance),
+                limit: Measurement::Ratio(limit),
+                shapes: (PolyId(u32::MAX), None),
+            });
+        }
+    });
+    (Outcome::Ran, sweep)
+}
+
+/// A layer's density per window held to the band its coverage by `cover`
+/// falls in ([`CoverBands::need`]), each layer merged and clipped to the die,
+/// windows as [`density`]'s. One violation per window below its band's
+/// density, on `layer`, at its centre, naming no shape. `examined` counts
+/// windows; an empty die is `Skipped(EmptyLayer)`.
+#[allow(clippy::too_many_arguments, reason = "one rule row's parameters")]
+pub(crate) fn cover_density(
+    store: &GeometryStore,
+    rule: StrId,
+    (layer, cover, boundary, drawn): (LayerId, LayerId, Option<LayerId>, usize),
+    (window, step): (Dbu, Dbu),
+    bands: &CoverBands,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let die = die_of(store, boundary, drawn);
+    if die.is_empty() {
+        return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
+    }
+    let (side, stride) = (window.raw(), step.raw());
+    let (x0, y0) = (die.xlo.raw(), die.ylo.raw());
+    let cols = positions(die.xhi.raw() - x0, side, stride);
+    let ways = positions(die.yhi.raw() - y0, side, stride);
+    let (xmax, ymax) = (
+        x0 + (cols - 1) * stride + side,
+        y0 + (ways - 1) * stride + side,
+    );
+    if Dbu::new(xmax).is_none() || Dbu::new(ymax).is_none() {
+        return REFUSED;
+    }
+    let Some(sweep) = cols.checked_mul(ways).and_then(|n| u64::try_from(n).ok()) else {
+        return REFUSED;
+    };
+    let grid = WindowGrid {
+        x0,
+        y0,
+        side,
+        stride,
+        cols,
+        ways,
+    };
+    let area = to_f64(i128::from(side) * i128::from(side));
+    if !merge_within(store, cover, die, s) {
+        return REFUSED;
+    }
+    let mut needs = Vec::new();
+    window_areas(&s.rects, grid, |_, covered| {
+        needs.push(bands.need(to_f64(covered.raw()) / area));
+    });
+    if !merge_within(store, layer, die, s) {
+        return REFUSED;
+    }
+    let mut at = needs.into_iter();
+    window_areas(&s.rects, grid, |window, covered| {
+        let need = at.next().expect("both sweeps visit every window");
+        let density = to_f64(covered.raw()) / area;
+        if let Some(need) = need.filter(|&need| density < need) {
+            out.push(Violation {
+                rule,
+                layer,
+                severity: Severity::Error,
+                at: centre(window),
+                measured: Measurement::Ratio(density),
+                limit: Measurement::Ratio(need),
+                shapes: (PolyId(u32::MAX), None),
+            });
+        }
+    });
+    (Outcome::Ran, sweep)
+}
+
+/// Short-circuit critical area for a square defect of half-side `radius`:
+/// the area where the defect's centre makes it overlap two different merged
+/// figures, the union over every pair of the intersection of the two figures
+/// each grown by `radius` (square corners). One violation when it is above
+/// `limit`, at the centre of that area's bounding box, naming no shape.
+/// `examined` counts figures.
+pub(crate) fn critical_area(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    radius: Dbu,
+    limit: DbuArea,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some((area, extent, examined)) = short_area(store, layer, radius, s) else {
+        return REFUSED;
+    };
+    if area > limit {
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(extent),
+            measured: Measurement::Area(area),
+            limit: Measurement::Area(limit),
+            shapes: (PolyId(u32::MAX), None),
+        });
+    }
+    (Outcome::Ran, examined)
+}
+
+/// The mean short-circuit critical area over a defect-size distribution the
+/// deck discretises: `Σ weight · critical area at radius`, each term as
+/// [`critical_area`] measures it. One violation when it is above `limit`, at
+/// the centre of the box of every radius's critical area, measuring the
+/// mean floored, naming no shape. `examined` counts figures.
+pub(crate) fn mean_critical_area(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    sizes: &DefectSizes,
+    limit: DbuArea,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let (mut mean, mut extent, mut examined) = (0.0f64, Bbox::EMPTY, 0);
+    for (&radius, &weight) in sizes.radius.iter().zip(&sizes.weight) {
+        let Some((area, box_of, figures)) = short_area(store, layer, radius, s) else {
+            return REFUSED;
+        };
+        mean += weight * to_f64(area.raw());
+        extent = extent.union(box_of);
+        examined = figures;
+    }
+    if mean > to_f64(limit.raw()) {
+        #[allow(clippy::cast_possible_truncation, reason = "an area far below 2^127")]
+        let floored = mean.floor() as i128;
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(extent),
+            measured: Measurement::Area(DbuArea::new(floored)),
+            limit: Measurement::Area(limit),
+            shapes: (PolyId(u32::MAX), None),
+        });
+    }
+    (Outcome::Ran, examined)
+}
+
+/// [`critical_area`]'s measure: the critical area for a defect of half-side
+/// `radius`, the box holding it (empty when it has none), and the figure
+/// count. `None` when the layer does not merge or growing leaves the
+/// coordinate domain.
+// ponytail: every pair of figures by their grown boxes, O(figures²); sweep by
+// x if a large layer makes this slow.
+fn short_area(
+    store: &GeometryStore,
+    layer: LayerId,
+    radius: Dbu,
+    s: &mut Scratch,
+) -> Option<(DbuArea, Bbox, u64)> {
+    if !merge_layer(store, layer, s, false) {
+        return None;
+    }
+    let r = radius.raw();
+    let grow = |b: Bbox| -> Option<Bbox> {
+        Some(Bbox {
+            xlo: Dbu::new(b.xlo.raw() - r)?,
+            ylo: Dbu::new(b.ylo.raw() - r)?,
+            xhi: Dbu::new(b.xhi.raw() + r)?,
+            yhi: Dbu::new(b.yhi.raw() + r)?,
+        })
+    };
+    let grown = s
+        .rects
+        .iter()
+        .map(|&b| grow(b))
+        .collect::<Option<Vec<_>>>()?;
+    let figures: Vec<&[Bbox]> = s
+        .rect_start
+        .windows(2)
+        .map(|span| &grown[span[0] as usize..span[1] as usize])
+        .collect();
+    let reach: Vec<Bbox> = figures
+        .iter()
+        .map(|rects| rects.iter().fold(Bbox::EMPTY, |acc, &b| acc.union(b)))
+        .collect();
+    let positive = |b: Option<Bbox>| b.filter(|c| c.xlo < c.xhi && c.ylo < c.yhi);
+    let mut critical = Vec::new();
+    for (i, (fi, ri)) in figures.iter().zip(&reach).enumerate() {
+        for (fj, rj) in figures.iter().zip(&reach).skip(i + 1) {
+            if positive(ri.intersection(*rj)).is_none() {
+                continue;
+            }
+            for &a in *fi {
+                critical.extend(fj.iter().filter_map(|&b| positive(a.intersection(b))));
+            }
+        }
+    }
+    let examined = figures.len() as u64;
+    if critical.is_empty() {
+        return Some((DbuArea::new(0), Bbox::EMPTY, examined));
+    }
+    let pieces = rects_layer(&critical).ok()?;
+    union_into(&pieces, &ValidatedLayer::default(), &mut s.layer_out).ok()?;
+    decompose_into(&s.layer_out, &mut s.rects, &mut s.rect_start);
+    let extent = s.rects.iter().fold(Bbox::EMPTY, |acc, &b| acc.union(b));
+    Some((covered_area(&s.rects), extent, examined))
+}
+
 /// Whole-die density (gf180 M1.4 "30 % over the entire die", IHP M1.j/k): the
 /// merged layer's area inside the die over the die's area, one violation at the
 /// die's centre. `examined` is one; an empty die is `Skipped(EmptyLayer)`.
 pub(crate) fn global_density(
     store: &GeometryStore,
     rule: StrId,
-    (layer, boundary): (LayerId, Option<LayerId>),
+    (layer, boundary, drawn): (LayerId, Option<LayerId>, usize),
     limit: f64,
     sense: LimitSense,
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let die = die_of(store, boundary);
+    let die = die_of(store, boundary, drawn);
     if die.is_empty() {
         return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
     }
@@ -331,6 +653,159 @@ pub(crate) fn global_density(
         });
     }
     (Outcome::Ran, 1)
+}
+
+/// The number of merged figures on the layer in the whole layout against a
+/// minimum or a maximum (IHP npn13G2.bR, one seal ring per chip), one
+/// violation at the die's centre. `examined` counts figures, and is one (the
+/// die) when the layer has none, so a missing figure's violation names a rule
+/// that examined something; nothing drawn is `Skipped(EmptyLayer)`.
+pub(crate) fn count(
+    store: &GeometryStore,
+    rule: StrId,
+    (layer, drawn): (LayerId, usize),
+    limit: u32,
+    sense: LimitSense,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let die = die_of(store, None, drawn);
+    if die.is_empty() {
+        return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
+    }
+    if !merge_layer(store, layer, s, false) {
+        return REFUSED;
+    }
+    let figures =
+        u32::try_from(s.layer_out.len()).expect("a merged layer's figure count fits a u32");
+    if Measurement::Count(figures).violates(Measurement::Count(limit), sense) {
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(die),
+            measured: Measurement::Count(figures),
+            limit: Measurement::Count(limit),
+            shapes: (PolyId(first_row_or_none(store, layer)), None),
+        });
+    }
+    (Outcome::Ran, u64::from(figures).max(1))
+}
+
+/// The area the merged layer covers in the whole layout, holes excluded,
+/// against a maximum (IHP MIM.gR, total MIM area per chip), one violation at
+/// the die's centre. `examined` counts figures; nothing drawn is
+/// `Skipped(EmptyLayer)`.
+pub(crate) fn total_area(
+    store: &GeometryStore,
+    rule: StrId,
+    (layer, drawn): (LayerId, usize),
+    limit: DbuArea,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let die = die_of(store, None, drawn);
+    if die.is_empty() {
+        return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
+    }
+    if !merge_layer(store, layer, s, false) {
+        return REFUSED;
+    }
+    let area = covered_area(&s.rects);
+    if Measurement::Area(area).violates(Measurement::Area(limit), LimitSense::Maximum) {
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(die),
+            measured: Measurement::Area(area),
+            limit: Measurement::Area(limit),
+            shapes: (PolyId(first_row_or_none(store, layer)), None),
+        });
+    }
+    (Outcome::Ran, s.layer_out.len() as u64)
+}
+
+/// Per merged figure of `region`, the area of the merged `layer` inside it
+/// over its own area, holes excluded (sky130 vpp.5a, vpp.11: pattern density
+/// over a capacitor), against a minimum or a maximum; one violation per
+/// region figure, on `region`, at the centre of its first rectangle.
+/// `examined` counts region figures.
+pub(crate) fn region_density(
+    store: &GeometryStore,
+    rule: StrId,
+    (layer, region): (LayerId, LayerId),
+    limit: f64,
+    sense: LimitSense,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    if !merge_layer(store, region, s, false) {
+        return REFUSED;
+    }
+    let owners = figure_owners(store, region, s);
+    let (regions, starts) = (s.rects.clone(), s.rect_start.clone());
+    if !merge_layer(store, layer, s, false) {
+        return REFUSED;
+    }
+    let material = SortedRects::new(s.rects.iter().map(|&r| (r, ())).collect());
+    let examined = owners.len() as u64;
+    for (figure, owner) in owners.into_iter().enumerate() {
+        let mine = &regions[starts[figure] as usize..starts[figure + 1] as usize];
+        let covered = mine
+            .iter()
+            .flat_map(|&r| material.overlapping(r))
+            .fold(DbuArea::new(0), |sum, (clip, ())| sum + clip.area());
+        let fraction = to_f64(covered.raw()) / to_f64(covered_area(mine).raw());
+        if !Measurement::Ratio(fraction).violates(Measurement::Ratio(limit), sense) {
+            continue;
+        }
+        out.push(Violation {
+            rule,
+            layer: region,
+            severity: Severity::Error,
+            at: centre(mine[0]),
+            measured: Measurement::Ratio(fraction),
+            limit: Measurement::Ratio(limit),
+            shapes: (owner, None),
+        });
+    }
+    (Outcome::Ran, examined)
+}
+
+/// Each merged figure's bounding-box aspect ratio, its longer side over its
+/// shorter (sky130 capm.6), against a maximum, at the centre of the figure's
+/// first rectangle. `examined` counts figures.
+pub(crate) fn aspect_ratio(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    limit: f64,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    if !merge_layer(store, layer, s, false) {
+        return REFUSED;
+    }
+    let owners = figure_owners(store, layer, s);
+    for (index, owner) in (0u32..).zip(owners) {
+        let b = s.layer_out.get(index).bbox();
+        let (short, long) = (b.width().min(b.height()), b.width().max(b.height()));
+        let ratio = to_f64(i128::from(long.raw())) / to_f64(i128::from(short.raw()));
+        if !Measurement::Ratio(ratio).violates(Measurement::Ratio(limit), LimitSense::Maximum) {
+            continue;
+        }
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(s.rects[s.rect_start[index as usize] as usize]),
+            measured: Measurement::Ratio(ratio),
+            limit: Measurement::Ratio(limit),
+            shapes: (owner, None),
+        });
+    }
+    (Outcome::Ran, s.layer_out.len() as u64)
 }
 
 /// A density sweep: `cols x ways` windows of `side`, origins `stride` apart
@@ -430,6 +905,9 @@ mod tests {
     }
 
     /// Differential: every window's sum equals clipping every rectangle to it.
+    ///
+    /// Oracle: differential against clipping every rectangle to every window
+    /// (`clipped_area`), over 2000 random grids and disjoint rectangle sets.
     #[test]
     fn window_areas_match_clipping_every_rect() {
         let mut seed = 0x9e37_79b9_7f4a_7c15u64;
@@ -466,46 +944,5 @@ mod tests {
             }
             assert_eq!(seen, want, "{rects:?} {g:?}");
         }
-    }
-
-    /// `cargo test --release -p gpurify-check -- --ignored --nocapture bench_window`
-    #[test]
-    #[ignore = "timing"]
-    fn bench_window_areas() {
-        use std::hint::black_box;
-        use std::time::Instant;
-        // A 200 x 200 array of 10 x 10 squares on a 20 pitch; 100-wide windows, step 50.
-        let rects: Vec<Bbox> = (0..200 * 200)
-            .map(|k| {
-                b(
-                    k % 200 * 20,
-                    k / 200 * 20,
-                    k % 200 * 20 + 10,
-                    k / 200 * 20 + 10,
-                )
-            })
-            .collect();
-        let g = WindowGrid {
-            x0: 0,
-            y0: 0,
-            side: 100,
-            stride: 50,
-            cols: 80,
-            ways: 80,
-        };
-        let t = Instant::now();
-        let mut sum = 0i128;
-        window_areas(black_box(&rects), g, |_, a| sum += a.raw());
-        let binned = t.elapsed();
-        let t = Instant::now();
-        let mut brute = 0i128;
-        for iy in 0..g.ways {
-            for ix in 0..g.cols {
-                brute += clipped_area(black_box(&rects), g.window(ix, iy)).raw();
-            }
-        }
-        let clipped = t.elapsed();
-        assert_eq!(sum, brute);
-        eprintln!("window_areas {binned:?}  clip-every-rect {clipped:?}");
     }
 }

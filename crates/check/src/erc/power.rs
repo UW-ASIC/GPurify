@@ -2,19 +2,21 @@
 //!
 //! Data in: the store, nets, devices, intent, the process stack.
 //! Data out: the supply grid ([`PowerGrid`], solved by [`solve_into`] into a
-//! [`PowerSolution`]) and per-net networks ([`NetNetworks`], probed by
-//! [`effective_resistance_into`]).
+//! [`PowerSolution`]), per-net networks ([`NetNetworks`], probed by
+//! [`effective_resistance_into`]), and forced-current stress networks across
+//! nets ([`StressGrid`], built by [`extract_stress_into`] and solved by
+//! [`solve_into`]).
 //!
 //! A polygon is a chain of resistors along its long bounding-box axis, tapped
 //! wherever something connects and once at its own centre (so an unconnected
 //! shape is an island, not absent). Segment resistance is sheet resistance
-//! times `∫ ds / w(s)` over the width a cut actually finds ([`ChainProfile`]).
+//! times `∫ ds / w(s)` over the width a cut actually finds (`ChainProfile`).
 //! One-dimensional: transverse resistance within a cut is not modelled.
 
 use crate::erc::centre;
 use crate::erc::facts::IntentMap;
 use crate::topology::net::{intra_layer_edges_into, via_cuts_into};
-use crate::topology::{csr_run, DeviceTable, NetId, NetTable};
+use crate::topology::{csr_run, DeviceId, DeviceTable, NetId, NetTable};
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::ops::Point;
 use gpurify_geom::{prefix, Current, Dbu, Grid, Qty, Resistance, Voltage, MAX_ABS_DBU};
@@ -34,44 +36,83 @@ const NOT_AN_UNKNOWN: u32 = u32::MAX;
 /// Why a network could not be built or solved. Every variant fails closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PowerError {
+    /// A grid with nodes but no pad held at a fixed voltage.
+    /// [`extract_into`] anchors every supply that has a shape, so only a grid
+    /// built by hand meets this.
     #[error("the grid has no supply pad to anchor the solve")]
     Unanchored,
+    /// The node is in a piece of the grid no pad reaches, such as a supply
+    /// shape joined to its net only through a global (substrate) layer, which
+    /// carries no modelled current. Its voltage would be undefined.
     #[error("node {0} is in an island no supply pad reaches")]
     UnanchoredIsland(u32),
+    /// The edge (within its network row, for a per-net network) has a zero,
+    /// negative or non-finite resistance; zero would short two nodes and hide
+    /// a drop.
     #[error("edge {0} does not have a positive finite resistance")]
     BadResistance(u32),
+    /// A conductor, or a cut between two conductors, has no positive finite
+    /// sheet resistance in the deck's `pex` rows: its resistance is unknown,
+    /// never zero.
     #[error("layer {0:?} carries current but the process stack gives it no sheet resistance")]
     NoSheetResistance(LayerId),
+    /// The conjugate-gradient solve did not bring the residual to `1e-10` of
+    /// its starting value within this many iterations.
     #[error("the solve did not reach the requested tolerance in {0} iterations")]
     NotConverged(u32),
+    /// The node carries a NaN or infinite value: an input nominal, load or pad
+    /// voltage, a solved voltage or current, or a probe that would not invert.
     #[error("node {0} carries a non-finite electrical value")]
     NotFinite(u32),
+    /// A point [`extract_points_into`] was asked to measure from lies on no
+    /// conducting shape of its net (its index among the points).
+    #[error("point {0} lies on no conducting shape of the net")]
+    NotOnNet(usize),
 }
 
 /// The process data an extraction needs, borrowed.
 #[derive(Debug, Clone, Copy)]
 pub struct Process<'a> {
+    /// The layout's grid: database units to metres.
     pub grid: Grid,
+    /// The deck's parasitic stack: sheet resistance per layer (Ω per square;
+    /// Ω per cut for a cut layer) and the layer heights that pick each
+    /// supply's feed point and set a via's length.
     pub stack: &'a ProcessStack,
+    /// The deck's `connect` statements: which layers conduct, which cuts join
+    /// them, and which layers are global.
     pub connectivity: &'a Connectivity,
 }
 
-/// What an edge models: metal (limited per width) or one via cut (limited per
-/// cut).
+/// What an edge models: metal (limited per width), one via cut (limited per
+/// cut), or a device conducting between two nets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EdgeKind {
+    /// A run along one conductor, or the touch between two: limited per unit
+    /// width.
     Metal,
+    /// One cut of a via: limited per cut.
     Via,
+    /// A device's on-resistance between two of its terminals' nets: an ESD
+    /// clamp in a stress network ([`extract_stress_into`]), rated by its own
+    /// size, never per width or per cut. The supply grid has none.
+    Device,
 }
 
 /// The supply grid, `SoA`: node columns, the fixed-voltage pads, edge columns.
+///
+/// Every node column has [`PowerGrid::node_count`] entries and every edge
+/// column [`PowerGrid::edge_count`]. Nodes are taps on the declared
+/// supplies' conducting shapes; edges are resistors between them.
 #[derive(Debug, Default)]
 pub struct PowerGrid {
+    /// The supply net each node is on.
     pub node_net: Vec<NetId>,
     /// Where to report a violation at this node.
     pub node_at: Vec<Point>,
-    /// The tapped polygon and its layer.
+    /// The tapped polygon.
     pub node_poly: Vec<PolyId>,
+    /// The tapped polygon's layer.
     pub node_layer: Vec<LayerId>,
     /// The domain nominal every drop is measured from.
     pub node_nominal: Vec<Qty<Voltage, { prefix::MILLI }>>,
@@ -80,33 +121,50 @@ pub struct PowerGrid {
 
     /// Pad nodes held at a fixed voltage, ascending.
     pub source_node: Vec<u32>,
+    /// Parallel to `source_node`: the voltage each pad is held at, mV.
     pub source_voltage: Vec<Qty<Voltage, { prefix::MILLI }>>,
 
+    /// Each resistor's first node; a branch current is positive from here
+    /// toward `edge_to`.
     pub edge_from: Vec<u32>,
+    /// Each resistor's second node.
     pub edge_to: Vec<u32>,
+    /// Each resistor's value, Ω.
     pub edge_resistance: Vec<Qty<Resistance, { prefix::BASE }>>,
     /// Conductor width (density denominator) and length (Blech `L`), exact.
     pub edge_width: Vec<Dbu>,
+    /// The run between the edge's two nodes, at least one database unit: the
+    /// Blech `L`. For a via, the stack height between its conductors.
     pub edge_length: Vec<Dbu>,
+    /// The conductor's layer, or the cut layer for a via.
     pub edge_layer: Vec<LayerId>,
+    /// Which limit applies: per width or per cut.
     pub edge_kind: Vec<EdgeKind>,
 }
 
 impl PowerGrid {
+    /// The number of nodes, the length of every node column.
     pub fn node_count(&self) -> usize {
         self.node_net.len()
     }
 
+    /// The number of resistors, the length of every edge column.
     pub fn edge_count(&self) -> usize {
         self.edge_from.len()
     }
 
+    /// True when no declared supply has a conducting shape: nothing to solve.
     pub fn is_empty(&self) -> bool {
         self.node_count() == 0
     }
 }
 
 /// One resistor network per net with at least two terminals, CSR by row.
+///
+/// Row `r` is net `net[r]`; its nodes, terminals and edges are the CSR runs
+/// of their `*_start` columns, each of which has `len() + 1` entries once a
+/// row exists and none before. Node indices in `terminal` and `edge_*` are
+/// local to the row.
 #[derive(Debug, Default)]
 pub struct NetNetworks {
     /// The net of each row, ascending.
@@ -114,25 +172,34 @@ pub struct NetNetworks {
 
     /// `node_start[r] .. node_start[r + 1]` indexes the node columns.
     pub node_start: Vec<u32>,
+    /// Where each node sits: on its shape's centre line, at the tap.
     pub node_at: Vec<Point>,
+    /// The polygon each node taps.
     pub node_poly: Vec<PolyId>,
 
     /// Row-local node indices between which resistance is probed.
     pub terminal_start: Vec<u32>,
+    /// The attach-point nodes, row-local, ascending, at least two per row;
+    /// CSR by `terminal_start`.
     pub terminal: Vec<u32>,
 
     /// Edges, endpoints row-local.
     pub edge_start: Vec<u32>,
+    /// Each resistor's first node, row-local.
     pub edge_from: Vec<u32>,
+    /// Each resistor's second node, row-local.
     pub edge_to: Vec<u32>,
+    /// Each resistor's value, Ω.
     pub edge_resistance: Vec<Qty<Resistance, { prefix::BASE }>>,
 }
 
 impl NetNetworks {
+    /// The number of rows: nets with at least two attach points.
     pub fn len(&self) -> usize {
         self.net.len()
     }
 
+    /// True when no net has two attach points.
     pub fn is_empty(&self) -> bool {
         self.net.is_empty()
     }
@@ -172,6 +239,8 @@ const MAX_ITERATIONS: u32 = 20_000;
 /// `i` (currents).
 #[derive(Debug, Default)]
 pub struct PowerSolution {
+    /// Solved voltage at each node, mV; a pad sits exactly at its fixed
+    /// voltage.
     pub node_voltage: Vec<Qty<Voltage, { prefix::MILLI }>>,
     /// Nominal minus solved: positive is a loss.
     pub node_drop: Vec<Qty<Voltage, { prefix::MILLI }>>,
@@ -208,8 +277,9 @@ pub struct SolveScratch {
     z: Vec<f64>,
     /// Diagonal preconditioner, as reciprocals.
     inv_diag: Vec<f64>,
-    /// IC(0) factor: strict lower triangle, CSR, columns ascending and merged,
-    /// plus its diagonal. Empty means "use the diagonal".
+    /// IC(0) factor `L D Lᵀ`: the unit lower triangle's strict part, CSR,
+    /// columns ascending and merged, plus the pivots `D`. Empty means "use the
+    /// diagonal".
     l_start: Vec<u32>,
     l_col: Vec<u32>,
     l_val: Vec<f64>,
@@ -505,6 +575,18 @@ fn assemble_into(scratch: &mut SolveScratch, unknowns: usize) {
         }
     }
 
+    // Every unknown reaches a pad through branches of positive conductance.
+    debug_assert!(
+        diag.iter().all(|&d| d > 0.0),
+        "the reduced Laplacian's diagonal is positive"
+    );
+    debug_assert!(
+        cursor
+            .iter()
+            .zip(&row_start[1..])
+            .all(|(&filled, &end)| filled == end),
+        "every row's off-diagonal slots are filled exactly"
+    );
     inv_diag.clear();
     inv_diag.reserve(unknowns);
     for i in 0..unknowns {
@@ -513,9 +595,13 @@ fn assemble_into(scratch: &mut SolveScratch, unknowns: usize) {
     }
 }
 
-/// IC(0): factor the assembled matrix with zero fill into `l_*`, merging
-/// duplicate columns. On breakdown the factor is left empty, which selects the
-/// diagonal preconditioner (a partial factor would diverge).
+/// IC(0): factor the assembled matrix with zero fill into `l_*` as `L D Lᵀ`,
+/// merging duplicate columns. Without square roots, a factor of a network
+/// with exact binary values is exact: on a tree, where zero fill drops
+/// nothing, CG then lands on the exact solution in one step, so a closed-form
+/// drop is the same bits on a ground rail near 0 mV as on a power rail. On
+/// breakdown the factor is left empty, which selects the diagonal
+/// preconditioner (a partial factor would diverge).
 fn factorise_into(scratch: &mut SolveScratch, unknowns: usize) {
     let SolveScratch {
         row_start,
@@ -568,13 +654,13 @@ fn factorise_into(scratch: &mut SolveScratch, unknowns: usize) {
             while p < t && q < q_end {
                 let (cp, cq) = (l_col[p], l_col[q]);
                 let hit = f64::from(u8::from(cp == cq));
-                s -= l_val[p] * l_val[q] * hit;
+                s -= l_val[p] * l_val[q] * l_diag[cp as usize] * hit;
                 p += usize::from(cp <= cq);
                 q += usize::from(cq <= cp);
             }
             let v = s / l_diag[j];
             l_val[t] = v;
-            d -= v * v;
+            d -= v * s;
         }
         if !(d > 0.0 && d.is_finite()) {
             l_start.clear();
@@ -583,7 +669,7 @@ fn factorise_into(scratch: &mut SolveScratch, unknowns: usize) {
             l_diag.clear();
             return;
         }
-        l_diag[i] = d.sqrt();
+        l_diag[i] = d;
     }
 }
 
@@ -604,29 +690,31 @@ fn precondition(
         }
         return;
     }
-    // `L y = r`, ascending.
+    // `L y = r`, ascending; `L` has a unit diagonal.
     for i in 0..unknowns {
         let mut s = r[i];
         for t in l_start[i] as usize..l_start[i + 1] as usize {
             s -= l_val[t] * z[l_col[t] as usize];
         }
-        z[i] = s / l_diag[i];
+        z[i] = s;
     }
-    // `Lᵀ z = y`, descending, scattering each row back over the rows above.
+    // `D w = y`.
+    for (z, &d) in z.iter_mut().zip(l_diag) {
+        *z /= d;
+    }
+    // `Lᵀ z = w`, descending, scattering each row back over the rows above.
     for i in (0..unknowns).rev() {
-        let v = z[i] / l_diag[i];
-        z[i] = v;
+        let v = z[i];
         for t in l_start[i] as usize..l_start[i + 1] as usize {
             z[l_col[t] as usize] -= l_val[t] * v;
         }
     }
 }
 
-/// Preconditioned CG on the assembled system, from the guess in `scratch.x`.
-/// A `NaN` residual refuses.
+/// Preconditioned CG on the assembled and factorised system, from the guess
+/// in `scratch.x`. A `NaN` residual refuses.
 fn conjugate_gradient(scratch: &mut SolveScratch) -> Result<(), PowerError> {
     let unknowns = scratch.x.len();
-    factorise_into(scratch, unknowns);
     scratch.z.clear();
     scratch.z.resize(unknowns, 0.0);
 
@@ -689,7 +777,9 @@ fn conjugate_gradient(scratch: &mut SolveScratch) -> Result<(), PowerError> {
 /// A grid and its solution, borrowed together.
 #[derive(Debug, Clone, Copy)]
 pub struct Solved<'a> {
+    /// The supply grid.
     pub grid: &'a PowerGrid,
+    /// Its solution, row for row.
     pub solution: &'a PowerSolution,
 }
 
@@ -725,6 +815,12 @@ pub(crate) fn discarded_budget(grid: &PowerGrid, intent: &IntentMap) -> bool {
 /// Each rail's budget spreads uniformly over its device terminals: one number
 /// per net is all [`IntentMap`] carries, so a hot spot reads cooler than it
 /// is. The rail is anchored at one pad (see below), which over-reports drop.
+///
+/// # Errors
+///
+/// Returns [`PowerError::NoSheetResistance`] when a conductor, or a cut
+/// between two non-global conductors, has no positive finite sheet
+/// resistance, whether or not any supply is declared. `out` is left empty.
 pub fn extract_into(
     store: &GeometryStore,
     nets: &NetTable,
@@ -782,8 +878,9 @@ pub fn extract_into(
     let metal_req = taps.push_links(store, &links.metal, shape_of);
     let via_req = taps.push_links(store, &links.via, shape_of);
 
-    // One tap per device on the rail at its nearest shape, and one load share
-    // per terminal it lands on the rail (source and drain both draw).
+    // One tap per device on the rail, on the nearest shape its marker touches
+    // (else the nearest), and one load share per terminal it lands on the
+    // rail (source and drain both draw).
     let mut attach: Vec<u32> = Vec::new();
     let mut load: Vec<(u32, Qty<Current, { prefix::MICRO }>)> = Vec::new();
     let mut index = TapIndex::default();
@@ -798,8 +895,9 @@ pub fn extract_into(
         }
         TapIndex::build_into(store, &shape[from..to], &mut index);
         for &device in devices.devices_on(net) {
-            let marker = centre(store.poly_bbox(devices.marker[device.0 as usize]));
-            let host_index = from + index.nearest(marker) as usize;
+            let marker_box = store.poly_bbox(devices.marker[device.0 as usize]);
+            let marker = centre(marker_box);
+            let host_index = from + index.host(marker_box) as usize;
             let host = store.poly_bbox(shape[host_index]);
             let request = taps.push(
                 u32::try_from(host_index).expect("a shape index is a u32"),
@@ -841,9 +939,7 @@ pub fn extract_into(
         out.node_load[node] = out.node_load[node] + share;
     }
 
-    // The anchor: no input marks pads, and supply enters from the top, so the
-    // centre tap of the rail's highest-layer, then widest, then lowest-index
-    // shape. A missing `height_nm` reads as the substrate.
+    // The anchor: no input marks pads, and supply enters from the top.
     for supply in 0..intent.supply_net.len() {
         let (from, to) = (
             supply_start[supply] as usize,
@@ -852,21 +948,7 @@ pub fn extract_into(
         if to == from {
             continue;
         }
-        let mut anchor = from;
-        let mut best = (f64::NEG_INFINITY, i128::MIN);
-        for (offset, &poly) in shape[from..to].iter().enumerate() {
-            let height = process
-                .stack
-                .height_nm
-                .get(store.poly_layer(poly).idx())
-                .copied()
-                .unwrap_or(0.0);
-            let key = (height, store.poly_bbox(poly).area().raw());
-            if key > best {
-                best = key;
-                anchor = from + offset;
-            }
-        }
+        let anchor = from + feed_shape(store, process, &shape[from..to]);
         let host = store.poly_bbox(shape[anchor]);
         let (lo, hi) = taps.chain_of(u32::try_from(anchor).expect("a shape index is a u32"));
         let at = lo
@@ -888,6 +970,279 @@ pub fn extract_into(
         &mut ChainProfile::default(),
         |edge| out.push_edge(edge),
     );
+    Ok(())
+}
+
+/// The index in `shapes` of a supply's feed point: supply enters from the top,
+/// so its highest-layer, then widest, then lowest-index shape. A missing
+/// `height_nm` reads as the substrate. `shapes` is not empty.
+pub(crate) fn feed_shape(store: &GeometryStore, process: Process<'_>, shapes: &[PolyId]) -> usize {
+    let mut anchor = 0;
+    let mut best = (f64::NEG_INFINITY, i128::MIN);
+    for (offset, &poly) in shapes.iter().enumerate() {
+        let height = process
+            .stack
+            .height_nm
+            .get(store.poly_layer(poly).idx())
+            .copied()
+            .unwrap_or(0.0);
+        let key = (height, store.poly_bbox(poly).area().raw());
+        if key > best {
+            best = key;
+            anchor = offset;
+        }
+    }
+    anchor
+}
+
+/// One forced-current stress for [`extract_stress_into`]: the nets a
+/// discharge path spans, where a current is forced in and where it leaves,
+/// and the devices that carry it from net to net.
+#[derive(Debug, Clone, Copy)]
+pub struct Stress<'a> {
+    /// The nets the network spans, ascending, without repeats.
+    pub nets: &'a [NetId],
+    /// The polygon the current enters at; its net is one of `nets`. It taps
+    /// its net's conducting shape nearest its box centre, at that centre.
+    pub source: PolyId,
+    /// The net `source` taps when `source` is on no path net itself (a
+    /// device's marker, tapped where the device attaches); `None` taps the
+    /// source's own net.
+    pub source_net: Option<NetId>,
+    /// The current forced in at `source`, µA.
+    pub current: Qty<Current, { prefix::MICRO }>,
+    /// The net the current leaves by, one of `nets`.
+    pub sink: NetId,
+    /// The sink's pins, each tapped as `source` is and held at 0 mV. Empty
+    /// holds the sink's feed point instead, the centre of its highest, then
+    /// widest, shape (as [`extract_into`] anchors a supply).
+    pub pins: &'a [PolyId],
+    /// The devices that conduct between nets. Each joins every pair of the
+    /// distinct nets of `nets` its terminals touch, at its attach point on
+    /// each (the shape nearest its marker's centre); one touching fewer than
+    /// two adds nothing.
+    pub devices: &'a [DeviceId],
+    /// The resistance one device puts between two of its nets, Ω; positive.
+    pub device_resistance: Qty<Resistance, { prefix::BASE }>,
+}
+
+/// A stress network built by [`extract_stress_into`] and solved by
+/// [`solve_into`]: every node's voltage is its rise above the held pins.
+#[derive(Debug, Default)]
+pub struct StressGrid {
+    /// The network. Its metal and via edges come first, as in the supply
+    /// grid; its last `device.len()` edges are [`EdgeKind::Device`].
+    pub grid: PowerGrid,
+    /// The node the current enters at.
+    pub entry: u32,
+    /// The device each device edge models, in edge order.
+    pub device: Vec<DeviceId>,
+}
+
+/// A tap request on the shape of `shapes` nearest `at`, at `at`; `None` when
+/// `shapes` is empty.
+// ponytail: rebuilds the nearest-shape index per query; a stress has a few
+// pins and clamps.
+fn tap_nearest(
+    store: &GeometryStore,
+    shapes: &[PolyId],
+    offset: usize,
+    at: Point,
+    index: &mut TapIndex,
+    taps: &mut TapTable,
+) -> Option<u32> {
+    if shapes.is_empty() {
+        return None;
+    }
+    TapIndex::build_into(store, shapes, index);
+    let local = index.nearest(at) as usize;
+    let host = store.poly_bbox(shapes[local]);
+    Some(taps.push(
+        u32::try_from(offset + local).expect("a shape index is a u32"),
+        tap_on(host, Bbox::point(at.x, at.y)),
+    ))
+}
+
+/// Build the network a forced current flows through; `out` is cleared and
+/// refilled. The nets are chains of resistors as in [`extract_into`]; each
+/// device in `stress.devices` adds `device_resistance` between its attach
+/// points on every two path nets it touches. The entry node draws
+/// `-current` (an injection), the held nodes sit at 0 mV, and every node's
+/// nominal is 0 mV, so after [`solve_into`] a node's voltage is the stress
+/// voltage there.
+///
+/// # Errors
+///
+/// [`PowerError::NoSheetResistance`] as [`extract_into`] returns it, with
+/// `out` left empty.
+///
+/// # Panics
+///
+/// Panics if `stress.source` is not on a net of `stress.nets`, or the source
+/// net or the sink has no conducting shape.
+pub fn extract_stress_into(
+    store: &GeometryStore,
+    nets: &NetTable,
+    devices: &DeviceTable,
+    process: Process<'_>,
+    stress: Stress<'_>,
+    out: &mut StressGrid,
+) -> Result<(), PowerError> {
+    out.grid = PowerGrid::default();
+    out.device.clear();
+    out.entry = 0;
+    let conductor = conductor_mask(process.connectivity, store.layer_count());
+    let sheet = sheet_resistances(process, store.layer_count())?;
+
+    // Every path net's conducting shapes, grouped by net.
+    let mut shape: Vec<PolyId> = Vec::new();
+    let mut net_of_shape: Vec<NetId> = Vec::new();
+    let mut net_start: Vec<usize> = vec![0];
+    for &net in stress.nets {
+        shape.extend(
+            conducting(store, &conductor, nets.polys_of(net))
+                .filter(|&poly| !nets.holes.is_hole(poly)),
+        );
+        net_of_shape.resize(shape.len(), net);
+        net_start.push(shape.len());
+    }
+    let run_of = |net: NetId| {
+        let row = stress
+            .nets
+            .binary_search(&net)
+            .expect("a stressed polygon's net is a path net");
+        (net_start[row], net_start[row + 1])
+    };
+
+    let mut shape_of_poly = vec![NONE; store.poly_count()];
+    for (index, &poly) in shape.iter().enumerate() {
+        shape_of_poly[poly.idx()] = u32::try_from(index).expect("a shape index is a u32");
+    }
+    let mut links = Connections::default();
+    connections_into(store, process.connectivity, &mut links);
+    let both_noded = |&(a, b, _, _): &Link| {
+        shape_of_poly[a as usize] != NONE && shape_of_poly[b as usize] != NONE
+    };
+    links.metal.retain(both_noded);
+    links.via.retain(both_noded);
+
+    let mut taps = TapTable::default();
+    for (index, &poly) in shape.iter().enumerate() {
+        let host = store.poly_bbox(poly);
+        taps.push(
+            u32::try_from(index).expect("a shape index is a u32"),
+            tap_on(host, host),
+        );
+    }
+    let shape_of = |poly: u32| shape_of_poly[poly as usize];
+    let metal_req = taps.push_links(store, &links.metal, shape_of);
+    let via_req = taps.push_links(store, &links.via, shape_of);
+
+    let mut index = TapIndex::default();
+    let mut tap_at = |net: NetId, at: Point, taps: &mut TapTable| {
+        let (from, to) = run_of(net);
+        tap_nearest(store, &shape[from..to], from, at, &mut index, taps)
+    };
+    let source = store.poly_bbox(stress.source);
+    let entry_net = stress
+        .source_net
+        .unwrap_or_else(|| nets.net_of(stress.source));
+    let entry_req = tap_at(entry_net, centre(source), &mut taps)
+        .expect("the source net has a conducting shape");
+    let mut held_req: Vec<u32> = Vec::new();
+    for &pin in stress.pins {
+        held_req.extend(tap_at(stress.sink, centre(store.poly_bbox(pin)), &mut taps));
+    }
+    if stress.pins.is_empty() {
+        let (from, to) = run_of(stress.sink);
+        assert!(to > from, "the sink net has a conducting shape");
+        let anchor = from + feed_shape(store, process, &shape[from..to]);
+        let host = store.poly_bbox(shape[anchor]);
+        held_req.push(taps.push(
+            u32::try_from(anchor).expect("a shape index is a u32"),
+            tap_on(host, host),
+        ));
+    }
+    // Per device: its attach request on each path net it touches.
+    let mut attach: Vec<(DeviceId, Vec<u32>)> = Vec::new();
+    let mut touched: Vec<NetId> = Vec::new();
+    for &device in stress.devices {
+        touched.clear();
+        touched.extend(
+            devices
+                .terminals_of(device)
+                .0
+                .iter()
+                .copied()
+                .filter(|net| stress.nets.binary_search(net).is_ok()),
+        );
+        touched.sort_unstable();
+        touched.dedup();
+        if touched.len() < 2 {
+            continue;
+        }
+        let marker = centre(store.poly_bbox(devices.marker[device.0 as usize]));
+        let requests: Vec<u32> = touched
+            .iter()
+            .filter_map(|&net| tap_at(net, marker, &mut taps))
+            .collect();
+        attach.push((device, requests));
+    }
+
+    taps.finish(shape.len());
+    let grid = &mut out.grid;
+    for i in 0..taps.node_shape.len() {
+        let owner = taps.node_shape[i] as usize;
+        let poly = shape[owner];
+        grid.node_poly.push(poly);
+        grid.node_net.push(net_of_shape[owner]);
+        grid.node_nominal.push(Qty::new(0.0));
+        grid.node_load.push(Qty::new(0.0));
+        grid.node_layer.push(store.poly_layer(poly));
+        grid.node_at
+            .push(tap_point(store.poly_bbox(poly), taps.node_along[i]));
+    }
+    out.entry = taps.req_node[entry_req as usize];
+    // An injection is a negative load.
+    grid.node_load[out.entry as usize] = Qty::new(-stress.current.raw());
+    grid.source_node.extend(
+        held_req
+            .iter()
+            .map(|&request| taps.req_node[request as usize]),
+    );
+    grid.source_node.sort_unstable();
+    grid.source_node.dedup();
+    grid.source_voltage
+        .resize(grid.source_node.len(), Qty::new(0.0));
+
+    push_edges(
+        store,
+        process,
+        &sheet,
+        &shape,
+        &taps,
+        [(&links.metal, metal_req), (&links.via, via_req)],
+        &mut ChainProfile::default(),
+        |edge| grid.push_edge(edge),
+    );
+    let one = Dbu::new_unchecked(1);
+    for (device, requests) in &attach {
+        let layer = store.poly_layer(devices.marker[device.0 as usize]);
+        for (k, &a) in requests.iter().enumerate() {
+            for &b in &requests[k + 1..] {
+                grid.push_edge(Edge {
+                    from: taps.req_node[a as usize],
+                    to: taps.req_node[b as usize],
+                    ohms: stress.device_resistance.raw(),
+                    width: one,
+                    length: one,
+                    layer,
+                    kind: EdgeKind::Device,
+                });
+                out.device.push(*device);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1002,10 +1357,17 @@ fn conducting<'a>(
         .filter(|&poly| conductor[store.poly_layer(poly).idx()])
 }
 
-/// A uniform grid over one net's shape centres, for exact nearest-point
-/// queries by expanding rings.
+/// The shapes of one net a device can draw its current from: their boxes,
+/// for "which holds this point", and a uniform grid over their centres, for
+/// exact nearest-point queries by expanding rings.
 #[derive(Debug, Default)]
 struct TapIndex {
+    /// Box of each candidate, in candidate order.
+    boxes: Vec<Bbox>,
+    /// Candidate indices by ascending box `xlo`.
+    by_xlo: Vec<u32>,
+    /// The widest box: how far left of a point a box holding it can start.
+    reach: i64,
     /// Centre of each candidate, in candidate order.
     at: Vec<Point>,
     origin_x: Dbu,
@@ -1022,16 +1384,57 @@ struct TapIndex {
 impl TapIndex {
     /// Build over one net's conducting shapes.
     fn build_into(store: &GeometryStore, candidate: &[PolyId], out: &mut Self) {
+        out.boxes.clear();
+        out.boxes
+            .extend(candidate.iter().map(|&p| store.poly_bbox(p)));
         out.at.clear();
-        out.at.reserve(candidate.len());
-        out.at
-            .extend(candidate.iter().map(|&p| centre(store.poly_bbox(p))));
+        out.at.extend(out.boxes.iter().map(|&b| centre(b)));
         out.grid();
+    }
+
+    /// The candidate a device draws its current from: of those whose box
+    /// touches or overlaps the device marker's box `marker` (shapes the
+    /// device can be connected to), the one whose centre is nearest the
+    /// marker's centre, the lower index winning a tie; with none touching,
+    /// [`Self::nearest`] over every candidate. Panics on an empty index.
+    fn host(&self, marker: Bbox) -> u32 {
+        let at = centre(marker);
+        let lo = self
+            .by_xlo
+            .partition_point(|&i| self.boxes[i as usize].xlo.raw() < marker.xlo.raw() - self.reach);
+        self.by_xlo[lo..]
+            .iter()
+            .take_while(|&&i| self.boxes[i as usize].xlo <= marker.xhi)
+            .filter(|&&i| {
+                let b = self.boxes[i as usize];
+                marker.xlo <= b.xhi && b.ylo <= marker.yhi && marker.ylo <= b.yhi
+            })
+            .map(|&i| {
+                let c = self.at[i as usize];
+                let (dx, dy) = (
+                    i128::from(c.x.raw() - at.x.raw()),
+                    i128::from(c.y.raw() - at.y.raw()),
+                );
+                (dx * dx + dy * dy, i)
+            })
+            .min()
+            .map_or_else(|| self.nearest(at), |(_, i)| i)
     }
 
     /// Bucket the points already in `at` (split out so tests need no store).
     fn grid(&mut self) {
         let out = self;
+        out.by_xlo.clear();
+        out.by_xlo
+            .extend(0..u32::try_from(out.boxes.len()).expect("a shape index is a u32"));
+        let boxes = &out.boxes;
+        out.by_xlo.sort_unstable_by_key(|&i| boxes[i as usize].xlo);
+        out.reach = out
+            .boxes
+            .iter()
+            .map(|b| (b.xhi - b.xlo).raw())
+            .max()
+            .unwrap_or(0);
         out.bucket_start.clear();
         out.rows.clear();
         out.cell = 1;
@@ -1544,6 +1947,11 @@ fn squares(length: Dbu, width: Dbu) -> f64 {
 ///
 /// Same chain model as [`extract_into`], but each net's links are sorted by
 /// `(net, a, b, layer)` and a device attaches once per net.
+///
+/// # Errors
+///
+/// Returns [`PowerError::NoSheetResistance`] as [`extract_into`] does, with
+/// `out` left empty.
 pub fn extract_nets_into(
     store: &GeometryStore,
     nets: &NetTable,
@@ -1614,15 +2022,17 @@ pub fn extract_nets_into(
         let metal_req = taps.push_links(store, metal, shape_of);
         let via_req = taps.push_links(store, via, shape_of);
 
-        // Every device on the net taps its nearest shape; one with a terminal
-        // here is an attach point (once, however many terminals).
+        // Every device on the net taps the nearest shape its marker touches
+        // (else the nearest); one with a terminal here is an attach point
+        // (once, however many terminals).
         let mut attach: Vec<u32> = Vec::new();
         if shapes > 0 {
             TapIndex::build_into(store, &candidate[from..to], &mut index);
             for &device in devices.devices_on(id) {
-                let marker = centre(store.poly_bbox(devices.marker[device.0 as usize]));
+                let marker_box = store.poly_bbox(devices.marker[device.0 as usize]);
+                let marker = centre(marker_box);
                 let (on, _) = devices.terminals_of(device);
-                let local = index.nearest(marker);
+                let local = index.host(marker_box);
                 let host = store.poly_bbox(candidate[from + local as usize]);
                 let request = taps.push(local, tap_on(host, Bbox::point(marker.x, marker.y)));
                 if on.contains(&id) {
@@ -1684,6 +2094,105 @@ pub fn extract_nets_into(
     Ok(())
 }
 
+/// Build one net's network, as [`extract_nets_into`] does, with a terminal
+/// at each of `points` instead of at its devices: what a point-to-point
+/// resistance report measures between (catalog PEX-016). Returns each
+/// point's node, in order; [`effective_resistance_into`] on the one row of
+/// `out` then gives the resistance between every two of them.
+///
+/// Each point taps the conducting shape of the net that holds it (its
+/// boundary included), at its position along that shape's chain.
+///
+/// # Errors
+///
+/// [`PowerError::NoSheetResistance`] as [`extract_into`] returns it, and
+/// [`PowerError::NotOnNet`] for a point on no conducting shape of the net
+/// (its index in `points`).
+pub fn extract_points_into(
+    store: &GeometryStore,
+    nets: &NetTable,
+    process: Process<'_>,
+    net: NetId,
+    points: &[Point],
+    out: &mut NetNetworks,
+) -> Result<Vec<u32>, PowerError> {
+    *out = NetNetworks::default();
+    let conductor = conductor_mask(process.connectivity, store.layer_count());
+    let sheet = sheet_resistances(process, store.layer_count())?;
+    let candidate: Vec<PolyId> = conducting(store, &conductor, nets.polys_of(net))
+        .filter(|&poly| !nets.holes.is_hole(poly))
+        .collect();
+    let mut shape_in_row = vec![NONE; store.poly_count()];
+    for (index, &poly) in candidate.iter().enumerate() {
+        shape_in_row[poly.idx()] = u32::try_from(index).expect("a shape index is a u32");
+    }
+    let mut links = Connections::default();
+    connections_into(store, process.connectivity, &mut links);
+    let both_noded =
+        |&(a, b, _, _): &Link| shape_in_row[a as usize] != NONE && shape_in_row[b as usize] != NONE;
+    links.metal.retain(both_noded);
+    links.via.retain(both_noded);
+    let shape_of = |poly: u32| shape_in_row[poly as usize];
+    let mut taps = TapTable::default();
+    for (local, &poly) in candidate.iter().enumerate() {
+        let host = store.poly_bbox(poly);
+        taps.push(
+            u32::try_from(local).expect("a shape index is a u32"),
+            tap_on(host, host),
+        );
+    }
+    let metal_req = taps.push_links(store, &links.metal, shape_of);
+    let via_req = taps.push_links(store, &links.via, shape_of);
+    let mut requests = Vec::with_capacity(points.len());
+    for (k, &at) in points.iter().enumerate() {
+        let local = candidate
+            .iter()
+            .position(|&poly| store.poly_contains_point(poly, at))
+            .ok_or(PowerError::NotOnNet(k))?;
+        let host = store.poly_bbox(candidate[local]);
+        requests.push(taps.push(
+            u32::try_from(local).expect("a shape index is a u32"),
+            tap_on(host, Bbox::point(at.x, at.y)),
+        ));
+    }
+    taps.finish(candidate.len());
+    let nodes: Vec<u32> = requests
+        .iter()
+        .map(|&request| taps.req_node[request as usize])
+        .collect();
+    let mut terminal = nodes.clone();
+    terminal.sort_unstable();
+    terminal.dedup();
+    out.net.push(net);
+    out.terminal.extend_from_slice(&terminal);
+    for node in 0..taps.node_shape.len() {
+        let poly = candidate[taps.node_shape[node] as usize];
+        out.node_poly.push(poly);
+        out.node_at
+            .push(tap_point(store.poly_bbox(poly), taps.node_along[node]));
+    }
+    let mut profile = ChainProfile::default();
+    push_edges(
+        store,
+        process,
+        &sheet,
+        &candidate,
+        &taps,
+        [(&links.metal[..], metal_req), (&links.via[..], via_req)],
+        &mut profile,
+        |edge| {
+            out.edge_from.push(edge.from);
+            out.edge_to.push(edge.to);
+            out.edge_resistance.push(Qty::new(edge.ohms));
+        },
+    );
+    let at = |n: usize| u32::try_from(n).expect("an index is a u32");
+    out.node_start = vec![0, at(out.node_poly.len())];
+    out.terminal_start = vec![0, at(out.terminal.len())];
+    out.edge_start = vec![0, at(out.edge_from.len())];
+    Ok(nodes)
+}
+
 /// One net's run of a link list sorted by net.
 fn net_slice<'a>(links: &'a [Link], net: u32, nets: &NetTable) -> &'a [Link] {
     let of = |&(a, _, _, _): &Link| nets.net_of(PolyId(a)).0;
@@ -1706,38 +2215,12 @@ fn bad_resistance(resistance: &[Qty<Resistance, { prefix::BASE }>]) -> Result<()
     }
 }
 
-/// Solve the grid for node voltages and branch currents; `out` is refilled.
-///
-/// Pads are eliminated before the iteration (leaving an SPD system), and an
-/// island no pad reaches is refused first: CG on a singular system converges
-/// to a meaningless solution.
-pub fn solve_into(
-    grid: &PowerGrid,
-    scratch: &mut SolveScratch,
-    out: &mut PowerSolution,
-) -> Result<(), PowerError> {
+/// Refuse a grid no solve can pose (an edge that is not positive and finite,
+/// no pad, an island no pad reaches) and number its unknowns into `scratch`:
+/// every node but a pad, ascending. Returns how many there are.
+fn pose_into(grid: &PowerGrid, scratch: &mut SolveScratch) -> Result<usize, PowerError> {
     let nodes = grid.node_count();
-    let edges = grid.edge_count();
     let node_width = u32::try_from(nodes).expect("a node index is a u32");
-    *out = PowerSolution::default();
-
-    // Non-finite inputs first: a `NaN` would pass every check downstream.
-    let not_finite = grid
-        .node_nominal
-        .iter()
-        .zip(&grid.node_load)
-        .position(|(v, i)| !(v.is_finite() && i.is_finite()))
-        .or_else(|| {
-            grid.source_voltage
-                .iter()
-                .position(|v| !v.is_finite())
-                .map(|pad| grid.source_node[pad] as usize)
-        });
-    if let Some(node) = not_finite {
-        return Err(PowerError::NotFinite(
-            u32::try_from(node).expect("a node index is a u32"),
-        ));
-    }
     bad_resistance(&grid.edge_resistance)?;
     if grid.source_node.is_empty() {
         return Err(PowerError::Unanchored);
@@ -1788,7 +2271,68 @@ pub fn solve_into(
             .node_of_unknown
             .push(u32::try_from(node).expect("a node index is a u32"));
     }
-    let unknowns = scratch.node_of_unknown.len();
+    Ok(scratch.node_of_unknown.len())
+}
+
+/// Assemble the grid's reduced Laplacian over the unknowns [`pose_into`]
+/// numbered.
+fn assemble_grid_into(grid: &PowerGrid, scratch: &mut SolveScratch, unknowns: usize) {
+    let SolveScratch {
+        branch,
+        unknown_of_node,
+        ..
+    } = &mut *scratch;
+    branch.clear();
+    branch.extend((0..grid.edge_count()).map(|i| {
+        (
+            unknown_of_node[grid.edge_from[i] as usize],
+            unknown_of_node[grid.edge_to[i] as usize],
+            UA_PER_MV_OHM / grid.edge_resistance[i].raw(),
+        )
+    }));
+    assemble_into(scratch, unknowns);
+}
+
+/// Solve the grid for node voltages and branch currents; `out` is refilled.
+///
+/// Pads are eliminated before the iteration (leaving an SPD system), and an
+/// island no pad reaches is refused first: CG on a singular system converges
+/// to a meaningless solution.
+///
+/// # Errors
+///
+/// [`PowerError::NotFinite`] for a non-finite nominal, load or pad voltage,
+/// or a non-finite result; [`PowerError::BadResistance`] for an edge that is
+/// not positive and finite; [`PowerError::Unanchored`] with no pad;
+/// [`PowerError::UnanchoredIsland`] for a node no pad reaches;
+/// [`PowerError::NotConverged`] when the iteration limit is hit. `out` is
+/// not a solution after an error.
+pub fn solve_into(
+    grid: &PowerGrid,
+    scratch: &mut SolveScratch,
+    out: &mut PowerSolution,
+) -> Result<(), PowerError> {
+    let edges = grid.edge_count();
+    *out = PowerSolution::default();
+
+    // Non-finite inputs first: a `NaN` would pass every check downstream.
+    let not_finite = grid
+        .node_nominal
+        .iter()
+        .zip(&grid.node_load)
+        .position(|(v, i)| !(v.is_finite() && i.is_finite()))
+        .or_else(|| {
+            grid.source_voltage
+                .iter()
+                .position(|v| !v.is_finite())
+                .map(|pad| grid.source_node[pad] as usize)
+        });
+    if let Some(node) = not_finite {
+        return Err(PowerError::NotFinite(
+            u32::try_from(node).expect("a node index is a u32"),
+        ));
+    }
+    let unknowns = pose_into(grid, scratch)?;
 
     // Start at nominal (pads at their fixed voltage), so the residual measures
     // interconnect loss and the tolerance is a fraction of the drop.
@@ -1829,20 +2373,8 @@ pub fn solve_into(
     }
     scratch.rhs.truncate(unknowns);
 
-    let SolveScratch {
-        branch,
-        unknown_of_node,
-        ..
-    } = &mut *scratch;
-    branch.clear();
-    branch.extend((0..edges).map(|i| {
-        (
-            unknown_of_node[grid.edge_from[i] as usize],
-            unknown_of_node[grid.edge_to[i] as usize],
-            UA_PER_MV_OHM / grid.edge_resistance[i].raw(),
-        )
-    }));
-    assemble_into(scratch, unknowns);
+    assemble_grid_into(grid, scratch, unknowns);
+    factorise_into(scratch, unknowns);
     conjugate_gradient(scratch)?;
 
     // Pads keep their exact fixed voltage.
@@ -1882,12 +2414,193 @@ pub fn solve_into(
     Ok(())
 }
 
+/// Backward-Euler steps per rise time of the fastest switching node in
+/// [`transient_into`]. Even, so that node's peak falls on a step. At 128 the
+/// peak of an RC node's response to its pulse reads low by at most 0.61 % of
+/// the closed form, at a time constant near a tenth of the rise, and by less
+/// at any other (`dynamic_and_thermal.rs` in this crate's tests).
+pub const STEPS_PER_RISE: u32 = 128;
+
+/// Microamps per millivolt from a capacitance in pF over a step in ps:
+/// `pF · mV / ps = mA`. Wrong here scales every decap and still passes the
+/// laws.
+const UA_PER_MV_PER_PF_PS: f64 = 1_000.0;
+
+/// One switching event per node of a [`PowerGrid`], for [`transient_into`].
+/// Every node column has one entry per node of the grid.
+#[derive(Debug, Default)]
+pub struct Stimulus {
+    /// The peak of the node's triangular current pulse, µA, signed as
+    /// [`PowerGrid::node_load`] (a ground rail's injects); zero for a node
+    /// that does not switch.
+    pub node_peak: Vec<Qty<Current, { prefix::MICRO }>>,
+    /// The pulse's base, ps: it rises for the first half and falls for the
+    /// second. Read only where the peak is not zero.
+    pub node_rise_ps: Vec<f64>,
+    /// Capacitance from the node to an ideal reference, pF: its decap.
+    pub node_cap_pf: Vec<f64>,
+    /// How long after the pulses start the grid is followed, ps; never less
+    /// than the longest pulse.
+    pub window_ps: f64,
+}
+
+/// The grid's response to one switching event at every node, from rest:
+/// `out` is refilled, node for node, with the drop of largest magnitude each
+/// node reaches, signed as [`PowerSolution::node_drop`]; a pad's is zero.
+///
+/// Each node's decap ties it to an ideal reference, and each switching node
+/// draws a triangle from zero at `t = 0` to its peak at half its rise and
+/// back to zero at its rise. Pads hold their voltage, so by superposition the
+/// static solution adds to this response unchanged. Backward Euler with a
+/// fixed step `h`, the shortest rise over [`STEPS_PER_RISE`], solves
+/// `(G + C/h) r[k+1] = (C/h) r[k] + i[k+1]` with the static solve's
+/// preconditioned conjugate gradient, factorised once (Kouroussis and Najm,
+/// DAC 2003, pose the same recurrence for an RC grid). Once every pulse has
+/// ended, the walk stops at the first step in which no node's drop grew:
+/// `(G + C/h)⁻¹ C/h` is nonnegative, so each node's change keeps its sign
+/// from then on and none can grow again. Otherwise it stops at the window.
+///
+/// Cost: one conjugate-gradient solve per step, at most `window / h` steps.
+///
+/// # Errors
+///
+/// As [`solve_into`] for the grid itself: [`PowerError::BadResistance`],
+/// [`PowerError::Unanchored`], [`PowerError::UnanchoredIsland`],
+/// [`PowerError::NotConverged`]. [`PowerError::NotFinite`] for a node whose
+/// peak or decap is not finite, whose decap is negative, or whose rise is not
+/// positive and finite where it switches, and for a non-finite response. A
+/// grid with no switching node responds with zeros, never an error.
+///
+/// # Panics
+///
+/// Panics if a node column of `stimulus` does not have one entry per node.
+pub fn transient_into(
+    grid: &PowerGrid,
+    stimulus: &Stimulus,
+    scratch: &mut SolveScratch,
+    out: &mut Vec<Qty<Voltage, { prefix::MILLI }>>,
+) -> Result<(), PowerError> {
+    // ponytail: one fixed step for the whole window; a step that grows after
+    // the pulses if long windows cost too many solves.
+    let nodes = grid.node_count();
+    assert!(
+        stimulus.node_peak.len() == nodes
+            && stimulus.node_rise_ps.len() == nodes
+            && stimulus.node_cap_pf.len() == nodes,
+        "one stimulus entry per node"
+    );
+    out.clear();
+    out.resize(nodes, Qty::new(0.0));
+    let node_index = |node: usize| u32::try_from(node).expect("a node index is a u32");
+    let bad = (0..nodes).position(|node| {
+        let peak = stimulus.node_peak[node].raw();
+        let (rise, cap) = (stimulus.node_rise_ps[node], stimulus.node_cap_pf[node]);
+        !(peak.is_finite()
+            && cap.is_finite()
+            && cap >= 0.0
+            && (peak == 0.0 || (rise.is_finite() && rise > 0.0)))
+    });
+    if let Some(node) = bad {
+        return Err(PowerError::NotFinite(node_index(node)));
+    }
+    let Some(shortest) = (0..nodes)
+        .filter(|&node| stimulus.node_peak[node].raw() != 0.0)
+        .map(|node| stimulus.node_rise_ps[node])
+        .reduce(f64::min)
+    else {
+        return Ok(());
+    };
+
+    let unknowns = pose_into(grid, scratch)?;
+    assemble_grid_into(grid, scratch, unknowns);
+    let steps_per_rise = f64::from(STEPS_PER_RISE);
+    let step_ps = shortest / steps_per_rise;
+    // Each unknown's `C/h`, on its diagonal and in its right-hand side, and
+    // its pulse's length in steps: exactly `STEPS_PER_RISE` for the fastest.
+    let mut decap = Vec::with_capacity(unknowns);
+    let mut span = Vec::with_capacity(unknowns);
+    let mut pulses_end = 0.0f64;
+    for unknown in 0..unknowns {
+        let node = scratch.node_of_unknown[unknown] as usize;
+        let c = UA_PER_MV_PER_PF_PS * stimulus.node_cap_pf[node] / step_ps;
+        let slot = scratch.row_start[unknown] as usize;
+        scratch.value[slot] += c;
+        scratch.inv_diag[unknown] = 1.0 / scratch.value[slot];
+        decap.push(c);
+        span.push(steps_per_rise * (stimulus.node_rise_ps[node] / shortest));
+        if stimulus.node_peak[node].raw() != 0.0 {
+            pulses_end = pulses_end.max(span[unknown]);
+        }
+    }
+    factorise_into(scratch, unknowns);
+    let last = (stimulus.window_ps / step_ps)
+        .max(pulses_end)
+        .min(f64::from(u32::MAX));
+
+    scratch.x.clear();
+    scratch.x.resize(unknowns, 0.0);
+    let mut previous = vec![0.0f64; unknowns];
+    let mut step = 0u32;
+    while f64::from(step) < last {
+        step += 1;
+        let at = f64::from(step);
+        let SolveScratch {
+            rhs,
+            x,
+            node_of_unknown,
+            ..
+        } = &mut *scratch;
+        rhs.clear();
+        rhs.extend((0..unknowns).map(|unknown| {
+            let node = node_of_unknown[unknown] as usize;
+            let fraction = at / span[unknown];
+            let shape = if fraction <= 1.0 {
+                1.0 - (2.0 * fraction - 1.0).abs()
+            } else {
+                0.0
+            };
+            decap[unknown] * x[unknown] + stimulus.node_peak[node].raw() * shape
+        }));
+        conjugate_gradient(scratch)?;
+
+        let mut grew = false;
+        for (unknown, before) in previous.iter_mut().enumerate() {
+            let (drop, node) = (
+                scratch.x[unknown],
+                scratch.node_of_unknown[unknown] as usize,
+            );
+            if !drop.is_finite() {
+                return Err(PowerError::NotFinite(node_index(node)));
+            }
+            grew |= drop.abs() > before.abs();
+            *before = drop;
+            if drop.abs() > out[node].raw().abs() {
+                out[node] = Qty::new(drop);
+            }
+        }
+        if at >= pulses_end && !grew {
+            break;
+        }
+    }
+    Ok(())
+}
+
 /// Effective resistance between every terminal pair of one network row: `out`
 /// is refilled with `(a, b, ohms)`, `a < b`, ascending; a pair in different
 /// components is absent (not infinite).
 ///
 /// Interior nodes are Kron-eliminated in minimum-degree order, then each
 /// component's `k × k` terminal Laplacian is grounded and inverted exactly.
+///
+/// # Errors
+///
+/// [`PowerError::BadResistance`] for an edge of the row that is not positive
+/// and finite (its index within the row), and [`PowerError::NotFinite`] when
+/// a component's terminal Laplacian will not invert.
+///
+/// # Panics
+///
+/// Panics if `row` is not below `networks.len()`.
 pub fn effective_resistance_into(
     networks: &NetNetworks,
     row: u32,
@@ -2037,7 +2750,7 @@ mod tests {
         assemble_into, factorise_into, ChainProfile, Point, SolveScratch, TapIndex, NOT_AN_UNKNOWN,
     };
     use gpurify_geom::Dbu;
-    use gpurify_geom::{GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
+    use gpurify_geom::{Bbox, GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
 
     /// One polygon on layer zero, from its rectilinear ring.
     fn shape(xs: &[i64], ys: &[i64]) -> GeometryStore {
@@ -2049,6 +2762,9 @@ mod tests {
     }
 
     /// A rectangle is one slab of its short dimension: length over width.
+    ///
+    /// Oracle: closed form. A 400 x 10 bar is 400 / 10 = 40 squares, and its
+    /// narrowest place is its width, 10.
     #[test]
     fn a_rectangle_profiles_to_its_own_length_over_its_own_width() {
         let store = shape(&[0, 400, 400, 0], &[0, 0, 10, 10]);
@@ -2070,6 +2786,9 @@ mod tests {
 
     /// A `100 x 100` L on ten-wide arms is `10/100 + 90/10 = 9.1` squares, not
     /// its square bounding box's 1 (a drop nine times low).
+    ///
+    /// Oracle: closed form, as above: 10/100 + 90/10 = 9.1 squares along the L,
+    /// its narrowest place the 10-wide arm.
     #[test]
     fn an_l_route_costs_the_squares_its_arms_have_and_not_its_bounding_box() {
         let store = shape(&[0, 100, 100, 10, 10, 0], &[0, 0, 10, 10, 100, 100]);
@@ -2089,6 +2808,9 @@ mod tests {
     }
 
     /// Rayleigh monotonicity: widening a polygon never raises a segment's squares.
+    ///
+    /// Oracle: law, Rayleigh monotonicity: resistance cannot rise when
+    /// conductor is added, so the wider L costs no more squares on any segment.
     #[test]
     fn widening_a_shape_can_only_lower_the_squares_a_segment_costs() {
         let narrow = shape(&[0, 100, 100, 10, 10, 0], &[0, 0, 10, 10, 100, 100]);
@@ -2109,8 +2831,12 @@ mod tests {
         }
     }
 
-    /// IC(0): `L Lᵀ` equals the matrix wherever the matrix is non-zero. A
+    /// IC(0): `L D Lᵀ` equals the matrix wherever the matrix is non-zero. A
     /// four-node cycle with one pad is the smallest case with a fill hole.
+    ///
+    /// Oracle: the defining property of IC(0): `L D L^T` equals the matrix on
+    /// its sparsity pattern, checked entry by entry on a four-node cycle with
+    /// one pad.
     #[test]
     fn an_incomplete_factor_reproduces_the_matrix_wherever_the_matrix_is_nonzero() {
         const N: usize = 4;
@@ -2139,21 +2865,22 @@ mod tests {
                 row[scratch.col[t] as usize] += scratch.value[t];
             }
         }
-        // The factor, densely.
+        // The factor, densely: `L` with its unit diagonal, and `D`.
         let mut l = [[0.0f64; N]; N];
         for (i, row) in l.iter_mut().enumerate() {
-            row[i] = scratch.l_diag[i];
+            row[i] = 1.0;
             for t in scratch.l_start[i] as usize..scratch.l_start[i + 1] as usize {
                 row[scratch.l_col[t] as usize] = scratch.l_val[t];
             }
         }
+        let d = &scratch.l_diag;
 
         let mut holes = 0;
         for i in 0..N {
             for j in 0..N {
                 let mut llt = 0.0;
-                for (&lik, &ljk) in l[i].iter().zip(&l[j]) {
-                    llt += lik * ljk;
+                for k in 0..N {
+                    llt += l[i][k] * d[k] * l[j][k];
                 }
                 if a[i][j] == 0.0 {
                     holes += usize::from(llt.abs() > 1e-9);
@@ -2161,7 +2888,7 @@ mod tests {
                 }
                 assert!(
                     (llt - a[i][j]).abs() < 1e-9 * a[i][j].abs(),
-                    "L Lt disagrees with A at ({i},{j}): {llt} against {}",
+                    "L D Lt disagrees with A at ({i},{j}): {llt} against {}",
                     a[i][j]
                 );
             }
@@ -2203,6 +2930,10 @@ mod tests {
 
     /// The ring search agrees with an exhaustive scan, including degenerate
     /// aspect ratios and markers outside the extent.
+    ///
+    /// Oracle: differential against `brute_force`, the nearest tap by an
+    /// exhaustive scan, over random taps, degenerate aspect ratios and markers
+    /// outside the extent.
     #[test]
     fn the_ring_search_agrees_with_an_exhaustive_scan() {
         let mut state = 0x2545_F491_4F6C_DD1Du64;
@@ -2244,7 +2975,56 @@ mod tests {
         }
     }
 
+    /// A device draws its current from a shape its marker touches, not from
+    /// the shape whose centre is nearest: a load whose marker sits on a 40 µm
+    /// rail at x = 2.5 µm is 18.5 µm from the rail's centre but 5.0 µm from
+    /// the centre of a strap crossing at x = 5 µm that it does not touch (O1,
+    /// PDNSim). Of several it touches, the nearest centre decides (a MOS
+    /// draws from the diffusion beside its channel rather than metal routed
+    /// over it, as before); touching none, the nearest centre.
+    ///
+    /// Oracle: hand-derived from the boxes. Marker (2.4..2.6, 2.9..3.1) µm
+    /// touches the rail (1..41 by 2.8..3.2) and not the strap (4.8..5.2 by
+    /// 1.4..9.0); marker (4.9..5.1, 2.9..3.1) touches both, the strap's
+    /// centre (5.0, 5.2) 2.2 µm away and the rail's (21, 3) 16 µm; marker
+    /// (0.4..0.6, 8.9..9.1) touches neither.
+    #[test]
+    fn a_device_draws_from_a_shape_its_marker_touches() {
+        let b = |xlo, ylo, xhi, yhi| Bbox {
+            xlo: Dbu::new_unchecked(xlo),
+            ylo: Dbu::new_unchecked(ylo),
+            xhi: Dbu::new_unchecked(xhi),
+            yhi: Dbu::new_unchecked(yhi),
+        };
+        let mut index = TapIndex {
+            boxes: vec![b(4800, 1400, 5200, 9000), b(1000, 2800, 41_000, 3200)],
+            ..TapIndex::default()
+        };
+        index.at = index.boxes.iter().map(|&x| super::centre(x)).collect();
+        index.grid();
+        let marker = b(2400, 2900, 2600, 3100);
+        assert_eq!(
+            index.nearest(super::centre(marker)),
+            0,
+            "the strap's centre is nearer"
+        );
+        assert_eq!(index.host(marker), 1, "the load touches only the rail");
+        assert_eq!(
+            index.host(b(4900, 2900, 5100, 3100)),
+            0,
+            "both: the nearer centre"
+        );
+        assert_eq!(
+            index.host(b(400, 8900, 600, 9100)),
+            0,
+            "neither: the nearest centre"
+        );
+    }
+
     /// The bucketed pass agrees with a masked sum over every node per net.
+    ///
+    /// Oracle: differential against a naive masked sum over every node per net,
+    /// over 500 random grids with zero and cancelling loads.
     #[test]
     fn discarded_budget_agrees_with_a_per_net_masked_sum() {
         use super::{discarded_budget, IntentMap, NetId, PowerGrid};
@@ -2292,5 +3072,276 @@ mod tests {
                 });
             assert_eq!(discarded_budget(&grid, &intent), naive);
         }
+    }
+
+    /// A xorshift draw in `lo ..= hi`.
+    fn draws(seed: u64) -> impl FnMut(i64, i64) -> i64 {
+        let mut state = seed;
+        move |lo, hi| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let span = u64::try_from(hi - lo + 1).expect("a non-empty range");
+            lo + i64::try_from(state % span).expect("a draw below the span fits an i64")
+        }
+    }
+
+    /// The ring search stays exact for markers inside the grid's extent,
+    /// where its stop test (the scanned block's slack) decides, over grids
+    /// of large cells (few taps, wide spans) and small ones.
+    ///
+    /// Oracle: differential against `brute_force`, the exhaustive scan.
+    #[test]
+    fn the_ring_search_agrees_with_an_exhaustive_scan_inside_the_extent() {
+        let mut draw = draws(0x5851_F42D_4C95_7F2D);
+        for taps in [2usize, 4, 9, 30, 150] {
+            for (span_x, span_y) in [(40i64, 40i64), (3000, 200), (200, 3000), (5000, 5000)] {
+                let at: Vec<Point> = (0..taps)
+                    .map(|_| Point {
+                        x: Dbu::new_unchecked(draw(-span_x, span_x)),
+                        y: Dbu::new_unchecked(draw(-span_y, span_y)),
+                    })
+                    .collect();
+                let index = index_of(&at);
+                for _ in 0..200 {
+                    let marker = Point {
+                        x: Dbu::new_unchecked(draw(-span_x, span_x)),
+                        y: Dbu::new_unchecked(draw(-span_y, span_y)),
+                    };
+                    assert_eq!(
+                        index.nearest(marker),
+                        brute_force(&at, marker),
+                        "{taps} taps over {span_x}x{span_y}, marker {marker:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// [`TapIndex::host`] over random boxes: of the boxes touching the
+    /// marker's box (edges and corners count), the one whose centre is
+    /// nearest the marker's centre, the lower index on a tie; touching
+    /// none, the nearest centre of all.
+    ///
+    /// Oracle: differential against that definition evaluated over every
+    /// box, with markers of every size, some touching nothing.
+    #[test]
+    fn host_agrees_with_an_exhaustive_scan_of_the_touching_boxes() {
+        let mut draw = draws(0x9E6C_63D0_676A_9A99);
+        let mut index = TapIndex::default();
+        for count in [1usize, 2, 5, 12, 60] {
+            for _ in 0..20 {
+                let boxes: Vec<Bbox> = (0..count)
+                    .map(|_| {
+                        let (x, y) = (draw(-500, 500), draw(-500, 500));
+                        Bbox {
+                            xlo: Dbu::new_unchecked(x),
+                            ylo: Dbu::new_unchecked(y),
+                            xhi: Dbu::new_unchecked(x + draw(0, 300)),
+                            yhi: Dbu::new_unchecked(y + draw(0, 300)),
+                        }
+                    })
+                    .collect();
+                index.boxes.clone_from(&boxes);
+                index.at = boxes.iter().map(|&b| super::centre(b)).collect();
+                index.grid();
+                for _ in 0..40 {
+                    let (x, y) = (draw(-700, 700), draw(-700, 700));
+                    let marker = Bbox {
+                        xlo: Dbu::new_unchecked(x),
+                        ylo: Dbu::new_unchecked(y),
+                        xhi: Dbu::new_unchecked(x + draw(0, 120)),
+                        yhi: Dbu::new_unchecked(y + draw(0, 120)),
+                    };
+                    let c = super::centre(marker);
+                    let d2 = |p: Point| {
+                        let (dx, dy) = (
+                            i128::from(p.x.raw() - c.x.raw()),
+                            i128::from(p.y.raw() - c.y.raw()),
+                        );
+                        dx * dx + dy * dy
+                    };
+                    let want = (0u32..)
+                        .zip(&boxes)
+                        .filter(|(_, b)| {
+                            b.xlo <= marker.xhi
+                                && marker.xlo <= b.xhi
+                                && b.ylo <= marker.yhi
+                                && marker.ylo <= b.yhi
+                        })
+                        .map(|(i, &b)| (d2(super::centre(b)), i))
+                        .min()
+                        .map_or_else(|| brute_force(&index.at, c), |(_, i)| i);
+                    assert_eq!(index.host(marker), want, "{boxes:?} against {marker:?}");
+                }
+            }
+        }
+    }
+
+    /// Cholesky inversion of a symmetric positive definite matrix is its
+    /// inverse, and a matrix with a pivot that is not positive is refused.
+    ///
+    /// Oracle: law: `A · A⁻¹ = I` (to 1e-9) for `A = B Bᵀ + I` over random
+    /// `B`, sizes 1 to 6; hand-derived refusals: `[[1, 2], [2, 1]]` has
+    /// second pivot `1 - 2² = -3`, `[[0]]` a zero pivot, `[[NaN]]` none.
+    #[test]
+    fn cholesky_inversion_inverts_a_positive_definite_matrix_and_refuses_others() {
+        use super::cholesky_inverse_into;
+        let mut draw = draws(0x1234_5678_9ABC_DEF1);
+        let mut out = Vec::new();
+        for n in 1..=6usize {
+            for _ in 0..10 {
+                let b: Vec<f64> = (0..n * n)
+                    .map(|_| f64::from(i32::try_from(draw(-9, 9)).expect("small")) / 3.0)
+                    .collect();
+                let mut a = vec![0.0f64; n * n];
+                for i in 0..n {
+                    for j in 0..n {
+                        let s: f64 = (0..n).map(|k| b[i * n + k] * b[j * n + k]).sum();
+                        a[i * n + j] = s + if i == j { 1.0 } else { 0.0 };
+                    }
+                }
+                let keep = a.clone();
+                assert!(cholesky_inverse_into(&mut a, n, &mut out));
+                assert_eq!(out.len(), n * n);
+                for i in 0..n {
+                    for j in 0..n {
+                        let p: f64 = (0..n).map(|k| keep[i * n + k] * out[k * n + j]).sum();
+                        let want = if i == j { 1.0 } else { 0.0 };
+                        assert!((p - want).abs() < 1e-9, "n={n} ({i},{j}): {p}");
+                    }
+                }
+            }
+        }
+        assert!(!cholesky_inverse_into(
+            &mut [1.0, 2.0, 2.0, 1.0],
+            2,
+            &mut out
+        ));
+        assert!(!cholesky_inverse_into(&mut [0.0], 1, &mut out));
+        assert!(!cholesky_inverse_into(&mut [f64::NAN], 1, &mut out));
+        assert!(!cholesky_inverse_into(&mut [f64::INFINITY], 1, &mut out));
+        // A 2 x 2 by hand: [[4, 2], [2, 3]] has inverse [[3, -2], [-2, 4]] / 8.
+        let mut a = [4.0, 2.0, 2.0, 3.0];
+        assert!(cholesky_inverse_into(&mut a, 2, &mut out));
+        for (got, want) in out
+            .iter()
+            .zip([3.0 / 8.0, -2.0 / 8.0, -2.0 / 8.0, 4.0 / 8.0])
+        {
+            assert!((got - want).abs() < 1e-12, "{out:?}");
+        }
+    }
+
+    /// A run between two taps is their Manhattan distance, at least one
+    /// unit; a via's length is the height between its layers in database
+    /// units, at least one; squares are length over width; a conductor's
+    /// width is the narrower shape's narrow side, at least one.
+    ///
+    /// Oracle: closed form, by hand: (0,0) to (30,-40) is 70; a point to
+    /// itself floors at 1; layers at 100 nm and 450 nm are 350 apart, 350
+    /// units on a 1 nm grid and 70 on a 5 nm one, either way round; a layer
+    /// with no height row sits at 0 (450 apart); two at one height floor at
+    /// 1; 30 / 4 is 7.5 squares; boxes 10 x 50 and 30 x 6 are 6 wide.
+    #[test]
+    fn run_and_via_lengths_squares_and_widths_are_their_closed_forms() {
+        use super::{conductor_width, run_length, squares, via_length, Process};
+        use gpurify_geom::Grid;
+        use gpurify_ingest::deck::{Connectivity, ProcessStack};
+        let p = |x: i64, y: i64| Point {
+            x: Dbu::new_unchecked(x),
+            y: Dbu::new_unchecked(y),
+        };
+        assert_eq!(run_length(p(0, 0), p(30, -40)).raw(), 70);
+        assert_eq!(run_length(p(30, -40), p(0, 0)).raw(), 70);
+        assert_eq!(run_length(p(5, 5), p(5, 5)).raw(), 1);
+
+        let stack = ProcessStack {
+            height_nm: vec![100.0, 450.0, 100.0],
+            ..ProcessStack::default()
+        };
+        let connectivity = Connectivity::default();
+        // `Grid::new` takes database units per micrometre.
+        let process = |nm: i64| Process {
+            grid: Grid::new(1000 / nm).expect("a grid"),
+            stack: &stack,
+            connectivity: &connectivity,
+        };
+        let (a, b, c, none) = (LayerId(0), LayerId(1), LayerId(2), LayerId(7));
+        assert_eq!(via_length(process(1), a, b).raw(), 350);
+        assert_eq!(via_length(process(1), b, a).raw(), 350);
+        assert_eq!(via_length(process(5), a, b).raw(), 70);
+        assert_eq!(via_length(process(1), none, b).raw(), 450);
+        assert_eq!(via_length(process(1), a, c).raw(), 1);
+
+        assert!((squares(Dbu::new_unchecked(30), Dbu::new_unchecked(4)) - 7.5).abs() < 1e-15);
+        let b = |xlo, ylo, xhi, yhi| Bbox {
+            xlo: Dbu::new_unchecked(xlo),
+            ylo: Dbu::new_unchecked(ylo),
+            xhi: Dbu::new_unchecked(xhi),
+            yhi: Dbu::new_unchecked(yhi),
+        };
+        assert_eq!(conductor_width(b(0, 0, 10, 50), b(0, 0, 30, 6)).raw(), 6);
+        assert_eq!(conductor_width(b(0, 0, 30, 6), b(0, 0, 10, 50)).raw(), 6);
+        assert_eq!(conductor_width(b(0, 0, 0, 50), b(0, 0, 30, 6)).raw(), 1);
+    }
+
+    /// Every layer that carries current needs a positive finite sheet
+    /// resistance: each conductor, and each cut between two conductors
+    /// neither of which is global; a cut into a global layer needs none.
+    ///
+    /// Oracle: the documented contract, construct-from-answer: conductors 0
+    /// and 2 at 0.1 and 0.2 Ω/sq and cut 1 at 5 Ω read back by layer; each
+    /// carrying layer's value made zero, negative, infinite or missing is
+    /// refused naming that layer; cut 3 into global layer 4 needs no row.
+    #[test]
+    fn sheet_resistances_refuse_a_carrying_layer_without_one() {
+        use super::{sheet_resistances, PowerError, Process};
+        use gpurify_geom::Grid;
+        use gpurify_ingest::deck::{Connectivity, ProcessStack};
+        let connectivity = Connectivity {
+            conductors: vec![LayerId(0), LayerId(2), LayerId(4)],
+            via_cut: vec![LayerId(1), LayerId(3)],
+            via_connects: vec![(LayerId(0), LayerId(2)), (LayerId(2), LayerId(4))],
+            global: vec![LayerId(4)],
+            ..Connectivity::default()
+        };
+        let read = |sheet: Vec<f64>, layers: usize| {
+            let stack = ProcessStack {
+                sheet_res_ohm_sq: sheet,
+                ..ProcessStack::default()
+            };
+            sheet_resistances(
+                Process {
+                    grid: Grid::new(1000).expect("a grid"),
+                    stack: &stack,
+                    connectivity: &connectivity,
+                },
+                layers,
+            )
+        };
+        assert_eq!(
+            read(vec![0.1, 5.0, 0.2, f64::NAN, 0.3], 6),
+            Ok(vec![0.1, 5.0, 0.2, 0.0, 0.3, 0.0])
+        );
+        assert_eq!(
+            read(vec![0.1, 5.0, 0.2, 0.0, 0.3], 2).map(|s| s.len()),
+            Ok(5),
+            "sized to the highest carrying layer"
+        );
+        for (layer, bad) in [(0, 0.0), (1, -1.0), (2, f64::INFINITY), (4, f64::NAN)] {
+            let mut sheet = vec![0.1, 5.0, 0.2, 0.0, 0.3];
+            sheet[layer] = bad;
+            let layer = u16::try_from(layer).expect("small");
+            assert_eq!(
+                read(sheet, 5),
+                Err(PowerError::NoSheetResistance(LayerId(layer))),
+                "layer {layer} at {bad}"
+            );
+        }
+        assert_eq!(
+            read(vec![0.1, 5.0], 5),
+            Err(PowerError::NoSheetResistance(LayerId(2))),
+            "no row for layer 2"
+        );
     }
 }

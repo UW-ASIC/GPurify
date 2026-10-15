@@ -1,0 +1,11 @@
+* The schematic LVS case LVS_HVT_MISMATCH compares cell LVS_HVT against.
+*
+* Transcribed once from manifest.json's reference_netlist for this case: the
+* schematic the case was designed around, an input rather than an answer.
+* The answer, whether the cell matches, is expectations.json's expect_match,
+* derived from the geometry. Models are params.deck's recognisers; a flavour
+* the deck cannot recognise keeps its own model name (expectations F6).
+* Bulk is written as the source and dropped, since the deck's MOS have none.
+.subckt LVS_HVT D A S
+M0 D A S S nfet_01v8
+.ends

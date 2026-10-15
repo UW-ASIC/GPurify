@@ -73,6 +73,10 @@ fn supply_intent() -> IntentMap {
             max_drop_fraction: Some(0.05),
             max_overvoltage: Some(millivolts(100.0)),
             budget_current_ua: Some(1_000.0),
+            dynamic: None,
+            rms_current_ua: None,
+            peak_current_ua: None,
+            frequency_mhz: None,
         },
     );
     map
@@ -225,6 +229,7 @@ fn em_current_density_skips_without_intent_and_examines_limited_edges_with_it() 
         layer: vec![LayerId(0)],
         max_density: vec![density(1e9)],
         max_current_per_cut: vec![microamps(200.0)],
+        narrow: vec![None],
     };
 
     let (mut violations, mut runs) = empty_report();

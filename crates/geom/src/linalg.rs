@@ -7,8 +7,13 @@
 use fearless_simd::{dispatch, f64x4, prelude::*, Level};
 
 /// Σ aᵢ·bᵢ.
+///
+/// # Panics
+///
+/// When `a` and `b` differ in length: a short `zip` would drop terms.
 #[inline]
 pub fn dot(a: &[f64], b: &[f64]) -> f64 {
+    assert_eq!(a.len(), b.len(), "a dot product of equal-length vectors");
     let mut s = 0.0;
     for (x, y) in a.iter().zip(b) {
         s += x * y;
@@ -23,7 +28,12 @@ pub fn nrm2(a: &[f64]) -> f64 {
 }
 
 /// y += α·x, element-wise, no FMA.
+///
+/// # Panics
+///
+/// When `x` and `y` differ in length.
 pub fn axpy(alpha: f64, x: &[f64], y: &mut [f64]) {
+    assert_eq!(x.len(), y.len(), "axpy over equal-length vectors");
     dispatch!(Level::new(), s => axpy_simd(s, alpha, x, y));
 }
 
@@ -47,7 +57,12 @@ fn axpy_scalar(alpha: f64, x: &[f64], y: &mut [f64]) {
 }
 
 /// p = z + β·p, element-wise, no FMA: CG's search-direction update.
+///
+/// # Panics
+///
+/// When `z` and `p` differ in length.
 pub fn xpay(z: &[f64], beta: f64, p: &mut [f64]) {
+    assert_eq!(z.len(), p.len(), "xpay over equal-length vectors");
     dispatch!(Level::new(), s => xpay_simd(s, z, beta, p));
 }
 
@@ -71,7 +86,32 @@ fn xpay_scalar(z: &[f64], beta: f64, p: &mut [f64]) {
 }
 
 /// One sparse mat-vec: `out[i]` is row `i` of a CSR matrix times `v`.
+///
+/// # Panics
+///
+/// When the CSR is malformed: `row_start` is not one longer than `out`, its
+/// last offset is not the entry count `col.len() == value.len()`, or (in
+/// debug builds) its offsets descend or a column is past `v`.
 pub fn spmv(row_start: &[u32], col: &[u32], value: &[f64], v: &[f64], out: &mut [f64]) {
+    assert_eq!(
+        row_start.len(),
+        out.len() + 1,
+        "one offset per row, plus the end"
+    );
+    assert_eq!(col.len(), value.len(), "one column per stored value");
+    assert_eq!(
+        row_start[out.len()] as usize,
+        col.len(),
+        "the last offset is the entry count"
+    );
+    debug_assert!(
+        row_start.windows(2).all(|w| w[0] <= w[1]),
+        "CSR row offsets are monotone"
+    );
+    debug_assert!(
+        col.iter().all(|&c| (c as usize) < v.len()),
+        "every column indexes the vector"
+    );
     for (i, row) in out.iter_mut().enumerate() {
         let (from, to) = (row_start[i] as usize, row_start[i + 1] as usize);
         let mut acc = 0.0f64;
@@ -83,7 +123,7 @@ pub fn spmv(row_start: &[u32], col: &[u32], value: &[f64], v: &[f64], out: &mut 
 }
 
 #[cfg(test)]
-#[expect(
+#[allow(
     clippy::float_cmp,
     reason = "the fold order is interface, so these assert bits, not closeness"
 )]
@@ -119,6 +159,8 @@ mod tests {
         v.iter().map(|x| x.to_bits()).collect()
     }
 
+    /// Oracle: differential against `axpy_scalar` and `xpay_scalar`, bit for
+    /// bit (both documented without FMA), at every length 0 to 13.
     #[test]
     fn the_lane_kernels_match_their_scalar_loops_bit_for_bit() {
         for n in 0..=13 {
@@ -137,42 +179,10 @@ mod tests {
         }
     }
 
-    /// `cargo test -p gpurify-geom --release -- --ignored --nocapture bench_`
-    #[test]
-    #[ignore = "timing, not a check"]
-    fn bench_axpy_xpay() {
-        use std::hint::black_box;
-        use std::time::Instant;
-        type Kernel = fn(&[f64], &mut [f64]);
-        let kernels: [(&str, Kernel); 4] = [
-            ("axpy simd", |x, y| axpy(1e-3, x, y)),
-            ("axpy scalar", |x, y| axpy_scalar(1e-3, x, y)),
-            ("xpay simd", |x, y| xpay(x, 0.5, y)),
-            ("xpay scalar", |x, y| xpay_scalar(x, 0.5, y)),
-        ];
-        for n in [1_000usize, 10_000, 100_000] {
-            let x: Vec<f64> = (0..u32::try_from(n).unwrap())
-                .map(|i| f64::from(i) * 0.37 + 1.0)
-                .collect();
-            let mut y = x.clone();
-            let reps = 20_000_000 / n;
-            for (name, f) in kernels {
-                let best = (0..9)
-                    .map(|_| {
-                        let t = Instant::now();
-                        for _ in 0..reps {
-                            f(black_box(&x), black_box(&mut y));
-                        }
-                        t.elapsed() / u32::try_from(reps).unwrap()
-                    })
-                    .min()
-                    .unwrap();
-                println!("n={n} {name}: {best:?} (best of 9)");
-            }
-        }
-    }
-
     /// `[[2, 0, 1], [0, 3, 0], [1, 0, 4]]` against `[1, 2, 3]`.
+    ///
+    /// Oracle: hand-derived. `[[2, 0, 1], [0, 3, 0], [1, 0, 4]] * [1, 2, 3]` is
+    /// `[5, 6, 13]`.
     #[test]
     fn spmv_reads_the_csr_it_is_given() {
         let row_start = [0u32, 2, 3, 5];
@@ -183,6 +193,8 @@ mod tests {
         assert_eq!(out, [5.0, 6.0, 13.0]);
     }
 
+    /// Oracle: closed form. An empty sum is 0, so the empty dot product and
+    /// norm are 0.
     #[test]
     fn the_empty_case_is_zero_and_not_a_panic() {
         assert_eq!(dot(&[], &[]), 0.0);

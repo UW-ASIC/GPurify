@@ -1,16 +1,86 @@
-//! Liberty generation for a hard macro, at a chosen accuracy.
+//! Liberty generation for a hard macro: one `.lib` per PVT corner and a
+//! Verilog blackbox, measured from the layout at a chosen [`Accuracy`].
 //!
-//! Data in: the loaded and extracted layout, a [`spec::MacroSpec`], an
-//! [`Accuracy`]. Data out: one `.lib` per corner (worst case; a `min/` copy
-//! with the best case when cases disagree) and a Verilog blackbox.
+//! This is what `gpurify lib` runs. It checks no rules. It turns an analog or
+//! custom block into the timing and power model a digital flow needs to place
+//! and time it. The user guide, with the measured agreement against
+//! `sky130_fd_sc_hd`'s shipped library, is
+//! [liberty.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/liberty.md).
+//!
+//! # Inputs and outputs
+//!
+//! In: the [`Loaded`] layout and its [`Extracted`] nets and devices, as
+//! [`crate::engine::pipeline::load`] and [`crate::engine::pipeline::extract`]
+//! give them, plus a [`Request`]: the [`spec::MacroSpec`] (what a layout cannot
+//! say about itself: which pin is a clock, which is analog, the arcs, each
+//! corner's supply voltages and model lines), the accuracy, and optionally the
+//! LEF text. A reference netlist, when [`Loaded`] carries one, is cross-checked
+//! too.
+//!
+//! Out: a [`Generated`], in memory, for the caller to write under an output
+//! directory: `<cell>.v`, then `<cell>__<corner>.lib` per corner. When the
+//! cases of an arc disagree, as a data-dependent comparator's do, the main
+//! file carries the worst case at every table point and
+//! `min/<cell>__<corner>.lib` the best, for `read_liberty -min`. Units in every
+//! `.lib`: ns, pF, V, mA, nW, and pJ for internal energy.
+//!
+//! # The accuracy ladder
 //!
 //! | Accuracy | Pin capacitance | Arcs | Leakage |
 //! |---|---|---|---|
-//! | `interface` | none | none | none |
-//! | `analytical` | closed-form wire C + each device's static model C | none | DC |
-//! | `field` | field-solved wire C + each device's static model C | none | DC |
-//! | `spice` | transient charge on the extracted RC netlist | NLDM, setup/hold, internal energy | DC |
-//! | `statistical` | as `spice` | as `spice`, plus Monte Carlo LVF sigma | DC |
+//! | `interface` (0) | none | none | none |
+//! | `analytical` (1) | closed-form wire C + each device's static model C | none | simulated |
+//! | `field` (2) | field-solved wire C + each device's static model C | none | simulated |
+//! | `spice` (3) | charge drawn on the extracted RC netlist | NLDM delay and transition, setup/hold, internal energy | simulated |
+//! | `statistical` (4) | as `spice` | as `spice`, plus Monte Carlo LVF sigma | simulated |
+//!
+//! Each level costs more than the one below. `interface` is enough for
+//! floorplanning and the power grid; sign-off STA wants `spice` or
+//! `statistical`. [`measure`] defines each number, [`circuit`] how the layout
+//! becomes the RC netlist the `spice` levels simulate, and [`mod@write`] the NLDM
+//! table conventions.
+//!
+//! # The simulator
+//!
+//! Every level above `interface` runs ngspice: the spec's
+//! [`spec::Simulator::binary`], `ngspice` on `PATH` by default, run in batch
+//! mode (`-b`). The corner's model lines are written into the deck verbatim,
+//! so the models they name must be readable. `statistical` also needs each
+//! corner's [`spec::CornerSpec::mc_models`].
+//!
+//! # Examples
+//!
+//! ```no_run
+//! use gpurify::engine::pipeline::{extract, load, Inputs};
+//! use gpurify::liberty::{generate, spec, Accuracy, Request};
+//!
+//! let inputs = Inputs {
+//!     layout: "strongarm.gds".into(),
+//!     deck: "pdks/sky130.deck".into(),
+//!     reference: vec!["strongarm.spice".into()],
+//!     ..Inputs::default()
+//! };
+//! let loaded = load(&inputs)?;
+//! let extracted = extract(&loaded)?;
+//! let spec = spec::parse(&std::fs::read_to_string("strongarm.json")?)?;
+//! let work = std::env::temp_dir().join("strongarm-lib");
+//! let request = Request {
+//!     spec: &spec,
+//!     accuracy: Accuracy::Spice,
+//!     lef: None,
+//!     work: &work,
+//!     tool_version: "my-flow 1.0",
+//! };
+//! let generated = generate(&loaded, &extracted, &request)?;
+//! for (path, text) in &generated.files {
+//!     let path = std::path::Path::new("lib").join(path);
+//!     if let Some(dir) = path.parent() {
+//!         std::fs::create_dir_all(dir)?;
+//!     }
+//!     std::fs::write(&path, text)?;
+//! }
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 //!
 //! Before anything is measured, the spec's pins are checked against the
 //! layout's labels, the reference `.subckt`'s ports and the LEF's pins: name
@@ -34,17 +104,34 @@ use spec::{ArcKind, ArcSpec, CornerSpec, Edge, Level, MacroSpec, Role, Vector};
 use spice::{Precision, SimError, Task};
 use write::{Cell, InternalPower, Library, NamedTable, Pin, Table, Timing};
 
-/// How much is measured, and how.
+/// How much is measured, and how. Ordered cheapest first: a higher level
+/// measures everything a lower one does, more exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Accuracy {
+    /// Pins, `pg_pin`s, directions and area. No simulator runs, so there is no
+    /// capacitance, arc or leakage. Enough for floorplanning and the power grid.
     Interface,
+    /// Pin capacitance as closed-form wire capacitance plus each touching
+    /// device's static model capacitance, averaged over the pin's swing.
+    /// Leakage is simulated. No arcs.
     Analytical,
+    /// As [`Accuracy::Analytical`], with the signal pins' wiring field-solved
+    /// together (50 nm panels) instead of taken from closed forms.
     Field,
+    /// The extracted RC netlist simulated: NLDM delay and transition, setup
+    /// and hold, internal energy, charge-integrated pin capacitance and
+    /// leakage.
     Spice,
+    /// As [`Accuracy::Spice`], plus LVF `ocv_sigma_*` tables: each point's
+    /// sample standard deviation over
+    /// [`spec::Characterization::mc_samples`] Monte Carlo redraws. Needs
+    /// every corner's [`spec::CornerSpec::mc_models`].
     Statistical,
 }
 
 impl Accuracy {
+    /// Every level, cheapest first: the order `--accuracy all` runs them, and
+    /// the numbering `0`..`4` [`Accuracy::parse`] reads.
     pub const ALL: [Self; 5] = [
         Self::Interface,
         Self::Analytical,
@@ -53,6 +140,8 @@ impl Accuracy {
         Self::Statistical,
     ];
 
+    /// The level's command-line spelling: also its subdirectory under
+    /// `--accuracy all`, and the word in each `.lib`'s header comment.
     pub const fn name(self) -> &'static str {
         match self {
             Self::Interface => "interface",
@@ -63,6 +152,8 @@ impl Accuracy {
         }
     }
 
+    /// One line on what the level measured, written into each `.lib`'s header
+    /// comment so a reader of the file knows what its numbers are.
     pub const fn describe(self) -> &'static str {
         match self {
             Self::Interface => "pins, supplies and area only",
@@ -77,7 +168,10 @@ impl Accuracy {
         }
     }
 
-    /// `interface`..`statistical`, or `0`..`4`.
+    /// Parses a level from its [`name`](Accuracy::name) (`interface` ..
+    /// `statistical`) or its number (`0` .. `4`). `None` for anything else,
+    /// including `all`, which the command line expands to [`Accuracy::ALL`]
+    /// itself.
     pub fn parse(text: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
@@ -87,41 +181,126 @@ impl Accuracy {
     }
 }
 
+/// Why [`generate`] produced nothing. A run never returns part of its
+/// output: the first failure, in any corner, ends it.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum LibError {
+    /// The spec's pins disagree with the reference netlist or the LEF: the
+    /// reference has no unique top `.subckt`, its top is named other than the
+    /// spec's `cell`, or its ports are not exactly the spec's pins; or the LEF
+    /// has no `MACRO <cell>`, or that macro's `PIN`s are not exactly the
+    /// spec's. The message names what each side lacks. A spec pin missing
+    /// from the layout is [`CircuitError::MissingPin`] instead.
     #[error("pin cross-check: {0}")]
     Mismatch(String),
+    /// The layout cannot be made into a circuit. At every level, a spec pin
+    /// no layout label names ([`CircuitError::MissingPin`]) or two pins the
+    /// layout shorts ([`CircuitError::ShortedPins`]); at `spice` and
+    /// `statistical`, also a conductor layer that is not valid geometry or a
+    /// net whose resistor network falls apart.
     #[error(transparent)]
     Circuit(#[from] CircuitError),
+    /// The simulator could not be started, stopped answering, or could not
+    /// make a measurement, such as an output that never switched or a capture
+    /// that fails even with the data a whole window clear of the clock. Never
+    /// at `interface`.
     #[error(transparent)]
     Sim(#[from] SimError),
-    #[error(transparent)]
-    Solve(#[from] gpurify_extract::quasistatic::solve::SolveError),
+    /// The field solve of the wiring failed (`field`, `spice`,
+    /// `statistical`): a layer it cannot mesh, named as the deck names it,
+    /// or a solve that did not converge. The message is the one `pex`
+    /// reports for the same refusal.
+    #[error("{0}")]
+    Solve(String),
+    /// The closed-form extraction of the wiring refused a conductor or via
+    /// layer with no `pex` row, or a conductor it cannot merge (every level
+    /// but `interface`). The message names the layer as the deck does, as
+    /// `pex` reports it.
+    #[error("{0}")]
+    Pex(String),
+    /// `statistical` was asked of a corner with no
+    /// [`mc_models`](spec::CornerSpec::mc_models).
     #[error("{0}")]
     Refused(String),
+    /// [`Request::work`] could not be created, or a deck could not be written
+    /// into it.
     #[error("io: {0}")]
     Io(String),
 }
 
-/// What was produced: paths relative to the output directory.
+/// What [`generate`] produced. Nothing has been written to an output
+/// directory: the caller writes `files`.
 #[derive(Debug, Default)]
 pub struct Generated {
+    /// `(path, text)`, each path relative to the output directory:
+    /// `<cell>.v` first, then for each corner in spec order
+    /// `<cell>__<corner>.lib`, followed by `min/<cell>__<corner>.lib` when
+    /// that corner's arc cases disagree. The `min/` library is named
+    /// `<cell>__<corner>__min`, because `OpenSTA` skips a second library whose
+    /// name it has already read.
     pub files: Vec<(PathBuf, String)>,
+    /// What the user should hear that did not stop the run: layout labels the
+    /// spec does not list, taken as internal nets, and constraints clamped to
+    /// `-constraint_window_ns` because the capture passed even that far on
+    /// the wrong side of the clock.
     pub notes: Vec<String>,
 }
 
-/// Everything a run needs besides the layout.
+/// Everything a run needs besides the layout. The reference netlist is not
+/// here: it arrives with the [`Loaded`] layout (from
+/// [`Inputs::reference`](crate::engine::Inputs::reference)), and its top
+/// `.subckt` is cross-checked whenever it is present.
 pub struct Request<'a> {
+    /// The macro spec. It must come from [`spec::parse`], which validates
+    /// it; see [`generate`]'s panics.
     pub spec: &'a MacroSpec,
+    /// What to measure, and how exactly.
     pub accuracy: Accuracy,
-    /// The LEF's text, to cross-check its pins.
+    /// The LEF's text. When given, the `PIN`s of its `MACRO <cell>` must be
+    /// exactly the spec's pins.
     pub lef: Option<&'a str>,
-    /// Where decks and simulator logs go.
+    /// Where testbench decks and simulator logs go. Created if missing, at
+    /// every level, and never removed: the caller decides whether to keep it,
+    /// which is worth doing after a failure, since the logs hold what the
+    /// simulator said.
     pub work: &'a Path,
+    /// The version string written into the header comment of every `.lib` and
+    /// of the blackbox.
     pub tool_version: &'static str,
 }
 
-/// Generate the Liberty files for `request.accuracy`.
+/// Generates the Verilog blackbox and one Liberty model per corner at
+/// `request.accuracy`.
+///
+/// The pins are cross-checked first, against the layout's labels, the
+/// reference `.subckt` and the LEF, so a name mismatch fails before any
+/// simulation. Above `interface`, each corner's measurements run on a pool of
+/// [`spec::Simulator::workers`] ngspice processes (default: every core), one
+/// corner after another.
+///
+/// # Errors
+///
+/// Every [`LibError`] variant, under the conditions each one states. Above
+/// `interface`, ngspice must be on `PATH` (or at the spec's
+/// [`spec::Simulator::binary`]), or the run fails with [`LibError::Sim`].
+///
+/// # Panics
+///
+/// Panics on a [`MacroSpec`] built by hand that [`spec::parse`] would have
+/// refused: an arc naming a pin the spec lacks, or a corner with no voltage
+/// for a supply pin.
+///
+/// # Cost
+///
+/// `interface` does no simulation. `analytical` and `field` run a leakage
+/// simulation and an AC sweep of the pins' devices per corner, and `field`
+/// adds a field solve of the signal pins' wiring. `spice` field-solves every
+/// net in a 3 µm window, a dense boundary-element solve whose cost grows with
+/// the square of its panel count, then runs one transient per load for each
+/// input slew of every delay case, and a bisection of transients for each
+/// point of every constraint case.
+/// `statistical` repeats the arc work
+/// [`mc_samples`](spec::Characterization::mc_samples) times.
 pub fn generate(
     loaded: &Loaded,
     extracted: &Extracted,
@@ -204,7 +383,7 @@ fn cross_check(
     let mut labelled = BTreeSet::new();
     for net in 0..extracted.nets.net_count() {
         let net = NetId(u32::try_from(net).expect("a net id is a u32"));
-        if let Some(name) = extracted.ports.name_of(net) {
+        for &name in extracted.ports.names_of(net) {
             labelled.insert(loaded.strings.resolve(name).to_owned());
         }
     }
@@ -279,7 +458,7 @@ fn lef_pins(lef: &str, cell: &str) -> Result<BTreeSet<String>, LibError> {
     }
 }
 
-/// The die area: the deck's outline layer if drawn, else every shape's box.
+/// The die area: the deck's outline layer if drawn, else every drawn shape's box.
 fn area_um2(loaded: &Loaded) -> f64 {
     let die = crate::engine::run::design_extent(loaded);
     if die.is_empty() {
@@ -329,7 +508,8 @@ impl<'a> Prepared<'a> {
             &loaded.deck.stack,
             loaded.grid,
             &mut analytical,
-        );
+        )
+        .map_err(|why| LibError::Pex(crate::engine::run::pex_refusal(loaded, why)))?;
         let pin_nets = circuit::pin_nets(loaded, extracted, spec)?;
         match accuracy {
             Accuracy::Interface => unreachable!("returned above"),
@@ -985,6 +1165,7 @@ fn field_solve(
         gpurify_extract::field::extract_columns_into(
             &wires,
             &nets,
+            &deck.connectivity,
             window,
             std::slice::from_ref(driven),
             stack,
@@ -992,7 +1173,8 @@ fn field_solve(
             meshing,
             solver,
             &mut matrix,
-        )?;
+        )
+        .map_err(|why| LibError::Solve(crate::engine::run::solve_refusal(loaded, why)))?;
         let owner_of = |conductor: NetId| {
             owner[conductors
                 .binary_search(&conductor)
@@ -1398,6 +1580,8 @@ fn sense(arc: &ArcSpec) -> Option<&'static str> {
 mod tests {
     use super::{lef_pins, Accuracy};
 
+    /// Oracle: `Accuracy::parse`'s doc: a name or a level `0` to `4`, so
+    /// `field` is `Field`, `4` is `Statistical` and `5` is nothing.
     #[test]
     fn accuracy_parses_by_name_and_level() {
         assert_eq!(Accuracy::parse("field"), Some(Accuracy::Field));
@@ -1405,6 +1589,9 @@ mod tests {
         assert_eq!(Accuracy::parse("5"), None);
     }
 
+    /// Oracle: construct-from-answer, by LEF's `MACRO` ... `END` scoping: `m`
+    /// holds `a` and `vdd`, `other`'s `x` is not among them, and a macro the
+    /// file lacks is an error.
     #[test]
     fn lef_pins_are_read_inside_the_named_macro_only() {
         let lef = "MACRO other\n PIN x\n END x\nEND other\nMACRO m\n PIN a\n  DIRECTION INPUT ;\n END a\n PIN vdd\n END vdd\nEND m\n";

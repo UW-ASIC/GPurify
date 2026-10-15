@@ -199,7 +199,11 @@ fn an_edge_parallel_to_an_allowed_direction_is_clean() {
 
 /// sky130 x.2: 90-degree angles only on diff, tap, poly, licon, li, mcon and
 /// vias; 45 degrees elsewhere. A 45-degree diff edge fails the diff row and a
-/// 45-degree met1 edge passes it; the global 0/45/90/135 row passes both.
+/// 45-degree met1 edge passes a met1 row allowing 0/45/90/135.
+///
+/// Oracle: foundry example, sky130 x.2 (90 degrees only on diff, 45 allowed
+/// elsewhere): the chamfered diff shape is the one violation of its five
+/// edges, and the same shape on met1 passes a row allowing 45 degrees.
 #[test]
 fn sky130_x_2_a_45_degree_diff_edge_fails_a_per_layer_row() {
     let (diff, met1) = (LayerId(0), LayerId(1));

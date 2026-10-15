@@ -1,0 +1,83 @@
+# helpers: build an in-memory layout and make it the DRC source
+def mk(spec)
+  ly = RBA::Layout.new
+  ly.dbu = 0.001
+  top = ly.create_cell("TOP")
+  spec.each do |ld, shapes|
+    li = ly.layer(ld[0], ld[1])
+    shapes.each do |s|
+      if s.is_a?(Array) && s[0].is_a?(Array)
+        top.shapes(li).insert(RBA::Polygon.new(s.map { |x, y| RBA::Point.new(x, y) }))
+      elsif s.is_a?(String)
+        x, y, t = s.split(",")
+        top.shapes(li).insert(RBA::Text.new(t, RBA::Trans.new(x.to_i, y.to_i)))
+      else
+        top.shapes(li).insert(RBA::Box.new(*s))
+      end
+    end
+  end
+  ly
+end
+def use(spec)
+  $ly = mk(spec)
+  source($ly, "TOP")
+end
+def ep_s(ep)
+  r = []
+  ep.data.each { |e| r << "#{e.first} | #{e.second} d=#{e.distance}" }
+  r.join("; ")
+end
+def show(name, layer)
+  d = layer.data
+  n = layer.count
+  items = []
+  d.each { |o| items << o.to_s } if n < 12
+  puts "#{name}: count=#{n} #{items.join(' ; ')}"
+end
+flat
+
+# T1 width equality
+use({[1,0] => [[0,0,100,1000]]})
+a = input(1,0)
+show("T1 width(100)", a.width(100))
+# T6 separation: nested, overlapping, touching, far-inside
+use({[1,0] => [[100,100,200,200]], [2,0] => [[0,0,1000,1000]]})
+show("T6 nested sep(50)", input(1,0).separation(input(2,0), 50))
+show("T6 nested sep(50,transparent)", input(1,0).separation(input(2,0), 50, transparent))
+use({[1,0] => [[100,100,200,200]], [2,0] => [[150,150,1000,1000]]})
+show("T6 overlap sep(50)", input(1,0).separation(input(2,0), 50))
+use({[1,0] => [[100,100,200,200]], [2,0] => [[200,100,300,200]]})
+show("T6 abut sep(50)", input(1,0).separation(input(2,0), 50))
+use({[1,0] => [[100,100,200,200]], [2,0] => [[200,200,300,300]]})
+show("T6 kiss sep(50)", input(1,0).separation(input(2,0), 50))
+show("T6 kiss sep(50,wtc)", input(1,0).separation(input(2,0), 50, without_touching_corners))
+use({[1,0] => [[100,100,200,200]], [2,0] => [[250,100,300,200]]})
+show("T6 gap50 sep(50)", input(1,0).separation(input(2,0), 50))
+show("T6 gap50 sep(51)", input(1,0).separation(input(2,0), 51))
+
+# T7 enclosing: outer(2) encloses inner(1)
+use({[1,0] => [[100,100,200,200]], [2,0] => [[50,100,300,300]]})
+show("T7 touching enc(30)", input(2,0).enclosing(input(1,0), 30))
+use({[1,0] => [[100,100,200,200]], [2,0] => [[70,70,230,230]]})
+show("T7 equal enc(30)", input(2,0).enclosing(input(1,0), 30))
+show("T7 equal enc(31)", input(2,0).enclosing(input(1,0), 31))
+use({[1,0] => [[100,100,200,200]], [2,0] => [[150,70,230,230]]})
+show("T7 partially-out enc(30)", input(2,0).enclosing(input(1,0), 30))
+use({[1,0] => [[100,100,200,200]], [2,0] => [[300,70,400,230]]})
+show("T7 outside enc(500)", input(2,0).enclosing(input(1,0), 500))
+show("T7 enclosed form", input(1,0).enclosed(input(2,0), 500))
+# euclidean corner of L-shaped outer
+use({[1,0] => [[100,100,200,200]], [2,0] => [[[0,0],[0,300],[180,300],[180,220],[300,220],[300,0]]]})
+show("T7 notched host enc(30) euclid", input(2,0).enclosing(input(1,0), 30))
+show("T7 notched host enc(30) projection", input(2,0).enclosing(input(1,0), 30, projection))
+# hole in host near inner
+use({[1,0] => [[100,100,200,200]], [2,0] => [[[0,0],[0,400],[400,400],[400,0],[0,0],[220,150],[260,150],[260,180],[220,180],[220,150]]]})
+show("T7 host-with-hole merged", input(2,0).merged)
+
+# T8 overlap check
+use({[1,0] => [[0,0,100,100]], [2,0] => [[80,0,200,100]]})
+show("T8 overlap(30)", input(1,0).overlap(input(2,0), 30))
+show("T8 overlap(20)", input(1,0).overlap(input(2,0), 20))
+show("T8 overlap(21)", input(1,0).overlap(input(2,0), 21))
+use({[1,0] => [[0,0,100,100]], [2,0] => [[100,0,200,100]]})
+show("T8 abut overlap(20)", input(1,0).overlap(input(2,0), 20))

@@ -1,75 +1,198 @@
 //! Supply, substrate and pad integrity: topological but geometry-aware, and
 //! independent of design intent (a supply short is an n-tie and a p-tie on one
-//! conductor, provable from the deck's tap markers), except the ESD path, which
-//! needs to know which nets are the rails.
+//! conductor, provable from the deck's tap markers), except a gate tied to a
+//! rail and the ESD path, which need to know which nets are the rails.
 //!
-//! Data in: the store, nets, devices, [`NetFacts`]. Data out: violations and
-//! one run per row.
+//! Data in: the store, nets, devices, [`NetFacts`], the design intent's
+//! supplies. Data out: violations and one run per row.
 
 use crate::erc::facts::{IntentMap, NetFacts, RoleMask};
+use crate::erc::power::{feed_shape, Process};
 use crate::erc::ruleset::RuleHead;
 use crate::erc::{first_vertex, push_net_violations, record_run, skip_rows, Design, Scratch};
 use crate::report::{Measurement, Outcome, RuleRun, Violation, Violations};
-use crate::topology::NetId;
-use gpurify_geom::connectivity::components_into;
-use gpurify_geom::ops::{isqrt, point_seg_dist2, segments_intersect, Point, Seg};
+use crate::topology::{extract_nets_into, DeviceId, NetId, PortTable, TerminalRole};
+use gpurify_geom::ops::{isqrt, point_seg_dist2, winding_of, Point, Seg, Winding};
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, RingRef};
-use gpurify_geom::{Dbu, DbuArea};
+use gpurify_geom::{Dbu, DbuArea, Qty};
+use gpurify_ingest::deck::{Connectivity, DeviceKind};
 use gpurify_ingest::intent::SupplyRole;
 use gpurify_ingest::StrId;
 
-/// One conductor carrying both tap layers. With `within`, a `tap_a` shape
-/// counts only inside a shape of that layer: an n-tap biasing a PMOS well,
-/// not a PNP's base contact, which carries a p-type net by design.
-#[derive(Debug, Default)]
+/// A supply short through one conductor: deck kind `supply_short`, written
+/// `supply_short(tap_a, tap_b[, within])`.
+///
+/// A row flags every net that holds a polygon of `tap_a` and a polygon of
+/// `tap_b`, such as an n-tap and a p-tap: one conductor ties together the two
+/// supplies those taps bias. With `within`, a `tap_a` shape counts only when
+/// its bounding-box centre lies in a `within` polygon: an n-tap biasing a
+/// PMOS well, not a PNP's base contact, which carries a p-type net by design.
+/// Needs no design intent.
+///
+/// Catalog: ERC-G4 in the [check catalog]. Defined by Calibre (public
+/// material only); no standards body defines it. Source tags are in
+/// [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct SupplyShortTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
+    /// Per row: the first tap layer (the one `within` scopes).
     pub tap_a: Vec<LayerId>,
+    /// Per row: the second tap layer.
     pub tap_b: Vec<LayerId>,
+    /// Per row: the layer a `tap_a` shape must sit in to count, or `None` for
+    /// every `tap_a` shape.
     pub within: Vec<Option<LayerId>>,
 }
 
-/// A net that falls into several components once its resistive (soft) layers
-/// are removed.
-#[derive(Debug, Default)]
+/// A net held together only by a high-resistance layer: deck kind
+/// `soft_connection`, written `soft_connection(layers..)`.
+///
+/// The listed layers are soft: wells, substrate ties and the like, which
+/// conduct too poorly to carry a signal or a supply. A row cuts the nets
+/// again from the deck's connectivity with the soft layers taken out: no soft
+/// conductor or global layer, and no via with a soft cut or a soft layer on
+/// either side. Every net with a polygon on a soft layer whose other
+/// polygons fall into more than one of those pieces is flagged: its pieces
+/// are connected only through the soft layers. Shapes join only as the deck
+/// declares, so a strap drawn over a piece without a via joins nothing.
+/// Needs no design intent.
+///
+/// Catalog: LVS-003, ERC-G5 in the [check catalog]. Defined by
+/// [KLayout `soft_connect`]; Calibre SOFTCHK and SCONNECT (public material
+/// only); Magic `disconnect`. Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [KLayout `soft_connect`]: https://www.klayout.de/doc-qt5/about/lvs_ref_netter.html
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct SoftConnectionTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
     /// `soft[soft_start[i] .. soft_start[i + 1]]` are row `i`'s soft layers.
     pub soft_start: Vec<u32>,
+    /// Soft layers, CSR by `soft_start`; at least one per row. A layer listed
+    /// twice counts once.
     pub soft: Vec<LayerId>,
+    /// The deck's connectivity, shared by every row: each row extracts it
+    /// without its soft layers. [`RuleSet::from_deck`](crate::erc::RuleSet::from_deck)
+    /// copies it from the deck's `connect` statements.
+    pub connectivity: Connectivity,
 }
 
-/// A point of a region further than `max_distance` from every tap.
-#[derive(Debug, Default)]
+/// Latch-up tap distance: deck kind `missing_tie`, written
+/// `missing_tie(region, tap; max_distance: len)`.
+///
+/// A row flags every polygon of the `region` layer (the active area of one
+/// device polarity, say) that has a point, anywhere in it and not only at a
+/// vertex, further than `max_distance` from the nearest edge of a `tap`
+/// polygon, holes included. Distance is Euclidean, compared exactly in
+/// integers. A region with no tap on the layout is flagged. Needs no design
+/// intent.
+///
+/// # Limits
+///
+/// A tap distance conditional on neighbouring well spacing is
+/// [`ConditionalTieTable`]'s, a minimum tie area [`TieAreaTable`]'s. A point
+/// inside a tap measures its
+/// distance to the tap's edge, not zero, and a region polygon's hole is
+/// measured as if filled (both over-report only).
+///
+/// Catalog: ERC-D1 in the [check catalog] (with the DRC kind
+/// `max_distance_to_tap`). Defined by [GF180MCU] LU.1-LU.4; [IHP SG13G2]
+/// LU.a and LU.b; [ASAP7] ACTIVE.LUP.1; [ESDA TR18.0-02] §3.1.1. Source tags
+/// are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [GF180MCU]: https://gf180mcu-pdk.readthedocs.io/en/latest/physical_verification/design_man.html
+/// [IHP SG13G2]: https://github.com/IHP-GmbH/IHP-Open-PDK/tree/main/ihp-sg13g2/libs.doc/doc
+/// [ASAP7]: https://github.com/The-OpenROAD-Project/asap7_pdk_r1p7/blob/main/docs/asap7_drm_201207a.pdf
+/// [ESDA TR18.0-02]: https://www.esda.org/store/standards/product/307/esd-tr18-0-02-20/
+/// [`ConditionalTieTable`]: crate::erc::rules::latchup::ConditionalTieTable
+/// [`TieAreaTable`]: crate::erc::rules::latchup::TieAreaTable
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct MissingTieTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
+    /// Per row: the layer whose polygons must be tied.
     pub region: Vec<LayerId>,
+    /// Per row: the tap layer.
     pub tap: Vec<LayerId>,
+    /// Per row: the furthest a region point may be from a tap, database
+    /// units. Positive from a deck.
     pub max_distance: Vec<Dbu>,
 }
 
-/// A net carrying a gate and a source terminal but no drain.
-#[derive(Debug, Default)]
+/// A gate tied straight to a rail: deck kind `tie_high_low`, written
+/// `tie_high_low()`.
+///
+/// A row flags every rail, a supply the design intent declares (power or
+/// ground), that reaches a transistor gate: a gate tied directly to a supply
+/// instead of through a tie cell, which leaves the gate oxide exposed to
+/// every transient on the rail. The rails decide, never which end of a
+/// channel extraction calls the source. Every row flags the same nets; rows
+/// differ only in id and severity. Needs design intent, for which nets are
+/// the rails.
+///
+/// Catalog: ERC-G7 in the [check catalog]. Defined by Calibre's weak-sourcing
+/// checks (public material only). Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct TieHighLowTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
 }
 
-/// A pad net with no chain of clamp devices to both a power and a ground supply.
-#[derive(Debug, Default)]
+/// Pad ESD clamp path: deck kind `esd_topological`, written
+/// `esd_topological(pad; clamps: models)`.
+///
+/// A row flags a pad net with no chain of clamp devices to both a power and a
+/// ground supply. A pad net is any net with a polygon on the `pad` layer. The
+/// path is a clamp from the pad to a declared supply, then any chain of clamps
+/// between supplies (rail clamps). A clamp is a device of a listed model,
+/// through any of its terminals, except a diode between a supply and the pad
+/// (or a signal) wired forward-biased: its anode held above its cathode, the
+/// pad sitting between ground and every power supply (`reverse_biased`).
+/// Such a diode conducts in operation and is no clamp. A signal net other than the
+/// pad is not a path. Needs design intent, for which nets are the rails.
+///
+/// # Limits
+///
+/// Only the path's existence is checked; [`EsdPathTable`] measures it under
+/// a forced current. A transistor clamp is taken as wired whatever its gate
+/// is tied to, and a diode between two supplies whichever way round.
+///
+/// [`EsdPathTable`]: crate::erc::rules::esd::EsdPathTable
+///
+/// Catalog: ERC-C1 in the [check catalog]. Defined by [ESDA TR18.0-01]
+/// §4.5.2-4.5.4; [Khazhinsky 2012]. Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [ESDA TR18.0-01]: https://www.esda.org/store/standards/product/457/esd-tr18-0-01-25/
+/// [Khazhinsky 2012]: https://www.esda.org/assets/News/8df611267c/ESDEDA-InCompliance-part1.pdf
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct EsdTopologicalTable {
+    /// Rule id and severity per row.
     pub head: RuleHead,
     /// Marker layer whose polygons are pads.
     pub pad: Vec<LayerId>,
     /// Clamp device models per row, CSR.
     pub clamp_start: Vec<u32>,
+    /// Clamp models, CSR by `clamp_start`; at least one per row.
     pub clamp: Vec<StrId>,
 }
 
 /// How many of the two rail kinds (power, ground) `pad` reaches through
-/// devices of the `clamps` models: a clamp from the pad to a supply, then any
-/// chain of clamps between supplies (rail clamps). Another signal net is not a
-/// path. `seen` and `stack` are scratch.
+/// devices of the `clamps` models ([`clamp_reach_into`]). `seen` and `stack`
+/// are scratch.
 pub(crate) fn clamp_rails(
     design: Design<'_>,
     intent: &IntentMap,
@@ -78,25 +201,52 @@ pub(crate) fn clamp_rails(
     seen: &mut Vec<bool>,
     stack: &mut Vec<NetId>,
 ) -> u32 {
+    let mut reached = Vec::new();
+    clamp_reach_into(design, intent, clamps, pad, seen, stack, &mut reached);
+    let has = |role| {
+        reached.iter().any(|&net| {
+            intent
+                .supply_net
+                .binary_search(&net)
+                .is_ok_and(|row| intent.supply_role[row] == role)
+        })
+    };
+    u32::from(has(SupplyRole::Power)) + u32::from(has(SupplyRole::Ground))
+}
+
+/// Every net `pad` reaches through devices of the `clamps` models, into
+/// `reached` (cleared): `pad` first, then each declared supply in visit order.
+/// The path is a clamp from the pad to a supply, then any chain of clamps
+/// between supplies (rail clamps); another signal net is not a path, and a
+/// diode clamp wired forward-biased carries nothing ([`reverse_biased`]).
+/// `seen` (indexed by net: every net touched, signal nets included) and
+/// `stack` are scratch.
+pub(crate) fn clamp_reach_into(
+    design: Design<'_>,
+    intent: &IntentMap,
+    clamps: &[StrId],
+    pad: NetId,
+    seen: &mut Vec<bool>,
+    stack: &mut Vec<NetId>,
+    reached: &mut Vec<NetId>,
+) {
     let devices = design.devices;
     // ponytail: O(nets) reset per pad net; pads are few.
     seen.clear();
     seen.resize(design.nets.net_count(), false);
     stack.clear();
+    reached.clear();
     stack.push(pad);
     seen[pad.idx()] = true;
-    let (mut power, mut ground) = (false, false);
     while let Some(net) = stack.pop() {
-        match intent.supply_net.binary_search(&net) {
-            Ok(row) => match intent.supply_role[row] {
-                SupplyRole::Power => power = true,
-                SupplyRole::Ground => ground = true,
-            },
-            Err(_) if net != pad => continue,
-            Err(_) => {}
+        if net != pad && intent.supply_net.binary_search(&net).is_err() {
+            continue;
         }
+        reached.push(net);
         for &device in devices.devices_on(net) {
-            if !clamps.contains(&devices.model[device.0 as usize]) {
+            if !clamps.contains(&devices.model[device.0 as usize])
+                || !reverse_biased(design, intent, device)
+            {
                 continue;
             }
             for &next in devices.terminals_of(device).0 {
@@ -107,7 +257,35 @@ pub(crate) fn clamp_rails(
             }
         }
     }
-    u32::from(power) + u32::from(ground)
+}
+
+/// False for a pad diode its declared supplies forward-bias, which conducts
+/// in operation and is no clamp: a diode between a supply and another net (a
+/// pad, a signal) whose anode (`Pin(0)`) sits above its cathode (`Pin(1)`),
+/// the other net sitting strictly between ground and every power supply. So
+/// an anode on a power supply, or a cathode on a ground supply, is wired the
+/// wrong way round. A diode between two supplies is taken as wired: a deck
+/// may model a rail clamp (IHP's `nmoscl`) as a two-pin device whose first
+/// pin is the power side, and anti-parallel pairs between grounds run both
+/// ways. A diode between two other nets, and any device that is not a diode,
+/// are taken as wired.
+pub(crate) fn reverse_biased(design: Design<'_>, intent: &IntentMap, device: DeviceId) -> bool {
+    let devices = design.devices;
+    if devices.kind[device.0 as usize] != DeviceKind::Diode {
+        return true;
+    }
+    let (on, roles) = devices.terminals_of(device);
+    let pin = |k: u8| {
+        on.iter()
+            .zip(roles)
+            .find(|&(_, &role)| role == TerminalRole::Pin(k))
+            .map(|(&net, _)| intent.nominal_voltage(net).map(Qty::raw))
+    };
+    match (pin(0), pin(1)) {
+        (Some(Some(anode)), Some(None)) => anode <= 0.0,
+        (Some(None), Some(Some(cathode))) => cathode > 0.0,
+        _ => true,
+    }
 }
 
 /// One bit-or of `bit` per polygon on `layers` into its net's slot of
@@ -137,8 +315,8 @@ fn mark_nets_within(
         let Some(scope) = within else { return true };
         let b = design.store.poly_bbox(poly);
         let centre = Point {
-            x: Dbu::new_unchecked((b.xlo.raw() + b.xhi.raw()) / 2),
-            y: Dbu::new_unchecked((b.ylo.raw() + b.yhi.raw()) / 2),
+            x: Dbu::new_unchecked(i64::midpoint(b.xlo.raw(), b.xhi.raw())),
+            y: Dbu::new_unchecked(i64::midpoint(b.ylo.raw(), b.yhi.raw())),
         };
         design.store.polys_on_layer(scope).any(|s| {
             let s = PolyId(s);
@@ -162,7 +340,148 @@ fn nets_marked(marks: &[u32], want: u32) -> Vec<u32> {
         .collect()
 }
 
-/// Flag every net carrying both taps.
+/// Low- and high-voltage features on one net: deck kind `mixed_tag`, written
+/// `mixed_tag(L, tag)`.
+///
+/// A merged figure of the conductor layer `L` is tagged when it shares area
+/// with `tag` (an n-well under sky130's `hvi`, a high-voltage n-well) and
+/// untagged otherwise. A row flags every untagged figure whose net also
+/// holds a tagged figure: a low-voltage well tied to a high-voltage one.
+/// Nets joined through a resistor count as one net, as hvnwell.10 asks ("for
+/// the purposes of this check, short the connectivity through resistors").
+/// A figure's net is its lowest-numbered drawn polygon's. Needs no design
+/// intent.
+///
+/// # Limits
+///
+/// The tag is a layer: sky130's exemption of a high-voltage n-well whose
+/// net carries the text tag `lv_net` is not read. A figure that touches the
+/// tag only along an edge or at a corner is untagged.
+///
+/// Catalog: ERC-F10 in the [check catalog]. Defined by [SKY130] hvnwell.10
+/// ("LVnwell and HnWell should not be on the same net"). Source tags are in
+/// [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [SKY130]: https://skywater-pdk.readthedocs.io/en/main/rules/periphery.html
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct MixedTagTable {
+    /// Rule id and severity per row.
+    pub head: RuleHead,
+    /// Per row: the conductor layer whose figures are classed.
+    pub layer: Vec<LayerId>,
+    /// Per row: the tag layer that marks a figure high-voltage.
+    pub tag: Vec<LayerId>,
+}
+
+/// Runs every [`MixedTagTable`] row.
+///
+/// `examined` counts the figures of `L` on a net. A violation sits at the
+/// first vertex of the untagged figure's lowest drawn polygon, on `L`,
+/// measuring the count of tagged figures on its net against 0, and names a
+/// tagged figure's polygon as its second shape. Every row runs; a row is
+/// refused when a layer will not validate or merge.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_mixed_tag(
+    design: Design<'_>,
+    table: &MixedTagTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    // Nets joined through a resistor are one group.
+    let devices = design.devices;
+    let mut edges: Vec<(u32, u32)> = Vec::new();
+    for device in 0..devices.len() {
+        if devices.kind[device] != gpurify_ingest::deck::DeviceKind::Resistor {
+            continue;
+        }
+        let id = crate::topology::DeviceId(u32::try_from(device).expect("a device id is a u32"));
+        let pins: Vec<u32> = devices
+            .terminals_of(id)
+            .0
+            .iter()
+            .filter(|&&net| net != NetId::NONE)
+            .map(|net| net.0)
+            .collect();
+        edges.extend(pins.windows(2).map(|pair| (pair[0], pair[1])));
+    }
+    let count = u32::try_from(design.nets.net_count()).expect("a NetId is a u32");
+    let mut group = Vec::new();
+    gpurify_geom::connectivity::components_into(count, &edges, &mut group);
+
+    // A figure on no net (none was extracted) has no group and is not judged.
+    let group_of = |poly: PolyId| {
+        if count == 0 {
+            return None;
+        }
+        let net = design.nets.net_of(poly);
+        (net != NetId::NONE).then(|| group[net.idx()].0)
+    };
+    let mut scratch = crate::drc::Scratch::default();
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let rule = table.head.rule[row];
+        let layer = table.layer[row];
+        let figures = crate::drc::rules::presence::tagged_figures(
+            design.store,
+            layer,
+            table.tag[row],
+            &mut scratch,
+        );
+        let Some(figures) = figures else {
+            record_run(runs, out, before, rule, Outcome::Refused, 0);
+            continue;
+        };
+        let mut tagged: Vec<(u32, PolyId)> = figures
+            .iter()
+            .filter(|figure| figure.1)
+            .filter_map(|&(poly, _)| Some((group_of(poly)?, poly)))
+            .collect();
+        tagged.sort_unstable();
+        let mut examined = 0u64;
+        for &(poly, is_tagged) in &figures {
+            let Some(mine) = group_of(poly) else {
+                continue;
+            };
+            examined += 1;
+            if is_tagged {
+                continue;
+            }
+            let on_net =
+                tagged.partition_point(|t| t.0 < mine)..tagged.partition_point(|t| t.0 <= mine);
+            if on_net.is_empty() {
+                continue;
+            }
+            out.push(Violation {
+                rule,
+                layer,
+                severity: table.head.severity[row],
+                at: first_vertex(design.store, poly),
+                measured: Measurement::Count(
+                    u32::try_from(on_net.len()).expect("a figure count fits a u32"),
+                ),
+                limit: Measurement::Count(0),
+                shapes: (poly, Some(tagged[on_net.start].1)),
+            });
+        }
+        record_run(runs, out, before, rule, Outcome::Ran, examined);
+    }
+}
+
+/// Runs every [`SupplyShortTable`] row.
+///
+/// `examined` counts the polygons on `tap_a` and `tap_b`, all of them, inside
+/// `within` or not. A violation sits at the first vertex of the net's
+/// lowest-numbered polygon, on that polygon's layer, measuring the count 2
+/// (tap kinds on the net) against 1. Every row runs.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_supply_short(
     design: Design<'_>,
     table: &SupplyShortTable,
@@ -200,8 +519,17 @@ pub fn check_supply_short(
     }
 }
 
-/// Flag every net that falls apart once the soft layers are removed, naming a
-/// shape on each side of the bridge.
+/// Runs every [`SoftConnectionTable`] row.
+///
+/// `examined` counts the nets with a polygon on a soft layer. A violation sits
+/// at the first vertex of the net's lowest-numbered remaining polygon, on its
+/// layer, and names a polygon in another group, one shape on each side of the
+/// bridge. It measures the count 2 against 1, however many groups there are.
+/// Every row runs.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_soft_connection(
     design: Design<'_>,
     table: &SoftConnectionTable,
@@ -211,8 +539,7 @@ pub fn check_soft_connection(
 ) {
     let nets = design.nets.net_count();
     let mut is_soft: Vec<bool> = Vec::new();
-    let mut hard: Vec<PolyId> = Vec::new();
-    let mut order: Vec<u32> = Vec::new();
+    let mut pieces = std::mem::take(&mut scratch.staged_nets);
 
     for row in 0..table.head.len() {
         let before = out.len();
@@ -232,52 +559,50 @@ pub fn check_soft_connection(
         }
         let soft_nets = nets_marked(&scratch.net_marks, 1);
 
-        for &net in &soft_nets {
-            // What is left without the resistive body is what one potential holds.
-            hard.clear();
-            hard.extend(
-                design
-                    .nets
-                    .polys_of(NetId(net))
-                    .iter()
-                    .copied()
-                    .filter(|&poly| !is_soft[design.store.poly_layer(poly).idx()]),
-            );
-            let Some(&first_poly) = hard.first() else {
-                continue;
-            };
-            scratch.boxes.clear();
-            scratch
-                .boxes
-                .extend(hard.iter().map(|&p| design.store.poly_bbox(p)));
+        // What is left without the resistive bodies, joined only as declared.
+        let soft = |layer: LayerId| is_soft[layer.idx()];
+        let all = &table.connectivity;
+        let (via_cut, via_connects) = all
+            .via_cut
+            .iter()
+            .zip(&all.via_connects)
+            .filter(|&(&cut, &(a, b))| !(soft(cut) || soft(a) || soft(b)))
+            .map(|(&cut, &joins)| (cut, joins))
+            .unzip();
+        let hard = Connectivity {
+            conductors: all
+                .conductors
+                .iter()
+                .copied()
+                .filter(|&l| !soft(l))
+                .collect(),
+            via_cut,
+            via_connects,
+            global: all.global.iter().copied().filter(|&l| !soft(l)).collect(),
+            ..all.clone()
+        };
+        extract_nets_into(design.store, &hard, &mut pieces);
 
-            // Join conductors that share a point (not just a box); the box test
-            // and an x-order sweep prune in front of the exact one.
-            let node_count = u32::try_from(hard.len()).expect("a net's polygons fit a u32");
-            order.clear();
-            order.extend(0..node_count);
-            order.sort_unstable_by_key(|&i| scratch.boxes[i as usize].xlo);
-            scratch.edges.clear();
-            for i in 0..order.len() {
-                let a = order[i];
-                let box_a = scratch.boxes[a as usize];
-                for &b in &order[i + 1..] {
-                    let box_b = scratch.boxes[b as usize];
-                    if box_b.xlo > box_a.xhi {
+        for &net in &soft_nets {
+            // The lowest polygon off the soft layers, and the lowest one in
+            // another piece.
+            let mut near: Option<(PolyId, NetId)> = None;
+            let mut far = None;
+            for &poly in design.nets.polys_of(NetId(net)) {
+                let piece = pieces.net_of(poly);
+                if soft(design.store.poly_layer(poly)) || piece == NetId::NONE {
+                    continue;
+                }
+                match near {
+                    None => near = Some((poly, piece)),
+                    Some((_, first)) if piece != first => {
+                        far = Some(poly);
                         break;
                     }
-                    if box_a.overlaps(box_b)
-                        && polys_meet(design.store, hard[a as usize], hard[b as usize])
-                    {
-                        scratch.edges.push((a, b));
-                    }
+                    Some(_) => {}
                 }
             }
-            components_into(node_count, &scratch.edges, &mut scratch.labels);
-
-            // The lowest-numbered conductor not in the first one's component.
-            let near = scratch.labels[0];
-            let Some(far) = scratch.labels.iter().position(|&label| label != near) else {
+            let (Some((first_poly, _)), Some(far)) = (near, far) else {
                 continue;
             };
             out.push(Violation {
@@ -287,18 +612,26 @@ pub fn check_soft_connection(
                 at: first_vertex(design.store, first_poly),
                 measured: Measurement::Count(2),
                 limit: Measurement::Count(1),
-                shapes: (first_poly, Some(hard[far])),
+                shapes: (first_poly, Some(far)),
             });
         }
 
         let examined = u64::try_from(soft_nets.len()).expect("a net count fits a u64");
         record_run(runs, out, before, rule, Outcome::Ran, examined);
     }
+    scratch.staged_nets = pieces;
 }
 
-/// Flag every region polygon whose furthest point is more than `max_distance`
-/// from a tap, reporting that exact furthest point. Distances are compared
-/// squared, in integers.
+/// Runs every [`MissingTieTable`] row.
+///
+/// `examined` counts the region polygons. A violation sits at that furthest
+/// point, on the region layer, measuring its distance (rounded down to a
+/// database unit; `MAX_ABS_DBU` with no tap at all) against `max_distance`. A
+/// row is refused when its tap layer will not validate, never read as empty.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_missing_tie(
     design: Design<'_>,
     table: &MissingTieTable,
@@ -333,20 +666,40 @@ pub fn check_missing_tie(
     }
 }
 
-/// Every row on `region` whose furthest point from the `tap` layer (every
-/// point of the polygon, not only its vertices; distance to the taps' edges,
-/// holes included) is more than `limit`: `each(row, point, distance²)`.
-/// Returns the region row count, or `None` when the tap layer will not
-/// validate. A region with no tap at all measures `MAX_ABS_DBU`.
+/// Every outer row on `region` whose furthest point from the `tap` layer
+/// (every point of the polygon, not only its vertices; distance to the taps'
+/// edges, holes included) is more than `limit`: `each(row, point, distance²)`.
+/// A hole row (clockwise) is not a region of its own, and its polygon is
+/// measured as if filled. Returns the outer row count, or `None` when the tap
+/// layer will not validate. A region with no tap at all measures
+/// `MAX_ABS_DBU`.
 pub(crate) fn untied_points(
     store: &GeometryStore,
-    (region, tap): (LayerId, LayerId),
+    layers: (LayerId, LayerId),
     limit: Dbu,
     tap_layer: &mut ValidatedLayer,
     mut each: impl FnMut(PolyId, Point, DbuArea),
 ) -> Option<u64> {
+    untied_points_by(
+        store,
+        layers,
+        |_| Some(limit),
+        tap_layer,
+        |poly, at, worst, _| each(poly, at, worst),
+    )
+}
+
+/// [`untied_points`] with each region polygon's own limit from `limit_of`,
+/// `None` leaving the polygon out (not counted); `each` also receives the
+/// limit the polygon was held to.
+pub(crate) fn untied_points_by(
+    store: &GeometryStore,
+    (region, tap): (LayerId, LayerId),
+    mut limit_of: impl FnMut(PolyId) -> Option<Dbu>,
+    tap_layer: &mut ValidatedLayer,
+    mut each: impl FnMut(PolyId, Point, DbuArea, Dbu),
+) -> Option<u64> {
     validate_layer_into(store, tap, tap_layer).ok()?;
-    let limit2 = limit.mul_wide(limit);
 
     // Holes too: a ring-shaped tap ties along its inner boundary.
     let mut taps: Vec<Seg> = Vec::new();
@@ -366,11 +719,18 @@ pub(crate) fn untied_points(
     TapGrid::build_into(&taps, &mut grid);
     let mut stack: Vec<Cell> = Vec::new();
 
-    let region_rows = store.polys_on_layer(region);
-    let examined = u64::from(region_rows.end - region_rows.start);
-    for poly in region_rows {
+    let mut examined = 0u64;
+    for poly in store.polys_on_layer(region) {
         let poly = PolyId(poly);
         let (xs, ys) = store.poly_verts(poly);
+        if winding_of(xs, ys) == Some(Winding::Clockwise) {
+            continue;
+        }
+        let Some(limit) = limit_of(poly) else {
+            continue;
+        };
+        let limit2 = limit.mul_wide(limit);
+        examined += 1;
         let Some((&x0, &y0)) = xs.first().zip(ys.first()) else {
             continue;
         };
@@ -383,31 +743,46 @@ pub(crate) fn untied_points(
             furthest_from_taps(xs, ys, store.poly_bbox(poly), limit2, &grid, &mut stack)
         };
         if worst > limit2 {
-            each(poly, at, worst);
+            each(poly, at, worst, limit);
         }
     }
     Some(examined)
 }
 
-/// Flag every net that is a gate and a source and not a drain. `examined`
-/// counts gate nets.
+/// Runs every [`TieHighLowTable`] row.
+///
+/// `examined` counts nets with a gate terminal. A violation sits at the first
+/// vertex of the rail's lowest-numbered polygon, on its layer, measuring the
+/// count of tie cells between the rail and its gates, 0, against 1. Every
+/// row is skipped when no design intent was given or it declares no supply
+/// this layout has.
 pub fn check_tie_high_low(
     design: Design<'_>,
     facts: &NetFacts,
+    intent: &IntentMap,
     table: &TieHighLowTable,
     out: &mut Violations,
     runs: &mut Vec<RuleRun>,
 ) {
-    let held = RoleMask::GATE.union(RoleMask::SOURCE);
+    if intent.supply_net.is_empty() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
     let examined = facts
         .role
         .iter()
         .filter(|mask| mask.contains(RoleMask::GATE))
         .count() as u64;
-    let flagged: Vec<u32> = (0u32..)
-        .zip(&facts.role)
-        .filter(|&(_, &mask)| mask.contains(held) & !mask.intersects(RoleMask::DRAIN))
-        .map(|(net, _)| net)
+    let flagged: Vec<u32> = intent
+        .supply_net
+        .iter()
+        .filter(|net| {
+            facts
+                .role
+                .get(net.idx())
+                .is_some_and(|mask| mask.contains(RoleMask::GATE))
+        })
+        .map(|net| net.0)
         .collect();
 
     for row in 0..table.head.len() {
@@ -426,8 +801,16 @@ pub fn check_tie_high_low(
     }
 }
 
-/// Flag every pad net that [`clamp_rails`] finds short of both rails.
-/// Measured is the rail kinds reached, limit 2.
+/// Runs every [`EsdTopologicalTable`] row.
+///
+/// `examined` counts distinct pad nets. A violation sits at the first vertex
+/// of the net's lowest-numbered polygon, on its layer, measuring the rail
+/// kinds reached (0 or 1) against 2. Every row is skipped without usable
+/// intent.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_esd_topological(
     design: Design<'_>,
     intent: &IntentMap,
@@ -489,7 +872,7 @@ fn push_ring_edges(ring: RingRef<'_>, out: &mut Vec<Seg>) {
 
 /// The closed edge from vertex `i` of a ring to the next one, wrapping.
 #[inline]
-fn ring_edge(xs: &[Dbu], ys: &[Dbu], i: usize) -> Seg {
+pub(crate) fn ring_edge(xs: &[Dbu], ys: &[Dbu], i: usize) -> Seg {
     let next = (i + 1) - xs.len() * usize::from(i + 1 == xs.len());
     Seg {
         a: Point { x: xs[i], y: ys[i] },
@@ -500,40 +883,11 @@ fn ring_edge(xs: &[Dbu], ys: &[Dbu], i: usize) -> Seg {
     }
 }
 
-/// Whether two polygons share at least one point. Rings whose boundaries do
-/// not meet are nested or disjoint, so one vertex of each decides the rest.
-fn polys_meet(store: &GeometryStore, a: PolyId, b: PolyId) -> bool {
-    let (ax, ay) = store.poly_verts(a);
-    let (bx, by) = store.poly_verts(b);
-
-    // `ingest` may carry a degenerate run, which bounds no area.
-    if ax.len() < 3 || bx.len() < 3 {
-        return false;
-    }
-
-    rings_meet(ax, ay, bx, by)
-        || point_in_region(bx, by, Point { x: ax[0], y: ay[0] })
-        || point_in_region(ax, ay, Point { x: bx[0], y: by[0] })
-}
-
-/// Whether any edge of one ring meets any edge of the other, touching included.
-fn rings_meet(ax: &[Dbu], ay: &[Dbu], bx: &[Dbu], by: &[Dbu]) -> bool {
-    for i in 0..ax.len() {
-        let edge = ring_edge(ax, ay, i);
-        for j in 0..bx.len() {
-            if segments_intersect(edge, ring_edge(bx, by, j)) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 /// Whether a point lies in a ring, boundary included (the missing-tie maximum
 /// often sits on an edge). Even-odd ray cast toward +x, exact in `i128`.
 /// Deliberately not folded with `topology::inside_ring`, which excludes the
 /// boundary.
-fn point_in_region(xs: &[Dbu], ys: &[Dbu], p: Point) -> bool {
+pub(crate) fn point_in_region(xs: &[Dbu], ys: &[Dbu], p: Point) -> bool {
     if xs.len() < 3 {
         return false;
     }
@@ -967,3 +1321,350 @@ fn furthest_from_taps(
 /// "No tap in range": the largest area `ops::isqrt` accepts, so an untapped
 /// region measures `MAX_ABS_DBU` and is reported.
 const NO_TAP_IN_RANGE: DbuArea = DbuArea::new(1i128 << 80);
+
+/// A floating piece of a supply: deck kind `floating_supply`, written
+/// `floating_supply()`.
+///
+/// A declared supply is one logical net, but a layout can leave its shapes in
+/// pieces that carry its name and touch nothing else of it: a stripe not
+/// strapped to the grid, a cell rail cut off from it. The grid is fed where
+/// the supply enters, the centre of its highest, then widest, shape over
+/// every piece ([`extract_into`](crate::erc::power::extract_into)'s feed
+/// point); every other piece is floating. A row flags each, at its lowest
+/// polygon. This is [OpenROAD `check_power_grid`]: it walks the supply's
+/// grid from one top-layer node and reports every shape the walk does not
+/// reach as unconnected (PSM-38), with the instance pins on them (PSM-39);
+/// here a piece is a connected component of the extracted net, and the
+/// device terminals on a floating piece are those pins. The IR-drop and
+/// current rules feed each piece by itself, so without this row a floating
+/// piece reads as a healthy rail. Needs design intent, for which names are
+/// supplies.
+///
+/// # Limits
+///
+/// A piece is found by its label: a stripe that carries no label of the
+/// supply is a net of its own, which [`UnconnectedPinTable`] reports when no
+/// device reaches it.
+///
+/// Catalog: ERC-E9 in the [check catalog]. Defined by
+/// [OpenROAD `check_power_grid`]. Source tags are in [check-sources.md].
+///
+/// [check catalog]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-catalog.tsv
+/// [check-sources.md]: https://github.com/UW-ASIC/GPurify/blob/main/docs/check-sources.md
+/// [OpenROAD `check_power_grid`]: https://openroad.readthedocs.io/en/latest/main/src/psm/README.html
+/// [`UnconnectedPinTable`]: crate::erc::rules::topology::UnconnectedPinTable
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct FloatingSupplyTable {
+    /// Rule id and severity per row. Rows differ only in id and severity.
+    pub head: RuleHead,
+}
+
+/// Runs every [`FloatingSupplyTable`] row.
+///
+/// `examined` counts the pieces of the declared supplies. A violation sits
+/// at the first vertex of a floating piece's lowest-numbered polygon, on its
+/// layer, measuring its connections to the fed piece, 0, against 1. Every
+/// row is skipped when no design intent was given or it declares no supply
+/// this layout has.
+///
+/// # Panics
+///
+/// Panics if `table`'s columns break the [table invariants](super#tables).
+pub fn check_floating_supply(
+    design: Design<'_>,
+    ports: &PortTable,
+    intent: &IntentMap,
+    process: Process<'_>,
+    table: &FloatingSupplyTable,
+    out: &mut Violations,
+    runs: &mut Vec<RuleRun>,
+) {
+    if intent.supply_net.is_empty() {
+        skip_rows(&table.head, out, runs);
+        return;
+    }
+    let nets = design.nets;
+    // Supply pieces grouped by name: `(name, net)`, ascending.
+    let mut pieces: Vec<(StrId, NetId)> = intent
+        .supply_net
+        .iter()
+        .filter_map(|&net| ports.name_of(net).map(|name| (name, net)))
+        .collect();
+    pieces.sort_unstable();
+    pieces.dedup();
+    let mut floating: Vec<u32> = Vec::new();
+    let mut shapes: Vec<PolyId> = Vec::new();
+    let mut owner: Vec<NetId> = Vec::new();
+    for group in pieces.chunk_by(|a, b| a.0 == b.0) {
+        if group.len() < 2 {
+            continue;
+        }
+        shapes.clear();
+        owner.clear();
+        for &(_, net) in group {
+            for &poly in nets.polys_of(net) {
+                if !nets.holes.is_hole(poly) {
+                    shapes.push(poly);
+                    owner.push(net);
+                }
+            }
+        }
+        if shapes.is_empty() {
+            continue;
+        }
+        let fed = owner[feed_shape(design.store, process, &shapes)];
+        floating.extend(group.iter().filter(|p| p.1 != fed).map(|p| p.1 .0));
+    }
+    floating.sort_unstable();
+    let examined = pieces.len() as u64;
+    for row in 0..table.head.len() {
+        let before = out.len();
+        let rule = table.head.rule[row];
+        push_net_violations(
+            design,
+            &floating,
+            rule,
+            table.head.severity[row],
+            Measurement::Count(0),
+            Measurement::Count(1),
+            out,
+        );
+        record_run(runs, out, before, rule, Outcome::Ran, examined);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{furthest_from_taps, isqrt_ceil, point_in_region, Cell, TapGrid};
+    use gpurify_geom::ops::{point_seg_dist2, Point, Seg};
+    use gpurify_geom::{Bbox, Dbu, DbuArea};
+
+    fn pt(x: i64, y: i64) -> Point {
+        Point {
+            x: Dbu::new_unchecked(x),
+            y: Dbu::new_unchecked(y),
+        }
+    }
+
+    fn ring(points: &[(i64, i64)]) -> (Vec<Dbu>, Vec<Dbu>) {
+        points
+            .iter()
+            .map(|&(x, y)| (Dbu::new_unchecked(x), Dbu::new_unchecked(y)))
+            .unzip()
+    }
+
+    /// A xorshift draw in `lo ..= hi`.
+    fn draws(seed: u64) -> impl FnMut(i64, i64) -> i64 {
+        let mut state = seed;
+        move |lo, hi| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let span = u64::try_from(hi - lo + 1).expect("a non-empty range");
+            lo + i64::try_from(state % span).expect("a draw below the span fits an i64")
+        }
+    }
+
+    /// The nearest tap by an exhaustive scan.
+    fn brute_nearest(taps: &[Seg], p: Point) -> DbuArea {
+        taps.iter()
+            .map(|&s| point_seg_dist2(p, s))
+            .min()
+            .expect("a non-empty column")
+    }
+
+    /// Random horizontal, vertical and sloped tap edges over a `span` square.
+    fn random_taps(draw: &mut impl FnMut(i64, i64) -> i64, count: usize, span: i64) -> Vec<Seg> {
+        (0..count)
+            .map(|k| {
+                let (x, y) = (draw(-span, span), draw(-span, span));
+                let len = draw(0, span / 4 + 1);
+                let b = match k % 3 {
+                    0 => pt(x + len, y),
+                    1 => pt(x, y - len),
+                    _ => pt(x + len, y + draw(-len, len)),
+                };
+                Seg { a: pt(x, y), b }
+            })
+            .collect()
+    }
+
+    /// The ring search finds the nearest tap edge exactly, from inside the
+    /// grid and far outside it, over grids of one bucket and of many (more
+    /// than `BUCKET_TARGET` edges a bucket), and names a filed edge at that
+    /// distance; each edge is filed once per cell its box covers.
+    ///
+    /// Oracle: differential against an exhaustive scan of every tap edge.
+    #[test]
+    fn the_tap_grid_ring_search_agrees_with_an_exhaustive_scan() {
+        let mut draw = draws(0x9E37_79B9_7F4A_7C15);
+        for count in [1usize, 2, 5, 17, 60, 400] {
+            for span in [3i64, 50, 2000] {
+                let taps = random_taps(&mut draw, count, span);
+                let mut grid = TapGrid::default();
+                TapGrid::build_into(&taps, &mut grid);
+                let filed: usize = taps
+                    .iter()
+                    .map(|&s| {
+                        let (x0, y0, x1, y1) = grid.cells_of(s);
+                        usize::try_from((x1 - x0 + 1) * (y1 - y0 + 1)).expect("a cell count")
+                    })
+                    .sum();
+                assert_eq!(grid.segs.len(), filed, "each edge once per cell it covers");
+                for _ in 0..80 {
+                    let p = pt(draw(-3 * span, 3 * span), draw(-3 * span, 3 * span));
+                    let found = grid.nearest2(p);
+                    assert_eq!(
+                        found.dist2,
+                        brute_nearest(&taps, p),
+                        "{count} taps over {span}: {p:?}"
+                    );
+                    assert_eq!(point_seg_dist2(p, grid.tap(found.tap)), found.dist2);
+                }
+            }
+        }
+    }
+
+    /// Rebuilding a grid over another column forgets the first one.
+    ///
+    /// Oracle: law: a build is a function of its column alone, so a grid
+    /// built over `a` then `b` answers as one built over `b` only: the
+    /// nearest point of the edge `(500,500)-(500,900)` to the origin is its
+    /// end, 500² + 500² away.
+    #[test]
+    fn a_rebuilt_tap_grid_answers_for_its_new_column_only() {
+        let a = [Seg {
+            a: pt(0, 0),
+            b: pt(10, 0),
+        }];
+        let b = [Seg {
+            a: pt(500, 500),
+            b: pt(500, 900),
+        }];
+        let mut grid = TapGrid::default();
+        TapGrid::build_into(&a, &mut grid);
+        TapGrid::build_into(&b, &mut grid);
+        assert_eq!(grid.nearest2(pt(0, 0)).dist2, DbuArea::new(500 * 500 * 2));
+        assert_eq!(grid.segs.len(), 1);
+    }
+
+    /// The furthest integer point of a region from every tap edge, by
+    /// visiting every integer point of its box.
+    fn brute_furthest(xs: &[Dbu], ys: &[Dbu], bbox: Bbox, taps: &[Seg]) -> DbuArea {
+        let mut worst = DbuArea::new(-1);
+        for x in bbox.xlo.raw()..=bbox.xhi.raw() {
+            for y in bbox.ylo.raw()..=bbox.yhi.raw() {
+                let p = pt(x, y);
+                if point_in_region(xs, ys, p) {
+                    worst = worst.max(brute_nearest(taps, p));
+                }
+            }
+        }
+        worst
+    }
+
+    /// Branch and bound finds the furthest point of a region from the taps
+    /// exactly whenever it beats the floor, reports a point of the region at
+    /// that distance, and answers the floor itself when nothing beats it.
+    ///
+    /// Oracle: differential against an exhaustive scan of every integer
+    /// point of the region (rectangles, an L and a U), with taps inside,
+    /// beside and far from it.
+    #[test]
+    fn the_furthest_point_from_the_taps_agrees_with_an_exhaustive_scan() {
+        let mut draw = draws(0x2545_F491_4F6C_DD1D);
+        let regions: [&[(i64, i64)]; 4] = [
+            &[(0, 0), (40, 0), (40, 30), (0, 30)],
+            &[(0, 0), (1, 0), (1, 57), (0, 57)],
+            &[(0, 0), (50, 0), (50, 10), (10, 10), (10, 45), (0, 45)],
+            &[
+                (0, 0),
+                (60, 0),
+                (60, 40),
+                (45, 40),
+                (45, 12),
+                (15, 12),
+                (15, 40),
+                (0, 40),
+            ],
+        ];
+        let mut stack: Vec<Cell> = Vec::new();
+        for region in regions {
+            let (xs, ys) = ring(region);
+            let bbox = region.iter().fold(Bbox::EMPTY, |b, &(x, y)| {
+                b.include(Dbu::new_unchecked(x), Dbu::new_unchecked(y))
+            });
+            for count in [1usize, 3, 20, 90] {
+                let taps = random_taps(&mut draw, count, 80);
+                let mut grid = TapGrid::default();
+                TapGrid::build_into(&taps, &mut grid);
+                let want = brute_furthest(&xs, &ys, bbox, &taps);
+                for floor in [DbuArea::new(0), want, DbuArea::new(want.raw() + 1)] {
+                    let (at, worst) = furthest_from_taps(&xs, &ys, bbox, floor, &grid, &mut stack);
+                    assert_eq!(
+                        worst,
+                        want.max(floor),
+                        "{region:?}, {count} taps, floor {floor:?}"
+                    );
+                    if want > floor {
+                        assert!(
+                            point_in_region(&xs, &ys, at),
+                            "{at:?} is outside {region:?}"
+                        );
+                        assert_eq!(brute_nearest(&taps, at), want, "{at:?} is not that far");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Membership, boundary included, of a rectangle, an L, and a
+    /// triangle with a sloped edge, at every integer point around them.
+    ///
+    /// Oracle: closed form: the rectangle is `0 <= x <= 20, 0 <= y <= 10`;
+    /// the L is that rectangle with `x > 8, y > 4` cut away; the triangle
+    /// `(0,0) (12,0) (0,12)` is `x >= 0, y >= 0, x + y <= 12`, either way
+    /// round. Fewer than three vertices is no region.
+    #[test]
+    fn point_in_region_is_the_closed_set_of_each_shape() {
+        let rect = ring(&[(0, 0), (20, 0), (20, 10), (0, 10)]);
+        let l = ring(&[(0, 0), (20, 0), (20, 4), (8, 4), (8, 10), (0, 10)]);
+        let tri = ring(&[(0, 0), (12, 0), (0, 12)]);
+        let tri_cw = ring(&[(0, 0), (0, 12), (12, 0)]);
+        for x in -3..=23 {
+            for y in -3..=14 {
+                let p = pt(x, y);
+                let in_rect = (0..=20).contains(&x) && (0..=10).contains(&y);
+                assert_eq!(
+                    point_in_region(&rect.0, &rect.1, p),
+                    in_rect,
+                    "rect {x},{y}"
+                );
+                let in_l = in_rect && !(x > 8 && y > 4);
+                assert_eq!(point_in_region(&l.0, &l.1, p), in_l, "L {x},{y}");
+                let in_tri = x >= 0 && y >= 0 && x + y <= 12;
+                assert_eq!(point_in_region(&tri.0, &tri.1, p), in_tri, "tri {x},{y}");
+                assert_eq!(
+                    point_in_region(&tri_cw.0, &tri_cw.1, p),
+                    in_tri,
+                    "cw {x},{y}"
+                );
+            }
+        }
+        let two = ring(&[(0, 0), (5, 5)]);
+        assert!(!point_in_region(&two.0, &two.1, pt(0, 0)));
+    }
+
+    /// `isqrt_ceil(a)` is the least `r` with `r² >= a`.
+    ///
+    /// Oracle: the definition, `(r - 1)² < a <= r²`, over every area to
+    /// 10 000 and at a large perfect square and its neighbours.
+    #[test]
+    fn isqrt_ceil_is_the_least_root_whose_square_covers_the_area() {
+        assert_eq!(isqrt_ceil(0), 0);
+        for a in (1..=10_000i128).chain([(1 << 60) - 1, 1 << 60, (1 << 60) + 1]) {
+            let r = i128::from(isqrt_ceil(a));
+            assert!((r - 1) * (r - 1) < a && a <= r * r, "{a} -> {r}");
+        }
+    }
+}

@@ -199,3 +199,30 @@ fn a_net_reached_only_by_a_passive_device_is_still_device_connected() {
         "the third net has no terminal on it at all"
     );
 }
+
+/// A terminal on no net, or on a net past the extraction, is dropped: it
+/// lands on no real net's mask and the facts keep one row per net.
+///
+/// Oracle: the documented contract of `classify_nets_into`, construct-from-
+/// answer: over the mixed netlist's nets, a table whose only terminals are
+/// a gate on net 0, a drain on `NetId::NONE` and a source on a net id past
+/// the extraction gives net 0 the gate bit alone and every other net none.
+#[test]
+fn a_terminal_on_no_net_or_past_the_extraction_is_dropped() {
+    let classified = classify(&mixed_netlist());
+    let mut devices = DeviceTable::default();
+    devices.terminal_net = vec![NetId(0), NetId::NONE, NetId(1_000)];
+    devices.terminal_role = vec![
+        TerminalRole::Gate,
+        TerminalRole::Drain,
+        TerminalRole::Source,
+    ];
+    let mut facts = NetFacts::default();
+    classify_nets_into(&classified.nets, &devices, &mut facts);
+    assert_eq!(facts.role.len(), classified.nets.net_count());
+    assert_eq!(facts.role[0], RoleMask::GATE);
+    assert!(
+        facts.role[1..].iter().all(|&m| m == RoleMask::NONE),
+        "{facts:?}"
+    );
+}

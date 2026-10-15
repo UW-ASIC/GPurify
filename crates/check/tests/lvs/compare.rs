@@ -11,11 +11,13 @@ use crate::common;
 use common::{
     assert_same_discrepancies, blames_device, blames_net, chain, differential_pair, discrepancies,
     flip, mos_and_bjt, mos_and_bjt_without_the_bjt, permute, random_graph, stacked_pair,
-    stacked_pair_with_params, GraphBuilder, NCH, NPN, VDD, VSS, WIDTH,
+    stacked_pair_with_params, GraphBuilder, LENGTH, NCH, NPN, RES, VDD, VSS, WIDTH,
 };
+use gpurify_check::lvs::graph::{from_reference, Graph};
 use gpurify_check::lvs::verdict::{Discrepancy, Inconclusive, Side, Verdict};
-use gpurify_check::lvs::{compare, CompareOptions};
+use gpurify_check::lvs::{compare, compare_logged, CompareOptions};
 use gpurify_ingest::deck::DeviceKind;
+use gpurify_ingest::netlist::{Netlist, RefNetId, SubcktId};
 use gpurify_ingest::StrId;
 use gpurify_testgen::Rng;
 
@@ -418,26 +420,80 @@ fn a_parameter_only_one_side_declares_is_not_evidence_of_agreement() {
     );
 }
 
-/// The mirror image, so the previous test is not satisfied by a comparator that
-/// only ever blames the reference. Swapping the two sides must swap the `side`
-/// field and nothing else — the same law
-/// `swapping_the_two_sides_reverses_every_side_in_the_report` states for
-/// terminals.
+/// Oracle: the decision on testing-plan F68. Parameter presence is per
+/// device: the layout measures, and each reference card says which measures
+/// its own device is sized by. Here the reference sizes its upper `NCH` card
+/// by `W` and leaves the lower card's out, so the lower pair compares no `W`
+/// and the upper pair compares theirs: a match, where sizing per model used
+/// to report the layout's lower `W` as `undeclared_param`. The upper card's
+/// `W` still has to agree, and a reference that sizes `NCH` by nothing says
+/// nothing against the layout's `W`s either.
 #[test]
-fn the_side_that_declared_the_lone_parameter_is_the_side_the_report_names() {
+fn a_measure_the_paired_card_omits_is_not_compared() {
+    let layout = stacked_pair_with_params(&[(WIDTH, 1.0)], &[(WIDTH, 1.0)]);
     let verdict = compare(
-        &stacked_pair_with_params(&[(WIDTH, 1.0)], &[]),
-        &stacked_pair_with_params(&[], &[]),
+        &layout,
+        &stacked_pair_with_params(&[], &[(WIDTH, 1.0)]),
         decisive(),
     );
+    assert_eq!(verdict, Verdict::Match, "the lower card states no W");
 
     assert_same_discrepancies(
-        discrepancies(&verdict),
-        &[Discrepancy::UndeclaredParam {
-            side: Side::Layout,
-            layout_device: 0,
-            ref_device: 0,
+        discrepancies(&compare(
+            &layout,
+            &stacked_pair_with_params(&[], &[(WIDTH, 2.0)]),
+            decisive(),
+        )),
+        &[Discrepancy::ParameterMismatch {
+            layout_device: 1,
+            ref_device: 1,
             param: WIDTH,
+            layout_value: 1.0,
+            ref_value: 2.0,
+        }],
+    );
+
+    let verdict = compare(&layout, &stacked_pair(), decisive());
+    assert_eq!(
+        verdict,
+        Verdict::Match,
+        "W is not how this reference sizes NCH"
+    );
+}
+
+/// Oracle: construct-from-answer, testing-plan F22. A reference that sizes
+/// its capacitor by `area` says nothing about its transistor's area, so the
+/// area the layout measured on every device is compared on the capacitor
+/// alone: the transistor's is not an undeclared parameter, and the
+/// capacitor's still has to agree.
+#[test]
+fn a_measure_is_compared_only_on_the_models_the_reference_declares_it_for() {
+    use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Pin, Source};
+    let graph = |mos: &[(StrId, f64)], cap: &[(StrId, f64)]| {
+        let mut builder = GraphBuilder::new(4);
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+            mos,
+        );
+        builder.device_with_params(DeviceKind::Capacitor, RES, &[(Pin(0), 2), (Pin(1), 3)], cap);
+        builder.finish()
+    };
+    let area = StrId(93);
+    let layout = graph(&[(area, 4.0)], &[(area, 2.0)]);
+    assert_eq!(
+        compare(&layout, &graph(&[], &[(area, 2.0)]), decisive()),
+        Verdict::Match
+    );
+    assert_same_discrepancies(
+        discrepancies(&compare(&layout, &graph(&[], &[(area, 3.0)]), decisive())),
+        &[Discrepancy::ParameterMismatch {
+            layout_device: 1,
+            ref_device: 1,
+            param: area,
+            layout_value: 2.0,
+            ref_value: 3.0,
         }],
     );
 }
@@ -514,9 +570,11 @@ fn no_round_budget_makes_a_netlist_differ_from_itself() {
     }
 }
 
-/// Oracle: construct-from-answer. The same structure with the tie-break allowed
-/// to fire matches, so the refusal above is the configuration talking and not
-/// the circuit.
+/// Oracle: law. A netlist compared against itself matches, and this one is
+/// genuinely symmetric: exchanging the two devices with their gate and drain
+/// nets is an automorphism, so refinement alone cannot pair them and only the
+/// tie-break reaches the match. A matcher that gives up on a tie, or pairs the
+/// halves crosswise, reports a mismatch here.
 #[test]
 fn the_same_symmetric_structure_matches_when_the_tie_break_may_fire() {
     let verdict = compare(&differential_pair(), &differential_pair(), decisive());
@@ -602,5 +660,421 @@ fn symmetric_devices_pair_by_parameters_not_by_row_order() {
         verdict,
         Verdict::Match,
         "a wrong size must still be reported"
+    );
+}
+
+/// Oracle: the `lvs` module docs' bounded symmetry search: a tie-break
+/// tries the parameter-closest reference node first and at most eight in
+/// all. Ten interchangeable dummies of ten different widths, written in
+/// opposite orders on the two sides: each layout dummy's exact twin is the
+/// closest, so they all pair and match, where trying candidates by row
+/// would run out of tries before reaching the twins at the far end.
+#[test]
+fn more_symmetric_devices_than_tries_pair_by_parameters() {
+    use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Source};
+    let dummies = |reversed: bool| {
+        let mut builder = GraphBuilder::new(2);
+        for k in 0..10u32 {
+            let k = if reversed { 9 - k } else { k };
+            builder.device_with_params(
+                DeviceKind::Mos,
+                NCH,
+                &[(Gate, 0), (Source, 0), (Drain, 1), (Bulk, 0)],
+                &[(WIDTH, f64::from(k + 1) * 1e-6)],
+            );
+        }
+        builder.finish()
+    };
+    assert_eq!(
+        compare(&dummies(false), &dummies(true), decisive()),
+        Verdict::Match
+    );
+}
+
+/// A two-terminal device of `kind` from net `first` to net `second`, beside a
+/// transistor whose gate sits on net 0: the gate gives net 0 a degree net 1
+/// lacks, so exchanging the two ends is not a relabelling (see
+/// [`a_bipolars_emitter_and_collector_are_not_interchangeable`]).
+fn anchored_two_terminal(kind: DeviceKind, first: u32, second: u32) -> Netlist {
+    Netlist {
+        subckt_name: vec![StrId(30)],
+        subckt_port_start: vec![0, 0],
+        subckt_device_start: vec![0, 2],
+        device_model: vec![StrId(40), NCH],
+        device_kind: vec![kind, DeviceKind::Mos],
+        device_terminal_start: vec![0, 2, 6],
+        terminal_net: [first, second, 0, 2, 3, 3].map(RefNetId).to_vec(),
+        device_param_start: vec![0, 0, 0],
+        net_name: (50..54).map(StrId).collect(),
+        net_subckt: vec![SubcktId(0); 4],
+        ..Netlist::default()
+    }
+}
+
+fn reference_verdict(kind: DeviceKind, swapped: bool) -> Verdict {
+    let drawn = from_reference(&anchored_two_terminal(kind, 0, 1), SubcktId(0));
+    let (a, b) = if swapped { (1, 0) } else { (0, 1) };
+    let written = from_reference(&anchored_two_terminal(kind, a, b), SubcktId(0));
+    compare(&drawn, &written, decisive())
+}
+
+/// Oracle: the device's definition. A diode conducts one way, so a diode
+/// written cathode-first is another circuit, and a capacitor's plates are not
+/// permuted either (Netgen's default). Each was a false clean while every
+/// `Pin(_)` shared one role (testing-plan F15).
+#[test]
+fn a_reversed_diode_or_capacitor_is_a_different_circuit() {
+    for kind in [DeviceKind::Diode, DeviceKind::Capacitor] {
+        assert_eq!(
+            reference_verdict(kind, false),
+            Verdict::Match,
+            "{kind:?} as drawn"
+        );
+        assert_ne!(
+            reference_verdict(kind, true),
+            Verdict::Match,
+            "a {kind:?} with its ends exchanged must not match"
+        );
+    }
+}
+
+/// Oracle: the device's definition. A resistor has no direction, so either
+/// end may be written first. The boundary on the test above: polarity must
+/// not leak into the one two-terminal device that has none.
+#[test]
+fn a_resistor_written_either_way_round_is_the_same_resistor() {
+    assert_eq!(
+        reference_verdict(DeviceKind::Resistor, true),
+        Verdict::Match,
+        "a resistor's ends are interchangeable"
+    );
+}
+
+/// Two NMOS in series from net 1 to net 3 through net 2, gates on 0, bulk on 4,
+/// each stating its `L`, which a series merge sums. Nets 0, 1, 3 and 4 are
+/// named ports; `middle` names net 2, and `middle_port` makes it a port as
+/// well.
+fn series_stack(middle: Option<StrId>, middle_port: bool) -> gpurify_check::lvs::Graph {
+    use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Source};
+    let mut builder = GraphBuilder::new(5);
+    builder.device_with_params(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 4)],
+        &[(LENGTH, 1.5e-7)],
+    );
+    builder.device_with_params(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, 2), (Drain, 3), (Bulk, 4)],
+        &[(LENGTH, 1.5e-7)],
+    );
+    for (net, name) in [(0, 60), (1, 61), (3, 63), (4, 64)] {
+        builder.name_net(net, StrId(name));
+        builder.port(net);
+    }
+    if let Some(name) = middle {
+        builder.name_net(2, name);
+    }
+    if middle_port {
+        builder.port(2);
+    }
+    builder.finish()
+}
+
+/// [`decisive`], told which parameter is `L`, so a stack can merge.
+fn sized() -> CompareOptions {
+    CompareOptions {
+        params: gpurify_check::lvs::ParamNames {
+            length: Some(LENGTH),
+            width: Some(WIDTH),
+            ..gpurify_check::lvs::ParamNames::default()
+        },
+        ..decisive()
+    }
+}
+
+/// Oracle: the stack is the same circuit on both sides. The layout's middle
+/// node is unlabelled and the reference's is named, as every reference net is;
+/// both must reduce to one device. Before B4 only the layout did, and the
+/// stack was a false mismatch (testing-plan F12).
+#[test]
+fn a_stack_matches_its_schematic_whether_or_not_the_middle_is_named() {
+    let layout = series_stack(None, false);
+    let reference = series_stack(Some(StrId(62)), false);
+    let (verdict, merges) = compare_logged(&layout, &reference, sized());
+    assert_eq!(verdict, Verdict::Match);
+    assert_eq!(merges.len(), 2, "each side merged its stack: {merges:?}");
+}
+
+/// Oracle: a label is a port, so the layout keeps a labelled middle node, and
+/// the reference net of the same name must be kept too or the two sides reduce
+/// differently. A schematic that does not name the node the same way still
+/// reduces, which is the mismatch a misnamed label deserves.
+#[test]
+fn a_labelled_middle_node_is_kept_on_both_sides() {
+    let layout = series_stack(Some(StrId(62)), true);
+    let (verdict, merges) = compare_logged(&layout, &series_stack(Some(StrId(62)), false), sized());
+    assert_eq!(verdict, Verdict::Match);
+    assert!(
+        merges.is_empty(),
+        "nothing merges across a labelled node: {merges:?}"
+    );
+    assert_ne!(
+        compare(&layout, &series_stack(Some(StrId(65)), false), sized()),
+        Verdict::Match,
+        "the label names a node the schematic does not"
+    );
+}
+
+/// Three-terminal MOS `(gate, source, drain, width)` on `nets` nets, in the
+/// order given.
+fn mos_circuit(nets: u32, devices: &[(u32, u32, u32, f64)]) -> Graph {
+    use gpurify_check::topology::TerminalRole::{Drain, Gate, Source};
+    let mut builder = GraphBuilder::new(nets);
+    for &(gate, source, drain, width) in devices {
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, gate), (Source, source), (Drain, drain)],
+            &[(WIDTH, width)],
+        );
+    }
+    builder.finish()
+}
+
+/// Oracle: law, testing-plan F58. A netlist matches itself in any card
+/// order. Refinement cannot tell these devices apart (every device has a
+/// gate and two channel ends on nets of one class, and every net carries
+/// one gate and two channel ends), yet they are not interchangeable:
+/// device 0 has all three terminals on net 0, while devices 1 and 2 swap
+/// under exchanging nets 1 and 2. Breaking that symmetry by pairing layout
+/// device 0 with whichever reference device comes first, as the greedy
+/// tie-break did, pairs it with one of the other two once the cards are
+/// reversed. Hand-derived from the circuit, not from a run.
+#[test]
+fn a_netlist_matches_itself_reversed_when_refinement_cannot_split_its_devices() {
+    let devices = [(0, 0, 0, 1e-6), (1, 1, 2, 1e-6), (2, 1, 2, 1e-6)];
+    let mut reversed = devices;
+    reversed.reverse();
+    let verdict = compare(
+        &mos_circuit(3, &devices),
+        &mos_circuit(3, &reversed),
+        CompareOptions::default(),
+    );
+    assert_eq!(verdict, Verdict::Match, "{verdict:?}");
+}
+
+/// Oracle: construct-from-answer, testing-plan F58. A three-device cycle
+/// (gate nets 0, 1, 2) whose reference states device 0 1.9 % wide, inside
+/// the 2 % tolerance: the same circuit. Devices 0 and 2 swap under
+/// exchanging nets 0 and 2, and device 1 is fixed, but refinement sees all
+/// three as one class. Closest parameters alone send layout device 0 to
+/// reference device 1, at distance 0, which no relabelling allows.
+#[test]
+fn a_cycle_with_one_device_inside_tolerance_matches() {
+    let layout = [(0, 0, 1, 1e-6), (1, 0, 2, 1e-6), (2, 1, 2, 1e-6)];
+    let mut reference = layout;
+    reference[0].3 = 1.019e-6;
+    let verdict = compare(
+        &mos_circuit(3, &layout),
+        &mos_circuit(3, &reference),
+        CompareOptions::default(),
+    );
+    assert_eq!(verdict, Verdict::Match, "{verdict:?}");
+}
+
+/// Oracle: law, testing-plan F58. Two two-stage buffers fed by net 0, the
+/// first stage of each 1 µm wide, the second 1 µm in one and 2 µm in the
+/// other. The two buffers are interchangeable to refinement (names take no
+/// part), so the first stages tie at distance 0; paired the wrong way round,
+/// the second stages pair 1 µm with 2 µm. Written in reverse, the netlist
+/// still matches itself. Nets: 0 the input, 1 ground, 2 and 3 the inner
+/// nodes, 4 and 5 the outputs.
+#[test]
+fn two_buffers_sized_apart_match_themselves_reversed() {
+    let devices = [
+        (0, 1, 2, 1e-6),
+        (2, 1, 4, 1e-6),
+        (0, 1, 3, 1e-6),
+        (3, 1, 5, 2e-6),
+    ];
+    let mut reversed = devices;
+    reversed.reverse();
+    let verdict = compare(
+        &mos_circuit(6, &devices),
+        &mos_circuit(6, &reversed),
+        CompareOptions::default(),
+    );
+    assert_eq!(verdict, Verdict::Match, "{verdict:?}");
+}
+
+/// Oracle: `KLayout`'s `consider_net_names` ("employ net names to resolve
+/// ambiguities"), by hand. One transistor whose source net `a` has a 1 pm²
+/// diffusion and drain net `b` a 2 pm² one, against a card stating 3 pm² at
+/// both ends: either pairing of `a` and `b` puts the diffusions equally far
+/// apart (2 and 1 pm² against 3 pm²), so they tie (testing-plan F98 decides
+/// nothing), and only names tell `a` from `b`. The reference lists `b`
+/// first, so the lowest reference net is `b`: paired by row order, the card's
+/// `as` would be read against the layout's drain, 2 pm². Paired by name it
+/// is read against the source, 1 pm², and the report says so. A card with
+/// the diffusions exchanged at its nets is the same transistor (F98). Breaks
+/// if names do not break the tie.
+#[test]
+fn nets_nothing_else_tells_apart_pair_by_name() {
+    use gpurify_check::lvs::ParamNames;
+    use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Source};
+    let [area_s, area_d, perim_s, perim_d] = [StrId(50), StrId(51), StrId(52), StrId(53)];
+    let [a, b, g, bulk] = [StrId(60), StrId(61), StrId(62), StrId(63)];
+    let options = CompareOptions {
+        params: ParamNames {
+            diffusion: [Some(area_s), Some(area_d), Some(perim_s), Some(perim_d)],
+            ..ParamNames::default()
+        },
+        ..decisive()
+    };
+    // `names[k]` names net `k`; the transistor's source is on `a`.
+    let mos = |names: [StrId; 4], diffusions: [f64; 2]| {
+        let at = |name: StrId| {
+            let net = names.iter().position(|&n| n == name).expect("named");
+            u32::try_from(net).expect("four nets")
+        };
+        let mut builder = GraphBuilder::new(4);
+        for (net, &name) in (0u32..).zip(&names) {
+            builder.name_net(net, name);
+        }
+        builder.device_with_params(
+            DeviceKind::Mos,
+            NCH,
+            &[
+                (Gate, at(g)),
+                (Source, at(a)),
+                (Drain, at(b)),
+                (Bulk, at(bulk)),
+            ],
+            &[(area_s, diffusions[0]), (area_d, diffusions[1])],
+        );
+        builder.finish()
+    };
+    let layout = mos([a, b, g, bulk], [1e-12, 2e-12]);
+    let reference = mos([b, a, g, bulk], [1e-12, 2e-12]);
+    assert_eq!(compare(&layout, &reference, options), Verdict::Match);
+    let exchanged = mos([b, a, g, bulk], [2e-12, 1e-12]);
+    assert_eq!(compare(&layout, &exchanged, options), Verdict::Match);
+    let level = mos([b, a, g, bulk], [3e-12, 3e-12]);
+    let verdict = compare(&layout, &level, options);
+    let source = discrepancies(&verdict).iter().find_map(|d| match *d {
+        Discrepancy::ParameterMismatch {
+            param,
+            layout_value,
+            ..
+        } if param == area_s => Some(layout_value),
+        _ => None,
+    });
+    assert_eq!(source, Some(1e-12), "{verdict:?}");
+}
+
+/// Two transistors in a chain, the second gated by the first's drain:
+/// gate 0, source 1, drain 2; then gate 2, source 3, drain 4; one bulk on
+/// net 3. Rigid: no two nets or devices trade places. The second is of
+/// model `second`, and `extra` adds a third, gate 0, source 1, drain 4.
+fn chain_of_two(second: StrId, extra: bool) -> Graph {
+    use gpurify_check::topology::TerminalRole::{Bulk, Drain, Gate, Source};
+    let mut builder = GraphBuilder::new(5);
+    builder.device(
+        DeviceKind::Mos,
+        NCH,
+        &[(Gate, 0), (Source, 1), (Drain, 2), (Bulk, 3)],
+    );
+    builder.device(
+        DeviceKind::Mos,
+        second,
+        &[(Gate, 2), (Source, 3), (Drain, 4), (Bulk, 3)],
+    );
+    if extra {
+        builder.device(
+            DeviceKind::Mos,
+            NCH,
+            &[(Gate, 0), (Source, 1), (Drain, 4), (Bulk, 3)],
+        );
+    }
+    builder.finish()
+}
+
+/// Oracle: construct-from-answer, and `KLayout`'s report of "two devices
+/// that are identified but have different device classes". The reference
+/// writes the second transistor `PCH`, the layout draws it `NCH`, and
+/// nothing else differs, so the report is that one pair with its two
+/// models, and nothing else; both ways round it is the mirror image. With a
+/// device added as well, the models are not all that differs, and the
+/// comparison by model stands: unpaired devices, no model mismatch. Breaks
+/// if a model swap is reported as unpaired devices, or a model mismatch is
+/// claimed where the wiring differs too.
+#[test]
+fn a_device_whose_model_alone_differs_is_one_model_mismatch() {
+    const PCH: StrId = common::PCH;
+    let verdict = compare(
+        &chain_of_two(NCH, false),
+        &chain_of_two(PCH, false),
+        decisive(),
+    );
+    let expected = [Discrepancy::ModelMismatch {
+        layout_device: 1,
+        ref_device: 1,
+        layout_model: NCH,
+        ref_model: PCH,
+    }];
+    assert_same_discrepancies(discrepancies(&verdict), &expected);
+    let backward = compare(
+        &chain_of_two(PCH, false),
+        &chain_of_two(NCH, false),
+        decisive(),
+    );
+    let flipped: Vec<Discrepancy> = expected.iter().map(flip).collect();
+    assert_same_discrepancies(discrepancies(&backward), &flipped);
+
+    let found = compare(
+        &chain_of_two(NCH, false),
+        &chain_of_two(PCH, true),
+        decisive(),
+    );
+    let found = discrepancies(&found);
+    assert!(
+        !found
+            .iter()
+            .any(|d| matches!(d, Discrepancy::ModelMismatch { .. })),
+        "a model mismatch claimed where the wiring differs too: {found:?}"
+    );
+    assert!(found
+        .iter()
+        .any(|d| matches!(d, Discrepancy::UnpairedDevice { .. })));
+}
+
+/// Oracle: construct-from-answer, `ParameterMismatch`'s contract. The
+/// layout measures `W` and `L` on both devices of [`stacked_pair`], the
+/// reference states only `L`: the `W` it omits is not compared (it sorts
+/// before `L`, so it is passed over on the way to `L`), and `L` is. An
+/// equal `L` matches; the upper card's `L` doubled is one mismatch naming
+/// it with both values.
+#[test]
+fn a_measure_sorting_before_the_card_s_parameter_is_passed_over() {
+    let measured = [(WIDTH, 1.0), (LENGTH, 0.5)];
+    let layout = stacked_pair_with_params(&measured, &measured);
+    let card = [(LENGTH, 0.5)];
+    let verdict = compare(&layout, &stacked_pair_with_params(&card, &card), decisive());
+    assert_eq!(verdict, Verdict::Match);
+    assert_same_discrepancies(
+        discrepancies(&compare(
+            &layout,
+            &stacked_pair_with_params(&card, &[(LENGTH, 1.0)]),
+            decisive(),
+        )),
+        &[Discrepancy::ParameterMismatch {
+            layout_device: 1,
+            ref_device: 1,
+            param: LENGTH,
+            layout_value: 0.5,
+            ref_value: 1.0,
+        }],
     );
 }

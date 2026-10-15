@@ -1,0 +1,13 @@
+# The foundry repositories tests/foundry reads, each pinned to a commit.
+# Checked out at ~/.cache/gpurify/foundry/<name>-<commit> with
+#   git sparse-checkout set --no-cone <paths>
+# as the `oracles` job of .github/workflows/nightly.yml does; nothing of
+# them is vendored. All are Apache-2.0 but sky130_klayout_pdk's deck, which
+# is GPL-3.0 and is only run, never copied.
+# name	repository	commit	paths
+gf180mcu_fd_pv	https://github.com/fossi-foundation/globalfoundries-pdk-libs-gf180mcu_fd_pv	b390a163ab86205006038a4a7eff73b17d54b814	/klayout/drc/ !/klayout/drc/testing/unit/*.lyrdb
+gf180mcu_fd_sc_mcu7t5v0	https://github.com/fossi-foundation/globalfoundries-pdk-libs-gf180mcu_fd_sc_mcu7t5v0	0ef8889a8df0acf959683fbe73013f342a2206a2	/cells/*/*.gds
+sky130_klayout_pdk	https://github.com/fossi-foundation/sky130_klayout_pdk	4ea0975391feacbdac697bf07029d8908d292613	/tech/sky130/drc/sky130A_mr.drc
+open_pdks	https://github.com/RTimothyEdwards/open_pdks	0ec4fa67eade28cd0a4352c04df981840809427b	/sky130/klayout/test_violators.gds
+sky130_fd_sc_hd	https://github.com/google/skywater-pdk-libs-sky130_fd_sc_hd	ac7fb61f06e6470b94e8afdf7c25268f62fbd7b1	/cells/*/*.gds
+ihp_open_pdk	https://github.com/IHP-GmbH/IHP-Open-PDK	5e6d592e4002946a4616f798c357f0f3c06cf3b6	/ihp-sg13g2/libs.tech/klayout/tech/drc/ihp-sg13g2.drc /ihp-sg13g2/libs.tech/klayout/tech/drc/rule_decks/ /ihp-sg13g2/libs.tech/klayout/tech/drc/testing/testcases/unit/ !/ihp-sg13g2/libs.tech/klayout/tech/drc/testing/testcases/unit/npnsubstratetie.gds !/ihp-sg13g2/libs.tech/klayout/tech/drc/testing/testcases/unit/density/ !/ihp-sg13g2/libs.tech/klayout/tech/drc/testing/testcases/unit/antenna.gds !/ihp-sg13g2/libs.tech/klayout/tech/drc/testing/testcases/unit/pad.gds !/ihp-sg13g2/libs.tech/klayout/tech/drc/testing/testcases/unit/copperpillar.gds !/ihp-sg13g2/libs.tech/klayout/tech/drc/testing/testcases/unit/solderbump.gds /ihp-sg13g2/libs.tech/klayout/python/sg13g2_pycell_lib/sg13g2_tech_mod.json /ihp-sg13g2/libs.ref/sg13g2_stdcell/gds/

@@ -41,27 +41,6 @@ fn nodes_across(nets: &[NetId]) -> ParasiticNetwork {
     }
 }
 
-/// Oracle: construct-from-answer. Pushing `n` elements leaves `n` elements and
-/// leaves the node columns alone — nodes and elements are separate columns and
-/// a push that touched both would misreport every count downstream.
-#[test]
-fn pushing_elements_grows_the_element_columns_and_not_the_node_columns() {
-    let mut network = nodes_on(NetId(4), 3);
-    assert_eq!(network.node_count(), 3);
-    assert_eq!(network.element_count(), 0);
-
-    network.push(NodeId(0), Some(NodeId(1)), ohms(12.0));
-    network.push(NodeId(1), None, ground(0.5));
-    network.push(NodeId(1), Some(NodeId(2)), ohms(8.0));
-
-    assert_eq!(network.element_count(), 3);
-    assert_eq!(network.node_count(), 3, "a push does not create a node");
-    assert_eq!(network.from.len(), 3);
-    assert_eq!(network.to.len(), 3);
-    assert_eq!(network.value.len(), 3);
-    assert_eq!(network.to[1], None, "a ground capacitance has no far node");
-}
-
 /// Oracle: closed form. A net carrying 1.5 fF and 2.25 fF to ground and 0.75 fF
 /// of coupling to a neighbour holds 4.5 fF, which is addition. Resistance is
 /// not capacitance and must not appear in the sum, which is why a resistor

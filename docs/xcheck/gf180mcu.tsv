@@ -1,0 +1,734 @@
+# Ledger F2: pdks/gf180mcu.deck against the foundry's KLayout deck,
+# globalfoundries-pdk-libs-gf180mcu_fd_pv klayout/drc (variant E: 6 metals,
+# 9 kA MetalTop, MIM option B; pinned in tests/foundry/pdks.tsv).
+# tests/foundry holds every row to it.
+#   ours     our rule ids (several: one foundry check our deck splits)
+#   foundry  the rule id the unit test structures label (11/222 text)
+#   check    the foundry deck's report categories for it
+#   status   agrees | differs | ours_missing | theirs_missing | not_comparable
+#   note     how it differs, or why one side has no rule
+# Compared on the fd_pv unit structures (klayout/drc/testing/unit: pass boxes
+# on 2/222 must stay clean, fail boxes on 3/222 must be flagged) and on every
+# gf180mcu_fd_sc_mcu7t5v0 cell (held clean).
+ours	foundry	check	status	note
+LPW.2b LPW.2b.notch	LPW.2b_LV LPW.2b_MV	LPW.2b_LV LPW.2b_MV	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+NW.1a	NW.1a_LV NW.1a_MV	NW.1a_LV NW.1a_MV	agrees	
+NW.1b	NW.1b_LV NW.1b_MV	NW.1b_LV NW.1b_MV	agrees	
+NW.5	NW.5_LV NW.5_MV	NW.5_LV NW.5_MV	agrees	
+PL.2_5V_n PL.2_5V_p	PL.2_MV	PL.2_MV	differs	The deck reads L from the gate's edges on COMP's edges; bent gates (SideEdge90) and a poly narrowed inside the channel are missed. Needs channel length (H).
+PL.4	PL.4_LV PL.4_MV	PL.4_LV PL.4_MV	differs	GPurify's extension measures each gate per axis Poly2 crosses COMP: a poly over only a COMP corner fails closed (2 pass structures flagged), and a poly overhanging a COMP edge it does not cross by 215 nm is missed (catalog DRC-045 partial).
+OFFGRID	cap_mk_OFFGRID comp_OFFGRID comp_label_OFFGRID contact_OFFGRID dnwell_OFFGRID drc_bjt_OFFGRID dualgate_OFFGRID esd_OFFGRID esd_mk_OFFGRID fusetop_OFFGRID ldmos_xtor_OFFGRID lvpwell_OFFGRID metal1_OFFGRID metal1_label_OFFGRID metal1_res_OFFGRID metal2_OFFGRID metal2_label_OFFGRID metal2_res_OFFGRID metal3_OFFGRID metal3_dummy_OFFGRID metal3_label_OFFGRID metal3_res_OFFGRID metal4_OFFGRID metal4_dummy_OFFGRID metal4_label_OFFGRID metal5_OFFGRID metal5_dummy_OFFGRID metal5_label_OFFGRID metal6_res_OFFGRID metaltop_OFFGRID metaltop_dummy_OFFGRID metaltop_label_OFFGRID mos_cap_mk_OFFGRID mvpsd_OFFGRID mvsd_OFFGRID nat_OFFGRID nplus_OFFGRID nwell_OFFGRID otp_mk_OFFGRID pad_OFFGRID plfuse_OFFGRID poly2_OFFGRID poly2_dummy_OFFGRID poly2_label_OFFGRID pplus_OFFGRID res_mk_OFFGRID resistor_OFFGRID sab_OFFGRID v5_xtor_OFFGRID via1_OFFGRID via2_OFFGRID via3_OFFGRID via4_OFFGRID via5_OFFGRID	cap_mk_OFFGRID comp_OFFGRID comp_label_OFFGRID contact_OFFGRID dnwell_OFFGRID drc_bjt_OFFGRID dualgate_OFFGRID esd_OFFGRID esd_mk_OFFGRID fusetop_OFFGRID ldmos_xtor_OFFGRID lvpwell_OFFGRID metal1_OFFGRID metal1_label_OFFGRID metal1_res_OFFGRID metal2_OFFGRID metal2_label_OFFGRID metal2_res_OFFGRID metal3_OFFGRID metal3_dummy_OFFGRID metal3_label_OFFGRID metal3_res_OFFGRID metal4_OFFGRID metal4_dummy_OFFGRID metal4_label_OFFGRID metal5_OFFGRID metal5_dummy_OFFGRID metal5_label_OFFGRID metal6_res_OFFGRID metaltop_OFFGRID metaltop_dummy_OFFGRID metaltop_label_OFFGRID mos_cap_mk_OFFGRID mvpsd_OFFGRID mvsd_OFFGRID nat_OFFGRID nplus_OFFGRID nwell_OFFGRID otp_mk_OFFGRID pad_OFFGRID plfuse_OFFGRID poly2_OFFGRID poly2_dummy_OFFGRID poly2_label_OFFGRID pplus_OFFGRID res_mk_OFFGRID resistor_OFFGRID sab_OFFGRID v5_xtor_OFFGRID via1_OFFGRID via2_OFFGRID via3_OFFGRID via4_OFFGRID via5_OFFGRID	agrees	
+ACUTE	cap_mk_ACUTE comp_ACUTE comp_label_ACUTE contact_ACUTE dnwell_ACUTE drc_bjt_ACUTE dualgate_ACUTE esd_ACUTE esd_mk_ACUTE fusetop_ACUTE ldmos_xtor_ACUTE lvpwell_ACUTE metal1_ACUTE metal1_label_ACUTE metal1_res_ACUTE metal2_ACUTE metal2_label_ACUTE metal2_res_ACUTE metal3_ACUTE metal3_dummy_ACUTE metal3_label_ACUTE metal3_res_ACUTE metal4_ACUTE metal4_dummy_ACUTE metal4_label_ACUTE metal5_ACUTE metal5_dummy_ACUTE metal5_label_ACUTE metal6_res_ACUTE metaltop_ACUTE metaltop_dummy_ACUTE metaltop_label_ACUTE mos_cap_mk_ACUTE mvpsd_ACUTE mvsd_ACUTE nat_ACUTE nplus_ACUTE nwell_ACUTE otp_mk_ACUTE pad_ACUTE plfuse_ACUTE poly2_ACUTE poly2_dummy_ACUTE poly2_label_ACUTE pplus_ACUTE res_mk_ACUTE resistor_ACUTE sab_ACUTE v5_xtor_ACUTE via1_ACUTE via2_ACUTE via3_ACUTE via4_ACUTE via5_ACUTE	cap_mk_ACUTE comp_ACUTE comp_label_ACUTE contact_ACUTE dnwell_ACUTE drc_bjt_ACUTE dualgate_ACUTE esd_ACUTE esd_mk_ACUTE fusetop_ACUTE ldmos_xtor_ACUTE lvpwell_ACUTE metal1_ACUTE metal1_label_ACUTE metal1_res_ACUTE metal2_ACUTE metal2_label_ACUTE metal2_res_ACUTE metal3_ACUTE metal3_dummy_ACUTE metal3_label_ACUTE metal3_res_ACUTE metal4_ACUTE metal4_dummy_ACUTE metal4_label_ACUTE metal5_ACUTE metal5_dummy_ACUTE metal5_label_ACUTE metal6_res_ACUTE metaltop_ACUTE metaltop_dummy_ACUTE metaltop_label_ACUTE mos_cap_mk_ACUTE mvpsd_ACUTE mvsd_ACUTE nat_ACUTE nplus_ACUTE nwell_ACUTE otp_mk_ACUTE pad_ACUTE plfuse_ACUTE poly2_ACUTE poly2_dummy_ACUTE poly2_label_ACUTE pplus_ACUTE res_mk_ACUTE resistor_ACUTE sab_ACUTE v5_xtor_ACUTE via1_ACUTE via2_ACUTE via3_ACUTE via4_ACUTE via5_ACUTE	agrees	
+ANT.2 ANT.2.DG	ANT.16_i_ANT.2 ANT.16_ii_ANT.2	ANT.16_i_ANT.2 ANT.16_ii_ANT.2	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+ANT.3 ANT.3.DG	ANT.16_i_ANT.3 ANT.16_ii_ANT.3	ANT.16_i_ANT.3 ANT.16_ii_ANT.3	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+ANT.4 ANT.4.DG	ANT.16_i_ANT.4 ANT.16_ii_ANT.4	ANT.16_i_ANT.4 ANT.16_ii_ANT.4	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+ANT.5 ANT.5.DG	ANT.16_i_ANT.5 ANT.16_ii_ANT.5	ANT.16_i_ANT.5 ANT.16_ii_ANT.5	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+ANT.6 ANT.6.DG	ANT.16_i_ANT.6 ANT.16_ii_ANT.6	ANT.16_i_ANT.6 ANT.16_ii_ANT.6	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+ANT.7 ANT.7.DG	ANT.16_i_ANT.7 ANT.16_ii_ANT.7	ANT.16_i_ANT.7 ANT.16_ii_ANT.7	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+ANT.9 ANT.9.DG	ANT.16_i_ANT.9 ANT.16_ii_ANT.9	ANT.16_i_ANT.9 ANT.16_ii_ANT.9	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+ANT.10 ANT.10.DG	ANT.16_i_ANT.10 ANT.16_ii_ANT.10	ANT.16_i_ANT.10 ANT.16_ii_ANT.10	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+ANT.11 ANT.11.DG	ANT.16_i_ANT.11 ANT.16_ii_ANT.11	ANT.16_i_ANT.11 ANT.16_ii_ANT.11	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+ANT.12 ANT.12.DG	ANT.16_i_ANT.12 ANT.16_ii_ANT.12	ANT.16_i_ANT.12 ANT.16_ii_ANT.12	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+ANT.13 ANT.13.DG	ANT.16_i_ANT.13 ANT.16_ii_ANT.13	ANT.16_i_ANT.13 ANT.16_ii_ANT.13	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+DN.1	DN.1	DN.1	agrees	
+DN.2a DN.2a.notch	DN.2a	DN.2a	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+LPW.1_3.3V	LPW.1_LV	LPW.1_LV	agrees	
+LPW.1_5V	LPW.1_MV	LPW.1_MV	agrees	
+LPW.3	LPW.3	LPW.3	agrees	
+LPW.11	LPW.11	LPW.11	agrees	
+NW.2a_3.3V NW.2a_3.3V.notch	NW.2a_LV	NW.2a_LV	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+NW.2a_5V NW.2a_5V.notch	NW.2a_MV	NW.2a_MV	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+NW.3	NW.3	NW.3	agrees	
+DF.1a_3.3V	DF.1a_LV	DF.1a_LV	agrees	
+DF.1a_5V	DF.1a_MV	DF.1a_MV	agrees	
+DF.1c	DF.1c	DF.1c	agrees	
+DF.2a_3.3V	DF.2a_LV	DF.2a_LV	agrees	
+DF.2a_5V	DF.2a_MV	DF.2a_MV	agrees	
+DF.2b	DF.2b	DF.2b	agrees	
+DF.3a_3.3V DF.3a_3.3V.notch	DF.3a_LV	DF.3a_LV	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+DF.3a_5V DF.3a_5V.notch	DF.3a_MV	DF.3a_MV	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+DF.3c_3.3V DF.3c_3.3V.notch	DF.3c_LV	DF.3c_LV	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+DF.4a_3.3V	DF.4a_LV	DF.4a_LV	agrees	
+DF.4a_5V	DF.4a_MV	DF.4a_MV	agrees	
+DF.4b_3.3V	DF.4b_LV	DF.4b_LV	agrees	
+DF.4b_5V	DF.4b_MV	DF.4b_MV	agrees	
+DF.4c_3.3V	DF.4c_LV	DF.4c_LV	agrees	
+DF.4c_5V	DF.4c_MV	DF.4c_MV	agrees	
+DF.4d_3.3V	DF.4d_LV	DF.4d_LV	agrees	
+DF.4d_5V	DF.4d_MV	DF.4d_MV	agrees	
+DF.4e_3.3V	DF.4e_LV	DF.4e_LV	agrees	
+DF.4e_5V	DF.4e_MV	DF.4e_MV	agrees	
+DF.5_3.3V	DF.5_LV	DF.5_LV	agrees	
+DF.5_5V	DF.5_MV	DF.5_MV	agrees	
+DF.6_3.3V	DF.6_LV	DF.6_LV	agrees	
+DF.6_5V	DF.6_MV	DF.6_MV	agrees	
+DF.7_3.3V	DF.7_LV	DF.7_LV	agrees	
+DF.7_5V	DF.7_MV	DF.7_MV	agrees	
+DF.8_3.3V	DF.8_LV	DF.8_LV	agrees	
+DF.8_5V	DF.8_MV	DF.8_MV	agrees	
+DF.9	DF.9	DF.9	agrees	
+DF.10	DF.10	DF.10	agrees	
+DF.13_3.3V	DF.13_LV	DF.13_LV	differs	The deck holds every point of the PCOMP within 20 um of a tap (tap_distance); the foundry grows the tap 20 um inside the Nwell and holds the PCOMP's nearest point, so a PCOMP whose near edge is 19.96 um away passes there. The deck applies 3.3 V rows to 5 V shapes too, and the mcu7t5v0 cells, tapless by design (taps are in the filltie cells), fail both decks' 5 V rows.
+DF.13_5V	DF.13_MV	DF.13_MV	differs	As DF.13_3.3V (nearest point against every point); the tapless mcu7t5v0 cells fail both decks: they are clean only in a row with filltie cells.
+DF.14_3.3V	DF.14_LV	DF.14_LV	differs	As DF.13_3.3V, for NCOMP to a substrate tap.
+DF.14_5V	DF.14_MV	DF.14_MV	differs	As DF.13_5V, for NCOMP to a substrate tap.
+DF.16_3.3V	DF.16_LV	DF.16_LV	agrees	
+DF.16_5V	DF.16_MV	DF.16_MV	agrees	
+DF.17_3.3V	DF.17_LV	DF.17_LV	agrees	
+DF.17_5V	DF.17_MV	DF.17_MV	agrees	
+DF.18	DF.18	DF.18	agrees	
+DF.19_3.3V	DF.19_LV	DF.19_LV	agrees	
+DF.19_5V	DF.19_MV	DF.19_MV	agrees	
+DV.1	DV.1	DV.1	agrees	
+DV.2 DV.2.notch	DV.2	DV.2	agrees	
+DV.3	DV.3	DV.3	agrees	
+DV.5	DV.5	DV.5	agrees	
+DV.6	DV.6	DV.6	agrees	
+DV.8	DV.8	DV.8	agrees	
+PL.1_3.3V	PL.1_LV PL.1a_LV PL.1a_MV	PL.1_LV PL.1a_LV PL.1a_MV	agrees	
+PL.1_5V	PL.1_MV	PL.1_MV	agrees	
+PL.2_3.3V	PL.2_LV	PL.2_LV	differs	The deck reads L from the gate's edges on COMP's edges; a poly that narrows inside the channel (275 nm mid-gate) is missed. Needs channel length (H).
+PL.3a PL.3a.notch	PL.3a	PL.3a	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+PL.5a_3.3V	PL.5a_LV	PL.5a_LV	agrees	
+PL.5a_5V	PL.5a_MV	PL.5a_MV	agrees	
+PL.8	PL.8	PL.8	differs	The density unit structures' die is their 2/222 or 3/222 marker box, which the foundry's extent counts and GPurify's die (the deck's drawn layers) does not: a 13.99 % fail reads 100 %.
+NP.1	NP.1	NP.1	agrees	
+NP.2 NP.2.notch	NP.2	NP.2	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+NP.5a	NP.5a	NP.5a	agrees	
+NP.7	NP.7	NP.7	agrees	
+NP.8a	NP.8a	NP.8a	agrees	
+NP.8b	NP.8b	NP.8b	agrees	
+NP.9	NP.9	NP.9	agrees	
+NP.10	NP.10	NP.10	agrees	
+PP.1	PP.1	PP.1	agrees	
+PP.2 PP.2.notch	PP.2	PP.2	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+PP.5a	PP.5a	PP.5a	agrees	
+PP.7	PP.7	PP.7	agrees	
+PP.8a	PP.8a	PP.8a	agrees	
+PP.8b	PP.8b	PP.8b	agrees	
+PP.9	PP.9	PP.9	agrees	
+PP.10	PP.10	PP.10	agrees	
+SB.1	SB.1	SB.1	agrees	
+SB.2 SB.2.notch	SB.2	SB.2	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+SB.3	SB.3	SB.3	agrees	
+SB.4	SB.4	SB.4	agrees	
+SB.5a	SB.5a	SB.5a	agrees	
+SB.5b	SB.5b	SB.5b	agrees	
+SB.6	SB.6	SB.6	agrees	
+SB.7	SB.7	SB.7	differs	COMP flush with the SAB on two sides: GPurify's extension flags the flush sides (fails closed); the foundry's enclosed check passes it (catalog DRC-045 partial).
+SB.9	SB.9	SB.9	differs	SAB flush with the Poly2 on two sides: GPurify's extension flags the flush sides (fails closed); the foundry's enclosed check passes it (catalog DRC-045 partial).
+SB.10	SB.10	SB.10	agrees	
+SB.11	SB.11	SB.11	agrees	
+SB.12	SB.12	SB.12	agrees	
+SB.13	SB.13	SB.13	agrees	
+ESD.1	ESD.1	ESD.1	agrees	
+ESD.2 ESD.2.notch	ESD.2	ESD.2	agrees	
+ESD.3a	ESD.3a	ESD.3a	agrees	
+ESD.4b	ESD.4b	ESD.4b	agrees	
+ESD.5a	ESD.5a	ESD.5a	agrees	
+ESD.5b	ESD.5b	ESD.5b	agrees	
+ESD.8	ESD.8	ESD.8	agrees	
+CO.1	CO.1	CO.1	agrees	
+CO.2a	CO.2a	CO.2a	agrees	
+CO.2b	CO.2b	CO.2b	differs	The deck reads 4x4 or larger as a cluster of more than 15 cuts (deck note): a 4-row by 2-column cluster at 0.22 um beside a 4x4 array is missed, and the long contact clusters of the 16x and 20x mcu7t5v0 buffers and inverters, which are not 4x4 arrays, are flagged.
+CO.3	CO.3	CO.3	agrees	
+CO.4	CO.4	CO.4	agrees	
+CO.6	CO.6	CO.6	agrees	
+CO.7	CO.7	CO.7	agrees	
+CO.8	CO.8	CO.8	agrees	
+M1.1	M1.1	M1.1	agrees	
+M1.2a M1.2a.notch	M1.2a	M1.2a	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+M1.2b	M1.2b	M1.2b	agrees	
+M1.3	M1.3	M1.3	agrees	
+M1.4	M1.4	M1.4	differs	The density unit structures' die is their 2/222 or 3/222 marker box, which the foundry's extent counts and GPurify's die (the deck's drawn layers) does not: a 13.99 % fail reads 100 %.
+M2.1	M2.1	M2.1	agrees	
+M2.2a M2.2a.notch	M2.2a	M2.2a	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+M2.2b	M2.2b	M2.2b	agrees	
+M2.3	M2.3	M2.3	agrees	
+M2.4	M2.4	M2.4	differs	The density unit structures' die is their 2/222 or 3/222 marker box, which the foundry's extent counts and GPurify's die (the deck's drawn layers) does not: a 13.99 % fail reads 100 %.
+M3.1	M3.1	M3.1	agrees	
+M3.2a M3.2a.notch	M3.2a	M3.2a	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+M3.2b	M3.2b	M3.2b	agrees	
+M3.3	M3.3	M3.3	agrees	
+M3.4	M3.4	M3.4	differs	The density unit structures' die is their 2/222 or 3/222 marker box, which the foundry's extent counts and GPurify's die (the deck's drawn layers) does not: a 13.99 % fail reads 100 %.
+M4.1	M4.1	M4.1	agrees	
+M4.2a M4.2a.notch	M4.2a	M4.2a	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+M4.2b	M4.2b	M4.2b	agrees	
+M4.3	M4.3	M4.3	agrees	
+M4.4	M4.4	M4.4	differs	The density unit structures' die is their 2/222 or 3/222 marker box, which the foundry's extent counts and GPurify's die (the deck's drawn layers) does not: a 13.99 % fail reads 100 %.
+M5.1	M5.1	M5.1	agrees	
+M5.2a M5.2a.notch	M5.2a	M5.2a	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+M5.2b	M5.2b	M5.2b	agrees	
+M5.3	M5.3	M5.3	agrees	
+M5.4	M5.4	M5.4	differs	The density unit structures' die is their 2/222 or 3/222 marker box, which the foundry's extent counts and GPurify's die (the deck's drawn layers) does not: a 13.99 % fail reads 100 %.
+V1.1	V1.1	V1.1	agrees	
+V1.2a	V1.2a	V1.2a	differs	The fd_pv Singular fail (two vias meeting only at a corner): GPurify reads them as one figure (the connected corner model), which V1.1 flags as not 260 x 260 nm; the foundry's KLayout space flags it as 0 spacing. Compared since H12: the unit layout's 45-degree metal no longer refuses the run.
+V1.2b	V1.2b	V1.2b	differs	The deck reads 4x4 or larger as a cluster of more than 15 cuts (deck note): a 4x4 array less one corner plus one cut at 0.26 um is held to 0.36 um.
+V1.4a	V1.4a	V1.4a	agrees	
+V2.1	V2.1	V2.1	agrees	
+V2.2a	V2.2a	V2.2a	differs	The fd_pv Singular fail (two vias meeting only at a corner): GPurify reads them as one figure (the connected corner model), which V2.1 flags as not 260 x 260 nm; the foundry's KLayout space flags it as 0 spacing. Compared since H12: the unit layout's 45-degree metal no longer refuses the run.
+V2.2b	V2.2b	V2.2b	differs	As V1.2b.
+V2.4a	V2.4a	V2.4a	agrees	
+V3.1	V3.1	V3.1	agrees	
+V3.2a	V3.2a	V3.2a	differs	The fd_pv Singular fail (two vias meeting only at a corner): GPurify reads them as one figure (the connected corner model), which V3.1 flags as not 260 x 260 nm; the foundry's KLayout space flags it as 0 spacing. Compared since H12: the unit layout's 45-degree metal no longer refuses the run.
+V3.2b	V3.2b	V3.2b	differs	As V1.2b.
+V3.4a	V3.4a	V3.4a	agrees	
+V4.1	V4.1	V4.1	agrees	
+V4.2a	V4.2a	V4.2a	differs	The fd_pv Singular fail (two vias meeting only at a corner): GPurify reads them as one figure (the connected corner model), which V4.1 flags as not 260 x 260 nm; the foundry's KLayout space flags it as 0 spacing. Compared since H12: the unit layout's 45-degree metal no longer refuses the run.
+V4.2b	V4.2b	V4.2b	differs	As V1.2b.
+V4.4a	V4.4a	V4.4a	agrees	
+V5.1	V5.1	V5.1	agrees	
+V5.2a	V5.2a	V5.2a	differs	The fd_pv Singular fail (two vias meeting only at a corner): GPurify reads them as one figure (the connected corner model), which V5.1 flags as not 260 x 260 nm; the foundry's KLayout space flags it as 0 spacing. Compared since H12: the unit layout's 45-degree metal no longer refuses the run.
+V5.2b	V5.2b	V5.2b	differs	As V1.2b.
+V5.4a	V5.4a	V5.4a	agrees	
+V2.3b	V2.3b	V2.3b	agrees	
+V3.3b	V3.3b	V3.3b	agrees	
+V4.3b	V4.3b	V4.3b	agrees	
+V5.3b	V5.3b	V5.3b	agrees	
+MT.1	MT.1	MT.1	agrees	
+MT.2a MT.2a.notch	MT.2a	MT.2a	agrees	
+MT.2b	MT.2b	MT.2b	agrees	
+MT.3	MT.3	MT.3	differs	The density unit structures' die is their 2/222 or 3/222 marker box, which the foundry's extent counts and GPurify's die (the deck's drawn layers) does not: a 13.99 % fail reads 100 %.
+MT.4	MT.4	MT.4	agrees	
+MIMTM.1	MIMTM.1	MIMTM.1	agrees	
+MIMTM.2	MIMTM.2	MIMTM.2	agrees	
+MIMTM.3	MIMTM.3	MIMTM.3	agrees	
+MIMTM.4	MIMTM.4	MIMTM.4	agrees	
+MIMTM.5	MIMTM.5	MIMTM.5	agrees	
+MIMTM.6 MIMTM.6.notch	MIMTM.6	MIMTM.6	agrees	
+MIMTM.8a	MIMTM.8a	MIMTM.8a	agrees	
+MIMTM.9	MIMTM.9	MIMTM.9	agrees	
+NAT.1	NAT.1	NAT.1	agrees	
+NAT.2	NAT.2	NAT.2	agrees	
+NAT.3	NAT.3	NAT.3	agrees	
+NAT.7 NAT.7.notch	NAT.7	NAT.7	agrees	
+PRES.1	PRES.1	PRES.1	agrees	
+PRES.2	PRES.2	PRES.2	agrees	
+PRES.3	PRES.3	PRES.3	agrees	
+PRES.4	PRES.4	PRES.4	agrees	
+PRES.5	PRES.5	PRES.5	agrees	
+PRES.7	PRES.7	PRES.7	agrees	
+LRES.1	LRES.1	LRES.1	agrees	
+LRES.2	LRES.2	LRES.2	agrees	
+LRES.3	LRES.3	LRES.3	agrees	
+LRES.4	LRES.4	LRES.4	agrees	
+LRES.5	LRES.5	LRES.5	agrees	
+LRES.7	LRES.7	LRES.7	agrees	
+HRES.1 HRES.1.notch	HRES.1	HRES.1	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+HRES.2	HRES.2	HRES.2	agrees	
+HRES.3 HRES.3.notch	HRES.3	HRES.3	differs	The fd_pv Singular fail (two shapes meeting only at a corner): GPurify reads them as one figure with a 0-wide neck, which the width row flags; the foundry's KLayout space flags it as 0 spacing.
+HRES.4	HRES.4	HRES.4	agrees	
+HRES.5	HRES.5	HRES.5	agrees	
+HRES.6	HRES.6	HRES.6	agrees	
+HRES.7	HRES.7	HRES.7	agrees	
+HRES.8	HRES.8	HRES.8	agrees	
+ANT.1 ANT.1.DG	ANT.1	ANT.1	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+ANT.8 ANT.8.DG	ANT.8	ANT.8	not_comparable	an ERC antenna rule: the cross-check runs GPurify's DRC only
+EM.14.3_Mn	EM.14.3_Mn	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+EM.14.3_MT	EM.14.3_MT	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+EM.14.4_Vn	EM.14.4_Vn	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+EM.14.4_CO	EM.14.4_CO	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+LU.9_10	LU.9_10	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+floating_nwell	floating_nwell	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+floating_lvpwell	floating_lvpwell	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+floating_gate	floating_gate	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+tie_high_low	tie_high_low	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+multiple_drivers	multiple_drivers	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+ir_drop	ir_drop	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+unconnected_metaltop	unconnected_metaltop	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+ESD.clamp_path	ESD.clamp_path	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+OX.3v3	OX.3v3	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+OX.6v0	OX.6v0	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+DS.3v3	DS.3v3	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+DS.6v0	DS.6v0	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no electrical check
+LPW.12	LPW.12	LPW.12	agrees	
+NW.4	NW.4	NW.4	agrees	
+NW.6	NW.6	NW.6	agrees	
+DV.7	DV.7	DV.7	agrees	
+PL.9	PL.9	PL.9	agrees	
+PL.11	PL.11	PL.11	agrees	
+PL.12	PL.12	PL.12	agrees	
+SB.8	SB.8	SB.8	agrees	
+ESD.3b	ESD.3b	ESD.3b	agrees	
+ESD.7	ESD.7	ESD.7	agrees	
+ESD.9	ESD.9	ESD.9	agrees	
+CO.10	CO.10	CO.10	agrees	
+CO.11	CO.11	CO.11	agrees	
+MIMTM.10	MIMTM.10	MIMTM.10	agrees	
+NAT.10	NAT.10	NAT.10	agrees	
+NAT.11	NAT.11	NAT.11	agrees	
+NAT.12	NAT.12	NAT.12	agrees	
+V1.3a	V1.3a	V1.3a	agrees	
+DF.11	DF.11	DF.11	differs	The deck reads each straight butting edge (an L-shaped butt of 220 + 80 nm fails); the foundry reads the butted COMP's width (300 nm passes).
+-	ANT.16_iii_ANT.14_M4_MIMB	ANT.16_iii_ANT.14_M4_MIMB	ours_missing	ANT.14/ANT.15 MIM-area antenna: the gate is FuseTop, left out (deck note)
+-	ANT.16_iii_ANT.14_M5_MIMB	ANT.16_iii_ANT.14_M5_MIMB	ours_missing	ANT.14/ANT.15 MIM-area antenna: the gate is FuseTop, left out (deck note)
+-	ANT.16_iii_ANT.14_MT_MIMB	ANT.16_iii_ANT.14_MT_MIMB	ours_missing	ANT.14/ANT.15 MIM-area antenna: the gate is FuseTop, left out (deck note)
+-	ANT.16_iii_ANT.15_V3_MIMB	ANT.16_iii_ANT.15_V3_MIMB	ours_missing	ANT.14/ANT.15 MIM-area antenna: the gate is FuseTop, left out (deck note)
+-	ANT.16_iii_ANT.15_V4_MIMB	ANT.16_iii_ANT.15_V4_MIMB	ours_missing	ANT.14/ANT.15 MIM-area antenna: the gate is FuseTop, left out (deck note)
+-	ANT.16_iii_ANT.15_V5_MIMB	ANT.16_iii_ANT.15_V5_MIMB	ours_missing	ANT.14/ANT.15 MIM-area antenna: the gate is FuseTop, left out (deck note)
+-	BJT.1	BJT.1	ours_missing	vertical BJT rules: the BJTs are not recognised (deck note)
+-	BJT.2	BJT.2	ours_missing	vertical BJT rules: the BJTs are not recognised (deck note)
+-	BJT.3	BJT.3	ours_missing	vertical BJT rules: the BJTs are not recognised (deck note)
+CO.5a	CO.5a	CO.5a	agrees	
+CO.5b	CO.5b	CO.5b	agrees	
+CO.6a	CO.6a	CO.6a	differs	GPurify holds a contact on Metal1 narrower than 0.34 um to 0.06 um on both ends of one axis (enclosure opposite, below 0.34 um); the foundry reads only an end of line, an edge shorter than 0.34 um between two edges at least 0.24 um long. The contact at the narrow L-shaped Metal1 corner of gf180mcu_fd_sc_mcu7t5v0__oai33_2 (0.05 and 0.055 um on its short sides) is flagged by GPurify only.
+-	CO.6b	CO.6b	ours_missing	contact implant overlap on butted COMP / end-of-line overlap: needs edge checks (deck: waiting)
+-	CO.9	CO.9	ours_missing	contact straddling a butting edge: no forbidden row yet
+-	CUP.2	CUP.2	ours_missing	circuit-under-pad option: left out
+-	CUP.3	CUP.3	ours_missing	circuit-under-pad option: left out
+-	DCF.11a	DCF.11a	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DCF.12	DCF.12	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DCF.1a	DCF.1a	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DCF.1b	DCF.1b	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DCF.2b	DCF.2b	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DCF.4	DCF.4	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DCF.5	DCF.5	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DCF.6a	DCF.6a	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DCF.6b	DCF.6b	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DCF.6c	DCF.6c	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DCF.6d	DCF.6d	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DCF.8a	DCF.8a	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DE.2	DE.2	ours_missing	DE.* left out (deck note)
+-	DE.3	DE.3	ours_missing	DE.* left out (deck note)
+-	DE.4	DE.4	ours_missing	DE.* left out (deck note)
+-	DF.12	DF.12	ours_missing	COMP outside both implants: the schottky marker it exempts is not declared (deck: waiting)
+-	DF.3b	DF.3b	ours_missing	butted COMP space: needs edge checks
+-	DF.3c_MV	DF.3c_MV	ours_missing	the deck states DF.3c at 3.3 V only
+-	DM1.2b	DM1.2b	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM1.3	DM1.3	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM1.8	DM1.8	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM2.2b	DM2.2b	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM2.3	DM2.3	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM2.8	DM2.8	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM3.2b	DM3.2b	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM3.3	DM3.3	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM3.8	DM3.8	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM4.2b	DM4.2b	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM4.3	DM4.3	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM4.8	DM4.8	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM5.2b	DM5.2b	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM5.3	DM5.3	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM5.8	DM5.8	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM6.2b	DM6.2b	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM6.3	DM6.3	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DM6.8	DM6.8	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DN.2b	DN.2b	ours_missing	different-net well spacing: wells are not nets in the deck (waiting on net spacing)
+DN.3	DN.3	DN.3	differs	The foundry counts a PCOMP ring only when its hole meets exactly one DNWELL (interacting(dnwell, 1..1)); GPurify reads any ring whose hole holds the DNWELL, so a DNWELL with no ring of its own inside a larger ring holding several (the unit structures' frame) passes here.
+-	DPF.1	DPF.1	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DPF.11	DPF.11	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DPF.14	DPF.14	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DPF.16	DPF.16	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DPF.19	DPF.19	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DPF.2b	DPF.2b	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DPF.4	DPF.4	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DPF.5	DPF.5	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DPF.6a	DPF.6a	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DPF.6b	DPF.6b	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DPF.6c	DPF.6c	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DPF.6d	DPF.6d	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DPF.8	DPF.8	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DPF.9	DPF.9	ours_missing	dummy-fill rules: left out (the deck checks fill only through density)
+-	DV.9	DV.9	ours_missing	3.3 V and 5 V PMOS in one NWELL: left out (deck note)
+-	EF.01	EF.01	ours_missing	eFuse section: left out
+-	EF.02	EF.02	ours_missing	eFuse section: left out
+-	EF.03	EF.03	ours_missing	eFuse section: left out
+-	EF.04a	EF.04a	ours_missing	eFuse section: left out
+-	EF.04b	EF.04b	ours_missing	eFuse section: left out
+-	EF.04c	EF.04c	ours_missing	eFuse section: left out
+-	EF.04d	EF.04d	ours_missing	eFuse section: left out
+-	EF.05	EF.05	ours_missing	eFuse section: left out
+-	EF.06	EF.06	ours_missing	eFuse section: left out
+-	EF.07	EF.07	ours_missing	eFuse section: left out
+-	EF.08	EF.08	ours_missing	eFuse section: left out
+-	EF.09	EF.09	ours_missing	eFuse section: left out
+-	EF.10	EF.10	ours_missing	eFuse section: left out
+-	EF.11	EF.11	ours_missing	eFuse section: left out
+-	EF.12	EF.12	ours_missing	eFuse section: left out
+-	EF.13	EF.13	ours_missing	eFuse section: left out
+-	EF.14	EF.14	ours_missing	eFuse section: left out
+-	EF.15	EF.15	ours_missing	eFuse section: left out
+-	EF.16a	EF.16a	ours_missing	eFuse section: left out
+-	EF.16b	EF.16b	ours_missing	eFuse section: left out
+-	EF.17	EF.17	ours_missing	eFuse section: left out
+-	EF.18	EF.18	ours_missing	eFuse section: left out
+-	EF.19	EF.19	ours_missing	eFuse section: left out
+-	EF.20	EF.20	ours_missing	eFuse section: left out
+-	EF.21	EF.21	ours_missing	eFuse section: left out
+-	EF.22a	EF.22a	ours_missing	eFuse section: left out
+-	EF.22b	EF.22b	ours_missing	eFuse section: left out
+-	ESD.10	ESD.10	ours_missing	LVS_IO coverage: lvs_io is not declared
+ESD.4a	ESD.4a	ESD.4a	agrees	
+ESD.6	ESD.6	ESD.6	agrees	
+ESD.pl	ESD.pl	ESD.pl	agrees	
+-	GR.1	GR.1	ours_missing	guard-ring rules: left out
+-	GR.11	GR.11	ours_missing	guard-ring rules: left out
+-	GR.2	GR.2	ours_missing	guard-ring rules: left out
+-	GR.3	GR.3	ours_missing	guard-ring rules: left out
+-	GR.4	GR.4	ours_missing	guard-ring rules: left out
+-	GR.6	GR.6	ours_missing	guard-ring rules: left out
+-	HRES.10	HRES.10	ours_missing	RES_MK marking rules: left out
+-	HRES.12a	HRES.12a	ours_missing	RES_MK marking rules: left out
+-	HRES.12b	HRES.12b	ours_missing	RES_MK marking rules: left out
+-	HRES.9	HRES.9	ours_missing	SAB overlap in the resistor's width direction: needs edge checks (deck: waiting)
+-	LPW.2a_LV	LPW.2a_LV	ours_missing	different-net well spacing: wells are not nets in the deck (waiting on net spacing)
+-	LPW.2a_MV	LPW.2a_MV	ours_missing	different-net well spacing: wells are not nets in the deck (waiting on net spacing)
+-	LPW.5	LPW.5	ours_missing	which layer holds which is not confirmed against the manual (deck: waiting)
+LRES.6	LRES.6	LRES.6	agrees	
+-	LRES.9a	LRES.9a	ours_missing	RES_MK marking rules: left out
+-	LRES.9b	LRES.9b	ours_missing	RES_MK marking rules: left out
+-	LVS_BJT.1	LVS_BJT.1	ours_missing	vertical BJT rules: the BJTs are not recognised (deck note)
+-	MC.1	MC.1	ours_missing	mcell rules: left out
+-	MC.2	MC.2	ours_missing	mcell rules: left out
+-	MC.3	MC.3	ours_missing	mcell rules: left out
+-	MC.4	MC.4	ours_missing	mcell rules: left out
+-	MDN.1	MDN.1	ours_missing	LDMOS section: left out
+-	MDN.10a	MDN.10a	ours_missing	LDMOS section: left out
+-	MDN.10b	MDN.10b	ours_missing	LDMOS section: left out
+-	MDN.10c	MDN.10c	ours_missing	LDMOS section: left out
+-	MDN.10d	MDN.10d	ours_missing	LDMOS section: left out
+-	MDN.10ei	MDN.10ei	ours_missing	LDMOS section: left out
+-	MDN.10eii	MDN.10eii	ours_missing	LDMOS section: left out
+-	MDN.10f	MDN.10f	ours_missing	LDMOS section: left out
+-	MDN.11	MDN.11	ours_missing	LDMOS section: left out
+-	MDN.12	MDN.12	ours_missing	LDMOS section: left out
+-	MDN.13a	MDN.13a	ours_missing	LDMOS section: left out
+-	MDN.13b	MDN.13b	ours_missing	LDMOS section: left out
+-	MDN.13c	MDN.13c	ours_missing	LDMOS section: left out
+-	MDN.13d	MDN.13d	ours_missing	LDMOS section: left out
+-	MDN.14	MDN.14	ours_missing	LDMOS section: left out
+-	MDN.15a	MDN.15a	ours_missing	LDMOS section: left out
+-	MDN.15b	MDN.15b	ours_missing	LDMOS section: left out
+-	MDN.17	MDN.17	ours_missing	LDMOS section: left out
+-	MDN.2a	MDN.2a	ours_missing	LDMOS section: left out
+-	MDN.2b	MDN.2b	ours_missing	LDMOS section: left out
+-	MDN.3a	MDN.3a	ours_missing	LDMOS section: left out
+-	MDN.3b	MDN.3b	ours_missing	LDMOS section: left out
+-	MDN.4a	MDN.4a	ours_missing	LDMOS section: left out
+-	MDN.4b	MDN.4b	ours_missing	LDMOS section: left out
+-	MDN.5ai	MDN.5ai	ours_missing	LDMOS section: left out
+-	MDN.5aii	MDN.5aii	ours_missing	LDMOS section: left out
+-	MDN.5b	MDN.5b	ours_missing	LDMOS section: left out
+-	MDN.5c	MDN.5c	ours_missing	LDMOS section: left out
+-	MDN.6	MDN.6	ours_missing	LDMOS section: left out
+-	MDN.6a	MDN.6a	ours_missing	LDMOS section: left out
+-	MDN.7	MDN.7	ours_missing	LDMOS section: left out
+-	MDN.7a	MDN.7a	ours_missing	LDMOS section: left out
+-	MDN.8a	MDN.8a	ours_missing	LDMOS section: left out
+-	MDN.8b	MDN.8b	ours_missing	LDMOS section: left out
+-	MDN.9	MDN.9	ours_missing	LDMOS section: left out
+-	MDP.1	MDP.1	ours_missing	LDMOS section: left out
+-	MDP.10	MDP.10	ours_missing	LDMOS section: left out
+-	MDP.10a	MDP.10a	ours_missing	LDMOS section: left out
+-	MDP.10b	MDP.10b	ours_missing	LDMOS section: left out
+-	MDP.11	MDP.11	ours_missing	LDMOS section: left out
+-	MDP.12	MDP.12	ours_missing	LDMOS section: left out
+-	MDP.13a	MDP.13a	ours_missing	LDMOS section: left out
+-	MDP.13b	MDP.13b	ours_missing	LDMOS section: left out
+-	MDP.13c	MDP.13c	ours_missing	LDMOS section: left out
+-	MDP.15	MDP.15	ours_missing	LDMOS section: left out
+-	MDP.16a	MDP.16a	ours_missing	LDMOS section: left out
+-	MDP.16b	MDP.16b	ours_missing	LDMOS section: left out
+-	MDP.17a	MDP.17a	ours_missing	LDMOS section: left out
+-	MDP.17c	MDP.17c	ours_missing	LDMOS section: left out
+-	MDP.1a	MDP.1a	ours_missing	LDMOS section: left out
+-	MDP.2	MDP.2	ours_missing	LDMOS section: left out
+-	MDP.3	MDP.3	ours_missing	LDMOS section: left out
+-	MDP.3ai	MDP.3ai	ours_missing	LDMOS section: left out
+-	MDP.3aii	MDP.3aii	ours_missing	LDMOS section: left out
+-	MDP.3b	MDP.3b	ours_missing	LDMOS section: left out
+-	MDP.3c	MDP.3c	ours_missing	LDMOS section: left out
+-	MDP.3d	MDP.3d	ours_missing	LDMOS section: left out
+-	MDP.4	MDP.4	ours_missing	LDMOS section: left out
+-	MDP.4a	MDP.4a	ours_missing	LDMOS section: left out
+-	MDP.4b	MDP.4b	ours_missing	LDMOS section: left out
+-	MDP.5	MDP.5	ours_missing	LDMOS section: left out
+-	MDP.5a	MDP.5a	ours_missing	LDMOS section: left out
+-	MDP.6	MDP.6	ours_missing	LDMOS section: left out
+-	MDP.6a	MDP.6a	ours_missing	LDMOS section: left out
+-	MDP.7	MDP.7	ours_missing	LDMOS section: left out
+-	MDP.8	MDP.8	ours_missing	LDMOS section: left out
+-	MDP.9a	MDP.9a	ours_missing	LDMOS section: left out
+-	MDP.9b	MDP.9b	ours_missing	LDMOS section: left out
+-	MDP.9c	MDP.9c	ours_missing	LDMOS section: left out
+-	MDP.9d	MDP.9d	ours_missing	LDMOS section: left out
+-	MDP.9ei	MDP.9ei	ours_missing	LDMOS section: left out
+-	MDP.9eii	MDP.9eii	ours_missing	LDMOS section: left out
+-	MDP.9f	MDP.9f	ours_missing	LDMOS section: left out
+-	MIMTM.11	MIMTM.11	ours_missing	left out (deck note)
+-	MIMTM.7	MIMTM.7	ours_missing	which layer holds which is not confirmed against the manual (deck: waiting)
+MIMTM.8b	MIMTM.8b	MIMTM.8b	agrees	
+-	MSLOT1.0	MSLOT1.0	ours_missing	metal slot rules: left out
+-	MSLOT1.1	MSLOT1.1	ours_missing	metal slot rules: left out
+-	MSLOT1.2	MSLOT1.2	ours_missing	metal slot rules: left out
+-	MSLOT1.3	MSLOT1.3	ours_missing	metal slot rules: left out
+-	MSLOT1.4	MSLOT1.4	ours_missing	metal slot rules: left out
+-	MSLOT1.5	MSLOT1.5	ours_missing	metal slot rules: left out
+-	MSLOT1.7	MSLOT1.7	ours_missing	metal slot rules: left out
+-	MSLOT1.8	MSLOT1.8	ours_missing	metal slot rules: left out
+-	MSLOT1.9	MSLOT1.9	ours_missing	metal slot rules: left out
+-	MSLOT2.0	MSLOT2.0	ours_missing	metal slot rules: left out
+-	MSLOT2.1	MSLOT2.1	ours_missing	metal slot rules: left out
+-	MSLOT2.2	MSLOT2.2	ours_missing	metal slot rules: left out
+-	MSLOT2.3	MSLOT2.3	ours_missing	metal slot rules: left out
+-	MSLOT2.4	MSLOT2.4	ours_missing	metal slot rules: left out
+-	MSLOT2.5	MSLOT2.5	ours_missing	metal slot rules: left out
+-	MSLOT2.7	MSLOT2.7	ours_missing	metal slot rules: left out
+-	MSLOT2.8	MSLOT2.8	ours_missing	metal slot rules: left out
+-	MSLOT2.9	MSLOT2.9	ours_missing	metal slot rules: left out
+-	MSLOT3.0	MSLOT3.0	ours_missing	metal slot rules: left out
+-	MSLOT3.1	MSLOT3.1	ours_missing	metal slot rules: left out
+-	MSLOT3.2	MSLOT3.2	ours_missing	metal slot rules: left out
+-	MSLOT3.3	MSLOT3.3	ours_missing	metal slot rules: left out
+-	MSLOT3.4	MSLOT3.4	ours_missing	metal slot rules: left out
+-	MSLOT3.5	MSLOT3.5	ours_missing	metal slot rules: left out
+-	MSLOT3.7	MSLOT3.7	ours_missing	metal slot rules: left out
+-	MSLOT3.8	MSLOT3.8	ours_missing	metal slot rules: left out
+-	MSLOT3.9	MSLOT3.9	ours_missing	metal slot rules: left out
+-	MSLOT4.0	MSLOT4.0	ours_missing	metal slot rules: left out
+-	MSLOT4.1	MSLOT4.1	ours_missing	metal slot rules: left out
+-	MSLOT4.2	MSLOT4.2	ours_missing	metal slot rules: left out
+-	MSLOT4.3	MSLOT4.3	ours_missing	metal slot rules: left out
+-	MSLOT4.4	MSLOT4.4	ours_missing	metal slot rules: left out
+-	MSLOT4.5	MSLOT4.5	ours_missing	metal slot rules: left out
+-	MSLOT4.7	MSLOT4.7	ours_missing	metal slot rules: left out
+-	MSLOT4.8	MSLOT4.8	ours_missing	metal slot rules: left out
+-	MSLOT4.9	MSLOT4.9	ours_missing	metal slot rules: left out
+-	MSLOT5.0	MSLOT5.0	ours_missing	metal slot rules: left out
+-	MSLOT5.1	MSLOT5.1	ours_missing	metal slot rules: left out
+-	MSLOT5.2	MSLOT5.2	ours_missing	metal slot rules: left out
+-	MSLOT5.3	MSLOT5.3	ours_missing	metal slot rules: left out
+-	MSLOT5.4	MSLOT5.4	ours_missing	metal slot rules: left out
+-	MSLOT5.5	MSLOT5.5	ours_missing	metal slot rules: left out
+-	MSLOT5.7	MSLOT5.7	ours_missing	metal slot rules: left out
+-	MSLOT5.8	MSLOT5.8	ours_missing	metal slot rules: left out
+-	MSLOT5.9	MSLOT5.9	ours_missing	metal slot rules: left out
+-	MSLOT6.0	MSLOT6.0	ours_missing	metal slot rules: left out
+-	MSLOT6.1	MSLOT6.1	ours_missing	metal slot rules: left out
+-	MSLOT6.2	MSLOT6.2	ours_missing	metal slot rules: left out
+-	MSLOT6.3	MSLOT6.3	ours_missing	metal slot rules: left out
+-	MSLOT6.4	MSLOT6.4	ours_missing	metal slot rules: left out
+-	MSLOT6.5	MSLOT6.5	ours_missing	metal slot rules: left out
+-	MSLOT6.7	MSLOT6.7	ours_missing	metal slot rules: left out
+-	MSLOT6.8	MSLOT6.8	ours_missing	metal slot rules: left out
+-	MSLOT6.9	MSLOT6.9	ours_missing	metal slot rules: left out
+NAT.4	NAT.4	NAT.4	agrees	
+NAT.5	NAT.5	NAT.5	agrees	
+-	NAT.6	NAT.6	ours_missing	left out (deck note)
+-	NAT.8	NAT.8	ours_missing	which layer holds which is not confirmed against the manual (deck: waiting)
+-	NAT.9	NAT.9	ours_missing	left out (deck note)
+-	NP.11	NP.11	ours_missing	butting implant near well edge / gate extension: left out
+-	NP.12	NP.12	ours_missing	butting implant near well edge / gate extension: left out
+-	NP.3a	NP.3a	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	NP.3bi	NP.3bi	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	NP.3bii	NP.3bii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	NP.3ci	NP.3ci	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	NP.3cii	NP.3cii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+NP.3d	NP.3d	NP.3d	agrees	
+NP.3e	NP.3e	NP.3e	agrees	
+-	NP.4a	NP.4a	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	NP.4b	NP.4b	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	NP.5b	NP.5b	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	NP.5ci	NP.5ci	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	NP.5cii	NP.5cii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	NP.5di	NP.5di	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	NP.5dii	NP.5dii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+NP.6	NP.6	NP.6	agrees	
+-	NW.2b_LV	NW.2b_LV	ours_missing	different-net well spacing: wells are not nets in the deck (waiting on net spacing)
+-	NW.2b_MV	NW.2b_MV	ours_missing	different-net well spacing: wells are not nets in the deck (waiting on net spacing)
+-	O.CO.7	O.CO.7	ours_missing	OTP section: left out
+-	O.DF.3a	O.DF.3a	ours_missing	OTP section: left out
+-	O.DF.6	O.DF.6	ours_missing	OTP section: left out
+-	O.DF.9	O.DF.9	ours_missing	OTP section: left out
+-	O.PL.2	O.PL.2	ours_missing	OTP section: left out
+-	O.PL.3a	O.PL.3a	ours_missing	OTP section: left out
+-	O.PL.4	O.PL.4	ours_missing	OTP section: left out
+-	O.PL.ORT	O.PL.ORT	ours_missing	OTP section: left out
+-	O.SB.11	O.SB.11	ours_missing	OTP section: left out
+-	O.SB.13_LV	O.SB.13_LV	ours_missing	OTP section: left out
+-	O.SB.13_MV	O.SB.13_MV	ours_missing	OTP section: left out
+-	O.SB.2	O.SB.2	ours_missing	OTP section: left out
+-	O.SB.3	O.SB.3	ours_missing	OTP section: left out
+-	O.SB.4	O.SB.4	ours_missing	OTP section: left out
+-	O.SB.5b_LV	O.SB.5b_LV	ours_missing	OTP section: left out
+-	O.SB.9	O.SB.9	ours_missing	OTP section: left out
+-	PL.5b_LV	PL.5b_LV	ours_missing	field poly to its related COMP: the deck holds poly with no gate only (PL.5a)
+-	PL.5b_MV	PL.5b_MV	ours_missing	field poly to its related COMP: the deck holds poly with no gate only (PL.5a)
+PL.6	PL.6	PL.6	differs	GPurify's bend reads a turn of Poly2 inside COMP (a concave corner); the foundry flags every Poly2 corner inside COMP, so a straight Poly2 ending inside COMP is flagged there only (GPurify leaves it to PL.4's endcap).
+-	PL.7_LV	PL.7_LV	ours_missing	bends on COMP and 45-degree gates: needs a shape class (H)
+-	PL.7_MV	PL.7_MV	ours_missing	bends on COMP and 45-degree gates: needs a shape class (H)
+-	PP.11	PP.11	ours_missing	butting implant near well edge / gate extension: left out
+-	PP.12	PP.12	ours_missing	butting implant near well edge / gate extension: left out
+-	PP.3a	PP.3a	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	PP.3bi	PP.3bi	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	PP.3bii	PP.3bii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	PP.3ci	PP.3ci	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	PP.3cii	PP.3cii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+PP.3d	PP.3d	PP.3d	agrees	
+PP.3e	PP.3e	PP.3e	agrees	
+-	PP.4a	PP.4a	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	PP.4b	PP.4b	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	PP.5b	PP.5b	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	PP.5ci	PP.5ci	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	PP.5cii	PP.5cii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	PP.5di	PP.5di	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+-	PP.5dii	PP.5dii	ours_missing	implant rules on butted COMP: need edge checks (deck: waiting)
+PP.6	PP.6	PP.6	agrees	
+PRES.6	PRES.6	PRES.6	agrees	
+-	PRES.9a	PRES.9a	ours_missing	RES_MK marking rules: left out
+-	PRES.9b	PRES.9b	ours_missing	RES_MK marking rules: left out
+-	S.CO.3_LV	S.CO.3_LV	ours_missing	SRAM section: left out
+-	S.CO.4_LV	S.CO.4_LV	ours_missing	SRAM section: left out
+-	S.CO.4_MV	S.CO.4_MV	ours_missing	SRAM section: left out
+-	S.CO.6_ii_LV	S.CO.6_ii_LV	ours_missing	SRAM section: left out
+-	S.DF.16_LV	S.DF.16_LV	ours_missing	SRAM section: left out
+-	S.DF.16_MV	S.DF.16_MV	ours_missing	SRAM section: left out
+-	S.DF.4c_LV	S.DF.4c_LV	ours_missing	SRAM section: left out
+-	S.DF.4c_MV	S.DF.4c_MV	ours_missing	SRAM section: left out
+-	S.DF.6_MV	S.DF.6_MV	ours_missing	SRAM section: left out
+-	S.DF.7_MV	S.DF.7_MV	ours_missing	SRAM section: left out
+-	S.DF.8_MV	S.DF.8_MV	ours_missing	SRAM section: left out
+-	S.M1.1_LV	S.M1.1_LV	ours_missing	SRAM section: left out
+-	S.PL.5a_MV	S.PL.5a_MV	ours_missing	SRAM section: left out
+-	S.PL.5b_MV	S.PL.5b_MV	ours_missing	SRAM section: left out
+-	SB.14a	SB.14a	ours_missing	left out (deck note)
+-	SB.14b	SB.14b	ours_missing	left out (deck note)
+-	SB.15a	SB.15a	ours_missing	left out (deck note)
+-	SB.15b	SB.15b	ours_missing	left out (deck note)
+-	SB.16	SB.16	ours_missing	left out (deck note)
+V1.3c	V1.3c	V1.3c	differs	GPurify holds a via on Metal1 narrower than 0.34 um to 0.06 um on both ends of one axis (as CO.6a); the foundry reads only an end of line. The via of via1.gds's V1.3d fail structure sits on an L-shaped Metal1 corner, and GPurify flags it under V1.3c with its marker inside the neighbouring V1.3c pass box (x 227899 of 227590-227920), so the pass box reads flagged.
+-	V1.3d	V1.3d	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V1.4b	V1.4b	V1.4b	differs	GPurify holds a via on Metal2 narrower than 0.34 um to 0.06 um on both ends of one axis (as CO.6a); the foundry reads only an end of line. The via of via1.gds's V1.4c fail structure sits on an L-shaped Metal2 corner, and GPurify flags it under V1.4b with its marker inside the neighbouring V1.4b pass box (x 227899 of 227590-227920), so the pass box reads flagged.
+-	V1.4c	V1.4c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V2.3c	V2.3c	V2.3c	agrees	
+-	V2.3d	V2.3d	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V2.4b	V2.4b	V2.4b	agrees	
+-	V2.4c	V2.4c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V3.3c	V3.3c	V3.3c	agrees	
+-	V3.3d	V3.3d	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V3.4b	V3.4b	V3.4b	agrees	
+-	V3.4c	V3.4c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V4.3c	V4.3c	V4.3c	agrees	
+-	V4.3d	V4.3d	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V4.4b	V4.4b	V4.4b	agrees	
+-	V4.4c	V4.4c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V5.3c	V5.3c	V5.3c	agrees	
+-	V5.3d	V5.3d	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+V5.4b	V5.4b	V5.4b	agrees	
+-	V5.4c	V5.4c	ours_missing	conditional end-of-line overlap: needs edge checks (deck: waiting)
+-	Y.DF.16_LV	Y.DF.16_LV	ours_missing	YMTP section: left out
+-	Y.DF.16_MV	Y.DF.16_MV	ours_missing	YMTP section: left out
+-	Y.DF.6_MV	Y.DF.6_MV	ours_missing	YMTP section: left out
+-	Y.NW.2b_LV	Y.NW.2b_LV	ours_missing	YMTP section: left out
+-	Y.NW.2b_MV	Y.NW.2b_MV	ours_missing	YMTP section: left out
+-	Y.PL.1_LV	Y.PL.1_LV	ours_missing	YMTP section: left out
+-	Y.PL.1_MV	Y.PL.1_MV	ours_missing	YMTP section: left out
+-	Y.PL.2_LV	Y.PL.2_LV	ours_missing	YMTP section: left out
+-	Y.PL.2_MV	Y.PL.2_MV	ours_missing	YMTP section: left out
+-	Y.PL.4_MV	Y.PL.4_MV	ours_missing	YMTP section: left out
+-	Y.PL.5a_LV	Y.PL.5a_LV	ours_missing	YMTP section: left out
+-	Y.PL.5a_MV	Y.PL.5a_MV	ours_missing	YMTP section: left out
+-	Y.PL.5b_LV	Y.PL.5b_LV	ours_missing	YMTP section: left out
+-	Y.PL.5b_MV	Y.PL.5b_MV	ours_missing	YMTP section: left out
+-	border_OFFGRID	border_OFFGRID	ours_missing	the deck does not declare layer border: a layout drawing it is refused
+-	comp_dummy_OFFGRID	comp_dummy_OFFGRID	ours_missing	the deck does not declare layer comp_dummy: a layout drawing it is refused
+-	dev_wf_mk_OFFGRID	dev_wf_mk_OFFGRID	ours_missing	the deck does not declare layer dev_wf_mk: a layout drawing it is refused
+-	diode_mk_OFFGRID	diode_mk_OFFGRID	ours_missing	the deck does not declare layer diode_mk: a layout drawing it is refused
+-	efuse_mk_OFFGRID	efuse_mk_OFFGRID	ours_missing	the deck does not declare layer efuse_mk: a layout drawing it is refused
+-	fhres_OFFGRID	fhres_OFFGRID	ours_missing	the deck does not declare layer fhres: a layout drawing it is refused
+-	fusewindow_d_OFFGRID	fusewindow_d_OFFGRID	ours_missing	the deck does not declare layer fusewindow_d: a layout drawing it is refused
+-	guard_ring_mk_OFFGRID	guard_ring_mk_OFFGRID	ours_missing	the deck does not declare layer guard_ring_mk: a layout drawing it is refused
+-	hvpolyrs_OFFGRID	hvpolyrs_OFFGRID	ours_missing	the deck does not declare layer hvpolyrs: a layout drawing it is refused
+-	ind_mk_OFFGRID	ind_mk_OFFGRID	ours_missing	the deck does not declare layer ind_mk: a layout drawing it is refused
+-	latchup_mk_OFFGRID	latchup_mk_OFFGRID	ours_missing	the deck does not declare layer latchup_mk: a layout drawing it is refused
+-	lvs_bjt_OFFGRID	lvs_bjt_OFFGRID	ours_missing	the deck does not declare layer lvs_bjt: a layout drawing it is refused
+-	lvs_drain_OFFGRID	lvs_drain_OFFGRID	ours_missing	the deck does not declare layer lvs_drain: a layout drawing it is refused
+-	lvs_io_OFFGRID	lvs_io_OFFGRID	ours_missing	the deck does not declare layer lvs_io: a layout drawing it is refused
+-	lvs_rf_OFFGRID	lvs_rf_OFFGRID	ours_missing	the deck does not declare layer lvs_rf: a layout drawing it is refused
+-	lvs_source_OFFGRID	lvs_source_OFFGRID	ours_missing	the deck does not declare layer lvs_source: a layout drawing it is refused
+-	mcell_feol_mk_OFFGRID	mcell_feol_mk_OFFGRID	ours_missing	the deck does not declare layer mcell_feol_mk: a layout drawing it is refused
+-	mdiode_OFFGRID	mdiode_OFFGRID	ours_missing	the deck does not declare layer mdiode: a layout drawing it is refused
+-	metal1_blk_OFFGRID	metal1_blk_OFFGRID	ours_missing	the deck does not declare layer metal1_blk: a layout drawing it is refused
+-	metal1_slot_OFFGRID	metal1_slot_OFFGRID	ours_missing	the deck does not declare layer metal1_slot: a layout drawing it is refused
+-	metal2_blk_OFFGRID	metal2_blk_OFFGRID	ours_missing	the deck does not declare layer metal2_blk: a layout drawing it is refused
+-	metal2_slot_OFFGRID	metal2_slot_OFFGRID	ours_missing	the deck does not declare layer metal2_slot: a layout drawing it is refused
+-	metal3_blk_OFFGRID	metal3_blk_OFFGRID	ours_missing	the deck does not declare layer metal3_blk: a layout drawing it is refused
+-	metal4_blk_OFFGRID	metal4_blk_OFFGRID	ours_missing	the deck does not declare layer metal4_blk: a layout drawing it is refused
+-	metal4_res_OFFGRID	metal4_res_OFFGRID	ours_missing	the deck does not declare layer metal4_res: a layout drawing it is refused
+-	metal5_blk_OFFGRID	metal5_blk_OFFGRID	ours_missing	the deck does not declare layer metal5_blk: a layout drawing it is refused
+-	metal5_res_OFFGRID	metal5_res_OFFGRID	ours_missing	the deck does not declare layer metal5_res: a layout drawing it is refused
+-	metaltop_blk_OFFGRID	metaltop_blk_OFFGRID	ours_missing	the deck does not declare layer metaltop_blk: a layout drawing it is refused
+-	mim_l_mk_OFFGRID	mim_l_mk_OFFGRID	ours_missing	the deck does not declare layer mim_l_mk: a layout drawing it is refused
+-	mtpmark_OFFGRID	mtpmark_OFFGRID	ours_missing	the deck does not declare layer mtpmark: a layout drawing it is refused
+-	ndmy_OFFGRID	ndmy_OFFGRID	ours_missing	the deck does not declare layer ndmy: a layout drawing it is refused
+-	neo_ee_mk_OFFGRID	neo_ee_mk_OFFGRID	ours_missing	the deck does not declare layer neo_ee_mk: a layout drawing it is refused
+-	opc_drc_OFFGRID	opc_drc_OFFGRID	ours_missing	the deck does not declare layer opc_drc: a layout drawing it is refused
+-	pmndmy_OFFGRID	pmndmy_OFFGRID	ours_missing	the deck does not declare layer pmndmy: a layout drawing it is refused
+-	polyfuse_OFFGRID	polyfuse_OFFGRID	ours_missing	the deck does not declare layer polyfuse: a layout drawing it is refused
+-	pr_bndry_OFFGRID	pr_bndry_OFFGRID	ours_missing	the deck does not declare layer pr_bndry: a layout drawing it is refused
+-	probe_mk_OFFGRID	probe_mk_OFFGRID	ours_missing	the deck does not declare layer probe_mk: a layout drawing it is refused
+-	schottky_diode_OFFGRID	schottky_diode_OFFGRID	ours_missing	the deck does not declare layer schottky_diode: a layout drawing it is refused
+-	sramcore_OFFGRID	sramcore_OFFGRID	ours_missing	the deck does not declare layer sramcore: a layout drawing it is refused
+-	ubmeplate_OFFGRID	ubmeplate_OFFGRID	ours_missing	the deck does not declare layer ubmeplate: a layout drawing it is refused
+-	ubmparray_OFFGRID	ubmparray_OFFGRID	ours_missing	the deck does not declare layer ubmparray: a layout drawing it is refused
+-	ubmpperi_OFFGRID	ubmpperi_OFFGRID	ours_missing	the deck does not declare layer ubmpperi: a layout drawing it is refused
+-	well_diode_mk_OFFGRID	well_diode_mk_OFFGRID	ours_missing	the deck does not declare layer well_diode_mk: a layout drawing it is refused
+-	ymtp_mk_OFFGRID	ymtp_mk_OFFGRID	ours_missing	the deck does not declare layer ymtp_mk: a layout drawing it is refused
+-	zener_OFFGRID	zener_OFFGRID	ours_missing	the deck does not declare layer zener: a layout drawing it is refused
+-	border_ACUTE	border_ACUTE	ours_missing	the deck does not declare layer border: a layout drawing it is refused
+-	comp_dummy_ACUTE	comp_dummy_ACUTE	ours_missing	the deck does not declare layer comp_dummy: a layout drawing it is refused
+-	dev_wf_mk_ACUTE	dev_wf_mk_ACUTE	ours_missing	the deck does not declare layer dev_wf_mk: a layout drawing it is refused
+-	diode_mk_ACUTE	diode_mk_ACUTE	ours_missing	the deck does not declare layer diode_mk: a layout drawing it is refused
+-	efuse_mk_ACUTE	efuse_mk_ACUTE	ours_missing	the deck does not declare layer efuse_mk: a layout drawing it is refused
+-	fhres_ACUTE	fhres_ACUTE	ours_missing	the deck does not declare layer fhres: a layout drawing it is refused
+-	fusewindow_d_ACUTE	fusewindow_d_ACUTE	ours_missing	the deck does not declare layer fusewindow_d: a layout drawing it is refused
+-	guard_ring_mk_ACUTE	guard_ring_mk_ACUTE	ours_missing	the deck does not declare layer guard_ring_mk: a layout drawing it is refused
+-	hvpolyrs_ACUTE	hvpolyrs_ACUTE	ours_missing	the deck does not declare layer hvpolyrs: a layout drawing it is refused
+-	ind_mk_ACUTE	ind_mk_ACUTE	ours_missing	the deck does not declare layer ind_mk: a layout drawing it is refused
+-	latchup_mk_ACUTE	latchup_mk_ACUTE	ours_missing	the deck does not declare layer latchup_mk: a layout drawing it is refused
+-	lvs_bjt_ACUTE	lvs_bjt_ACUTE	ours_missing	the deck does not declare layer lvs_bjt: a layout drawing it is refused
+-	lvs_drain_ACUTE	lvs_drain_ACUTE	ours_missing	the deck does not declare layer lvs_drain: a layout drawing it is refused
+-	lvs_io_ACUTE	lvs_io_ACUTE	ours_missing	the deck does not declare layer lvs_io: a layout drawing it is refused
+-	lvs_rf_ACUTE	lvs_rf_ACUTE	ours_missing	the deck does not declare layer lvs_rf: a layout drawing it is refused
+-	lvs_source_ACUTE	lvs_source_ACUTE	ours_missing	the deck does not declare layer lvs_source: a layout drawing it is refused
+-	mcell_feol_mk_ACUTE	mcell_feol_mk_ACUTE	ours_missing	the deck does not declare layer mcell_feol_mk: a layout drawing it is refused
+-	mdiode_ACUTE	mdiode_ACUTE	ours_missing	the deck does not declare layer mdiode: a layout drawing it is refused
+-	metal1_blk_ACUTE	metal1_blk_ACUTE	ours_missing	the deck does not declare layer metal1_blk: a layout drawing it is refused
+-	metal1_slot_ACUTE	metal1_slot_ACUTE	ours_missing	the deck does not declare layer metal1_slot: a layout drawing it is refused
+-	metal2_blk_ACUTE	metal2_blk_ACUTE	ours_missing	the deck does not declare layer metal2_blk: a layout drawing it is refused
+-	metal2_slot_ACUTE	metal2_slot_ACUTE	ours_missing	the deck does not declare layer metal2_slot: a layout drawing it is refused
+-	metal3_blk_ACUTE	metal3_blk_ACUTE	ours_missing	the deck does not declare layer metal3_blk: a layout drawing it is refused
+-	metal4_blk_ACUTE	metal4_blk_ACUTE	ours_missing	the deck does not declare layer metal4_blk: a layout drawing it is refused
+-	metal4_res_ACUTE	metal4_res_ACUTE	ours_missing	the deck does not declare layer metal4_res: a layout drawing it is refused
+-	metal5_blk_ACUTE	metal5_blk_ACUTE	ours_missing	the deck does not declare layer metal5_blk: a layout drawing it is refused
+-	metal5_res_ACUTE	metal5_res_ACUTE	ours_missing	the deck does not declare layer metal5_res: a layout drawing it is refused
+-	metaltop_blk_ACUTE	metaltop_blk_ACUTE	ours_missing	the deck does not declare layer metaltop_blk: a layout drawing it is refused
+-	mim_l_mk_ACUTE	mim_l_mk_ACUTE	ours_missing	the deck does not declare layer mim_l_mk: a layout drawing it is refused
+-	mtpmark_ACUTE	mtpmark_ACUTE	ours_missing	the deck does not declare layer mtpmark: a layout drawing it is refused
+-	ndmy_ACUTE	ndmy_ACUTE	ours_missing	the deck does not declare layer ndmy: a layout drawing it is refused
+-	neo_ee_mk_ACUTE	neo_ee_mk_ACUTE	ours_missing	the deck does not declare layer neo_ee_mk: a layout drawing it is refused
+-	opc_drc_ACUTE	opc_drc_ACUTE	ours_missing	the deck does not declare layer opc_drc: a layout drawing it is refused
+-	pmndmy_ACUTE	pmndmy_ACUTE	ours_missing	the deck does not declare layer pmndmy: a layout drawing it is refused
+-	polyfuse_ACUTE	polyfuse_ACUTE	ours_missing	the deck does not declare layer polyfuse: a layout drawing it is refused
+-	pr_bndry_ACUTE	pr_bndry_ACUTE	ours_missing	the deck does not declare layer pr_bndry: a layout drawing it is refused
+-	probe_mk_ACUTE	probe_mk_ACUTE	ours_missing	the deck does not declare layer probe_mk: a layout drawing it is refused
+-	schottky_diode_ACUTE	schottky_diode_ACUTE	ours_missing	the deck does not declare layer schottky_diode: a layout drawing it is refused
+-	sramcore_ACUTE	sramcore_ACUTE	ours_missing	the deck does not declare layer sramcore: a layout drawing it is refused
+-	ubmeplate_ACUTE	ubmeplate_ACUTE	ours_missing	the deck does not declare layer ubmeplate: a layout drawing it is refused
+-	ubmparray_ACUTE	ubmparray_ACUTE	ours_missing	the deck does not declare layer ubmparray: a layout drawing it is refused
+-	ubmpperi_ACUTE	ubmpperi_ACUTE	ours_missing	the deck does not declare layer ubmpperi: a layout drawing it is refused
+-	well_diode_mk_ACUTE	well_diode_mk_ACUTE	ours_missing	the deck does not declare layer well_diode_mk: a layout drawing it is refused
+-	ymtp_mk_ACUTE	ymtp_mk_ACUTE	ours_missing	the deck does not declare layer ymtp_mk: a layout drawing it is refused
+-	zener_ACUTE	zener_ACUTE	ours_missing	the deck does not declare layer zener: a layout drawing it is refused
+LU.1	LU.1	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+LU.2	LU.2	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+LU.3	LU.3	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+LU.4	LU.4	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+LU.1_MV	LU.1_MV	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+LU.2_MV	LU.2_MV	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+LU.5	LU.5	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+IO.1	IO.1	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+IO.1b	IO.1b	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+IO.2	IO.2	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+IO.3	IO.3	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+IO.3b	IO.3b	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check
+IO.4	IO.4	-	theirs_missing	an electrical (ERC) rule; the foundry DRC deck has no latch-up check

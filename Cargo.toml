@@ -27,7 +27,6 @@ members = [
     "crates/extract",
     "crates/testgen",
 ]
-exclude = ["tools"]
 
 [workspace.dependencies]
 gpurify-geom = { path = "crates/geom" }
@@ -65,6 +64,15 @@ module_name_repetitions = "allow"
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 unexpected_cfgs = "warn"
+# Every public item says what it does and what it promises; the rustdoc is how
+# a library user learns the tool, so an undocumented item fails the build.
+missing_docs = "deny"
+
+# The rustdoc is the reference a library user reads, so a link that leads
+# nowhere, or to an item they cannot see, fails `cargo doc`.
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
 
 [profile.release]
 opt-level = 3
@@ -79,4 +87,10 @@ debug = true
 strip = false
 
 [profile.dev.package."*"]
+opt-level = 3
+
+# The field solver is the one workspace crate whose debug build is too slow
+# to test: an unoptimised quasistatic run of a corpus cell took 57 s, 2 s
+# optimised. Debug assertions and overflow checks stay on.
+[profile.dev.package.gpurify-extract]
 opt-level = 3

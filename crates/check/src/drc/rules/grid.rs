@@ -1,13 +1,15 @@
-//! Grid family: off-grid vertices and disallowed edge angles, over every
-//! polygon in the store (angles: or one layer's), reported at the vertex.
+//! Grid family: off-grid vertices, over every drawn polygon, and disallowed
+//! edge angles, over every drawn polygon (or one layer's), reported at the
+//! vertex.
 //!
 //! Data in: the store's coordinate columns. Data out: one violation per
 //! offending vertex (off-grid) or edge (angle, at the vertex it leaves).
 
 use super::{ring_segs, Verdict};
-use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
-use gpurify_geom::ops::Point;
-use gpurify_geom::{Dbu, GeometryStore, LayerId, PolyId};
+use crate::report::{Measurement, Outcome, Severity, SkipReason, Violation, Violations};
+use gpurify_geom::ops::{isqrt, Point};
+use gpurify_geom::view::ring_defect;
+use gpurify_geom::{Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId};
 use gpurify_ingest::StrId;
 
 /// Chebyshev distance from `(x, y)` to the nearest `pitch` lattice point; zero
@@ -26,20 +28,28 @@ fn lattice_offset(x: Dbu, y: Dbu, pitch: i64) -> i64 {
     rx.min(pitch - rx).max(ry.min(pitch - ry))
 }
 
-fn store_polys(store: &GeometryStore) -> impl Iterator<Item = PolyId> {
-    (0..u32::try_from(store.poly_count()).expect("a store indexes polygons with a u32")).map(PolyId)
+/// Every row on the drawn layers `0..drawn`.
+fn drawn_rows(store: &GeometryStore, drawn: usize) -> impl Iterator<Item = PolyId> + '_ {
+    (0..drawn)
+        .flat_map(|layer| {
+            store.polys_on_layer(LayerId(u16::try_from(layer).expect("a LayerId is a u16")))
+        })
+        .map(PolyId)
 }
 
-/// Every vertex must sit on the `pitch` lattice. `examined` counts vertices.
+/// Every vertex on the drawn layers `0..drawn` must sit on the `pitch`
+/// lattice; a derived layer is computed, not drawn, and repeats its operands'
+/// vertices. `examined` counts vertices.
 pub(crate) fn off_grid(
     store: &GeometryStore,
     rule: StrId,
     pitch: Dbu,
+    drawn: usize,
     out: &mut Violations,
 ) -> Verdict {
     let pitch = pitch.raw();
     let mut examined = 0u64;
-    for poly in store_polys(store) {
+    for poly in drawn_rows(store, drawn) {
         let (xs, ys) = store.poly_verts(poly);
         examined += xs.len() as u64;
         for (&x, &y) in xs.iter().zip(ys) {
@@ -65,20 +75,21 @@ fn line_bit(dx: i64, dy: i64) -> u8 {
     u8::from(dy == 0) | u8::from(dx == dy) << 1 | u8::from(dx == 0) << 2 | u8::from(dx == -dy) << 3
 }
 
-/// Every non-zero edge on `layer` (every layer when `None`) must lie along an
+/// Every non-zero edge on `layer`, or on every drawn layer `0..drawn` when
+/// `None` (a derived layer repeats its operands' edges), must lie along an
 /// `allowed` line. Measured as the count of allowed lines matched (zero)
 /// against a limit of one. `examined` counts non-zero edges.
 pub(crate) fn angle(
     store: &GeometryStore,
     rule: StrId,
-    layer: Option<LayerId>,
+    (layer, drawn): (Option<LayerId>, usize),
     allowed: u8,
     out: &mut Violations,
 ) -> Verdict {
     let mut examined = 0u64;
     let polys: Box<dyn Iterator<Item = PolyId>> = match layer {
         Some(layer) => Box::new(store.polys_on_layer(layer).map(PolyId)),
-        None => Box::new(store_polys(store)),
+        None => Box::new(drawn_rows(store, drawn)),
     };
     for poly in polys {
         let (xs, ys) = store.poly_verts(poly);
@@ -104,6 +115,126 @@ pub(crate) fn angle(
     (Outcome::Ran, examined)
 }
 
+/// The rows a rule reads: `layer`'s, or every drawn layer's (`0..drawn`) when
+/// `None`.
+fn rows_of(
+    store: &GeometryStore,
+    (layer, drawn): (Option<LayerId>, usize),
+) -> Box<dyn Iterator<Item = PolyId> + '_> {
+    match layer {
+        Some(layer) => Box::new(store.polys_on_layer(layer).map(PolyId)),
+        None => Box::new(drawn_rows(store, drawn)),
+    }
+}
+
+/// The angle at a corner on its shape's side, in degrees from 0 to 360, from
+/// the edge arriving at it, `(ax, ay)`, and the edge leaving it, `(bx, by)`.
+/// A row's shape lies left of travel (outer rings counter-clockwise, holes
+/// clockwise), so the angle is 180 less the signed turn. Rounded to 1e-9
+/// degree, so a right angle reads exactly 90.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "the products are exact in i128; their ratio is all the angle needs"
+)]
+fn interior_degrees((ax, ay): (i64, i64), (bx, by): (i64, i64)) -> f64 {
+    let (ax, ay, bx, by) = (
+        i128::from(ax),
+        i128::from(ay),
+        i128::from(bx),
+        i128::from(by),
+    );
+    let (cross, dot) = (ax * by - ay * bx, ax * bx + ay * by);
+    let turn = (cross as f64).atan2(dot as f64).to_degrees();
+    ((180.0 - turn) * 1e9).round() / 1e9
+}
+
+/// Every corner of the rows read (one layer's, or every drawn layer's) whose
+/// angle inside its shape is below `limit` degrees (IHP 3.1 "acute angles
+/// <87 degree"), at the vertex, measuring the angle. A zero-length edge is
+/// skipped. `examined` counts the corners measured.
+pub(crate) fn min_interior_angle(
+    store: &GeometryStore,
+    rule: StrId,
+    read: (Option<LayerId>, usize),
+    limit: f64,
+    out: &mut Violations,
+) -> Verdict {
+    let mut examined = 0u64;
+    for poly in rows_of(store, read) {
+        let (xs, ys) = store.poly_verts(poly);
+        let n = xs.len();
+        for at in 0..n {
+            let (before, after) = ((at + n - 1) % n, (at + 1) % n);
+            let arriving = (
+                xs[at].raw() - xs[before].raw(),
+                ys[at].raw() - ys[before].raw(),
+            );
+            let leaving = (
+                xs[after].raw() - xs[at].raw(),
+                ys[after].raw() - ys[at].raw(),
+            );
+            if arriving == (0, 0) || leaving == (0, 0) {
+                continue;
+            }
+            examined += 1;
+            let angle = interior_degrees(arriving, leaving);
+            if angle < limit {
+                out.push(Violation {
+                    rule,
+                    layer: store.poly_layer(poly),
+                    severity: Severity::Error,
+                    at: Point {
+                        x: xs[at],
+                        y: ys[at],
+                    },
+                    measured: Measurement::Ratio(angle),
+                    limit: Measurement::Ratio(limit),
+                    shapes: (poly, None),
+                });
+            }
+        }
+    }
+    (Outcome::Ran, examined)
+}
+
+/// Every row read (one layer's, or every drawn layer's) that is no valid
+/// polygon whatever its angles (IHP 3.1 "self-intersecting polygons must be
+/// avoided"): degenerate or self-intersecting, as layer validation decides
+/// ([`ring_defect`]). One violation per row at its first vertex. `examined`
+/// counts rows.
+pub(crate) fn polygon_validity(
+    store: &GeometryStore,
+    rule: StrId,
+    read: (Option<LayerId>, usize),
+    out: &mut Violations,
+) -> Verdict {
+    let mut examined = 0u64;
+    for poly in rows_of(store, read) {
+        examined += 1;
+        let (xs, ys) = store.poly_verts(poly);
+        if ring_defect(xs, ys, poly).is_none() {
+            continue;
+        }
+        out.push(Violation {
+            rule,
+            layer: store.poly_layer(poly),
+            severity: Severity::Error,
+            // A row with no vertex at all is reported at the origin.
+            at: xs.first().zip(ys.first()).map_or(
+                Point {
+                    x: Dbu::new_unchecked(0),
+                    y: Dbu::new_unchecked(0),
+                },
+                |(&x, &y)| Point { x, y },
+            ),
+            measured: Measurement::Count(0),
+            limit: Measurement::Count(1),
+            shapes: (poly, None),
+        });
+    }
+    (Outcome::Ran, examined)
+}
+
 #[cfg(test)]
 mod tests {
     use super::lattice_offset;
@@ -114,6 +245,9 @@ mod tests {
         rx.min(pitch - rx).max(ry.min(pitch - ry))
     }
 
+    /// Oracle: differential against `reference`, the offset written with
+    /// `rem_euclid`, at every listed pitch (powers of two and not) and
+    /// coordinate, signs and domain edges included.
     #[test]
     fn the_power_of_two_mask_is_rem_euclid() {
         let d = Dbu::new_unchecked;
@@ -137,25 +271,36 @@ mod tests {
             }
         }
     }
+}
 
-    /// `cargo test --release -p gpurify-check -- --ignored --nocapture bench_lattice`
-    #[test]
-    #[ignore = "timing"]
-    fn bench_lattice_offset() {
-        use std::hint::black_box;
-        use std::time::Instant;
-        let xs: Vec<i64> = (0..4_000_000i64).map(|i| i * 7919 - (1 << 34)).collect();
-        let pitch = black_box(8);
-        let t = Instant::now();
-        let masked: i64 = xs
-            .iter()
-            .map(|&x| lattice_offset(Dbu::new_unchecked(x), Dbu::new_unchecked(x), pitch))
-            .sum();
-        let fast = t.elapsed();
-        let t = Instant::now();
-        let divided: i64 = xs.iter().map(|&x| reference(x, x, pitch)).sum();
-        let slow = t.elapsed();
-        assert_eq!(masked, divided);
-        eprintln!("mask {fast:?}  rem_euclid {slow:?}");
+/// sky130 x.19: the lower-left corner of the box of every row on `layer` is
+/// the origin, or one violation there measuring its distance from the origin.
+/// `examined` counts rows; an empty layer is skipped.
+pub(crate) fn origin(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    out: &mut Violations,
+) -> Verdict {
+    let rows = store.polys_on_layer(layer);
+    if rows.is_empty() {
+        return (Outcome::Skipped(SkipReason::EmptyLayer), 0);
     }
+    let b = rows
+        .clone()
+        .map(|row| store.poly_bbox(PolyId(row)))
+        .fold(Bbox::EMPTY, Bbox::union);
+    if b.xlo.raw() != 0 || b.ylo.raw() != 0 {
+        let (x, y) = (i128::from(b.xlo.raw()), i128::from(b.ylo.raw()));
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: Point { x: b.xlo, y: b.ylo },
+            measured: Measurement::Length(isqrt(DbuArea::new(x * x + y * y))),
+            limit: Measurement::Length(Dbu::new_unchecked(0)),
+            shapes: (PolyId(rows.start), None),
+        });
+    }
+    (Outcome::Ran, u64::from(rows.end - rows.start))
 }

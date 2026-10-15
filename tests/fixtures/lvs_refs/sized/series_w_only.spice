@@ -1,0 +1,5 @@
+* LVS_SERIES (case LVS_SERIES_MERGE) as one card stating its width alone:
+* with no L to sum, the stack stays two transistors (testing-plan F67).
+.subckt LVS_SERIES D A S
+M0 D A S S nfet_01v8 W=200n
+.ends

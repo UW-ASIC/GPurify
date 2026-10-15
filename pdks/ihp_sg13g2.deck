@@ -8,7 +8,9 @@
 #        ihp-sg13g2/libs.doc/doc/SG13G2_os_process_spec.pdf, last changed in commit 5de3340987
 #        (supply voltages §1, sheet and via resistances §2.13/2.14, current limits
 #        §2.15, layer thicknesses §2.16, measured capacitance §2.17, εr Fig. 1.1.1).
-#  [DRC] Open KLayout deck, ihp-sg13g2/libs.tech/klayout/tech/drc, last changed in commit 3e4a6c5021
+#  [DRC] Open KLayout deck, ihp-sg13g2/libs.tech/klayout/tech/drc, last changed in commit 3e4a6c5021;
+#        AFil.d, AFil.j and MIM.h follow it at 5e6d592e4002 and its unit cells
+#        (testing/testcases/unit; ledger docs/xcheck/ihp_sg13g2.tsv)
 #        (layers_def.drc for GDS numbers, density.drc for window step and die
 #        boundary, docs/main_rules.md + extra_rules.md cross-checked against [LR]).
 #  [LVS] Open KLayout LVS, ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks, last changed in commit 6ff43baf32
@@ -258,11 +260,15 @@ rule AFil.b  space(activ_filler) >= 420nm
 rule AFil.c.Cont    space(activ_filler, cont) >= 1.1um
 rule AFil.c.GatPoly space(activ_filler, gatpoly) >= 1.1um
 rule AFil.c1 space(activ_filler, activ) >= 420nm
-rule AFil.d.NWell   space(activ_filler, nwell) >= 1um
-rule AFil.d.nBuLay  space(activ_filler, nbl) >= 1um
+# AFil.d holds the filler 1 um from the well's edges, outside or inside it
+# ([DRC] 5_6_activfiller.drc: separation, and NWell/nBuLay enclosing the filler).
+rule AFil.d.NWell   space(activ_filler.edges(), nwell.edges()) >= 1um
+rule AFil.d.nBuLay  space(activ_filler.edges(), nbl.edges()) >= 1um
 rule AFil.e  space(activ_filler, trans) >= 1um
-rule AFil.j.nSDblock  enclosure(afil_in_pwb, nsd_block) >= 250nm
-rule AFil.j.SalBlock  enclosure(afil_in_pwb, salblock) >= 250nm
+# Each block layer encloses the fillers it covers; a filler under SalBlock
+# alone passes ([DRC] 5_6_activfiller.drc AFil.j, and the unit cell's PASS).
+rule AFil.j.nSDblock  enclosure(afil_in_pwb.interacting(nsd_block), nsd_block) >= 250nm
+rule AFil.j.SalBlock  enclosure(afil_in_pwb.interacting(salblock), salblock) >= 250nm
 rule AFil.g  global_density(activ_den, prboundary) >= 35%
 rule AFil.g1 global_density(activ_den, prboundary) <= 55%
 # Window 800 um, step half a window ([DRC] density.drc), tiled over prBoundary.
@@ -282,13 +288,20 @@ rule TGO.f width(thickgateox) >= 860nm
 rule Gat.a  width(gatpoly) >= 130nm
 rule Gat.a1 width(ngate_lv) >= 130nm
 rule Gat.a2 width(pgate_lv) >= 130nm
+# Gat.a3/a4, the 3.3 V channel length: the gate's sides inside Activ.
+rule Gat.a3 width(ngate_hv.edges() not activ.edges()) >= 450nm
+rule Gat.a4 width(pgate_hv.edges() not activ.edges()) >= 400nm
 rule Gat.b  space(gatpoly) >= 180nm
 rule Gat.b.notch notch(gatpoly) >= 180nm
 rule Gat.b1 space(gate_hv) >= 250nm
 rule Gat.c  extension(gatpoly, activ) >= 180nm
-# Gat.d, partial: poly that touches no Activ, and Activ that touches no poly.
+# Gat.d ([LR] §5.8, as [DRC] gatpoly.sep(activ)): poly that touches no Activ,
+# Activ that touches no poly, and (Gat.d.3) any GatPoly edge facing an Activ
+# edge across a gap, so a gate crossing one Activ is held to the next. Gat.d.3
+# measures facing edges only, not corner to corner.
 rule Gat.d  space(gatpoly_field_only, activ) >= 70nm
 rule Gat.d.2 space(gatpoly, activ_no_poly) >= 70nm
+rule Gat.d.3 facing_space(gatpoly.edges() or activ.edges()) >= 70nm
 rule Gat.e  area(gatpoly) >= 0.09um2
 
 # 5.9 GatPoly:filler
@@ -351,6 +364,9 @@ rule Sal.e space(salblock, cont) >= 200nm
 # 5.14 Cont (min and max width 0.16 also admits a 0.16 um wide ContBar, 5.15)
 rule Cnt.a     width(cont) >= 160nm
 rule Cnt.a.max width(cont) <= 160nm
+# CntB.a1: "any Cont shape not being a square shape is considered a ContBar",
+# and a ContBar is at least 0.34 um long (its width is Cnt.a's 0.16 um).
+rule CntB.a1 forbidden(cont.non_squares().with_bbox_max(< 340nm))
 rule Cnt.b  space(cont) >= 180nm
 # "More than 4 rows and more than 4 columns" read as more than 24 cuts in a cluster:
 # every 5x5 array is held, and so is a 4xN (N >= 7) one, which is stricter than the manual.
@@ -397,11 +413,19 @@ for (n, m, fill, den) in fillers {
 }
 
 # 5.19 Via1 and 5.20 Via(n=2-4): Metal(n) below encloses Via(n).
-# "More than 3 rows and more than 3 columns" read as more than 15 cuts in a cluster:
+# V(n).b1 "more than 3 rows and more than 3 columns" read as more than 15 cuts in a cluster:
 # every 4x4 array is held, and so is a 3xN (N >= 6) one, which is stricter than the manual.
 rule V1.a  size(via1) == 190nm x 190nm
 rule V1.b  space(via1) >= 220nm
-rule V1.b1 via_array_space(via1; array: 15) >= 290nm
+# V1.b1 as [LR] §5.19 note 1 states it, "only required in one direction", as
+# [DRC] sg13g2_maximal.drc finds it: an array (Via1 joined across gaps up to
+# 0.29 um, at least 4 x 0.19 + 3 x 0.22 - 0.05 um on both axes) whose cuts,
+# joined across gaps below 0.29 um, leave a gap that is not a rectangle has
+# gaps under 0.29 um both ways. [DRC] joins across 0.143 um; on the 5 nm grid
+# this joins across 0.14 um, so an array whose gaps are 0.285 um both ways passes.
+layer v1_array = via1.sized(145nm).sized(-145nm).sized(-685nm).sized(685nm)
+layer v1_arrayed = via1.inside(v1_array)
+rule V1.b1 forbidden((v1_arrayed.sized(140nm).sized(-140nm) not v1_arrayed).non_rectangles())
 rule V1.c  enclosure(via1, metal1) >= 10nm
 rule V1.c1 enclosure(via1, metal1, opposite) >= 50nm
 let vias = [(2, via2, metal2), (3, via3, metal3), (4, via4, metal4)]
@@ -453,7 +477,9 @@ for (n, m, fill) in top_fillers {
 rule Pas.a width(passiv) >= 2.1um
 rule Pas.b space(passiv) >= 3.5um
 rule Pas.b.notch notch(passiv) >= 3.5um
-rule Pas.c enclosure(passiv, topmetal2) >= 2.1um
+# Pas.c "not checked outside of sealring" ([LR] §5.27 note 1): Passiv inside
+# the EdgeSeal ring's hole, as [DRC] passiv_drw.and(edgeseal_drw.holes).
+rule Pas.c enclosure(passiv and edgeseal.holes(), topmetal2) >= 2.1um
 
 # ======================= 6 Device rules =======================
 
@@ -525,6 +551,7 @@ rule MIM.c enclosure(mim, metal5) >= 600nm
 rule MIM.d enclosure(topvia1_mim, mim) >= 360nm
 rule MIM.e space(topmetal1_unrel_mim, mim) >= 600nm
 rule MIM.f area(mim) >= 1.3um2
+rule MIM.g forbidden(mim.with_area(> 5625um2))
 
 # ======================= 7 Special rules =======================
 
@@ -552,6 +579,7 @@ rule Slt.h4 space(topmetal2_slit, topvia2) >= 1um
 # 9 Localized backside etching
 rule LBE.a  width(lbe) >= 100um
 rule LBE.b  width(lbe) <= 1500um
+rule LBE.b1 forbidden(lbe.with_area(> 250000um2))
 rule LBE.b2 area(lbe) >= 30000um2
 rule LBE.c  space(lbe) >= 100um
 rule LBE.c.notch notch(lbe) >= 100um
@@ -569,43 +597,111 @@ for (name, c) in cuts_90 {
     rule Angle.{name} angle(c; allowed: [0deg, 90deg])
 }
 
-# 7.1 Antenna rules, without a protection diode (the stricter limits).
-# One row per etch step, collecting everything standing at that step.
+# 7.1 Antenna rules. One row per etch step, collecting everything standing at
+# that step. A gate whose net reaches a protection diode is held to Ant.e
+# (20000, metal) and Ant.f (500, via) instead of Ant.b (200) and Ant.d (20):
+# Ant.b/d skip it, and Ant.e/f hold every gate, so a gate without a diode
+# fails Ant.e/f only where it already fails Ant.b/d. The diode is any
+# source/drain or tap Activ, as [DRC] rule_decks/antenna.drc writes
+# `diode = nactiv_con.join(pactiv_con)`, each piece at least [LR] Ant.g's
+# 0.16 um2 (antenna.drc sums a net's diode area and counts it only above
+# 0.16; [LR] states the size per diode). Ant.g itself is the size of an
+# Activ under recog_diode (antenna.drc's dantenna and dpantenna).
+# The Ant.d rows carry Ant.g Note 4 as a fix hint: a finding names the diode
+# that clears it, "PDarea (um2) = 0.02 x (Vn_area / (GatPoly over
+# Activ)_area)" and at least Ant.g's 0.16 um2. Note 2's Vn_area is the
+# cumulative Cont and Via1-TopVia2 area; Ant.d's collectors, as antenna.drc
+# writes them, begin at Via1 (Cont is Ant.c's), so the hint leaves out the
+# contact area.
+layer ant_activ = (nact or pact) not gatpoly
+layer ant_diode = ant_activ.with_area(>= 0.16um2)
+layer ant_marked = ant_activ and recog_diode
+rule Ant.g area(ant_marked) >= 0.16um2
 # Ant.a: GatPoly over field over gate area; GatPoly here includes the gate
 # itself, so the limit is 200 + 1.
-rule Ant.a antenna(gate, gatpoly_c; max_ratio: 201, sidewall: none)
-rule Ant.c antenna(gate, cont; max_ratio: 20, sidewall: none)
-rule Ant.b_Metal1    antenna(gate, metal1; max_ratio: 200, sidewall: none)
-rule Ant.b_Metal2    antenna(gate, metal1, metal2; max_ratio: 200, sidewall: none)
-rule Ant.b_Metal3    antenna(gate, metal1, metal2, metal3; max_ratio: 200, sidewall: none)
-rule Ant.b_Metal4    antenna(gate, metal1, metal2, metal3, metal4; max_ratio: 200, sidewall: none)
-rule Ant.b_Metal5    antenna(gate, metal1, metal2, metal3, metal4, metal5; max_ratio: 200, sidewall: none)
-rule Ant.b_TopMetal1 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1; max_ratio: 200, sidewall: none)
-rule Ant.b_TopMetal2 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2; max_ratio: 200, sidewall: none)
-rule Ant.d_Via1    antenna(gate, via1; max_ratio: 20, sidewall: none)
-rule Ant.d_Via2    antenna(gate, via1, via2; max_ratio: 20, sidewall: none)
-rule Ant.d_Via3    antenna(gate, via1, via2, via3; max_ratio: 20, sidewall: none)
-rule Ant.d_Via4    antenna(gate, via1, via2, via3, via4; max_ratio: 20, sidewall: none)
-rule Ant.d_TopVia1 antenna(gate, via1, via2, via3, via4, topvia1_m5; max_ratio: 20, sidewall: none)
-rule Ant.d_TopVia2 antenna(gate, via1, via2, via3, via4, topvia1_m5, topvia2; max_ratio: 20, sidewall: none)
+rule Ant.a antenna(gate, gatpoly_c; max_ratio: 201, sidewall: none, diode: none, diode_area: none, diode_min: none)
+rule Ant.c antenna(gate, cont; max_ratio: 20, sidewall: none, diode: none, diode_area: none, diode_min: none)
+rule Ant.b_Metal1 antenna(gate, metal1; max_ratio: 200, sidewall: none, diode: ant_diode, diode_area: none, diode_min: none)
+rule Ant.b_Metal2 antenna(gate, metal1, metal2; max_ratio: 200, sidewall: none, diode: ant_diode, diode_area: none, diode_min: none)
+rule Ant.b_Metal3 antenna(gate, metal1, metal2, metal3; max_ratio: 200, sidewall: none, diode: ant_diode, diode_area: none, diode_min: none)
+rule Ant.b_Metal4 antenna(gate, metal1, metal2, metal3, metal4; max_ratio: 200, sidewall: none, diode: ant_diode, diode_area: none, diode_min: none)
+rule Ant.b_Metal5 antenna(gate, metal1, metal2, metal3, metal4, metal5; max_ratio: 200, sidewall: none, diode: ant_diode, diode_area: none, diode_min: none)
+rule Ant.b_TopMetal1 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1; max_ratio: 200, sidewall: none, diode: ant_diode, diode_area: none, diode_min: none)
+rule Ant.b_TopMetal2 antenna(gate, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2; max_ratio: 200, sidewall: none, diode: ant_diode, diode_area: none, diode_min: none)
+rule Ant.d_Via1 antenna(gate, via1; max_ratio: 20, sidewall: none, diode: ant_diode, diode_area: 0.02um2, diode_min: 0.16um2)
+rule Ant.d_Via2 antenna(gate, via1, via2; max_ratio: 20, sidewall: none, diode: ant_diode, diode_area: 0.02um2, diode_min: 0.16um2)
+rule Ant.d_Via3 antenna(gate, via1, via2, via3; max_ratio: 20, sidewall: none, diode: ant_diode, diode_area: 0.02um2, diode_min: 0.16um2)
+rule Ant.d_Via4 antenna(gate, via1, via2, via3, via4; max_ratio: 20, sidewall: none, diode: ant_diode, diode_area: 0.02um2, diode_min: 0.16um2)
+rule Ant.d_TopVia1 antenna(gate, via1, via2, via3, via4, topvia1_m5; max_ratio: 20, sidewall: none, diode: ant_diode, diode_area: 0.02um2, diode_min: 0.16um2)
+rule Ant.d_TopVia2 antenna(gate, via1, via2, via3, via4, topvia1_m5, topvia2; max_ratio: 20, sidewall: none, diode: ant_diode, diode_area: 0.02um2, diode_min: 0.16um2)
+rule Ant.e_Metal1 antenna_electrical(gate, metal1; max_ratio: 20000, sidewall: none, cut_factor: 1,
+    diode: ant_diode, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
+    diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule Ant.e_Metal2 antenna_electrical(gate, metal1, metal2; max_ratio: 20000, sidewall: none, cut_factor: 1,
+    diode: ant_diode, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
+    diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule Ant.e_Metal3 antenna_electrical(gate, metal1, metal2, metal3; max_ratio: 20000, sidewall: none, cut_factor: 1,
+    diode: ant_diode, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
+    diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule Ant.e_Metal4 antenna_electrical(gate, metal1, metal2, metal3, metal4; max_ratio: 20000, sidewall: none, cut_factor: 1,
+    diode: ant_diode, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
+    diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule Ant.e_Metal5 antenna_electrical(gate, metal1, metal2, metal3, metal4, metal5; max_ratio: 20000, sidewall: none, cut_factor: 1,
+    diode: ant_diode, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
+    diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule Ant.e_TopMetal1 antenna_electrical(gate, metal1, metal2, metal3, metal4, metal5, topmetal1; max_ratio: 20000, sidewall: none, cut_factor: 1,
+    diode: ant_diode, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
+    diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule Ant.e_TopMetal2 antenna_electrical(gate, metal1, metal2, metal3, metal4, metal5, topmetal1, topmetal2; max_ratio: 20000, sidewall: none, cut_factor: 1,
+    diode: ant_diode, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
+    diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule Ant.f_Via1 antenna_electrical(gate, via1; max_ratio: 500, sidewall: none, cut_factor: 1,
+    diode: ant_diode, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
+    diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule Ant.f_Via2 antenna_electrical(gate, via1, via2; max_ratio: 500, sidewall: none, cut_factor: 1,
+    diode: ant_diode, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
+    diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule Ant.f_Via3 antenna_electrical(gate, via1, via2, via3; max_ratio: 500, sidewall: none, cut_factor: 1,
+    diode: ant_diode, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
+    diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule Ant.f_Via4 antenna_electrical(gate, via1, via2, via3, via4; max_ratio: 500, sidewall: none, cut_factor: 1,
+    diode: ant_diode, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
+    diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule Ant.f_TopVia1 antenna_electrical(gate, via1, via2, via3, via4, topvia1_m5; max_ratio: 500, sidewall: none, cut_factor: 1,
+    diode: ant_diode, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
+    diode_reduce: none, diode_max_ratio: none, exempt: none)
+rule Ant.f_TopVia2 antenna_electrical(gate, via1, via2, via3, via4, topvia1_m5, topvia2; max_ratio: 500, sidewall: none, cut_factor: 1,
+    diode: ant_diode, diode_credit: 0, diode_bonus: 0, area_minus_diode: 0, gate_plus_diode: 0,
+    diode_reduce: none, diode_max_ratio: none, exempt: none)
 
 # ======================= Electrical rules =======================
 
 # 7.2 Latch-up: LU.a, LU.b.
 rule LU.a missing_tie(pact_nw, ntap; max_distance: 20um)
 rule LU.b missing_tie(nact_pw, ptap; max_distance: 20um)
+# LU.d, LU.d1 ([LR] §7.2.2): a tie Activ (one that is no transistor's)
+# reaching more than 6 um beyond the Cont it holds. [DRC] grows each Cont
+# inside the Activ in 0.21 um steps; this grows it in a square, the same on a
+# straight tie and shorter round a bend. LU.c and LU.c1 (an abutted tie, from
+# the Cont of the diffusion it abuts) are not written: the reach is measured
+# on the tie only, through the abutment, which max enclosure does not do.
+layer ntap_lone = ntap.not_interacting(activ.interacting(gatpoly))
+layer ptap_lone = ptap.not_interacting(activ.interacting(gatpoly))
+rule LU.d  enclosure(cont, ntap_lone) <= 6um
+rule LU.d1 enclosure(cont, ptap_lone) <= 6um
 rule floating_nwell floating_well(nwell, ntap)
 rule supply_short supply_short(ntap, ptap)
 
-# [PS] §2.15 maximum current densities (11 years at 105 C); the narrow-line
-# IMAX values equal JMAX times the upper width of their range.
-rule EM.Metal1    em_current_density(metal1, cont; max_density: 1mA/um, max_current_per_cut: 0.3mA)
-rule EM.Metal2    em_current_density(metal2, via1; max_density: 2mA/um, max_current_per_cut: 0.4mA)
-rule EM.Metal3    em_current_density(metal3, via2; max_density: 2mA/um, max_current_per_cut: 0.4mA)
-rule EM.Metal4    em_current_density(metal4, via3; max_density: 2mA/um, max_current_per_cut: 0.4mA)
-rule EM.Metal5    em_current_density(metal5, via4; max_density: 2mA/um, max_current_per_cut: 0.4mA)
-rule EM.TopMetal1 em_current_density(topmetal1, topvia1_m5; max_density: 15mA/um, max_current_per_cut: 1.4mA)
-rule EM.TopMetal2 em_current_density(topmetal2, topvia2; max_density: 16mA/um, max_current_per_cut: 10mA)
+# [PS] §2.15 maximum current densities (11 years at 105 C): JMAX per width
+# above a band, the absolute IMAX within it (Metal1 0.36 mA up to 0.36 um,
+# Metal2-5 0.6 mA up to 0.3 um), equal to JMAX times the band's upper width.
+rule EM.Metal1    em_current_density(metal1, cont; max_density: 1mA/um, max_current_per_cut: 0.3mA, narrow: (width: 360nm, current: 0.36mA))
+rule EM.Metal2    em_current_density(metal2, via1; max_density: 2mA/um, max_current_per_cut: 0.4mA, narrow: (width: 300nm, current: 0.6mA))
+rule EM.Metal3    em_current_density(metal3, via2; max_density: 2mA/um, max_current_per_cut: 0.4mA, narrow: (width: 300nm, current: 0.6mA))
+rule EM.Metal4    em_current_density(metal4, via3; max_density: 2mA/um, max_current_per_cut: 0.4mA, narrow: (width: 300nm, current: 0.6mA))
+rule EM.Metal5    em_current_density(metal5, via4; max_density: 2mA/um, max_current_per_cut: 0.4mA, narrow: (width: 300nm, current: 0.6mA))
+rule EM.TopMetal1 em_current_density(topmetal1, topvia1_m5; max_density: 15mA/um, max_current_per_cut: 1.4mA, narrow: none)
+rule EM.TopMetal2 em_current_density(topmetal2, topvia2; max_density: 16mA/um, max_current_per_cut: 10mA, narrow: none)
 
 # [PS] §1: thin oxide for 1.2 V logic, thick oxide for a 3.3 V supply. The
 # PDK publishes no absolute maximum, so the nominal supply is the limit.
@@ -734,6 +830,9 @@ rule Cnt.h  inside(cont, metal1)
 rule Cnt.j  forbidden(cont and gate)
 rule nSDB.e forbidden(nsd_block and cont)
 rule MIM.h  forbidden(topvia1.interacting(mim) not mim)
+# And every MIM holds a TopVia1 ([DRC] sg13g2_maximal.drc MIM.h: MIM not
+# covering a TopVia1; the unit cell's FAIL is a MIM with none).
+rule MIM.h.via contains(mim, topvia1) >= 1
 rule Pad.i  inside(dfpad, topmetal2)
 layer metal1_pin = gds(8, 2)
 rule Pin.e  inside(metal1_pin, metal1)
@@ -755,34 +854,22 @@ device diode nmoscl_4 model "nmoscl_4" terminals [ntap, ptap]
 # rule TM2.bR space_table(topmetal2; prl: [0um, 50um], width: [0um, 5um], space: [[2um, 2um], [2um, 5um]])
 # Pin.a/b/f/g/h: the other pin layers, as Pin.e.
 
-# needs: shape class, identical layers, full-crossing extension
-# rule Gat.f  rectangles_only(gate)               # no 45 or 90 degree bends on Activ
+# Gat.f, no 45 or 90 degree bends on Activ: every gate is a rectangle.
+rule Gat.f forbidden(gate.non_rectangles())
+
+# needs: identical layers, full-crossing extension
 # rule Rhi.b  identical(psd.interacting(rhigh_body), nsd)
 # rule Rsil.c extension(res, gatpoly) >= 0nm      # RES must reach across the GatPoly
 
-# needs: channel length across the gate, and the abutted-tie rules' exact reading
-# rule Gat.a3 channel_length(ngate_hv) >= 450nm
-# rule Gat.a4 channel_length(pgate_hv) >= 400nm
+# needs: the abutted-tie rules' exact reading
 # rule pSD.e  abutted_overlap(psd, activ) >= 300nm
 # rule pSD.f  abutted_extension(activ, psd) >= 300nm
 # rule AFil.i space(activ_filler, pwell_block.edges()) >= 1.5um   # shape to edge
 
-# needs: maximum area / maximum extension / per-chip totals
-# rule MIM.g  area(mim) <= 5625um2
-# rule LBE.b1 area(lbe) <= 250000um2
-# rule LU.c   max_extension(ntap.interacting(psd_c), cont) <= 6um
-# rule LU.c1  max_extension(ptap.interacting(nsd_c), cont) <= 6um
-# rule LU.d   max_extension(ntap, cont) <= 6um
-# rule LU.d1  max_extension(ptap, cont) <= 6um
+# needs: a tie's reach measured through the diffusion it abuts (LU.c, LU.c1;
+# see LU.d above)
 
 # ======================= Not carried, and why =======================
-# - Antenna: the rows above hold every gate to the unprotected limits; Ant.e/f
-#   (20000 and 500 with a protection diode of at least Ant.g 0.16 um2) switch the
-#   limit on diode presence, which antenna_electrical's linear credit cannot state,
-#   so gates with a diode over-report. IHP sums one ratio per layer, each over the
-#   gate area connected at that layer's step; the rows here divide all collected
-#   metal by the gate area at the highest step, which can under-report a gate that
-#   is joined to others only on a higher metal.
 # - Sheet and fringe capacitances other than Metal1-substrate are not in [PS];
 #   metal-to-metal area capacitances ([PS] §2.17, 68 aF/um2 M(n)-M(n+1), 42.5
 #   TopMetal1-Metal5, 13 TopMetal2-TopMetal1) have no field in the pex row.
@@ -797,8 +884,8 @@ device diode nmoscl_4 model "nmoscl_4" terminals [ntap, ptap]
 #   two well nets. npn13G2/L/V (npnG2.*) need emitter-window layers and
 #   substrate as a net. Metal resistors res_metal1..res_topmetal2 need each
 #   metal split at its :res marker.
-# - Cnt.b1, V*.b1 are approximated by cut counts (see above). ContBar rules
-#   CntB.* need a square/bar shape class; Cnt.a admits 0.16 um wide bars.
+# - Cnt.b1, V*.b1 are approximated by cut counts (see above). Cnt.a admits
+#   0.16 um wide bars, which are ContBars (CntB.a1 holds their length).
 # - Seal.e/f/k/l/m/n, Padb.*, Padc.* (bump/pillar options), Pad.*R, npn*.bR/cR,
 #   MIM.gR, TM2.bR and other "R" rules are recommended or option-specific.
 # - Slt.i (6 % slit density in plates over 35 x 35 um), GFil.i (GatPoly:nofill
@@ -807,4 +894,4 @@ device diode nmoscl_4 model "nmoscl_4" terminals [ntap, ptap]
 #   well exactly 3.0 um wide generates none.
 # - Abutted ties (N+ and P+ Activ touching under one silicide) extract as two
 #   nets, since Activ is split by implant; tie them through Cont as LU.c/d expect.
-# - Gat.d is partial: poly crossing one Activ and passing near another is not held.
+# - Gat.d.3 measures facing edges only: a gate corner diagonal to an Activ corner is not held.

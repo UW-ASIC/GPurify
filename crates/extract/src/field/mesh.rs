@@ -6,37 +6,61 @@
 //! layer abuts it, so no panel sits inside metal.
 //! Data out: a [`Mesh`] — panels banded by conductor, Morton-ordered within each
 //! band. That order is the matvec's summation order, so it fixes output bits.
+//! In a stack whose dielectric changes with height, a last band holds the
+//! panels of every interface between two dielectrics, and each conductor
+//! panel carries the permittivity outside its face (`super::dielectric`).
 
+use super::dielectric::{interface_panels_into, Footprint, Profile};
 use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::rects::decompose_into;
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
 use gpurify_geom::{Dbu, Grid};
-use gpurify_ingest::deck::ProcessStack;
+use gpurify_ingest::deck::{Connectivity, ProcessStack};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 /// A flat rectangular boundary element.
+///
+/// Its face is axis-aligned: a top or bottom face of a layer's extrusion, or
+/// a side face where no rectangle of the same conductor and layer abuts it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Panel {
     /// Centroid, in metres.
     pub centre: [f64; 3],
+    /// Area, in square metres: `4 · half[0] · half[1]`.
     pub area: f64,
     /// Which conductor this panel belongs to.
     pub conductor: u32,
+    /// The axis the face is normal to: 0 for x, 1 for y, 2 for z.
+    pub normal: u8,
+    /// Half the panel's sides, in metres, along the axes `normal + 1` and
+    /// `normal + 2` (mod 3).
+    pub half: [f64; 2],
 }
 
 /// The meshed problem: panels in spatial order, banded by conductor.
 #[derive(Debug, Default)]
 pub struct Mesh {
+    /// Every panel, conductor by conductor, Morton-ordered within each band.
+    /// The order is the matvec's summation order, so it fixes the output bits.
     pub panel: Vec<Panel>,
     /// `panel[conductor_start[c] .. conductor_start[c + 1]]` is conductor `c`.
     pub conductor_start: Vec<u32>,
+    /// The net of each conductor, in the order it was selected.
     pub conductor_net: Vec<NetId>,
-    /// Relative permittivity above each panel.
+    /// Relative permittivity per panel: in a uniform stack each layer's own,
+    /// the dielectric its panels sit in; in a stratified one, the
+    /// permittivity just outside the panel's face (above a top face, below a
+    /// bottom face, beside a side face), and 1 on an interface panel.
     pub epsilon: Vec<f64>,
+    /// `λ = (ε_below − ε_above)/(ε_below + ε_above)` of each interface panel:
+    /// the panels after the conductors', `panel[conductor_start[n] ..]` for
+    /// `n` conductors. Empty in a uniform stack.
+    pub interface: Vec<f64>,
 }
 
+/// How finely to mesh, and when to refuse.
 #[derive(Debug, Clone, Copy)]
 pub struct MeshOptions {
     /// Largest panel edge, in database units.
@@ -47,22 +71,95 @@ pub struct MeshOptions {
     pub max_panels: u32,
 }
 
+/// Why a selection could not be meshed. Each is a refusal, and the `out`
+/// buffer holds no usable mesh after one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum MeshError {
+    /// The panels would exceed [`MeshOptions::max_panels`].
     #[error("mesh would exceed the panel limit")]
     TooManyPanels,
-    #[error("layer {0:?} has no thickness in the process stack")]
+    /// A selected polygon is on a layer the mesh panels and the stack does
+    /// not describe: no row, or a row whose thickness or permittivity is not
+    /// positive or whose height is not finite. The smallest such layer id is
+    /// named. A layer the mesh leaves out ([`build_into`]: a junction or a
+    /// global layer) needs none of these.
+    #[error(
+        "no pex row gives this layer a positive thickness and permittivity, so it cannot be meshed"
+    )]
     MissingThickness(LayerId),
+    /// A selected net has no polygons.
     #[error("selected net has no geometry")]
     EmptyConductor,
-    #[error("layer {0:?} is not valid rectilinear geometry, so it cannot be meshed exactly")]
+    /// The layer's polygons fail validation as rectilinear geometry, so they
+    /// cannot be cut into rectangles exactly.
+    #[error("not valid rectilinear geometry, so it cannot be meshed exactly")]
     InvalidGeometry(LayerId),
+    /// The layer's `pex` row states a dielectric that differs from another
+    /// row's at the same height, so the stack has no one permittivity there.
+    #[error(
+        "its dielectric differs from another layer's at the same height, so the stack's \
+         permittivity there is not defined"
+    )]
+    DielectricConflict(LayerId),
+}
+
+impl MeshError {
+    /// The layer the refusal names, which its message leaves to the caller
+    /// to name as the deck does; `None` for a refusal about no one layer.
+    pub fn layer(self) -> Option<LayerId> {
+        match self {
+            Self::MissingThickness(layer)
+            | Self::InvalidGeometry(layer)
+            | Self::DielectricConflict(layer) => Some(layer),
+            Self::TooManyPanels | Self::EmptyConductor => None,
+        }
+    }
+}
+
+/// Whether the stack puts `layer` on the substrate, at height 0 or below: a
+/// well or a diffusion. Such a shape is a junction in the substrate, whose
+/// capacitance to it is a depletion capacitance, not an electrostatic one,
+/// so the mesh leaves it out and the solve adds its closed form
+/// ([`super::extract_into`]).
+pub(crate) fn on_substrate(stack: &ProcessStack, layer: LayerId) -> bool {
+    stack
+        .height_nm
+        .get(layer.idx())
+        .is_some_and(|&height| !(height > 0.0))
+}
+
+/// Whether `layer`'s shapes are conductors in the field: neither a junction
+/// ([`on_substrate`]) nor a global layer ([`Connectivity::global`], the
+/// substrate as a net, which carries no modelled parasitics and needs no
+/// `pex` row).
+pub(crate) fn in_field(stack: &ProcessStack, connectivity: &Connectivity, layer: LayerId) -> bool {
+    !on_substrate(stack, layer) && !connectivity.global.contains(&layer)
 }
 
 /// Mesh the selected nets, one conductor per entry of `selected`, in that order.
+///
+/// `out` is cleared first. Each polygon is cut into disjoint rectangles,
+/// extruded from its layer's height through its thickness, and each face is
+/// cut into panels no longer than `options.max_edge` on a side (half that
+/// near another conductor). A polygon on a layer the stack puts on the
+/// substrate (height 0) is a junction and gets no panels, and so does one on
+/// a global layer (`connectivity.global`), which needs no stack row; a
+/// conductor made only of such polygons has an empty band.
+///
+/// # Errors
+///
+/// Every [`MeshError`]: checked net by net in selection order, and the panel
+/// budget face by face, so an over-limit mesh is refused, never truncated.
+///
+/// # Time complexity
+///
+/// *O*(P log P) in the panels, for the sort, plus a check of every rectangle
+/// against every other for proximity refinement, quadratic in the
+/// selection's rectangles.
 pub fn build_into(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     selected: &[NetId],
     stack: &ProcessStack,
     options: MeshOptions,
@@ -73,6 +170,10 @@ pub fn build_into(
     out.conductor_start.clear();
     out.conductor_net.clear();
     out.epsilon.clear();
+    out.interface.clear();
+    let profile = Profile::of(stack)
+        .map_err(|conflict| MeshError::DielectricConflict(LayerId(conflict.layer)))?;
+    let layered = profile.is_layered();
 
     // One database unit, in metres.
     #[expect(clippy::cast_precision_loss, reason = "a resolution is a small count")]
@@ -97,10 +198,13 @@ pub fn build_into(
             return Err(MeshError::EmptyConductor);
         }
         // Refuse by the smallest layer id the stack does not describe (a layer
-        // past the stack clamps onto the NaN sentinel row).
+        // past the stack clamps onto the NaN sentinel row). Only a layer in
+        // the field is meshed, so only it needs a thickness and a
+        // permittivity: a junction and a global layer get no panels.
         let undescribed = polys
             .iter()
             .map(|&poly| store.poly_layer(poly))
+            .filter(|&layer| in_field(stack, connectivity, layer))
             .filter(|layer| !(table[layer.idx().min(sentinel)].epsilon > 0.0))
             .min();
         if let Some(layer) = undescribed {
@@ -108,6 +212,9 @@ pub fn build_into(
         }
         for &poly in polys {
             let layer = store.poly_layer(poly);
+            if !in_field(stack, connectivity, layer) {
+                continue;
+            }
             let row = table[layer.idx().min(sentinel)];
             for &bbox in rects.of(store, layer, poly)? {
                 solid.push(Solid {
@@ -166,6 +273,12 @@ pub fn build_into(
             let edge_here = edge / f64::from(1 + u8::from(near));
             for (axis, sign) in [(2, -1.0), (2, 1.0)] {
                 let plane = if sign < 0.0 { lo[axis] } else { hi[axis] };
+                // Stratified, a face sees the dielectric outside it.
+                let epsilon = match (layered, sign < 0.0) {
+                    (false, _) => here.epsilon,
+                    (true, true) => profile.below(plane),
+                    (true, false) => profile.above(plane),
+                };
                 mesh_face(
                     axis,
                     plane,
@@ -173,7 +286,7 @@ pub fn build_into(
                     hi,
                     edge_here,
                     conductor,
-                    here.epsilon,
+                    epsilon,
                     &mut remaining,
                     &mut scratch,
                 )?;
@@ -192,17 +305,45 @@ pub fn build_into(
                         piece_lo[along] = from as f64 * metre;
                         piece_hi[along] = to as f64 * metre;
                     }
-                    mesh_face(
-                        axis,
-                        plane,
-                        piece_lo,
-                        piece_hi,
-                        edge_here,
-                        conductor,
-                        here.epsilon,
-                        &mut remaining,
-                        &mut scratch,
-                    )?;
+                    if !layered {
+                        mesh_face(
+                            axis,
+                            plane,
+                            piece_lo,
+                            piece_hi,
+                            edge_here,
+                            conductor,
+                            here.epsilon,
+                            &mut remaining,
+                            &mut scratch,
+                        )?;
+                        continue;
+                    }
+                    // Stratified, the face is cut at every interface it
+                    // crosses, each slab seeing its own dielectric.
+                    let mut cuts: Vec<f64> = profile
+                        .interfaces()
+                        .map(|(z, _, _)| z)
+                        .filter(|&z| z > lo[2] + SAME_PLANE && z < hi[2] - SAME_PLANE)
+                        .collect();
+                    cuts.insert(0, lo[2]);
+                    cuts.push(hi[2]);
+                    for slab in cuts.windows(2) {
+                        let (mut slab_lo, mut slab_hi) = (piece_lo, piece_hi);
+                        slab_lo[2] = slab[0];
+                        slab_hi[2] = slab[1];
+                        mesh_face(
+                            axis,
+                            plane,
+                            slab_lo,
+                            slab_hi,
+                            edge_here,
+                            conductor,
+                            profile.above(slab[0]),
+                            &mut remaining,
+                            &mut scratch,
+                        )?;
+                    }
                 }
             }
         }
@@ -231,8 +372,67 @@ pub fn build_into(
         out.panel.push(panel);
         out.epsilon.push(epsilon);
     }
+    debug_assert!(
+        out.conductor_start.len() == out.conductor_net.len() + 1
+            && out.conductor_start.last().map(|&end| end as usize) == Some(out.panel.len()),
+        "the conductor bands are CSR over the panels"
+    );
+    debug_assert!(
+        out.conductor_start
+            .windows(2)
+            .enumerate()
+            .all(
+                |(conductor, band)| out.panel[band[0] as usize..band[1] as usize]
+                    .iter()
+                    .all(|panel| panel.conductor as usize == conductor)
+            ),
+        "every panel sits in its own conductor's band"
+    );
+    // A zero-area panel would divide by zero in its self-term. (A non-finite
+    // one, from an overflowed stack value, is the solve's `NonFinite`.)
+    debug_assert!(
+        out.panel
+            .iter()
+            .zip(&out.epsilon)
+            .all(|(panel, &epsilon)| panel.area > 0.0 && epsilon > 0.0),
+        "every panel has a positive area and permittivity"
+    );
+
+    if layered {
+        let footprints: Vec<Footprint> = solid
+            .iter()
+            .map(|here| {
+                #[expect(clippy::cast_precision_loss, reason = "|Dbu| <= 2^40, exact in f64")]
+                let at = |v: Dbu| v.raw() as f64 * metre;
+                Footprint {
+                    lo: [at(here.bbox.xlo), at(here.bbox.ylo)],
+                    hi: [at(here.bbox.xhi), at(here.bbox.yhi)],
+                    z: here.z,
+                }
+            })
+            .collect();
+        let after = u32::try_from(selected.len()).expect("a selection is indexed by a u32");
+        let mut interfaces = Vec::new();
+        interface_panels_into(
+            &profile,
+            &footprints,
+            edge,
+            after,
+            &mut remaining,
+            &mut interfaces,
+        )
+        .map_err(|()| MeshError::TooManyPanels)?;
+        for (panel, lambda) in interfaces {
+            out.panel.push(panel);
+            out.epsilon.push(1.0);
+            out.interface.push(lambda);
+        }
+    }
     Ok(())
 }
+
+/// Two heights closer than this, in metres, are one plane.
+const SAME_PLANE: f64 = 1e-12;
 
 /// One rectangle of a conductor polygon as a solid: grid-unit footprint, z
 /// extent in metres.
@@ -373,13 +573,19 @@ fn near_another_conductor(solid: &[Solid], of: Solid, distance: Dbu) -> bool {
 }
 
 /// Panels along one face edge of `width` at a limit of `edge`; at least one.
+///
+/// A width within a millionth of an edge above a whole number of edges takes
+/// that number. `width` is a difference of absolute coordinates in metres, so
+/// an exact multiple can come out a few ulps over and gain a panel at one
+/// position but not another: moving a layout changed its capacitance
+/// (testing-plan F46).
 fn cuts(width: f64, edge: f64) -> u32 {
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         reason = "positive; a saturated count is refused as TooManyPanels"
     )]
-    let n = (width / edge).ceil() as u32;
+    let n = (width / edge - 1e-6).ceil() as u32;
     n.max(1)
 }
 
@@ -422,6 +628,8 @@ fn mesh_face(
                     centre,
                     area,
                     conductor,
+                    normal: u8::try_from(axis).expect("an axis is 0, 1 or 2"),
+                    half: [du / 2.0, dv / 2.0],
                 },
                 epsilon,
             ));
@@ -508,6 +716,9 @@ fn spatial_cmp(a: Panel, b: Panel) -> Ordering {
 mod tests {
     use super::{morton3, quantise, spread3, uncovered, MORTON_BITS, MORTON_MAX, MORTON_SPAN};
 
+    /// Oracle: hand-derived. 0..10 less 2..4, 3..6 and 9..20 leaves 0..2 and
+    /// 6..9; an empty cover leaves the span, a cover past both ends leaves
+    /// nothing.
     #[test]
     fn uncovered_is_the_span_less_every_cover() {
         assert_eq!(uncovered((0, 10), &[]), [(0, 10)]);
@@ -521,6 +732,10 @@ mod tests {
     /// An L whose bounding box swallows a second conductor in its notch: the
     /// L's panels must stay on the L, and its footprint must be its area,
     /// not its box's. Meshing boxes put the L's top face over the square.
+    ///
+    /// Oracle: hand-derived. The L's top face is 1000 x 400 + 400 x 600 nm2,
+    /// and no panel of it may lie over the square in its notch (600..900 on
+    /// both axes).
     #[test]
     fn a_concave_conductor_is_meshed_as_drawn_not_as_its_box() {
         use gpurify_check::topology::{net::extract_nets_into, NetId, NetTable};
@@ -568,6 +783,7 @@ mod tests {
         super::build_into(
             &store,
             &nets,
+            &connectivity,
             &[NetId(0), NetId(1)],
             &stack,
             options,
@@ -596,6 +812,8 @@ mod tests {
         );
     }
 
+    /// Oracle: the definition in `spread3`'s doc: bit `i` lands at bit `3i`,
+    /// for every `i`, and bits above the axis width are masked off.
     #[test]
     fn spreading_moves_bit_i_to_bit_three_i() {
         for i in 0..MORTON_BITS {
@@ -610,6 +828,8 @@ mod tests {
         );
     }
 
+    /// Oracle: round trip. Gathering every third bit of the key from offsets 0,
+    /// 1 and 2 gives back `x`, `y` and `z`.
     #[test]
     fn a_key_keeps_all_three_axes_in_disjoint_bits() {
         let (x, y, z) = (0b1011, 0b0110, 0b1101);
@@ -627,6 +847,9 @@ mod tests {
         );
     }
 
+    /// Oracle: hand-derived from `quantise`'s doc (saturating, NaN to zero):
+    /// 0 maps to 0, the span's end to `MORTON_MAX`, a quarter to a quarter of
+    /// it, and out-of-range, NaN and infinite inputs to the ends.
     #[test]
     fn quantising_is_monotone_and_total() {
         let scale = MORTON_SPAN / 4.0;

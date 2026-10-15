@@ -2,6 +2,26 @@
 //!
 //! Data in: a [`Report`] (violations, rule records, strings, grid, header). Data
 //! out: one JSON object appended to a `String`, lengths in nanometres.
+//!
+//! The object has three keys, four with waived findings, in this order:
+//!
+//! - `header`: `tool_version`, `deck_path`, `layout_path`, and `timestamp`
+//!   (a string or `null`).
+//! - `violations`: one object per row, with `rule`, `layer` (the deck's layer
+//!   id), `severity` (`"error"` or `"warning"`), `at` (`x` and `y` in nm),
+//!   `measured` and `limit` (each `kind`, `unit` and `value`), `shapes`
+//!   (two polygon ids, the second `null` for a one-shape violation), and,
+//!   only where the finding carries a fix hint, `fix` (a measurement: for an
+//!   antenna finding the least protection-diode area that clears it).
+//! - `waived`, only when the deck's waivers cover any finding: those
+//!   findings, as `violations` writes them.
+//! - `runs`: one object per rule, with `rule`, `outcome` (`ran`, `refused`,
+//!   or `skipped:` and the reason), `examined` and `violations`.
+//!
+//! Measurement units: lengths `nm`, areas `nm^2`, voltages `mV`, currents
+//! `uA`, resistances `ohm`; ratios and counts have none. Floats have six
+//! decimals and no exponent ([`format_f64`]). Keys are fixed, never derived
+//! from a map, so the bytes are deterministic.
 
 use std::fmt::Write as _;
 
@@ -14,23 +34,38 @@ use gpurify_ingest::{StrId, StrTable};
 /// mean "clean" rather than "nothing ran".
 #[derive(Debug)]
 pub struct Report<'a> {
+    /// The run's metadata, written first.
     pub header: &'a Header,
+    /// The findings, written in their own order: sort them canonically first
+    /// ([`run_checks`](crate::engine::run::run_checks) does).
     pub violations: &'a Violations,
+    /// The waived findings, written as `"waived"` after the violations when
+    /// there are any, in their own order (sort them as the violations).
+    pub waived: &'a Violations,
+    /// One record per rule, written in slice order.
     pub runs: &'a [RuleRun],
+    /// Resolves every rule name. It must be the table the ids came from.
     pub strings: &'a StrTable,
+    /// Converts coordinates and measurements from database units to nm.
     pub grid: Grid,
 }
 
 /// Write a report as JSON, appended to `out`, in the table's own order. A
 /// non-finite measurement is refused before a byte is written.
+///
+/// # Errors
+///
+/// [`WriteError::Unrepresentable`] when a measured value or limit is NaN or
+/// infinite, which JSON cannot carry.
 pub fn write_report(report: &Report<'_>, out: &mut String) -> Result<(), WriteError> {
-    let v = report.violations;
-    let all_finite = v
-        .measured
-        .iter()
-        .zip(&v.limit)
-        .all(|(measured, limit)| measured.is_finite() && limit.is_finite());
-    if !all_finite {
+    let finite = |v: &Violations| {
+        v.measured
+            .iter()
+            .zip(&v.limit)
+            .all(|(measured, limit)| measured.is_finite() && limit.is_finite())
+            && v.fix.iter().flatten().all(|fix| fix.is_finite())
+    };
+    if !finite(report.violations) || !finite(report.waived) {
         return Err(WriteError::Unrepresentable("a non-finite measurement"));
     }
 
@@ -38,6 +73,34 @@ pub fn write_report(report: &Report<'_>, out: &mut String) -> Result<(), WriteEr
     write_header(report.header, out);
 
     out.push_str(",\"violations\":[");
+    write_rows(report.violations, report, out);
+    // Only a deck with waivers has any; a report without them reads as before.
+    if !report.waived.is_empty() {
+        out.push_str("],\"waived\":[");
+        write_rows(report.waived, report, out);
+    }
+
+    out.push_str("],\"runs\":[");
+    for (index, run) in report.runs.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"rule\":");
+        write_name(report.strings, run.rule, out);
+        out.push_str(",\"outcome\":\"");
+        out.push_str(outcome_name(run.outcome));
+        let _ = write!(
+            out,
+            "\",\"examined\":{},\"violations\":{}}}",
+            run.examined, run.violations
+        );
+    }
+    out.push_str("]}");
+    Ok(())
+}
+
+/// Each row of `v` as a JSON object, comma-separated.
+fn write_rows(v: &Violations, report: &Report<'_>, out: &mut String) {
     for row in 0..v.rule.len() {
         if row > 0 {
             out.push(',');
@@ -65,26 +128,13 @@ pub fn write_report(report: &Report<'_>, out: &mut String) -> Result<(), WriteEr
             }
             None => out.push_str(",null"),
         }
-        out.push_str("]}");
-    }
-
-    out.push_str("],\"runs\":[");
-    for (index, run) in report.runs.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
+        out.push(']');
+        if let Some(fix) = v.fix[row] {
+            out.push_str(",\"fix\":");
+            write_measurement(fix, report.grid, out);
         }
-        out.push_str("{\"rule\":");
-        write_name(report.strings, run.rule, out);
-        out.push_str(",\"outcome\":\"");
-        out.push_str(outcome_name(run.outcome));
-        let _ = write!(
-            out,
-            "\",\"examined\":{},\"violations\":{}}}",
-            run.examined, run.violations
-        );
+        out.push('}');
     }
-    out.push_str("]}");
-    Ok(())
 }
 
 fn write_header(header: &Header, out: &mut String) {
@@ -152,6 +202,7 @@ fn outcome_name(outcome: Outcome) -> &'static str {
         Outcome::Skipped(SkipReason::NoDesignIntent) => "skipped:no_design_intent",
         Outcome::Skipped(SkipReason::NotInDeck) => "skipped:not_in_deck",
         Outcome::Skipped(SkipReason::EmptyLayer) => "skipped:empty_layer",
+        Outcome::Skipped(SkipReason::EarlierStage) => "skipped:earlier_stage",
         Outcome::Refused => "refused",
     }
 }
@@ -162,6 +213,11 @@ fn write_json_str(text: &str, out: &mut String) {
 
 /// The one place a float becomes bytes: `{:.6}`, six decimal places, never an
 /// exponent (so anything below `5e-7` prints as `0.000000`).
+///
+/// Six decimals of the unit the caller writes in: 1 zF for a capacitance in
+/// fF, 1 µΩ for ohms. A non-finite value prints as `NaN` or `inf`, which no
+/// format here can carry: [`write_report`] and the parasitic writers refuse
+/// one before writing.
 pub fn format_f64(value: f64, out: &mut String) {
     let _ = write!(out, "{value:.6}");
 }

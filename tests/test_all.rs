@@ -5,6 +5,7 @@
 //! `tests/fixtures` and check each against its geometry-derived expectation.
 
 use gpurify::check::report::{Measurement, Outcome, Severity, SkipReason};
+use gpurify::deck::CompileError;
 use gpurify::engine::pipeline::LoadError;
 use gpurify::engine::run::{Checks, StageStatus};
 use gpurify::ingest::DeckError;
@@ -93,6 +94,47 @@ fn a_layout_written_and_read_back_yields_the_same_store() {
     common::assert_stores_equal(&original.store, &round_tripped);
 }
 
+/// Oracle: law, on a hole. The reader splits a keyhole into its outer and a
+/// clockwise hole row; written back, the hole must go inside its outer's
+/// keyhole, since a `BOUNDARY` of its own reads back as material. Found by
+/// the `gds` fuzz target's round trip on `conformance.gds` (E1).
+#[test]
+fn a_hole_survives_the_file_round_trip() {
+    let mut strings = gpurify::ingest::StrTable::default();
+    let deck = gpurify::ingest::deck::parse_deck(
+        "grid 1nm\nlayer m = gds(1, 0)\n",
+        gpurify::geom::Grid::new(1000).expect("a 1 nm grid"),
+        &mut strings,
+    )
+    .expect("a one-layer deck");
+    // [0, 1000]² around a [200, 800]² hole, as one keyhole ring.
+    let mut layout = gpurify_testgen::LayoutBuilder::new(1);
+    layout.push(
+        gpurify::geom::LayerId(0),
+        &[200, 1000, 1000, 0, 0, 200, 200, 200, 800, 800, 200],
+        &[0, 0, 1000, 1000, 0, 0, 200, 800, 800, 200, 200],
+    );
+    let mut bytes = Vec::new();
+    gpurify_testgen::gds::write_store(&layout.finish().0, &deck.layers, "TOP", &mut bytes)
+        .expect("a keyhole is writable");
+    let read = common::load_bytes(&bytes, &deck).expect("a keyhole reads");
+    let ring = |row| {
+        let (xs, ys) = read.poly_verts(gpurify::geom::PolyId(row));
+        gpurify::geom::ops::area2(xs, ys).raw()
+    };
+    assert_eq!(
+        (read.poly_count(), ring(0), ring(1)),
+        (2, 2 * 1_000_000, -2 * 360_000),
+        "the outer, then its hole, clockwise"
+    );
+
+    let mut again = Vec::new();
+    gpurify_testgen::gds::write_store(&read, &deck.layers, "TOP", &mut again)
+        .expect("a store with a hole is writable");
+    let round_tripped = common::load_bytes(&again, &deck).expect("re-read");
+    common::assert_stores_equal(&read, &round_tripped);
+}
+
 /// Oracle: construct-from-answer. Coordinates at the edge of the representable
 /// domain survive the file round trip exactly.
 #[test]
@@ -114,7 +156,7 @@ fn an_off_grid_deck_limit_is_refused_rather_than_rounded() {
         .expect_err("a limit off the manufacturing grid must not load");
 
     assert!(
-        matches!(&error, LoadError::Deck(DeckError::Invalid { diagnostics, .. })
+        matches!(&error, LoadError::Deck(CompileError::Deck(DeckError::Invalid { diagnostics, .. }))
             if diagnostics[0].message.contains("not on the layout's grid")),
         "expected an off-grid rejection, got {error:?}"
     );
@@ -180,22 +222,83 @@ fn every_erc_case_in_the_corpus_agrees_with_its_geometry() {
 }
 
 /// Oracle: construct-from-answer. Each LVS cell draws a stated number of
-/// devices and a stated number of nets.
+/// devices and nets, and matches its own reference netlist (`lvs_refs/`) or
+/// not, as `expect_match` derives from the geometry.
 #[test]
 fn every_lvs_cell_in_the_corpus_extracts_the_devices_it_draws() {
     let corpus = common::load_corpus();
     let mut failed = Vec::new();
+    let open = corpus.open_blockers();
     for case in &corpus.lvs.cases {
-        failed.extend(common::check_lvs_case(case));
+        failed.extend(common::check_lvs_case(case, &open));
     }
     common::report_domain("LVS", corpus.lvs.cases.len(), &failed);
 }
 
+/// Oracle: the circuit, not its hierarchy. `LVS_INV`'s inverter placed by
+/// instance matches the flat cell, and a schematic that also places a second,
+/// undrawn inverter by instance does not (testing-plan F1: the instance used to
+/// be dropped, so the missing block matched).
+#[test]
+fn a_block_placed_by_instance_is_compared_like_one_drawn_flat() {
+    let lvs = Checks {
+        drc: false,
+        erc: false,
+        lvs: true,
+        pex: false,
+    };
+    let verdict = |reference: &str| {
+        common::run_case_with_reference("lvs", "LVS_CLEAN_MATCH", lvs, reference)
+            .expect("the cell and the reference load")
+            .outputs
+            .lvs
+            .map(|verdict| matches!(verdict, gpurify::check::lvs::Verdict::Match))
+    };
+    assert_eq!(verdict("lvs_refs/hier/inv_by_instance.spice"), Some(true));
+    assert_eq!(
+        verdict("lvs_refs/hier/inv_and_missing_block.spice"),
+        Some(false)
+    );
+}
+
+/// Oracle: construct-from-answer, testing-plan F84. `LVS_SERIES` draws two
+/// 200 by 50 nm channels stacked through an unlabelled node with their gates
+/// strapped, and `LVS_PARALLEL` two such channels side by side (their case
+/// notes). Each merge needs only the size it sums: the stack is one card of
+/// `L=100n` with no `W` written, and the pair one card of `W=400n` with no
+/// `L`. The other size alone leaves nothing to sum, so the two stay two and
+/// do not match one card.
+#[test]
+fn a_merge_needs_only_the_size_it_sums() {
+    let lvs = Checks {
+        drc: false,
+        erc: false,
+        lvs: true,
+        pex: false,
+    };
+    let verdict = |id: &str, reference: &str| {
+        common::run_case_with_reference("lvs", id, lvs, reference)
+            .expect("the cell and the reference load")
+            .outputs
+            .lvs
+            .map(|verdict| matches!(verdict, gpurify::check::lvs::Verdict::Match))
+    };
+    for (id, reference, matched) in [
+        ("LVS_SERIES_MERGE", "series_l_only", true),
+        ("LVS_SERIES_MERGE", "series_w_only", false),
+        ("LVS_PARALLEL_MERGE", "parallel_w_only", true),
+        ("LVS_PARALLEL_MERGE", "parallel_l_only", false),
+    ] {
+        let path = format!("lvs_refs/sized/{reference}.spice");
+        assert_eq!(verdict(id, &path), Some(matched), "{id} against {path}");
+    }
+}
+
 /// Oracle: construct-from-answer. A real extraction and a real reference netlist
-/// through the LVS stage, and the eight run rows that say which of its checks
+/// through the LVS stage, and the five run rows that say which of its checks
 /// executed.
 #[test]
-fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows() {
+fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_five_run_rows() {
     let checks = Checks {
         drc: false,
         erc: false,
@@ -250,7 +353,7 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
         run.outputs.violations.len()
     );
 
-    // The eight rows, by name, with `examined` tied to the extraction's own
+    // The five rows, by name, with `examined` tied to the extraction's own
     // counts rather than to a constant: the claim a `RuleRun` makes is *this
     // check looked at every one of them*, and a hardcoded number would still
     // pass on a check that examined half of a differently-sized cell.
@@ -258,26 +361,10 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
     let ports = run.extracted.ports.len() as u64;
     let devices = run.extracted.devices.len() as u64;
     let terminals = run.extracted.devices.terminal_net.len() as u64;
-    let expected: [(&str, Outcome, u64); 8] = [
+    let expected: [(&str, Outcome, u64); 5] = [
         ("lvs.floating_net", Outcome::Ran, nets),
         ("lvs.label_conflict", Outcome::Ran, nets),
         ("lvs.net_seed_conflict", Outcome::Ran, ports),
-        // Both device-count families and the parametric check compare against a
-        // limit that lives in the deck, and no signature in `lvs::checks` takes
-        // one. They are recorded unrun rather than passing every layout, which
-        // is the whole point of the variant — and the reason a run selecting
-        // LVS cannot report a pass today.
-        (
-            "lvs.device_count_mos",
-            Outcome::Skipped(SkipReason::NotInDeck),
-            0,
-        ),
-        (
-            "lvs.device_count_bjt",
-            Outcome::Skipped(SkipReason::NotInDeck),
-            0,
-        ),
-        ("lvs.parametric", Outcome::Skipped(SkipReason::NotInDeck), 0),
         ("lvs.terminal_net", Outcome::Ran, terminals),
         ("lvs.terminal_count", Outcome::Ran, devices),
     ];
@@ -293,7 +380,7 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
     assert_eq!(
         run.outputs.runs.len(),
         expected.len(),
-        "six checks file eight rows between them; the run recorded {:?}",
+        "five checks file five rows; the run recorded {:?}",
         run.outputs.runs
     );
 
@@ -301,7 +388,7 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
     // sentinels counted down from `u32::MAX` precisely so that
     // `StrTable::resolve` panics on one rather than mislabelling a finding, and
     // `export::json::write_runs` resolves every row — so a stage that filed
-    // those eight rows without mapping them back to interned names would crash
+    // those five rows without mapping them back to interned names would crash
     // the CLI on every LVS run. This is the one check that the mapping happened.
     let mut json = String::new();
     gpurify::export::json::write_report(
@@ -313,6 +400,7 @@ fn a_real_extraction_and_a_reference_netlist_reach_a_verdict_and_eight_run_rows(
                 timestamp: None,
             },
             violations: &run.outputs.violations,
+            waived: &run.outputs.waived,
             runs: &run.outputs.runs,
             strings: &run.loaded.strings,
             grid: run.loaded.grid,
@@ -402,12 +490,14 @@ fn a_field_solve_obeys_the_coupling_laws_a_closed_form_cannot_state() {
         "PEX_VERT is PEX_CC rotated a quarter turn, so the field is the same \
          field: {vertical} aF against {s200} aF"
     );
+    // Once "the same field": in free space a pair moved straight up is the
+    // same pair. The solve now holds the substrate at ground (F24), and a
+    // grounded plane takes more of a pair's flux the nearer it is.
     assert!(
-        agree(on_met2, s200),
+        on_met2 > s200,
         "PEX_M2CC is PEX_CC on met2, which the deck gives the same thickness \
-         and the same dielectric_k, so the field is the same field: {on_met2} \
-         aF against {s200} aF. The manifest's 160-against-200 is what this \
-         disagrees with, and the geometry is on this side"
+         and the same dielectric_k 700 nm farther from the grounded substrate, \
+         so it must couple more: {on_met2} aF against {s200} aF"
     );
 
     assert!(
@@ -1137,6 +1227,7 @@ fn black_and_blech_decide_a_met1_rail_that_carries_a_device_terminal() {
 /// Oracle: law — determinism, on the split extraction path specifically.
 #[test]
 fn extracting_the_split_corpus_twice_is_bit_identical() {
+    use gpurify_testgen::assertions::{net_partition, port_names};
     let checks = Checks {
         drc: false,
         erc: false,
@@ -1146,7 +1237,6 @@ fn extracting_the_split_corpus_twice_is_bit_identical() {
     let first = common::run_case("lvs", "LVS_CLEAN_MATCH", checks).expect("LVS_INV extracts");
     let second = common::run_case("lvs", "LVS_CLEAN_MATCH", checks).expect("LVS_INV extracts");
 
-    use gpurify_testgen::assertions::{net_partition, port_names};
     assert_eq!(
         net_partition(&first.extracted.nets),
         net_partition(&second.extracted.nets),
@@ -1189,4 +1279,74 @@ fn extracting_the_split_corpus_twice_is_bit_identical() {
         terminal_nets[source], terminal_nets[drain],
         "the determinism above would be vacuous if the split were not in force"
     );
+}
+
+/// N-s2-2, reduced from IHP's `sg13g2_stdcell.gds` read whole (every top cell
+/// placed at the origin): `sg13g2_dfrbpq_2`'s Activ is one keyhole
+/// `BOUNDARY` around a hole, and another cell's Activ drawn earlier over the
+/// hole holds its corners but not its middle. Read back, the hole is the
+/// keyhole's and every polygon's rectangles cover exactly its area (the
+/// debug assertion in `decompose_into` tripped on the file).
+///
+/// Oracle: construct-from-answer. A square notched from its top to its
+/// middle, `[35, 65]²` less `[45, 55] x [50, 65]`, then `[0, 100]²` around
+/// the hole `[40, 60]²` as one keyhole ring: areas `30² - 10·15` and `100² -
+/// 20²`, the hole bound to the second.
+#[test]
+fn a_keyhole_keeps_its_hole_under_an_overlapping_shape() {
+    let mut strings = gpurify::ingest::StrTable::default();
+    let deck = gpurify::ingest::deck::parse_deck(
+        "grid 1nm\nlayer m = gds(1, 0)\n",
+        gpurify::geom::Grid::new(1000).expect("a 1 nm grid"),
+        &mut strings,
+    )
+    .expect("a one-layer deck");
+    let m = gpurify::geom::LayerId(0);
+    let mut layout = gpurify_testgen::LayoutBuilder::new(1);
+    layout.push(
+        m,
+        &[35, 65, 65, 55, 55, 45, 45, 35],
+        &[35, 35, 65, 65, 50, 50, 65, 65],
+    );
+    layout.push(
+        m,
+        &[40, 100, 100, 0, 0, 40, 40, 40, 60, 60, 40],
+        &[0, 0, 100, 100, 0, 0, 40, 60, 60, 40, 40],
+    );
+    let mut bytes = Vec::new();
+    gpurify_testgen::gds::write_store(&layout.finish().0, &deck.layers, "TOP", &mut bytes)
+        .expect("writable");
+    let read = common::load_bytes(&bytes, &deck).expect("reads");
+    let mut layer = gpurify::geom::ValidatedLayer::default();
+    gpurify::geom::view::validate_layer_into(&read, m, &mut layer).expect("valid");
+    let (mut rects, mut start) = (Vec::new(), Vec::new());
+    gpurify::geom::rects::decompose_into(&layer, &mut rects, &mut start);
+    let found: Vec<(usize, i128)> = (0..2u32)
+        .map(|i| {
+            let poly = layer.get(i);
+            let range = start[i as usize] as usize..start[i as usize + 1] as usize;
+            (
+                poly.holes().count(),
+                gpurify::geom::rects::covered_area(&rects[range]).raw(),
+            )
+        })
+        .collect();
+    assert_eq!(found, [(0, 30 * 30 - 10 * 15), (1, 100 * 100 - 20 * 20)]);
+}
+
+/// Every PEX case of the corpus runs through the field solve too
+/// (testing-plan F6), not the closed forms alone.
+///
+/// Oracle: closed form and law (`common::check_pex_case_field_solved`): the
+/// case's stage outcome and drawn nets; a straight bar's resistance is `Rs ·
+/// L / W` in both methods; a field-solved coupling is at least the closed
+/// form's, which has no fringing field.
+#[test]
+fn every_pex_case_in_the_corpus_also_field_solves() {
+    let corpus = common::load_corpus();
+    let mut failed = Vec::new();
+    for case in &corpus.pex.cases {
+        failed.extend(common::check_pex_case_field_solved(case));
+    }
+    common::report_domain("PEX (field solve)", corpus.pex.cases.len(), &failed);
 }

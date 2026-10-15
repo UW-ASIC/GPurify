@@ -1,0 +1,6 @@
+* LVS_SERIES (case LVS_SERIES_MERGE) as one card stating its length alone:
+* the cell's two 200 by 50 nm channels stack through an unlabelled node to
+* one of L = 100 nm, and a series merge needs only L (testing-plan F84).
+.subckt LVS_SERIES D A S
+M0 D A S S nfet_01v8 L=100n
+.ends

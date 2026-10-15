@@ -1,0 +1,27 @@
+{
+  "cell": "strongarm",
+  "substrate": "vss",
+  "pins": [
+    {"name": "vinp", "role": "analog", "direction": "input", "bias": 0.9,
+     "power": "vdd", "ground": "vss"},
+    {"name": "vinn", "role": "analog", "direction": "input", "bias": 0.9,
+     "power": "vdd", "ground": "vss"},
+    {"name": "outp", "role": "output", "power": "vdd", "ground": "vss"},
+    {"name": "outn", "role": "output", "power": "vdd", "ground": "vss"},
+    {"name": "clk",  "role": "clock",  "power": "vdd", "ground": "vss"},
+    {"name": "vdd",  "role": "power"},
+    {"name": "vss",  "role": "ground"}
+  ],
+  "arcs": [
+    {"from": "clk", "to": "outp", "kind": "rising_edge", "cases": [
+      {"vectors": [{"clk": "0", "vinp": 0.95, "vinn": 0.85}], "output": "fall"},
+      {"vectors": [{"clk": "0", "vinp": 0.905, "vinn": 0.895}], "output": "fall"}
+    ]}
+  ],
+  "corners": [
+    {"name": "tt_025C_1v80", "temperature": 25,
+     "supplies": {"vdd": 1.8, "vss": 0},
+     "models": [".lib \"/path/to/sky130.lib.spice\" tt"],
+     "mc_models": [".lib \"/path/to/sky130.lib.spice\" tt_mm"]}
+  ]
+}

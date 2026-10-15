@@ -1,74 +1,43 @@
 //! Width family: min/max width and notch (facing parallel edge pairs of one
 //! polygon, found by a scanline sweep), and min edge length.
 //!
-//! Data in: one validated rectilinear layer. Data out: one violation per offending
-//! polygon (per edge for min edge length). Exact on the whole input domain.
+//! Data in: one validated layer; `min_width`, `notch` and `min_edge_length`
+//! take edges at 45 degrees, the others refuse them. Data out: one violation
+//! per offending merged figure (per edge of one for min edge length). Exact
+//! on the whole input domain.
 
-use super::{mid, owners_of, Verdict, REFUSED};
+use super::{centre, mid, owners_by_point, owners_of, Verdict, REFUSED};
+use crate::drc::ruleset::{StepKind, StepNeighbour};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::boolean::{subtraction_into, union_into, BooleanError};
-use gpurify_geom::ops::{Point, Winding};
+use gpurify_geom::derive::interacting_into;
+use gpurify_geom::ops::isqrt;
+use gpurify_geom::ops::Point;
 use gpurify_geom::rects::decompose_into;
 use gpurify_geom::store::GeometryStoreBuilder;
 use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
-use gpurify_geom::width::{narrowest_facing, narrowest_neck, poly_edges};
+use gpurify_geom::width::{
+    narrowest_facing, narrowest_neck, narrowest_pair2, narrowest_pair_any, narrowest_width2,
+};
 use gpurify_geom::{Bbox, Dbu, DbuArea, MAX_ABS_DBU};
-use gpurify_geom::{GeometryStore, LayerId, PolyId};
+use gpurify_geom::{GeometryStore, LayerId};
 use gpurify_ingest::StrId;
-
-/// The store rows of a layer's validated polygons, in validated order: one
-/// polygon per counter-clockwise row, ascending.
-fn outer_rows(store: &GeometryStore, layer: LayerId) -> impl Iterator<Item = PolyId> + '_ {
-    store
-        .polys_on_layer(layer)
-        .map(PolyId)
-        .filter(move |&poly| {
-            let (xs, ys) = store.poly_verts(poly);
-            ring_winding(xs, ys) == Winding::CounterClockwise
-        })
-}
-
-/// Winding of a validated rectilinear ring, read off its bottom edge: that edge
-/// travels +x exactly when the ring is counter-clockwise.
-fn ring_winding(xs: &[Dbu], ys: &[Dbu]) -> Winding {
-    let n = xs.len();
-    let ys = &ys[..n];
-    // `i64::MAX` doubles as "no horizontal edge yet"; iteration zero is the closing edge.
-    let (mut px, mut py) = (xs[n - 1].raw(), ys[n - 1].raw());
-    let mut best_y = i64::MAX;
-    let mut best_dx = 0i64;
-    for i in 0..n {
-        let (x, y) = (xs[i].raw(), ys[i].raw());
-        let cand_y = if py == y { py } else { i64::MAX };
-        if cand_y < best_y {
-            best_dx = x - px;
-            best_y = cand_y;
-        }
-        px = x;
-        py = y;
-    }
-    debug_assert_eq!(
-        Some(if best_dx > 0 {
-            Winding::CounterClockwise
-        } else {
-            Winding::Clockwise
-        }),
-        gpurify_geom::ops::winding_of(xs, ys),
-        "the bottom edge disagrees with the shoelace"
-    );
-    if best_dx > 0 {
-        Winding::CounterClockwise
-    } else {
-        Winding::Clockwise
-    }
-}
 
 /// Min width (Euclidean at concave corners) and notch (`material_between ==
 /// false`, facing edges only). One violation per
 /// offending figure of the self-merged layer: touching rectangles are one U,
 /// and a rectangle drawn inside another adds no width of its own. `examined`
 /// is the pre-merge polygon count.
+///
+/// A layer with edges at 45 degrees is measured by
+/// [`narrowest_pair2`](gpurify_geom::width::narrowest_pair2): facing edges at
+/// their perpendicular distance, necks corner to corner, an acute tip 0 wide
+/// (DRC-038; IHP SG13G2 M1.g, Mn.g, Gat.g). A layer with an edge at any
+/// other angle is measured by
+/// [`narrowest_pair_any`](gpurify_geom::width::narrowest_pair_any), the same
+/// measure with its fractions compared exactly (DRC-116). The figure is
+/// named by the lowest drawn row inside it.
 pub(crate) fn facing(
     store: &GeometryStore,
     rule: StrId,
@@ -78,12 +47,39 @@ pub(crate) fn facing(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let Some(drawn) = s.validated.get(store, layer) else {
+    let Some(drawn) = s.validated.get_any(store, layer) else {
         return REFUSED;
     };
     let polys = drawn.len() as u64;
     if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
         return REFUSED;
+    }
+    if !drawn.is_rectilinear() {
+        let octilinear = drawn.is_octilinear();
+        let owners = owners_by_point(&s.layer_out, drawn);
+        for (idx, owner) in (0..).zip(owners) {
+            let poly = s.layer_out.get(idx);
+            let narrowest = if octilinear {
+                narrowest_pair2(poly, material_between, limit)
+            } else {
+                // A fraction's floor compares and floors as the fraction does.
+                narrowest_pair_any(poly, material_between, limit)
+                    .map(|((floor, _), at)| (floor, at))
+            };
+            if let Some((twice, at)) = narrowest {
+                out.push(Violation {
+                    rule,
+                    layer,
+                    severity: Severity::Error,
+                    at,
+                    // Floored: twice a square halved, then rooted.
+                    measured: Measurement::Length(isqrt(DbuArea::new(twice / 2))),
+                    limit: Measurement::Length(limit),
+                    shapes: (owner, None),
+                });
+            }
+        }
+        return (Outcome::Ran, polys);
     }
     // A merged figure's own provenance is a row of the boolean's scratch store.
     s.rects_a.build(store, layer, drawn);
@@ -223,8 +219,156 @@ pub(crate) fn cut_size(
     (Outcome::Ran, figures.len() as u64)
 }
 
-/// One violation per edge shorter than `limit`, at its midpoint. `examined`
-/// counts edges.
+/// Cut classes (sky130 via.1b, LEF58 `CUTCLASS`): every merged figure must be
+/// a rectangle with no hole whose `(short, long)` sides are one of `classes`.
+/// One violation per figure in none, at its bounding box's centre, measuring
+/// the classes it matches (0) against 1. `examined` counts figures.
+pub(crate) fn cut_class(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    classes: &[(Dbu, Dbu)],
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(drawn) = s.validated.get(store, layer) else {
+        return REFUSED;
+    };
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return REFUSED;
+    }
+    s.rects_a.build(store, layer, drawn);
+    let figures = &s.layer_out;
+    for (idx, owner) in (0..).zip(owners_of(figures, &s.rects_a)) {
+        let poly = figures.get(idx);
+        let b = poly.bbox();
+        let sides = (b.width().min(b.height()), b.width().max(b.height()));
+        let rectangle = poly.outer().coords().0.len() == 4 && poly.holes().next().is_none();
+        if rectangle && classes.contains(&sides) {
+            continue;
+        }
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: Point {
+                x: mid(b.xlo, b.xhi),
+                y: mid(b.ylo, b.yhi),
+            },
+            measured: Measurement::Count(0),
+            limit: Measurement::Count(1),
+            shapes: (owner, None),
+        });
+    }
+    (Outcome::Ran, figures.len() as u64)
+}
+
+/// Allowed widths (sky130 rpm.1b-1f, LEF58 `WIDTHTABLE`): each merged
+/// figure's narrowest width, as `width` measures it, must be one of
+/// `allowed`, or with `open_last` at least the last of them, compared squared
+/// and so exactly. One violation per figure in none, at the centre of its
+/// first rectangle, measuring the width (floored) against the nearest
+/// allowed one. `examined` counts figures.
+pub(crate) fn allowed_width(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    (allowed, open_last): (&[Dbu], bool),
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(drawn) = s.validated.get(store, layer) else {
+        return REFUSED;
+    };
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return REFUSED;
+    }
+    s.rects_a.build(store, layer, drawn);
+    let owners = owners_of(&s.layer_out, &s.rects_a);
+    decompose_into(&s.layer_out, &mut s.rects, &mut s.rect_start);
+    for (idx, owner) in (0u32..).zip(owners) {
+        let width2 = narrowest_width2(s.layer_out.get(idx), &mut s.facing);
+        let last = *allowed.last().expect("an allowed list is never empty");
+        if allowed.iter().any(|&w| w.mul_wide(w) == width2)
+            || (open_last && width2 >= last.mul_wide(last))
+        {
+            continue;
+        }
+        let width = isqrt(width2);
+        let nearest = allowed
+            .iter()
+            .copied()
+            .min_by_key(|w| (w.raw() - width.raw()).abs())
+            .expect("an allowed list is never empty");
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(s.rects[s.rect_start[idx as usize] as usize]),
+            measured: Measurement::Length(width),
+            limit: Measurement::Length(nearest),
+            shapes: (owner, None),
+        });
+    }
+    (Outcome::Ran, s.layer_out.len() as u64)
+}
+
+/// LEF `PROTRUSIONWIDTH width1 LENGTH 0 WIDTH width2` (`limit`, `wide`): each
+/// narrow part of a merged figure (no `limit` square covers it) touching the
+/// figure's wide part (a `wide` square fits there) is one violation,
+/// measuring its narrowest width, at the centre of its box, on the lowest
+/// drawn row under it. `examined` counts merged figures.
+pub(crate) fn protrusion_width(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    wide: Dbu,
+    limit: Dbu,
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(drawn) = s.validated.get(store, layer) else {
+        return REFUSED;
+    };
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return REFUSED;
+    }
+    s.rects_a.build(store, layer, drawn);
+    let figures = &s.layer_out;
+    let protrusions = || -> Result<ValidatedLayer, BooleanError> {
+        let mut rects = Vec::new();
+        wide_rects_into(figures, limit, &mut rects)?;
+        let mut narrow = ValidatedLayer::default();
+        subtraction_into(figures, &rects_layer(&rects)?, &mut narrow)?;
+        wide_rects_into(figures, wide, &mut rects)?;
+        let mut attached = ValidatedLayer::default();
+        interacting_into(&narrow, &rects_layer(&rects)?, true, &mut attached);
+        Ok(attached)
+    };
+    let Ok(attached) = protrusions() else {
+        return REFUSED;
+    };
+    let owners = owners_of(&attached, &s.rects_a);
+    for (idx, owner) in (0u32..).zip(owners) {
+        let part = attached.get(idx);
+        out.push(Violation {
+            rule,
+            layer,
+            severity: Severity::Error,
+            at: centre(part.bbox()),
+            measured: Measurement::Length(isqrt(narrowest_width2(part, &mut s.facing))),
+            limit: Measurement::Length(limit),
+            shapes: (owner, None),
+        });
+    }
+    (Outcome::Ran, s.layer_out.len() as u64)
+}
+
+/// One violation per edge of the merged layer shorter than `limit`, at its
+/// midpoint, on the lowest drawn row under its figure. `examined` counts the
+/// merged figures' edges. A 45-degree edge `k` steps long is `k·√2` long, and
+/// one at any other angle `√(dx² + dy²)`, compared exactly and reported
+/// floored.
 pub(crate) fn min_edge_length(
     store: &GeometryStore,
     rule: StrId,
@@ -233,19 +377,27 @@ pub(crate) fn min_edge_length(
     s: &mut Scratch,
     out: &mut Violations,
 ) -> Verdict {
-    let Some(drawn) = s.validated.get(store, layer) else {
+    let Some(drawn) = s.validated.get_any(store, layer) else {
         return REFUSED;
     };
-    let polys = u32::try_from(drawn.len()).expect("a layer indexes polygons with a u32");
-    let mut rows = outer_rows(store, layer);
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return REFUSED;
+    }
+    let owners = if drawn.is_rectilinear() {
+        s.rects_a.build(store, layer, drawn);
+        owners_of(&s.layer_out, &s.rects_a)
+    } else {
+        owners_by_point(&s.layer_out, drawn)
+    };
+    let limit2 = limit.mul_wide(limit);
     let mut examined = 0u64;
-    for idx in 0..polys {
-        let shape = rows.next().expect("one store row per validated polygon");
-        for (a, b) in poly_edges(drawn.get(idx)) {
+    for (idx, owner) in (0..).zip(owners) {
+        for (a, b) in straight_runs(s.layer_out.get(idx)) {
             examined += 1;
-            // Rectilinear: one term is zero.
-            let length = (b.x - a.x).abs() + (b.y - a.y).abs();
-            if length < limit {
+            let (dx, dy) = ((b.x - a.x).abs(), (b.y - a.y).abs());
+            let length2 = dx.mul_wide(dx) + dy.mul_wide(dy);
+            if length2 < limit2 {
+                let length = isqrt(length2);
                 out.push(Violation {
                     rule,
                     layer,
@@ -256,7 +408,298 @@ pub(crate) fn min_edge_length(
                     },
                     measured: Measurement::Length(length),
                     limit: Measurement::Length(limit),
-                    shapes: (shape, None),
+                    shapes: (owner, None),
+                });
+            }
+        }
+    }
+    (Outcome::Ran, examined)
+}
+
+/// Every straight run of a polygon's boundary, holes included: consecutive
+/// edges of a ring running one way are one run. A merged ring keeps a vertex
+/// where it passes straight through a point it also turns at (a 45-degree
+/// tip touching an edge, the connected corner model), and one that leaves an
+/// edge at a point it touches and comes back to it there continues that edge;
+/// either way the edge is still one edge, as `KLayout` reads it.
+fn straight_runs(poly: gpurify_geom::view::PolygonRef<'_>) -> Vec<(Point, Point)> {
+    let mut runs = Vec::new();
+    for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+        let (xs, ys) = ring.coords();
+        let n = xs.len();
+        let at = |i: usize| Point {
+            x: xs[i % n],
+            y: ys[i % n],
+        };
+        let way = |i: usize| heading(at(i), at(i + 1));
+        // Start at a vertex where the ring turns; every ring turns somewhere.
+        let Some(first) = (0..n).find(|&i| way(i + n - 1) != way(i)) else {
+            continue;
+        };
+        let mut from = first;
+        for step in 1..=n {
+            let i = first + step;
+            if step == n || way(i - 1) != way(i) {
+                runs.push((at(from), at(i)));
+                from = i;
+            }
+        }
+    }
+    // A ring that leaves a straight edge at a point it also touches (a tip on
+    // the edge) comes back and goes on: the two pieces are one edge.
+    let mut by_start: std::collections::BTreeMap<(Point, (i64, i64)), usize> = runs
+        .iter()
+        .enumerate()
+        .map(|(k, &(a, b))| ((a, heading(a, b)), k))
+        .collect();
+    let mut merged: Vec<(Point, Point)> = Vec::with_capacity(runs.len());
+    let mut taken = vec![false; runs.len()];
+    // A piece some other piece ends at is reached from that one.
+    let continues: std::collections::BTreeSet<(Point, (i64, i64))> =
+        runs.iter().map(|&(a, b)| (b, heading(a, b))).collect();
+    for k in 0..runs.len() {
+        let (a, b) = runs[k];
+        if taken[k] || continues.contains(&(a, heading(a, b))) {
+            continue;
+        }
+        taken[k] = true;
+        let (way, mut end) = (heading(a, b), b);
+        while let Some(&next) = by_start.get(&(end, way)) {
+            if taken[next] {
+                break;
+            }
+            taken[next] = true;
+            by_start.remove(&(end, way));
+            end = runs[next].1;
+        }
+        merged.push((a, end));
+    }
+    // Pieces on a closed straight loop (impossible) or not reached stay as they are.
+    merged.extend((0..runs.len()).filter(|&k| !taken[k]).map(|k| runs[k]));
+    merged
+}
+
+/// The direction an edge runs, as its primitive step: signs along x and y
+/// for an axis or 45-degree edge, the difference over its gcd at any angle.
+fn heading(a: Point, b: Point) -> (i64, i64) {
+    let (dx, dy) = ((b.x - a.x).raw(), (b.y - a.y).raw());
+    let g = gcd(dx.unsigned_abs(), dy.unsigned_abs()).max(1);
+    let g = i64::try_from(g).expect("a coordinate difference fits an i64");
+    (dx / g, dy / g)
+}
+
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+/// LEF `MINSTEP` variants (DRC-020): runs of consecutive edges shorter than
+/// `limit` along each ring of the merged layer, classified by the long edges
+/// on either side, rejected by `kind` and `length_sum` as
+/// [`Rule::MinStep`](crate::drc::Rule::MinStep) states. One violation per
+/// run at the centre of its vertices' box. `examined` counts runs.
+pub(crate) fn min_step(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    (limit, kind, length_sum): (Dbu, StepKind, Option<Dbu>),
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(drawn) = s.validated.get(store, layer) else {
+        return REFUSED;
+    };
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return REFUSED;
+    }
+    s.rects_a.build(store, layer, drawn);
+    let mut examined = 0u64;
+    let (mut points, mut short) = (Vec::new(), Vec::new());
+    for (idx, owner) in (0u32..).zip(owners_of(&s.layer_out, &s.rects_a)) {
+        let poly = s.layer_out.get(idx);
+        for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+            let (xs, ys) = ring.coords();
+            points.clear();
+            points.extend(xs.iter().zip(ys).map(|(&x, &y)| Point { x, y }));
+            let n = points.len();
+            let length = |i: usize| {
+                let (a, b) = (points[i], points[(i + 1) % n]);
+                (b.x - a.x).abs() + (b.y - a.y).abs()
+            };
+            short.clear();
+            short.extend((0..n).map(|i| length(i) < limit));
+            // Each run starts after a long edge; a ring with none is one run.
+            let first_long = (0..n).find(|&i| !short[i]);
+            let start = first_long.map_or(0, |i| i + 1);
+            let mut i = 0;
+            while i < n {
+                let at = (start + i) % n;
+                if !short[at] {
+                    i += 1;
+                    continue;
+                }
+                let mut count = 0usize;
+                let mut sum = Dbu::new_unchecked(0);
+                let mut bbox = Bbox::point(points[at].x, points[at].y);
+                while i < n && short[(start + i) % n] {
+                    let edge = (start + i) % n;
+                    let end = points[(edge + 1) % n];
+                    bbox = bbox.include(end.x, end.y);
+                    sum = sum + length(edge);
+                    count += 1;
+                    i += 1;
+                }
+                examined += 1;
+                // The long edges on either side, when the ring has one.
+                let corner = first_long.map(|_| {
+                    let before = (at + n - 1) % n;
+                    let after = (at + count) % n;
+                    let d1 = heading(points[before], points[(before + 1) % n]);
+                    let d2 = heading(points[after], points[(after + 1) % n]);
+                    let cross = d1.0 * d2.1 - d1.1 * d2.0;
+                    let dot = d1.0 * d2.0 + d1.1 * d2.1;
+                    match (cross.signum(), dot.signum()) {
+                        (1, _) => Some(StepKind::OutsideCorner),
+                        (-1, _) => Some(StepKind::InsideCorner),
+                        (_, 1) => Some(StepKind::Step),
+                        _ => None,
+                    }
+                });
+                let run = u32::try_from(count).expect("a ring's edges fit a u32");
+                let (measured, limit) = match kind {
+                    StepKind::MaxEdges(most) if run > u32::from(most) => {
+                        (Measurement::Count(run), Measurement::Count(u32::from(most)))
+                    }
+                    StepKind::MaxEdges(_) => continue,
+                    _ if corner.flatten() != Some(kind) => continue,
+                    _ => {
+                        let fewest = if kind == StepKind::Step { 1 } else { 2 };
+                        match length_sum {
+                            _ if run < fewest => continue,
+                            Some(allowed) if sum <= allowed => continue,
+                            Some(allowed) => {
+                                (Measurement::Length(sum), Measurement::Length(allowed))
+                            }
+                            None => (Measurement::Count(run), Measurement::Count(fewest - 1)),
+                        }
+                    }
+                };
+                out.push(Violation {
+                    rule,
+                    layer,
+                    severity: Severity::Error,
+                    at: Point {
+                        x: mid(bbox.xlo, bbox.xhi),
+                        y: mid(bbox.ylo, bbox.yhi),
+                    },
+                    measured,
+                    limit,
+                    shapes: (owner, None),
+                });
+            }
+        }
+    }
+    (Outcome::Ran, examined)
+}
+
+/// `LEF58_MINSTEP`'s qualifiers as `TritonRoute` checks them (DRC-020): each
+/// edge of the merged layer shorter than `limit` whose neighbours offend as
+/// `neighbour` states ([`Rule::MinStepAdjacent`](crate::drc::Rule::MinStepAdjacent)).
+/// One violation per offending short edge, at the centre of the box of it
+/// and the edges that made it offend. `examined` counts short edges.
+pub(crate) fn min_step_adjacent(
+    store: &GeometryStore,
+    rule: StrId,
+    layer: LayerId,
+    (limit, neighbour): (Dbu, StepNeighbour),
+    s: &mut Scratch,
+    out: &mut Violations,
+) -> Verdict {
+    let Some(drawn) = s.validated.get(store, layer) else {
+        return REFUSED;
+    };
+    if union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).is_err() {
+        return REFUSED;
+    }
+    s.rects_a.build(store, layer, drawn);
+    let mut examined = 0u64;
+    let mut points = Vec::new();
+    for (idx, owner) in (0u32..).zip(owners_of(&s.layer_out, &s.rects_a)) {
+        let poly = s.layer_out.get(idx);
+        if matches!(
+            neighbour,
+            StepNeighbour::Adjacent {
+                except_rectangle: true,
+                ..
+            }
+        ) && poly.outer().coords().0.len() == 4
+        {
+            continue;
+        }
+        for ring in std::iter::once(poly.outer()).chain(poly.holes()) {
+            let (xs, ys) = ring.coords();
+            points.clear();
+            points.extend(xs.iter().zip(ys).map(|(&x, &y)| Point { x, y }));
+            let n = points.len();
+            // Edge `i` runs from vertex `i` to `i + 1`.
+            let length = |i: usize| {
+                let (a, b) = (points[i % n], points[(i + 1) % n]);
+                (b.x - a.x).abs() + (b.y - a.y).abs()
+            };
+            // A left turn at a vertex is a convex corner: the material is on
+            // the left of travel, outer rings and holes alike.
+            let convex = |i: usize| {
+                let d1 = heading(points[(i + n - 1) % n], points[i % n]);
+                let d2 = heading(points[i % n], points[(i + 1) % n]);
+                d1.0 * d2.1 - d1.1 * d2.0 > 0
+            };
+            let eol_under = |i: usize, width: Dbu| convex(i) && convex(i + 1) && length(i) < width;
+            for e in 0..n {
+                if length(e) >= limit {
+                    continue;
+                }
+                examined += 1;
+                let (prev, next) = (e + n - 1, e + 1);
+                // The edges, besides `e`, that make it offend.
+                let blamed: &[usize] = match neighbour {
+                    StepNeighbour::Adjacent {
+                        length: adj, eol, ..
+                    } => {
+                        let offends =
+                            |i: usize| length(i) < adj || eol.is_some_and(|w| eol_under(i, w));
+                        if offends(prev) || offends(next) {
+                            &[prev, next]
+                        } else {
+                            continue;
+                        }
+                    }
+                    StepNeighbour::BetweenEol(width) => {
+                        if eol_under(next, width) && length(next + 1) < limit {
+                            &[next, next + 1]
+                        } else {
+                            continue;
+                        }
+                    }
+                };
+                let mut bbox = Bbox::point(points[e].x, points[e].y);
+                for &i in std::iter::once(&e).chain(blamed) {
+                    for p in [points[i % n], points[(i + 1) % n]] {
+                        bbox = bbox.include(p.x, p.y);
+                    }
+                }
+                out.push(Violation {
+                    rule,
+                    layer,
+                    severity: Severity::Error,
+                    at: Point {
+                        x: mid(bbox.xlo, bbox.xhi),
+                        y: mid(bbox.ylo, bbox.yhi),
+                    },
+                    measured: Measurement::Length(length(e)),
+                    limit: Measurement::Length(limit),
+                    shapes: (owner, None),
                 });
             }
         }
@@ -322,7 +765,7 @@ pub(crate) fn wide_rects_into(
 }
 
 /// Rectangles, possibly overlapping, as one validated layer.
-fn rects_layer(rects: &[Bbox]) -> Result<ValidatedLayer, BooleanError> {
+pub(super) fn rects_layer(rects: &[Bbox]) -> Result<ValidatedLayer, BooleanError> {
     let mut builder = GeometryStoreBuilder::with_capacity(rects.len(), 4 * rects.len());
     for r in rects {
         builder.push(

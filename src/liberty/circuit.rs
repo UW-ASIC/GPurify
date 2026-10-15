@@ -5,7 +5,8 @@
 //! the simulator's ground.
 //!
 //! Two shapes. [`Wires::Lumped`] is one node per net and no wire elements: the
-//! device netlist, for DC. [`Wires::Distributed`] is a rectangle graph: every
+//! device netlist, for leakage and the static capacitance sweep.
+//! [`Wires::Distributed`] is a rectangle graph: every
 //! conductor polygon is cut into the slab rectangles [`decompose_into`] gives,
 //! each rectangle is a node, two rectangles sharing an edge are joined by the
 //! sheet resistance from centre to centre, each via cut is its own resistor, and
@@ -13,9 +14,11 @@
 //! capacitance is taken per rectangle from the stack (area less what lies over
 //! a channel, which the device model already counts as gate oxide, plus the
 //! perimeter no same-net rectangle covers). Coupling is the analytical
-//! extractor's polygon pairs, each placed between the two closest rectangles
-//! of its polygons; a field solve, when given, rescales every net's ground and
-//! every net pair's coupling to the solved totals without moving them.
+//! extractor's, measured between conductor regions (a net's merged shapes,
+//! one per edge-connected piece on a layer), each element placed between the
+//! two closest rectangles of its two regions; a field solve, when given,
+//! rescales every net's ground and every net pair's coupling to the solved
+//! totals without moving them.
 
 use std::collections::BTreeMap;
 
@@ -33,11 +36,19 @@ use gpurify_ingest::deck::DeviceKind;
 /// Where wire parasitics come from.
 #[derive(Clone, Copy)]
 pub enum Wires<'a> {
-    /// No wire elements; one node per net.
+    /// No wire elements; one node per net. What `analytical` and `field`
+    /// simulate, where wire capacitance is added separately.
     Lumped,
     /// The rectangle graph, coupling from `analytical`, rescaled to `field`.
+    /// What `spice` and `statistical` simulate.
     Distributed {
+        /// The analytical extraction of the same layout and nets. Each of
+        /// its couplings joins two regions
+        /// ([`node_rects`](gpurify_extract::analytical::node_rects)) and is
+        /// placed between their closest rectangles.
         analytical: &'a ParasiticNetwork,
+        /// A field solve with one node per net. When given, every net's
+        /// ground and every net pair's coupling is rescaled to its totals.
         field: Option<&'a ParasiticNetwork>,
     },
 }
@@ -45,27 +56,46 @@ pub enum Wires<'a> {
 /// A device parameter value, SI.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Param {
+    /// Metres; written divided by
+    /// [`Simulator::scale`](crate::liberty::spec::Simulator::scale).
     Length(f64),
+    /// Square metres; written divided by the scale's square.
     Area(f64),
+    /// A count, such as fingers; written as is.
     Count(u32),
 }
 
+/// One device card.
 #[derive(Debug, Clone)]
 pub struct Device {
+    /// The deck's device family.
     pub kind: DeviceKind,
+    /// The deck's model name, written on the card as is.
     pub model: String,
-    /// Card order (`d g s b` for a MOS).
+    /// Card order (`d g s b` for a MOS, `c b e` for a bipolar, pins in order
+    /// otherwise).
     pub nodes: Vec<u32>,
+    /// The layout net of each terminal, in `nodes` order.
     pub nets: Vec<NetId>,
+    /// Each terminal's role, in `nodes` order.
     pub roles: Vec<TerminalRole>,
+    /// Card parameters, `(name, value)`: the recogniser's `w`, `l`, `nf`,
+    /// `area` and `perim` (`pj` on a diode). A MOS has its diffusions' `as`,
+    /// `ps`, `ad` and `pd` instead of area and perimeter, topology's measures
+    /// ([`DeviceParam::SourceArea`] and the rest, the ones LVS compares): a
+    /// shared diffusion split between the fingers that share it, holes out of
+    /// the area and in the perimeter, none where the terminal is drawn in
+    /// pieces. And BSIM4 `sa` and `sb` when its channel's direction can be
+    /// told.
     pub params: Vec<(&'static str, Param)>,
 }
 
 /// The circuit, SI units.
 #[derive(Debug, Clone, Default)]
 pub struct Circuit {
-    /// Node 0 is ground.
+    /// Nodes are `0..node_count`. Node 0 is ground.
     pub node_count: u32,
+    /// Every recognised device in the layout, in device-table order.
     pub devices: Vec<Device>,
     /// `(a, b, ohms)`.
     pub resistors: Vec<(u32, u32, f64)>,
@@ -77,12 +107,26 @@ pub struct Circuit {
     pub pin_nets: Vec<Vec<NetId>>,
 }
 
+/// Why the layout could not be made into a circuit.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum CircuitError {
+    /// Spec pin `.0` names no layout net: no label carries it and, when it is
+    /// the spec's `substrate`, the deck declares no substrate geometry
+    /// either (`.1` then says so).
     #[error("pin {0} names no net in the layout: no label carries it{1}")]
     MissingPin(String, &'static str),
+    /// Spec pins `.0` and `.1` are labelled on one layout net: the layout
+    /// shorts them, so no characterisation can tell them apart.
+    #[error("pins {0} and {1} are labelled on one net: the layout shorts them")]
+    ShortedPins(String, String),
+    /// Conductor layer `.0` is not valid rectilinear geometry (`.1` says
+    /// why), so it cannot be cut into rectangles. [`Wires::Distributed`]
+    /// only.
     #[error("layer {0} is not valid rectilinear geometry: {1}")]
     Geometry(String, String),
+    /// Net `.0`'s rectangles and via resistors fall into `.1` separate
+    /// pieces, so a terminal on a detached piece would float in simulation.
+    /// [`Wires::Distributed`] only.
     #[error(
         "net {0} falls apart into {1} unconnected pieces in the resistor network, \
          so a simulation of it would leave a terminal floating"
@@ -90,8 +134,17 @@ pub enum CircuitError {
     Disconnected(String, usize),
 }
 
-/// The layout nets each spec pin is: its label's net, plus every net holding
-/// substrate when it is the spec's `substrate`.
+/// The layout nets each spec pin is, in spec order: every net its label is
+/// on, plus every net holding substrate geometry when it is the spec's
+/// `substrate`. Each list is ascending and never empty. A label on several
+/// disconnected nets (an open) gives all of them, which the circuit joins at
+/// the pin.
+///
+/// # Errors
+///
+/// - [`CircuitError::MissingPin`] for the first pin that names no net.
+/// - [`CircuitError::ShortedPins`] for the first two pins whose labels are on
+///   one net: a short between them in the layout.
 pub fn pin_nets(
     loaded: &Loaded,
     extracted: &Extracted,
@@ -99,13 +152,15 @@ pub fn pin_nets(
 ) -> Result<Vec<Vec<NetId>>, CircuitError> {
     let substrate = substrate_nets(loaded, extracted);
     let mut out = Vec::with_capacity(spec.pins.len());
-    for pin in &spec.pins {
+    // `(label net, pin)`: two pins whose labels share a net are shorted.
+    let mut labelled: Vec<(NetId, usize)> = Vec::new();
+    for (index, pin) in spec.pins.iter().enumerate() {
         let mut nets: Vec<NetId> = loaded
             .strings
             .get(&pin.name)
-            .and_then(|id| extracted.ports.net_of(id))
-            .into_iter()
-            .collect();
+            .map_or(&[][..], |id| extracted.ports.nets_of(id))
+            .to_vec();
+        labelled.extend(nets.iter().map(|&net| (net, index)));
         if spec.substrate.as_deref() == Some(pin.name.as_str()) {
             nets.extend(&substrate);
         }
@@ -120,6 +175,11 @@ pub fn pin_nets(
             return Err(CircuitError::MissingPin(pin.name.clone(), hint));
         }
         out.push(nets);
+    }
+    labelled.sort_unstable();
+    if let Some(pair) = labelled.windows(2).find(|pair| pair[0].0 == pair[1].0) {
+        let (first, second) = (&spec.pins[pair[0].1].name, &spec.pins[pair[1].1].name);
+        return Err(CircuitError::ShortedPins(first.clone(), second.clone()));
     }
     Ok(out)
 }
@@ -250,7 +310,17 @@ fn as_f64(v: i64) -> f64 {
     v as f64
 }
 
-/// Build the circuit for `spec` from the extraction.
+/// Builds the circuit for `spec` from the extraction, with wires as
+/// `wires` says.
+///
+/// The result is deterministic: node numbers do not depend on hash or union
+/// order.
+///
+/// # Errors
+///
+/// [`CircuitError::MissingPin`] for a spec pin with no net, and for
+/// [`Wires::Distributed`] also [`CircuitError::Geometry`] and
+/// [`CircuitError::Disconnected`].
 pub fn build(
     loaded: &Loaded,
     extracted: &Extracted,
@@ -265,7 +335,7 @@ pub fn build(
         builder.overlaps();
         builder.vias();
         builder.ground_caps();
-        builder.couplings(analytical);
+        builder.couplings(analytical)?;
         if let Some(field) = field {
             builder.calibrate(field);
         }
@@ -284,12 +354,10 @@ struct Builder<'a> {
     rect: Vec<Bbox>,
     rect_layer: Vec<LayerId>,
     rect_net: Vec<NetId>,
-    rect_poly: Vec<PolyId>,
     /// Same-net perimeter each rectangle shares with a neighbour, dbu.
     rect_shared: Vec<i64>,
-    /// CSR of rectangles per net and per polygon.
+    /// Rectangles per net.
     net_rects: Vec<Vec<u32>>,
-    poly_rects: BTreeMap<PolyId, Vec<u32>>,
     index: BTreeMap<LayerId, RectIndex>,
     /// One proto node per net with no rectangle, lazily.
     hub: Vec<u32>,
@@ -313,10 +381,8 @@ impl<'a> Builder<'a> {
             rect: Vec::new(),
             rect_layer: Vec::new(),
             rect_net: Vec::new(),
-            rect_poly: Vec::new(),
             rect_shared: Vec::new(),
             net_rects: vec![Vec::new(); nets],
-            poly_rects: BTreeMap::new(),
             index: BTreeMap::new(),
             hub: vec![u32::MAX; nets],
             union: Union(vec![GROUND]),
@@ -396,10 +462,8 @@ impl<'a> Builder<'a> {
                     self.rect.push(r);
                     self.rect_layer.push(conductor);
                     self.rect_net.push(net);
-                    self.rect_poly.push(row);
                     self.rect_shared.push(0);
                     self.net_rects[net.idx()].push(id);
-                    self.poly_rects.entry(row).or_default().push(id);
                     index.insert(id, r);
                 }
             }
@@ -642,39 +706,75 @@ impl<'a> Builder<'a> {
     }
 
     /// The analytical extractor's coupling, each between the closest pair of
-    /// rectangles of its two polygons.
-    fn couplings(&mut self, analytical: &ParasiticNetwork) {
-        let poly_of = node_polys(self.extracted, analytical);
+    /// rectangles of the two regions it was measured between.
+    fn couplings(&mut self, analytical: &ParasiticNetwork) -> Result<(), CircuitError> {
+        let rects_of = self.node_rects(analytical)?;
         for row in 0..analytical.element_count() {
             let (Parasitic::CouplingCap(q), Some(to)) = (analytical.value[row], analytical.to[row])
             else {
                 continue;
             };
-            let poly = |node: NodeId| poly_of.get(node.0 as usize).copied().flatten();
-            let (Some(p), Some(q_poly)) = (poly(analytical.from[row]), poly(to)) else {
-                continue;
-            };
+            let from = analytical.from[row];
             // Diffusions and wells couple through junctions, the models' job.
-            if !self.is_wire(p) || !self.is_wire(q_poly) {
+            let layer = |node: NodeId| analytical.node_layer[node.0 as usize];
+            if !self.is_wire(layer(from)) || !self.is_wire(layer(to)) {
                 continue;
             }
-            if let Some((a, b)) = self.closest(p, q_poly) {
+            let rects = |node: NodeId| &rects_of[node.0 as usize][..];
+            if let Some((a, b)) = self.closest(rects(from), rects(to)) {
                 self.cap(Self::rect_node(a), Self::rect_node(b), q.raw() * 1e-15);
             }
         }
+        Ok(())
     }
 
-    /// A polygon on a layer the stack gives wire capacitance to.
-    fn is_wire(&self, poly: PolyId) -> bool {
+    /// This circuit's rectangles in each analytical node's region, by
+    /// [`NodeId`]: those of the node's net and layer that share area with one
+    /// of the region's rectangles. A drawn rectangle lies in one region, the
+    /// edge-connected piece its interior is in.
+    fn node_rects(&self, analytical: &ParasiticNetwork) -> Result<Vec<Vec<u32>>, CircuitError> {
+        let loaded = self.loaded;
+        let regions = gpurify_extract::analytical::node_rects(
+            &loaded.store,
+            &self.extracted.nets,
+            &loaded.deck.connectivity,
+        )
+        .map_err(|why| {
+            let name = loaded.deck.layers.name(why.layer());
+            CircuitError::Geometry(loaded.strings.resolve(name).to_owned(), why.to_string())
+        })?;
+        let mut out = vec![Vec::new(); analytical.node_count()];
+        let mut found = Vec::new();
+        for (node, region) in regions {
+            let node = node.0 as usize;
+            let Some(index) = self.index.get(&analytical.node_layer[node]) else {
+                continue;
+            };
+            index.query(region, &mut found);
+            let net = analytical.node_net[node];
+            out[node].extend(found.iter().copied().filter(|&r| {
+                let (x, y) = shared(self.rect[r as usize], region);
+                self.rect_net[r as usize] == net && x > 0 && y > 0
+            }));
+        }
+        for rects in &mut out {
+            rects.sort_unstable();
+            rects.dedup();
+        }
+        Ok(out)
+    }
+
+    /// Whether the stack gives `layer` wire capacitance.
+    fn is_wire(&self, layer: LayerId) -> bool {
         let stack = &self.loaded.deck.stack;
-        self.stack_row(self.loaded.store.poly_layer(poly))
-            .is_some_and(|row| {
-                stack.area_cap_af_um2[row] > 0.0 || stack.fringe_cap_af_um[row] > 0.0
-            })
+        self.stack_row(layer).is_some_and(|row| {
+            stack.area_cap_af_um2[row] > 0.0 || stack.fringe_cap_af_um[row] > 0.0
+        })
     }
 
-    fn closest(&self, p: PolyId, q: PolyId) -> Option<(u32, u32)> {
-        let (ps, qs) = (self.poly_rects.get(&p)?, self.poly_rects.get(&q)?);
+    /// The closest pair, one of `ps` and one of `qs`; the first such pair in
+    /// rectangle order on a tie.
+    fn closest(&self, ps: &[u32], qs: &[u32]) -> Option<(u32, u32)> {
         let mut best: Option<(i128, u32, u32)> = None;
         for &a in ps {
             for &b in qs {
@@ -769,7 +869,7 @@ impl<'a> Builder<'a> {
     }
 
     /// Cards for every recognised device, terminals on the rectangles that
-    /// touch their channel, MOS diffusion area and perimeter measured.
+    /// touch their channel, parameters as topology measured them.
     fn devices(&mut self) {
         let loaded = self.loaded;
         let store = &loaded.store;
@@ -808,11 +908,9 @@ impl<'a> Builder<'a> {
                 channels.insert(id, store.poly_bbox(table.marker[d]));
             }
         }
-        // Per diffusion polygon: how many channels it serves, so a shared
-        // diffusion's area and perimeter are split between them.
+        // Per MOS: the diffusion polygons its channel abuts, for `sa` and `sb`.
         let mut found = Vec::new();
         let mut touching: Vec<Vec<u32>> = vec![Vec::new(); table.len()];
-        let mut shares = vec![0u32; sd_polys.len()];
         for (d, touches) in touching.iter_mut().enumerate() {
             if table.kind[d] != DeviceKind::Mos {
                 continue;
@@ -822,7 +920,6 @@ impl<'a> Builder<'a> {
             for &p in &found {
                 if contact(store.poly_bbox(sd_polys[p as usize]), m) > 0 {
                     touches.push(p);
-                    shares[p as usize] += 1;
                 }
             }
         }
@@ -853,13 +950,17 @@ impl<'a> Builder<'a> {
                 device.nodes.push(node);
             }
             for &(param, measure) in table.params_of(id) {
-                // A MOS's area and perimeter are its diffusions', measured below.
-                if device.kind == DeviceKind::Mos
-                    && matches!(param, DeviceParam::Area | DeviceParam::Perimeter)
-                {
-                    continue;
-                }
+                // A MOS's area and perimeter are its diffusions', which
+                // topology measured as LVS compares them (testing-plan F100);
+                // a bipolar's emitter measures are no ngspice instance
+                // parameter.
                 let key = match (device.kind, param) {
+                    (DeviceKind::Mos, DeviceParam::Area | DeviceParam::Perimeter)
+                    | (_, DeviceParam::EmitterArea | DeviceParam::EmitterPerimeter) => continue,
+                    (_, DeviceParam::SourceArea) => "as",
+                    (_, DeviceParam::DrainArea) => "ad",
+                    (_, DeviceParam::SourcePerimeter) => "ps",
+                    (_, DeviceParam::DrainPerimeter) => "pd",
                     (_, DeviceParam::Width) => "w",
                     (_, DeviceParam::Length) => "l",
                     (_, DeviceParam::Fingers) => "nf",
@@ -867,16 +968,21 @@ impl<'a> Builder<'a> {
                     (_, DeviceParam::Perimeter) => "perim",
                     (_, DeviceParam::Area) => "area",
                 };
+                #[expect(clippy::cast_precision_loss, reason = "a device area below 2^80")]
                 let value = match measure {
                     DeviceMeasure::Length(v) => Param::Length(as_f64(v.raw()) * self.um),
-                    #[expect(clippy::cast_precision_loss, reason = "a device area below 2^80")]
                     DeviceMeasure::Area(v) => Param::Area(v.raw() as f64 * self.um * self.um),
                     DeviceMeasure::Count(n) => Param::Count(n),
+                    DeviceMeasure::LengthShare(v, ways) => {
+                        Param::Length(as_f64(v.raw()) * self.um / f64::from(ways))
+                    }
+                    DeviceMeasure::AreaShare(v, ways) => {
+                        Param::Area(v.raw() as f64 * self.um * self.um / f64::from(ways))
+                    }
                 };
                 device.params.push((key, value));
             }
             if device.kind == DeviceKind::Mos {
-                self.diffusion(&mut device, touches, &sd_polys, &shares);
                 let active = Active {
                     store,
                     sd_index: &sd_index,
@@ -895,78 +1001,6 @@ impl<'a> Builder<'a> {
             }
             self.devices.push(device);
         }
-    }
-
-    /// `ad pd` on the drain, `as ps` on the source. Perimeter includes the
-    /// edge against the gate (BSIM4 `permod = 1`, sky130's setting).
-    fn diffusion(
-        &self,
-        device: &mut Device,
-        touching: &[u32],
-        sd_polys: &[PolyId],
-        shares: &[u32],
-    ) {
-        let store = &self.loaded.store;
-        let nets = &self.extracted.nets;
-        let net_of_role = |role: TerminalRole| {
-            device
-                .roles
-                .iter()
-                .position(|&r| r == role)
-                .map(|i| device.nets[i])
-        };
-        let (Some(drain), Some(source)) = (
-            net_of_role(TerminalRole::Drain),
-            net_of_role(TerminalRole::Source),
-        ) else {
-            return;
-        };
-        // A polygon on both nets' side (source and drain shorted) is handed out
-        // in position order, so neither side counts it twice.
-        let mut drain_polys = Vec::new();
-        let mut source_polys = Vec::new();
-        for &p in touching {
-            let net = nets.net_of(sd_polys[p as usize]);
-            if net == drain && net == source {
-                if drain_polys.len() <= source_polys.len() {
-                    source_polys.push(p);
-                } else {
-                    drain_polys.push(p);
-                }
-            } else if net == drain {
-                drain_polys.push(p);
-            } else if net == source {
-                source_polys.push(p);
-            }
-        }
-        let um = self.um;
-        let measure = |polys: &[u32]| {
-            let (mut area, mut perimeter) = (0.0, 0.0);
-            for &p in polys {
-                let (xs, ys) = store.poly_verts(sd_polys[p as usize]);
-                #[expect(clippy::cast_precision_loss, reason = "an area below 2^80")]
-                let a = (gpurify_geom::ops::area2(xs, ys).raw().abs() / 2) as f64;
-                let mut per = 0.0;
-                for i in 0..xs.len() {
-                    let j = (i + 1) % xs.len();
-                    per += as_f64(
-                        (xs[j].raw() - xs[i].raw()).abs() + (ys[j].raw() - ys[i].raw()).abs(),
-                    );
-                }
-                let share = f64::from(shares[p as usize].max(1));
-                area += a * um * um / share;
-                perimeter += per * um / share;
-            }
-            (area, perimeter)
-        };
-        let (ad, pd) = measure(&drain_polys);
-        let (as_, ps) = measure(&source_polys);
-        device.params.extend([
-            ("ad", Param::Area(ad)),
-            ("as", Param::Area(as_)),
-            ("pd", Param::Length(pd)),
-            ("ps", Param::Length(ps)),
-        ]);
     }
 
     /// The rectangle of `net` touching `marker` most; the net's anchor if none.
@@ -1210,25 +1244,4 @@ const fn card_rank(role: TerminalRole) -> u8 {
         TerminalRole::Bulk => 3,
         TerminalRole::Pin(position) => position,
     }
-}
-
-/// The polygon behind each analytical node, by [`NodeId`]; `None` for a net's
-/// closing node. Mirrors the analytical extractor's allocation.
-fn node_polys(extracted: &Extracted, network: &ParasiticNetwork) -> Vec<Option<PolyId>> {
-    let mut out = Vec::with_capacity(network.node_count());
-    for net in 0..extracted.nets.net_count() {
-        let polys = extracted
-            .nets
-            .polys_of(NetId(u32::try_from(net).expect("a net id is a u32")));
-        out.extend(polys.iter().map(|&p| Some(p)));
-        if !polys.is_empty() {
-            out.push(None);
-        }
-    }
-    debug_assert_eq!(
-        out.len(),
-        network.node_count(),
-        "the analytical network's node allocation changed"
-    );
-    out
 }

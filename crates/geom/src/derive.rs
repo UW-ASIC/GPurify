@@ -3,8 +3,11 @@
 //!
 //! Data in: merged [`ValidatedLayer`]s (a boolean result, or a layer passed
 //! through [`merge_into`]); edge layers as directed [`Seg`]s, material on the
-//! left of travel. Data out: a merged layer, or merged edges. Semantics follow
-//! `KLayout`'s merged-polygon definitions; exact on the rectilinear grid.
+//! left of travel. Data out: a merged layer (but [`extents_into`]: one box per
+//! polygon, overlaps kept), or merged edges. Semantics follow `KLayout`'s
+//! merged-polygon definitions. Exact on layers at any angle, but where a
+//! boolean snaps or rounds a vertex that falls between grid points
+//! ([`crate::boolean::union_into`]).
 
 use crate::bbox::Bbox;
 use crate::boolean::{subtraction_into, union_into, BooleanError};
@@ -13,8 +16,8 @@ use crate::index::{cross_layer_pairs_into, SpatialIndex};
 use crate::ops::{segments_intersect, Point, Seg};
 use crate::rects::decompose_into;
 use crate::store::GeometryStoreBuilder;
-use crate::view::{validate_layer_into, PolygonRef, ValidatedLayer};
-use crate::width::{narrowest_width, FacingScratch};
+use crate::view::{validate_layer_into, validate_layer_with, Angles, PolygonRef, ValidatedLayer};
+use crate::width::{narrowest_pair2, narrowest_pair_any, narrowest_width2, FacingScratch};
 use crate::{narrow, Dbu};
 use std::ops::RangeInclusive;
 
@@ -25,11 +28,11 @@ pub fn merge_into(a: &ValidatedLayer, out: &mut ValidatedLayer) -> Result<(), Bo
     union_into(a, &ValidatedLayer::default(), out)
 }
 
-/// Validate the builder's CCW rings as one layer, then merge them.
+/// Validate the builder's rings as one layer at any angle, then merge them.
 fn merged(builder: GeometryStoreBuilder, out: &mut ValidatedLayer) -> Result<(), BooleanError> {
     let (store, _) = builder.finish(1);
     let mut raw = ValidatedLayer::default();
-    validate_layer_into(&store, ONLY, &mut raw)?;
+    validate_layer_with(&store, ONLY, Angles::Any, &mut raw)?;
     merge_into(&raw, out)
 }
 
@@ -41,27 +44,49 @@ fn push_rect(builder: &mut GeometryStoreBuilder, r: Bbox) {
     );
 }
 
-/// `r` grown by `d` on every side, refused past the coordinate domain.
-fn grown(r: Bbox, d: i64) -> Result<Bbox, BooleanError> {
+/// `r` grown by `dx` left and right and `dy` above and below, refused past
+/// the coordinate domain.
+fn grown(r: Bbox, dx: i64, dy: i64) -> Result<Bbox, BooleanError> {
     let at = |v: Dbu, by: i64| Dbu::new(v.raw() + by).ok_or(BooleanError::OutOfRange);
     Ok(Bbox {
-        xlo: at(r.xlo, -d)?,
-        ylo: at(r.ylo, -d)?,
-        xhi: at(r.xhi, d)?,
-        yhi: at(r.yhi, d)?,
+        xlo: at(r.xlo, -dx)?,
+        ylo: at(r.ylo, -dy)?,
+        xhi: at(r.xhi, dx)?,
+        yhi: at(r.yhi, dy)?,
     })
 }
 
-/// `KLayout` `sized(d)`: the Minkowski sum with the square `[-d, d]²` for `d > 0`,
-/// the erosion by it for `d < 0`. A part no wider than `2|d|` shrinks away.
+/// `KLayout` `sized(dx, dy)` (`sized(d)` is `(d, d)`): the Minkowski sum with
+/// the box `[-dx, dx] x [-dy, dy]` when both are at least 0, the erosion by
+/// `[dx, -dx] x [dy, -dy]` when both are at most 0. A part no wider than
+/// `2|dx|` across x, or `2|dy|` across y, shrinks away.
+///
+/// # Panics
+///
+/// When `dx` and `dy` differ in sign: one axis grown and the other shrunk is
+/// not one Minkowski operation, and the deck refuses it.
+///
+/// On a layer with edges at 45 degrees the box moves a diagonal edge `dx` in
+/// x and `dy` in y, and keeps every edge octilinear and every vertex on the
+/// grid (a crossing between grid points is snapped as
+/// [`crate::boolean::union_into`] states). An edge at any other angle moves
+/// so too, and where the swept edges cross between grid points the union
+/// rounds them as [`crate::boolean::union_into`] states. `KLayout`'s `sized`
+/// moves every edge along its normal instead, so on a slanted edge the two
+/// differ; this is the definition `docs/deck.md` gives.
 pub fn sized_into(
     a: &ValidatedLayer,
-    d: Dbu,
+    dx: Dbu,
+    dy: Dbu,
     out: &mut ValidatedLayer,
 ) -> Result<(), BooleanError> {
-    let d = d.raw();
-    if d >= 0 {
-        return grow_into(a, d, out);
+    let (dx, dy) = (dx.raw(), dy.raw());
+    assert!(
+        dx.signum() * dy.signum() >= 0,
+        "sizing grows or shrinks both axes, never one of each"
+    );
+    if dx >= 0 && dy >= 0 {
+        return grow_into(a, dx, dy, out);
     }
     // Erosion is the complement of growing the complement, within a frame far
     // enough out that its own border does not erode `a`.
@@ -69,26 +94,105 @@ pub fn sized_into(
         return merge_into(a, out);
     };
     let mut frame = GeometryStoreBuilder::with_capacity(1, 4);
-    push_rect(&mut frame, grown(extent, -d)?);
+    push_rect(&mut frame, grown(extent, -dx, -dy)?);
     let mut frame_layer = ValidatedLayer::default();
     merged(frame, &mut frame_layer)?;
     let mut outside = ValidatedLayer::default();
     subtraction_into(&frame_layer, a, &mut outside)?;
     let mut eaten = ValidatedLayer::default();
-    grow_into(&outside, -d, &mut eaten)?;
+    grow_into(&outside, -dx, -dy, &mut eaten)?;
     subtraction_into(a, &eaten, out)
 }
 
-/// Union of every rectangle of `a` grown by `d >= 0`: exact, since the
-/// Minkowski sum distributes over union.
-fn grow_into(a: &ValidatedLayer, d: i64, out: &mut ValidatedLayer) -> Result<(), BooleanError> {
+/// `a` grown by the box `[-dx, dx] x [-dy, dy]`, `dx, dy >= 0`: exact, since
+/// the Minkowski sum distributes over union. A rectilinear layer is the union
+/// of its rectangles grown; any other is itself together with each boundary
+/// edge swept by the box, since a point the sum adds lies within the box of
+/// some boundary point.
+fn grow_into(
+    a: &ValidatedLayer,
+    dx: i64,
+    dy: i64,
+    out: &mut ValidatedLayer,
+) -> Result<(), BooleanError> {
+    if !a.is_rectilinear() {
+        let mut builder = GeometryStoreBuilder::with_capacity(0, 0);
+        for idx in 0..narrow(a.len()) {
+            // Outer and holes as rows: every ring adds its winding to the union.
+            for ring in a.poly_rings(idx) {
+                let (xs, ys) = ring.coords();
+                builder.push(ONLY, xs, ys);
+            }
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            for (p, q) in crate::width::poly_edges(a.get(idx)) {
+                let (xs, ys) = swept_box(p, q, dx, dy)?;
+                builder.push(ONLY, &xs, &ys);
+            }
+        }
+        return merged(builder, out);
+    }
     let (mut rects, mut start) = (Vec::new(), Vec::new());
     decompose_into(a, &mut rects, &mut start);
     let mut builder = GeometryStoreBuilder::with_capacity(rects.len(), 4 * rects.len());
     for &r in &rects {
-        push_rect(&mut builder, grown(r, d)?);
+        push_rect(&mut builder, grown(r, dx, dy)?);
     }
     merged(builder, out)
+}
+
+/// The edge `p`-`q` swept by the box `[-dx, dx] x [-dy, dy]`, not both 0:
+/// its convex hull, counter-clockwise; a box for an axis-parallel edge, else
+/// a hexagon (a parallelogram when `dx` or `dy` is 0), at any angle. Refused past
+/// the coordinate domain.
+fn swept_box(p: Point, q: Point, dx: i64, dy: i64) -> Result<(Vec<Dbu>, Vec<Dbu>), BooleanError> {
+    let (l, r) = if (p.x, p.y) <= (q.x, q.y) {
+        (p, q)
+    } else {
+        (q, p)
+    };
+    let (lx, ly, rx, ry) = (l.x.raw(), l.y.raw(), r.x.raw(), r.y.raw());
+    let mut corners: Vec<(i64, i64)> = if lx == rx || ly == ry {
+        let (x0, x1) = (lx.min(rx) - dx, lx.max(rx) + dx);
+        let (y0, y1) = (ly.min(ry) - dy, ly.max(ry) + dy);
+        vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    } else if ry > ly {
+        // Rising: `l` is the lower end.
+        vec![
+            (lx - dx, ly - dy),
+            (lx + dx, ly - dy),
+            (rx + dx, ry - dy),
+            (rx + dx, ry + dy),
+            (rx - dx, ry + dy),
+            (lx - dx, ly + dy),
+        ]
+    } else {
+        // Falling: `l` is the upper end.
+        vec![
+            (lx - dx, ly - dy),
+            (rx - dx, ry - dy),
+            (rx + dx, ry - dy),
+            (rx + dx, ry + dy),
+            (lx + dx, ly + dy),
+            (lx - dx, ly + dy),
+        ]
+    };
+    // A zero `dx` or `dy` folds two corners of the hexagon into one.
+    corners.dedup();
+    while corners.len() > 1 && corners.first() == corners.last() {
+        corners.pop();
+    }
+    let at = |v: i64| Dbu::new(v).ok_or(BooleanError::OutOfRange);
+    let xs = corners
+        .iter()
+        .map(|&(x, _)| at(x))
+        .collect::<Result<_, _>>()?;
+    let ys = corners
+        .iter()
+        .map(|&(_, y)| at(y))
+        .collect::<Result<_, _>>()?;
+    Ok((xs, ys))
 }
 
 /// `KLayout` `holes`: every hole of `a` as a filled polygon, merged, so a hole
@@ -110,33 +214,216 @@ pub fn holes_into(a: &ValidatedLayer, out: &mut ValidatedLayer) -> Result<(), Bo
     merged(builder, out)
 }
 
-/// `KLayout` `extents`: the bounding box of every polygon of `a`, merged.
+/// `KLayout` `extents`: the bounding box of each polygon of `a`, one polygon
+/// per box. Boxes that overlap stay apart, as `KLayout`'s do ("The boxes will
+/// not be merged"); a later operation merges them like any operand.
 pub fn extents_into(a: &ValidatedLayer, out: &mut ValidatedLayer) -> Result<(), BooleanError> {
     let mut builder = GeometryStoreBuilder::with_capacity(a.len(), 4 * a.len());
     for &b in a.bboxes() {
         push_rect(&mut builder, b);
     }
-    merged(builder, out)
+    let (store, _) = builder.finish(1);
+    validate_layer_into(&store, ONLY, out)?;
+    Ok(())
+}
+
+/// One rectangle per box of `boxes`, unmerged (overlapping boxes stay
+/// separate polygons, as [`extents_into`]'s do).
+///
+/// # Errors
+///
+/// A box with no area fails validation.
+pub fn boxes_into(boxes: &[Bbox], out: &mut ValidatedLayer) -> Result<(), BooleanError> {
+    let mut builder = GeometryStoreBuilder::with_capacity(boxes.len(), 4 * boxes.len());
+    for &b in boxes {
+        push_rect(&mut builder, b);
+    }
+    let (store, _) = builder.finish(1);
+    validate_layer_into(&store, ONLY, out)?;
+    Ok(())
 }
 
 /// `KLayout` `with_area`: polygons whose area in square grid units, holes
-/// excluded, is in `range`.
+/// excluded, is in `range`. Exact for an octilinear polygon too, whose area
+/// can be a half unit: it is compared doubled.
 pub fn with_area_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mut ValidatedLayer) {
+    let (lo, hi) = (
+        range.start().saturating_mul(2),
+        range.end().saturating_mul(2),
+    );
     let keep: Vec<bool> = (0..narrow(a.len()))
         .map(|idx| {
             let twice: i128 = a.poly_rings(idx).map(|r| r.area2().raw()).sum();
-            range.contains(&(twice / 2))
+            (lo..=hi).contains(&twice)
         })
         .collect();
     a.select_into(&keep, out);
 }
 
-/// Polygons whose narrowest width in grid units, as the `width` rule measures
-/// it, is in `range`.
+/// Polygons whose narrowest width, as the `width` rule measures it (diagonal
+/// necks count, and on a 45-degree layer [`crate::width::narrowest_pair2`]'s
+/// width), has twice its square in `range`, in square grid units. Twice a
+/// squared width is a whole number even at 45 degrees, so a strict bound is
+/// exact as an inclusive one: `> 70` is `9801..` here, and a `√5000` neck
+/// (70.7) and a `99/√2` width (70.004) are both in it.
 pub fn with_width_into(a: &ValidatedLayer, range: RangeInclusive<i128>, out: &mut ValidatedLayer) {
     let mut scratch = FacingScratch::default();
+    let far = Dbu::new_unchecked(crate::MAX_ABS_DBU);
     let keep: Vec<bool> = (0..narrow(a.len()))
-        .map(|idx| range.contains(&i128::from(narrowest_width(a.get(idx), &mut scratch).raw())))
+        .map(|idx| {
+            let poly = a.get(idx);
+            if a.is_rectilinear() {
+                return range.contains(&(2 * narrowest_width2(poly, &mut scratch).raw()));
+            }
+            if a.is_octilinear() {
+                return narrowest_pair2(poly, true, far)
+                    .is_some_and(|(twice, _)| range.contains(&twice));
+            }
+            narrowest_pair_any(poly, true, far)
+                .is_some_and(|(width, _)| width_in(width, range.clone()))
+        })
+        .collect();
+    a.select_into(&keep, out);
+}
+
+/// Whether a width at any angle, twice its square as `(floor, inexact)`,
+/// lies in a deck's width bounds, whose strictness the parity of each end
+/// keeps: a lower end `2a²` is `>= a` and `2a² + 1` is `> a`, either of which
+/// the ceiling meets exactly; an upper end `2b²` is `<= b`, which the ceiling
+/// meets, and `2b² - 1` is `< b`, which the floor meets.
+fn width_in((floor, inexact): (i128, bool), range: RangeInclusive<i128>) -> bool {
+    let ceil = floor + i128::from(inexact);
+    let (lo, hi) = (*range.start(), *range.end());
+    let top = if hi % 2 == 0 { ceil } else { floor };
+    lo <= ceil && top <= hi
+}
+
+/// `KLayout` `with_bbox_max` (`longer`) or `with_bbox_min`: polygons whose
+/// bounding box's longer, or shorter, side in grid units lies in `range`
+/// ("the maximum dimension of the bounding box … either the width or height,
+/// whichever is larger"). For a straight feature, the longer side is its
+/// length.
+pub fn with_bbox_into(
+    a: &ValidatedLayer,
+    longer: bool,
+    range: RangeInclusive<i128>,
+    out: &mut ValidatedLayer,
+) {
+    let keep: Vec<bool> = (0..narrow(a.len()))
+        .map(|idx| {
+            let b = a.get(idx).bbox();
+            let (w, h) = (b.width().raw(), b.height().raw());
+            range.contains(&i128::from(if longer { w.max(h) } else { w.min(h) }))
+        })
+        .collect();
+    a.select_into(&keep, out);
+}
+
+/// Calibre `ENCLOSE RECTANGLE` (`keep`) or `NOT ENCLOSE RECTANGLE`: the
+/// polygons of merged `a` that can hold an axis-aligned `w` x `h` box, either
+/// way round, its boundary allowed on theirs ("select all polygons ... that
+/// can fit an X by Y rectangle", the operation as `KLayout`'s forum thread
+/// 2141 states it; its author's emulation tries both orientations by under-
+/// and oversizing). `w` and `h` are positive grid units.
+///
+/// Exact on rectilinear input: a polygon with whole-unit vertices holds a
+/// `w` x `h` box exactly when its erosion by the box `[0, w - 1] x [0, h -
+/// 1]` keeps a positive area, since the intervals its sides bound have whole
+/// ends (a box `w - 1 + e` wide fits only where one `w` wide does).
+///
+/// # Errors
+///
+/// [`BooleanError::NotRectilinear`] for a layer with a 45-degree edge, which
+/// the erosion by rectangles does not read; a boolean refusing its input, or
+/// growing past the coordinate domain.
+///
+/// # Panics
+///
+/// When `w` or `h` is not positive; the deck refuses both.
+pub fn with_rect_into(
+    a: &ValidatedLayer,
+    w: Dbu,
+    h: Dbu,
+    keep: bool,
+    out: &mut ValidatedLayer,
+) -> Result<(), BooleanError> {
+    let (w, h) = (w.raw(), h.raw());
+    assert!(w > 0 && h > 0, "a box has positive sides");
+    if !a.is_rectilinear() {
+        return Err(BooleanError::NotRectilinear);
+    }
+    let mut room = ValidatedLayer::default();
+    let mut flags = room_into(a, w, h, &mut room).and_then(|()| overlapping_flags(a, &room))?;
+    if w != h {
+        room_into(a, h, w, &mut room)?;
+        for (flag, turned) in flags.iter_mut().zip(overlapping_flags(a, &room)?) {
+            *flag |= turned;
+        }
+    }
+    for flag in &mut flags {
+        *flag = *flag == keep;
+    }
+    a.select_into(&flags, out);
+    Ok(())
+}
+
+/// The lower-left corners at which a `w` x `h` box fits in `a`, less one unit
+/// each way: `a` minus everything within `[-(w - 1), 0] x [-(h - 1), 0]` of
+/// its complement (taken in a frame reaching `w`, `h` past its extent).
+fn room_into(
+    a: &ValidatedLayer,
+    w: i64,
+    h: i64,
+    out: &mut ValidatedLayer,
+) -> Result<(), BooleanError> {
+    let Some(extent) = a.bboxes().iter().copied().reduce(Bbox::union) else {
+        return merge_into(a, out);
+    };
+    let mut frame = GeometryStoreBuilder::with_capacity(1, 4);
+    push_rect(&mut frame, grown(extent, w, h)?);
+    let mut frame_layer = ValidatedLayer::default();
+    merged(frame, &mut frame_layer)?;
+    let mut outside = ValidatedLayer::default();
+    subtraction_into(&frame_layer, a, &mut outside)?;
+    let (mut rects, mut start) = (Vec::new(), Vec::new());
+    decompose_into(&outside, &mut rects, &mut start);
+    let mut builder = GeometryStoreBuilder::with_capacity(rects.len(), 4 * rects.len());
+    for &r in &rects {
+        let reach = |v: Dbu, by: i64| Dbu::new(v.raw() - by).ok_or(BooleanError::OutOfRange);
+        push_rect(
+            &mut builder,
+            Bbox {
+                xlo: reach(r.xlo, w - 1)?,
+                ylo: reach(r.ylo, h - 1)?,
+                ..r
+            },
+        );
+    }
+    let mut eaten = ValidatedLayer::default();
+    merged(builder, &mut eaten)?;
+    subtraction_into(a, &eaten, out)
+}
+
+/// `KLayout` `rectangles` and `squares` (`keep`), or `non_rectangles` and
+/// `non_squares`: the polygons of `a` that are, or are not, one axis-aligned
+/// box with no hole, and with `square` a box with equal sides. `a` must be
+/// merged: then a rectangle drawn as abutting pieces is one rectangle, and two
+/// boxes meeting only at a corner are one polygon that is none.
+pub fn rectangles_into(a: &ValidatedLayer, square: bool, keep: bool, out: &mut ValidatedLayer) {
+    let keep: Vec<bool> = (0..narrow(a.len()))
+        .map(|idx| {
+            let poly = a.get(idx);
+            let b = poly.bbox();
+            // A merged ring has no collinear vertex: four corners, every edge
+            // horizontal or vertical, are a box (a diamond has four too).
+            let (xs, ys) = poly.outer().coords();
+            let axis = (0..xs.len()).all(|i| {
+                let j = (i + 1) % xs.len();
+                xs[i] == xs[j] || ys[i] == ys[j]
+            });
+            let boxed = xs.len() == 4 && axis && poly.holes().next().is_none();
+            (boxed && (!square || b.width() == b.height())) == keep
+        })
         .collect();
     a.select_into(&keep, out);
 }
@@ -168,22 +455,78 @@ fn poly_segs(poly: PolygonRef<'_>) -> impl Iterator<Item = Seg> + '_ {
     crate::width::poly_edges(poly).map(|(a, b)| Seg { a, b })
 }
 
-/// Even-odd inside test for the point `(x2 / 2, y2 / 2)`, which must lie on no
-/// ring. Counts the vertical edges a `+x` ray crosses, half-open in y.
-fn inside_doubled<'a>(polys: impl Iterator<Item = PolygonRef<'a>>, x2: i64, y2: i64) -> bool {
+/// Even-odd inside test for the point `(px / scale, py / scale)`, which must
+/// lie on no ring: counts the edges a `+x` ray crosses, half-open in y, exactly
+/// at any angle.
+fn inside_scaled<'a>(
+    polys: impl Iterator<Item = PolygonRef<'a>>,
+    px: i64,
+    py: i64,
+    scale: i64,
+) -> bool {
+    let (k, px, py) = (i128::from(scale), i128::from(px), i128::from(py));
     let mut inside = false;
     for poly in polys {
         for seg in poly_segs(poly) {
-            let (lo, hi) = (
-                seg.a.y.raw().min(seg.b.y.raw()),
-                seg.a.y.raw().max(seg.b.y.raw()),
-            );
-            if seg.a.x == seg.b.x && 2 * seg.a.x.raw() > x2 && 2 * lo <= y2 && y2 < 2 * hi {
-                inside = !inside;
+            let (ax, ay) = (i128::from(seg.a.x.raw()) * k, i128::from(seg.a.y.raw()) * k);
+            let (bx, by) = (i128::from(seg.b.x.raw()) * k, i128::from(seg.b.y.raw()) * k);
+            if (ay > py) != (by > py) {
+                // The point's side of the edge: left of an upward edge, or
+                // right of a downward one, is where the ray crosses it.
+                let side = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+                if (side > 0) == (by > ay) {
+                    inside = !inside;
+                }
             }
         }
     }
     inside
+}
+
+/// A point strictly inside a polygon's material, at eight times scale: one
+/// step into the material from a convex corner of its outer ring, along the
+/// bisector of the corner, trying the corners lowest first. On the octilinear
+/// grid no edge but those through a vertex passes within `1/√2` of it, so a
+/// step of at most `√8 / 8` stays in the corner; the lowest, then leftmost,
+/// corner is convex, and only a hole touching it there can make it try the
+/// next.
+///
+/// # Panics
+///
+/// On a polygon with no such corner, which validation rules out.
+pub fn interior_point8(poly: PolygonRef<'_>) -> (i64, i64) {
+    let (xs, ys) = poly.outer().coords();
+    let n = xs.len();
+    let mut corners: Vec<usize> = (0..n).collect();
+    corners.sort_unstable_by_key(|&i| (ys[i], xs[i]));
+    for v in corners {
+        let toward = |to: usize| {
+            (
+                (xs[to] - xs[v]).raw().signum(),
+                (ys[to] - ys[v]).raw().signum(),
+            )
+        };
+        let (back, on) = (toward((v + n - 1) % n), toward((v + 1) % n));
+        // Convex: turning left from the way in (`-back`) to the way out.
+        if back.1 * on.0 - back.0 * on.1 <= 0 {
+            continue;
+        }
+        let probe = (
+            8 * xs[v].raw() + back.0 + on.0,
+            8 * ys[v].raw() + back.1 + on.1,
+        );
+        if inside_scaled(std::iter::once(poly), probe.0, probe.1, 8) {
+            return probe;
+        }
+    }
+    panic!("a validated polygon has a convex corner with its material beside it")
+}
+
+/// Whether the point `(px / scale, py / scale)`, which must lie on none of
+/// its rings, is in a polygon's material: inside its outer and no hole.
+/// Exact at any angle.
+pub fn contains_scaled(poly: PolygonRef<'_>, px: i64, py: i64, scale: i64) -> bool {
+    inside_scaled(std::iter::once(poly), px, py, scale)
 }
 
 /// Whether two closed polygons share a point: their boundaries meet, or one
@@ -199,7 +542,7 @@ fn polys_meet(p: PolygonRef<'_>, q: PolygonRef<'_>) -> bool {
     };
     let (px, py) = vertex(p);
     let (qx, qy) = vertex(q);
-    inside_doubled(std::iter::once(q), px, py) || inside_doubled(std::iter::once(p), qx, qy)
+    inside_scaled(std::iter::once(q), px, py, 2) || inside_scaled(std::iter::once(p), qx, qy, 2)
 }
 
 /// `KLayout` `interacting` (`keep`) / `not_interacting` (`!keep`): polygons of
@@ -226,24 +569,93 @@ pub fn interacting_into(
 /// Per polygon of `a`: `false` when it holds part of `parts` (a subset of `a`
 /// by area), else `true`.
 fn free_of(a: &ValidatedLayer, parts: &ValidatedLayer) -> Vec<bool> {
+    if !(a.is_octilinear() && parts.is_octilinear()) {
+        return free_of_any(a, parts);
+    }
     let mut free = vec![true; a.len()];
-    let (mut rects, mut start) = (Vec::new(), Vec::new());
-    decompose_into(parts, &mut rects, &mut start);
-    // One rectangle per part: its open interior lies inside exactly one polygon of `a`.
-    let probes: Vec<Bbox> = start[..start.len() - 1]
-        .iter()
-        .map(|&s| rects[s as usize])
+    // One point inside each part: it lies inside exactly one polygon of `a`.
+    let probes: Vec<(i64, i64)> = (0..narrow(parts.len()))
+        .map(|i| interior_point8(parts.get(i)))
         .collect();
     let mut pairs = Vec::new();
-    box_pairs(&probes, a.bboxes(), &mut pairs);
+    box_pairs(parts.bboxes(), a.bboxes(), &mut pairs);
     for &(r, p) in &pairs {
-        let r = probes[r as usize];
-        let (x2, y2) = (r.xlo.raw() + r.xhi.raw(), r.ylo.raw() + r.yhi.raw());
-        if inside_doubled(std::iter::once(a.get(p)), x2, y2) {
+        let (x8, y8) = probes[r as usize];
+        if inside_scaled(std::iter::once(a.get(p)), x8, y8, 8) {
             free[p as usize] = false;
         }
     }
     free
+}
+
+/// [`free_of`] at any angle, where no point near a corner is safely inside
+/// at a small fixed scale: each polygon of `a` holds part of `parts` exactly
+/// when their intersection has area.
+fn free_of_any(a: &ValidatedLayer, parts: &ValidatedLayer) -> Vec<bool> {
+    let mut free = vec![true; a.len()];
+    for (p, _) in sharing_area(a, parts) {
+        free[p as usize] = false;
+    }
+    free
+}
+
+/// Whether the grid point `p` lies in a polygon's material and on none of
+/// its rings.
+fn strictly_in(poly: PolygonRef<'_>, p: Point) -> bool {
+    !poly_segs(poly).any(|s| segments_intersect(s, Seg { a: p, b: p }))
+        && inside_scaled(std::iter::once(poly), p.x.raw(), p.y.raw(), 1)
+}
+
+/// Every `(i, j)` where polygon `i` of `a` and polygon `j` of `b` share
+/// area, ascending, among the pairs whose boxes meet: a vertex of either
+/// strictly inside the other shares (the polygon has area at its vertex);
+/// otherwise the intersection of the two polygons alone decides.
+fn sharing_area(a: &ValidatedLayer, b: &ValidatedLayer) -> Vec<(u32, u32)> {
+    let mut pairs = Vec::new();
+    box_pairs(a.bboxes(), b.bboxes(), &mut pairs);
+    pairs.sort_unstable();
+    let (mut one, mut other, mut common) = (
+        ValidatedLayer::default(),
+        ValidatedLayer::default(),
+        ValidatedLayer::default(),
+    );
+    let first = |poly: PolygonRef<'_>| {
+        let (xs, ys) = poly.outer().coords();
+        Point { x: xs[0], y: ys[0] }
+    };
+    let mut out = Vec::new();
+    for &(i, j) in &pairs {
+        let (p, q) = (a.get(i), b.get(j));
+        let shares = strictly_in(p, first(q)) || strictly_in(q, first(p)) || {
+            a.copy_polygon_into(i, &mut one);
+            b.copy_polygon_into(j, &mut other);
+            // A boolean of validated layers only fails on an internal fault.
+            crate::boolean::intersection_into(&one, &other, &mut common)
+                .map_or(true, |()| !common.is_empty())
+        };
+        if shares {
+            out.push((i, j));
+        }
+    }
+    out
+}
+
+/// Per polygon of `parts`: the lowest polygon of `figures` it shares area
+/// with, or `None`. Where `figures` is a merge that `parts` lies in, that is
+/// the figure holding it, at any angle: a figure and a part rounded apart by
+/// less than half a unit along their edges still share the rest of their
+/// area. One boolean per pair whose boxes meet.
+// ponytail: a boolean per pair; a single overlay sweep labelling both
+// operands' faces if large any-angle layers make this slow.
+pub fn holding_figures(figures: &ValidatedLayer, parts: &ValidatedLayer) -> Vec<Option<u32>> {
+    let mut home = vec![None; parts.len()];
+    for (j, i) in sharing_area(parts, figures) {
+        let slot = &mut home[j as usize];
+        if slot.is_none() {
+            *slot = Some(i);
+        }
+    }
+    home
 }
 
 /// `KLayout` `inside`: polygons of `a` covered by `b`; touching `b`'s boundary
@@ -253,10 +665,22 @@ pub fn inside_into(
     b: &ValidatedLayer,
     out: &mut ValidatedLayer,
 ) -> Result<(), BooleanError> {
+    a.select_into(&inside_flags(a, b)?, out);
+    Ok(())
+}
+
+/// Per polygon of `a`: whether `b` covers it ([`inside_into`]'s test), at
+/// any octilinear angle. Where polygons of `a` overlap, a part of their
+/// union `b` leaves uncovered counts against each that holds a point of it
+/// near its lowest convex corner, as [`inside_into`] reads it.
+///
+/// # Errors
+///
+/// A failed boolean.
+pub fn inside_flags(a: &ValidatedLayer, b: &ValidatedLayer) -> Result<Vec<bool>, BooleanError> {
     let mut rest = ValidatedLayer::default();
     subtraction_into(a, b, &mut rest)?;
-    a.select_into(&free_of(a, &rest), out);
-    Ok(())
+    Ok(free_of(a, &rest))
 }
 
 /// `KLayout` `outside`: polygons of `a` sharing no area with `b`; touching is outside.
@@ -265,38 +689,125 @@ pub fn outside_into(
     b: &ValidatedLayer,
     out: &mut ValidatedLayer,
 ) -> Result<(), BooleanError> {
+    overlapping_into(a, b, false, out)
+}
+
+/// `KLayout` `overlapping` (`keep`): polygons of `a` sharing area with `b`;
+/// touching is not overlapping. `!keep` is [`outside_into`].
+pub fn overlapping_into(
+    a: &ValidatedLayer,
+    b: &ValidatedLayer,
+    keep: bool,
+    out: &mut ValidatedLayer,
+) -> Result<(), BooleanError> {
+    let flags: Vec<bool> = overlapping_flags(a, b)?
+        .into_iter()
+        .map(|hit| hit == keep)
+        .collect();
+    a.select_into(&flags, out);
+    Ok(())
+}
+
+/// Per polygon of `a`, in order: whether it shares area with `b`, as
+/// [`overlapping_into`] selects. Touching is not sharing.
+pub fn overlapping_flags(
+    a: &ValidatedLayer,
+    b: &ValidatedLayer,
+) -> Result<Vec<bool>, BooleanError> {
     let mut common = ValidatedLayer::default();
     crate::boolean::intersection_into(a, b, &mut common)?;
-    a.select_into(&free_of(a, &common), out);
+    Ok(free_of(a, &common).into_iter().map(|free| !free).collect())
+}
+
+/// `KLayout` `covering` (`keep`) / `not_covering` (`!keep`): polygons of `a`
+/// that hold a whole polygon of `b`, which may touch `a`'s boundary from
+/// inside ([`inside_into`] with the operands swapped).
+pub fn covering_into(
+    a: &ValidatedLayer,
+    b: &ValidatedLayer,
+    keep: bool,
+    out: &mut ValidatedLayer,
+) -> Result<(), BooleanError> {
+    let mut held = ValidatedLayer::default();
+    inside_into(b, a, &mut held)?;
+    // Each held polygon is connected and inside `a`, so it lies in one polygon of `a`.
+    let flags: Vec<bool> = free_of(a, &held)
+        .into_iter()
+        .map(|free| free != keep)
+        .collect();
+    a.select_into(&flags, out);
     Ok(())
 }
 
 // ---- edge layers ----
 
-/// One axis-parallel edge on its line: `pos` is the fixed coordinate, `lo < hi`
-/// the span, `forward` whether it travels toward `hi`.
+/// One edge on its line. `dir` is the line's direction: 0 horizontal, 1
+/// vertical, 2 rising at 45 degrees, 3 falling, 4 any other angle, whose
+/// primitive direction `step` (`step.0 > 0`; `(0, 0)` for the others) the
+/// line carries; `pos` its intercept (`y`, `x`, `y - x`, `y + x`, and
+/// `step.1·x - step.0·y`); `lo < hi` the span of the line's parameter (`x`,
+/// `y`, `x`, `x`, `x`); `forward` whether it travels toward `hi`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Run {
-    vertical: bool,
-    pos: i64,
+    dir: u8,
+    step: (i64, i64),
+    pos: i128,
     lo: i64,
     hi: i64,
     forward: bool,
 }
 
 fn run_of(s: Seg) -> Run {
-    let vertical = s.a.x == s.b.x;
-    let (pos, from, to) = if vertical {
-        (s.a.x.raw(), s.a.y.raw(), s.b.y.raw())
+    let (ax, ay, bx, by) = (s.a.x.raw(), s.a.y.raw(), s.b.x.raw(), s.b.y.raw());
+    let (dx, dy) = (bx - ax, by - ay);
+    let (ax128, ay128) = (i128::from(ax), i128::from(ay));
+    let (dir, step, pos, from, to) = if dy == 0 {
+        (0, (0, 0), ay128, ax, bx)
+    } else if dx == 0 {
+        (1, (0, 0), ax128, ay, by)
+    } else if dx == dy {
+        (2, (0, 0), ay128 - ax128, ax, bx)
+    } else if dx == -dy {
+        (3, (0, 0), ay128 + ax128, ax, bx)
     } else {
-        (s.a.y.raw(), s.a.x.raw(), s.b.x.raw())
+        let g = gcd(dx.unsigned_abs(), dy.unsigned_abs());
+        let g = i64::try_from(g).expect("a coordinate difference fits an i64") * dx.signum();
+        let step = (dx / g, dy / g);
+        let pos = i128::from(step.1) * ax128 - i128::from(step.0) * ay128;
+        (4, step, pos, ax, bx)
     };
     Run {
-        vertical,
+        dir,
+        step,
         pos,
         lo: from.min(to),
         hi: from.max(to),
         forward: to > from,
+    }
+}
+
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+/// The point at parameter `t` on a run's line, given its intercept `pos`, all
+/// scaled by the same factor; on a skew line `t` must be a point of the
+/// lattice it passes.
+fn on_line(r: Run, pos: i128, t: i64) -> (i64, i64) {
+    let narrow = |v: i128| i64::try_from(v).expect("a point of an in-domain line");
+    match r.dir {
+        0 => (t, narrow(pos)),
+        1 => (narrow(pos), t),
+        2 => (t, t + narrow(pos)),
+        3 => (t, narrow(pos) - t),
+        _ => {
+            let num = i128::from(r.step.1) * i128::from(t) - pos;
+            debug_assert_eq!(num % i128::from(r.step.0), 0, "a lattice point of the line");
+            (t, narrow(num / i128::from(r.step.0)))
+        }
     }
 }
 
@@ -307,11 +818,7 @@ fn seg_of(r: Run) -> Seg {
         (r.hi, r.lo)
     };
     let point = |along: i64| {
-        let (x, y) = if r.vertical {
-            (r.pos, along)
-        } else {
-            (along, r.pos)
-        };
+        let (x, y) = on_line(r, r.pos, along);
         Point {
             x: Dbu::new_unchecked(x),
             y: Dbu::new_unchecked(y),
@@ -323,19 +830,47 @@ fn seg_of(r: Run) -> Seg {
     }
 }
 
+/// Where two octilinear runs' lines cross, as twice the parameter along
+/// each, or `None` for parallel lines. Exact: twice a crossing of octilinear
+/// lines through grid points is an integer.
+fn crossing2(r: Run, t: Run) -> Option<(i64, i64)> {
+    // Each line as `a·x + b·y = c`.
+    let line = |run: Run| {
+        let c = run.pos;
+        match run.dir {
+            0 => (0, 1, c),
+            1 => (1, 0, c),
+            2 => (-1, 1, c),
+            _ => (1, 1, c),
+        }
+    };
+    let ((a1, b1, c1), (a2, b2, c2)) = (line(r), line(t));
+    let det = a1 * b2 - a2 * b1;
+    if det == 0 {
+        return None;
+    }
+    // `det` is ±1 or ±2, so twice each coordinate divides exactly.
+    let (x2, y2) = (2 * (c1 * b2 - c2 * b1) / det, 2 * (a1 * c2 - a2 * c1) / det);
+    let along = |run: Run| {
+        let v = if run.dir == 1 { y2 } else { x2 };
+        i64::try_from(v).expect("a crossing of in-domain lines is in range")
+    };
+    Some((along(r), along(t)))
+}
+
 /// Runs to merged segments: collinear pieces of one direction that touch or
 /// overlap become one, zero-length ones go.
 fn emit_runs(runs: &mut Vec<Run>, out: &mut Vec<Seg>) {
     runs.retain(|r| r.lo < r.hi);
-    runs.sort_unstable_by_key(|r| (r.vertical, r.pos, r.forward, r.lo));
+    runs.sort_unstable_by_key(|r| (r.dir, r.step, r.pos, r.forward, r.lo));
     out.clear();
     let mut at = 0;
     while at < runs.len() {
         let mut cur = runs[at];
         at += 1;
         while at < runs.len()
-            && (runs[at].vertical, runs[at].pos, runs[at].forward)
-                == (cur.vertical, cur.pos, cur.forward)
+            && (runs[at].dir, runs[at].step, runs[at].pos, runs[at].forward)
+                == (cur.dir, cur.step, cur.pos, cur.forward)
             && runs[at].lo <= cur.hi
         {
             cur.hi = cur.hi.max(runs[at].hi);
@@ -368,24 +903,25 @@ pub enum EdgeOp {
 /// Parts of `a` that `b` covers (`covered`) or does not, direction ignored.
 fn split_runs(a: &[Run], b: &[Run], covered: bool, out: &mut Vec<Run>) {
     // `b`'s coverage per line, undirected, merged and sorted.
-    let mut cover: Vec<(bool, i64, i64, i64)> =
-        b.iter().map(|r| (r.vertical, r.pos, r.lo, r.hi)).collect();
+    type Line = (u8, (i64, i64), i128);
+    let line = |r: &Run| -> Line { (r.dir, r.step, r.pos) };
+    let mut cover: Vec<(Line, i64, i64)> = b.iter().map(|r| (line(r), r.lo, r.hi)).collect();
     cover.sort_unstable();
-    let mut merged: Vec<(bool, i64, i64, i64)> = Vec::with_capacity(cover.len());
+    let mut merged: Vec<(Line, i64, i64)> = Vec::with_capacity(cover.len());
     for c in cover {
         match merged.last_mut() {
-            Some(m) if (m.0, m.1) == (c.0, c.1) && c.2 <= m.3 => m.3 = m.3.max(c.3),
+            Some(m) if m.0 == c.0 && c.1 <= m.2 => m.2 = m.2.max(c.2),
             _ => merged.push(c),
         }
     }
     for &r in a {
-        let first = merged.partition_point(|m| (m.0, m.1, m.3) <= (r.vertical, r.pos, r.lo));
+        let first = merged.partition_point(|m| (m.0, m.2) <= (line(&r), r.lo));
         let mut from = r.lo;
         for m in merged[first..]
             .iter()
-            .take_while(|m| (m.0, m.1) == (r.vertical, r.pos) && m.2 < r.hi)
+            .take_while(|m| m.0 == line(&r) && m.1 < r.hi)
         {
-            let (lo, hi) = (m.2.max(r.lo), m.3.min(r.hi));
+            let (lo, hi) = (m.1.max(r.lo), m.2.min(r.hi));
             if covered {
                 out.push(Run { lo, hi, ..r });
             } else {
@@ -450,30 +986,38 @@ fn edge_candidates(a: &[Seg], b: &ValidatedLayer, start: &mut Vec<u32>, cand: &m
 
 /// `KLayout` `inside_part` (`inside`) / `outside_part` (`!inside`): the parts of
 /// each edge strictly inside / strictly outside `b`. Parts on `b`'s boundary
-/// are in neither.
+/// are in neither. Where a diagonal of `b` crosses a diagonal edge between
+/// grid points, the part ends at the last grid point inside it.
 pub fn edge_part_into(a: &[Seg], b: &ValidatedLayer, inside: bool, out: &mut Vec<Seg>) {
     let (mut start, mut cand) = (Vec::new(), Vec::new());
     edge_candidates(a, b, &mut start, &mut cand);
+    if !b.is_octilinear() || a.iter().any(|&s| run_of(s).dir == 4) {
+        return edge_part_any(a, b, inside, (&start, &cand), out);
+    }
     let mut runs = Vec::new();
+    // Cut points and on-line spans as twice the line's parameter.
     let mut cuts = Vec::new();
+    let mut on_line = Vec::new();
     for (i, &s) in a.iter().enumerate() {
         let r = run_of(s);
         let polys = &cand[start[i] as usize..start[i + 1] as usize];
         // Every point where `b`'s boundary meets this edge's line cuts it.
         cuts.clear();
-        cuts.extend([r.lo, r.hi]);
-        let mut on_line = Vec::new();
+        cuts.extend([2 * r.lo, 2 * r.hi]);
+        on_line.clear();
         for &p in polys {
             for t in poly_segs(b.get(p)).map(run_of) {
-                if t.vertical != r.vertical && (t.lo..=t.hi).contains(&r.pos) {
-                    cuts.push(t.pos);
-                } else if t.vertical == r.vertical && t.pos == r.pos {
-                    cuts.extend([t.lo, t.hi]);
-                    on_line.push((t.lo, t.hi));
+                if (t.dir, t.pos) == (r.dir, r.pos) {
+                    cuts.extend([2 * t.lo, 2 * t.hi]);
+                    on_line.push((2 * t.lo, 2 * t.hi));
+                } else if let Some((on_r, on_t)) = crossing2(r, t) {
+                    if (2 * t.lo..=2 * t.hi).contains(&on_t) {
+                        cuts.push(on_r);
+                    }
                 }
             }
         }
-        cuts.retain(|&c| (r.lo..=r.hi).contains(&c));
+        cuts.retain(|&c| (2 * r.lo..=2 * r.hi).contains(&c));
         cuts.sort_unstable();
         cuts.dedup();
         for w in cuts.windows(2) {
@@ -481,14 +1025,118 @@ pub fn edge_part_into(a: &[Seg], b: &ValidatedLayer, inside: bool, out: &mut Vec
             if on_line.iter().any(|&(l, h)| l <= lo && hi <= h) {
                 continue;
             }
-            let (along, across) = (lo + hi, 2 * r.pos);
-            let (x2, y2) = if r.vertical {
-                (across, along)
-            } else {
-                (along, across)
-            };
-            if inside_doubled(polys.iter().map(|&p| b.get(p)), x2, y2) == inside {
+            // The piece's midpoint, at four times scale.
+            let (x4, y4) = on_line_point(r, lo + hi);
+            if inside_scaled(polys.iter().map(|&p| b.get(p)), x4, y4, 4) == inside {
+                // Ends between grid points move inward onto the grid.
+                let (lo, hi) = (lo.div_euclid(2) + lo.rem_euclid(2), hi.div_euclid(2));
                 runs.push(Run { lo, hi, ..r });
+            }
+        }
+    }
+    emit_runs(&mut runs, out);
+}
+
+/// The point at parameter `t4 / 4` on an octilinear run's line, at four
+/// times scale.
+fn on_line_point(r: Run, t4: i64) -> (i64, i64) {
+    on_line(r, 4 * r.pos, t4)
+}
+
+/// A run's line as `A·x + B·y = C`, and the lattice step of its parameter.
+fn line_of(r: Run) -> (i128, i128, i128, i64) {
+    match r.dir {
+        0 => (0, 1, r.pos, 1),
+        1 => (1, 0, r.pos, 1),
+        2 => (-1, 1, r.pos, 1),
+        3 => (1, 1, r.pos, 1),
+        _ => (i128::from(r.step.1), -i128::from(r.step.0), r.pos, r.step.0),
+    }
+}
+
+/// Where the lines of `r` and `t` cross, as `(num, den)` of the parameter
+/// along each (`den > 0`), or `None` for parallel lines.
+fn crossing_any(r: Run, t: Run) -> Option<((i128, i128), (i128, i128))> {
+    let ((a1, b1, c1, _), (a2, b2, c2, _)) = (line_of(r), line_of(t));
+    let mut det = a1 * b2 - a2 * b1;
+    if det == 0 {
+        return None;
+    }
+    let (mut x, mut y) = (c1 * b2 - c2 * b1, a1 * c2 - a2 * c1);
+    if det < 0 {
+        (det, x, y) = (-det, -x, -y);
+    }
+    let along = |run: Run| if run.dir == 1 { (y, det) } else { (x, det) };
+    Some((along(r), along(t)))
+}
+
+/// [`edge_part_into`] where an edge or `b` is at an angle other than a
+/// multiple of 45 degrees: each edge cut where `b`'s boundary crosses its
+/// line, at rational points compared exactly, and each piece's ends moved
+/// inward to the last points of the lattice its line passes, as the
+/// octilinear path moves them onto the grid; a piece holding no two lattice
+/// points is dropped.
+fn edge_part_any(
+    a: &[Seg],
+    b: &ValidatedLayer,
+    inside: bool,
+    (start, cand): (&[u32], &[u32]),
+    out: &mut Vec<Seg>,
+) {
+    use crate::wide::cmp_products;
+    use core::cmp::Ordering;
+    let cmp = |p: (i128, i128), q: (i128, i128)| cmp_products(p.0, q.1, q.0, p.1);
+    let mut runs = Vec::new();
+    let mut cuts: Vec<(i128, i128)> = Vec::new();
+    let mut on_line_spans: Vec<(i64, i64)> = Vec::new();
+    for (i, &s) in a.iter().enumerate() {
+        let r = run_of(s);
+        let polys = &cand[start[i] as usize..start[i + 1] as usize];
+        let step = i128::from(line_of(r).3);
+        cuts.clear();
+        cuts.extend([(i128::from(r.lo), 1), (i128::from(r.hi), 1)]);
+        on_line_spans.clear();
+        for &p in polys {
+            for t in poly_segs(b.get(p)).map(run_of) {
+                if (t.dir, t.step, t.pos) == (r.dir, r.step, r.pos) {
+                    cuts.extend([(i128::from(t.lo), 1), (i128::from(t.hi), 1)]);
+                    on_line_spans.push((t.lo, t.hi));
+                } else if let Some((on_r, on_t)) = crossing_any(r, t) {
+                    let (tlo, thi) = ((i128::from(t.lo), 1), (i128::from(t.hi), 1));
+                    if cmp(on_t, tlo) != Ordering::Less && cmp(on_t, thi) != Ordering::Greater {
+                        cuts.push(on_r);
+                    }
+                }
+            }
+        }
+        let (lo, hi) = ((i128::from(r.lo), 1), (i128::from(r.hi), 1));
+        cuts.retain(|&c| cmp(c, lo) != Ordering::Less && cmp(c, hi) != Ordering::Greater);
+        cuts.sort_by(|&p, &q| cmp(p, q));
+        cuts.dedup_by(|p, q| cmp(*p, *q) == Ordering::Equal);
+        // The lattice of the line: r.lo + k·step.
+        let base = i128::from(r.lo);
+        let snap = |(num, den): (i128, i128), up: bool| {
+            let (n, d) = (num - base * den, step * den);
+            let k = if up {
+                -((-n).div_euclid(d))
+            } else {
+                n.div_euclid(d)
+            };
+            i64::try_from(base + k * step).expect("on the edge")
+        };
+        for w in cuts.windows(2) {
+            let (from, to) = (snap(w[0], true), snap(w[1], false));
+            if from >= to || on_line_spans.iter().any(|&(l, h)| l <= from && to <= h) {
+                continue;
+            }
+            // The piece's middle, at twice scale: on no ring of `b`.
+            let (p, q) = (on_line(r, r.pos, from), on_line(r, r.pos, to));
+            if inside_scaled(polys.iter().map(|&k| b.get(k)), p.0 + q.0, p.1 + q.1, 2) == inside {
+                runs.push(Run {
+                    lo: from,
+                    hi: to,
+                    ..r
+                });
             }
         }
     }
@@ -506,7 +1154,7 @@ pub fn edge_interacting_into(a: &[Seg], b: &ValidatedLayer, keep: bool, out: &mu
         let meets = polys.iter().any(|&p| {
             let poly = b.get(p);
             poly_segs(poly).any(|t| segments_intersect(s, t))
-                || inside_doubled(std::iter::once(poly), 2 * s.a.x.raw(), 2 * s.a.y.raw())
+                || inside_scaled(std::iter::once(poly), s.a.x.raw(), s.a.y.raw(), 1)
         });
         if meets == keep {
             out.push(s);
@@ -514,11 +1162,82 @@ pub fn edge_interacting_into(a: &[Seg], b: &ValidatedLayer, keep: bool, out: &mu
     }
 }
 
+/// `KLayout` `extended(begin, end, out, in)` on edges, material on the left:
+/// one box per edge of `a`, the edge lengthened by `begin` before its start
+/// and `end` past its end, and widened by `outside` to its right (away from
+/// its shape) and `inside` to its left. Boxes are not merged, as `KLayout`'s
+/// are not. A box with no area (`outside + inside` of 0) is refused by
+/// validation, and a 45-degree edge with [`BooleanError::NotRectilinear`].
+pub fn extended_into(
+    a: &[Seg],
+    (begin, end, outside, inside): (Dbu, Dbu, Dbu, Dbu),
+    out: &mut ValidatedLayer,
+) -> Result<(), BooleanError> {
+    let mut builder = GeometryStoreBuilder::with_capacity(a.len(), 4 * a.len());
+    for &s in a {
+        let r = run_of(s);
+        if r.dir > 1 {
+            return Err(BooleanError::NotRectilinear);
+        }
+        let vertical = r.dir == 1;
+        let pos = i64::try_from(r.pos).expect("an axis line's intercept is a coordinate");
+        // Travelling toward `hi`, the material (left) is +y on a horizontal
+        // edge and -x on a vertical one.
+        let left_positive = r.forward != vertical;
+        let (before, after) = if r.forward {
+            (begin.raw(), end.raw())
+        } else {
+            (end.raw(), begin.raw())
+        };
+        let (below, above) = if left_positive {
+            (outside.raw(), inside.raw())
+        } else {
+            (inside.raw(), outside.raw())
+        };
+        let (lo, hi, across_lo, across_hi) =
+            (r.lo - before, r.hi + after, pos - below, pos + above);
+        let at = |v: i64| Dbu::new(v).ok_or(BooleanError::OutOfRange);
+        let b = if vertical {
+            Bbox {
+                xlo: at(across_lo)?,
+                ylo: at(lo)?,
+                xhi: at(across_hi)?,
+                yhi: at(hi)?,
+            }
+        } else {
+            Bbox {
+                xlo: at(lo)?,
+                ylo: at(across_lo)?,
+                xhi: at(hi)?,
+                yhi: at(across_hi)?,
+            }
+        };
+        push_rect(&mut builder, b);
+    }
+    let (store, _) = builder.finish(1);
+    validate_layer_into(&store, ONLY, out)?;
+    Ok(())
+}
+
 /// `KLayout` `with_length`: edges whose length in grid units is in `range`.
+/// A diagonal edge `k` steps long is `k·√2`, and one at any other angle
+/// `√(dx² + dy²)`, compared squared, exactly.
 pub fn with_length_into(a: &[Seg], range: RangeInclusive<i128>, out: &mut Vec<Seg>) {
+    let (lo, hi) = (*range.start(), *range.end());
     out.clear();
     out.extend(a.iter().filter(|s| {
         let r = run_of(**s);
-        range.contains(&i128::from(r.hi - r.lo))
+        let k = i128::from(r.hi - r.lo);
+        if r.dir < 2 {
+            return range.contains(&k);
+        }
+        let (dx, dy) = (
+            i128::from((s.b.x - s.a.x).raw()),
+            i128::from((s.b.y - s.a.y).raw()),
+        );
+        let length2 = dx * dx + dy * dy;
+        let above = lo <= 0 || lo.checked_mul(lo).is_some_and(|l2| l2 <= length2);
+        let below = hi >= 0 && hi.checked_mul(hi).is_none_or(|h2| length2 <= h2);
+        above && below
     }));
 }

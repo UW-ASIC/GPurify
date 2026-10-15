@@ -1,0 +1,268 @@
+name: Nightly
+
+# The nightly tier of docs/testing-plan.md §5. Each floor is stated in the
+# step that checks it; the plan's gate table says where each number came from.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+  # A pull request labelled `heavy` runs this tier too, so heavy work runs here
+  # rather than on a developer's machine.
+  pull_request:
+    types: [labeled, synchronize]
+
+# A newer push supersedes an older run of the same workflow on the same
+# branch or pull request: with many branches in flight, stale runs would
+# otherwise hold the runners.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ignored:
+    name: cargo test -- --ignored
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'heavy')
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The exhaustive enumerations, the 10^5-case property twins and the
+      # nightly golden field solves; a failing property prints its seed. The
+      # differentials need the oracle shell and run in the `oracles` job; the
+      # bench gate runs alone below, so other tests do not skew its timings.
+      - run: >-
+          cargo test --workspace -- --ignored --skip klayout_mirror --skip klayout_xor
+          --skip netgen_differential --skip fastcap_differential
+          --skip fasthenry_differential --skip ngspice_differential
+          --skip magic_differential
+          --skip foundry_deck
+          --skip klayout_antenna_differential --skip openroad_antenna_differential
+          --skip pdnsim_differential --skip yosys_differential
+          --skip lefdef_differential --skip openrcx_differential
+          --skip the_engine_costs_the_same_per_polygon_at_sixteen_times_the_size
+          --skip flattening_is_linear_in_the_placements
+      # The bench gate (tests/scaling.rs): ns per polygon at 16x a layout's
+      # size within 3x of 1x's, on an otherwise idle runner; and the
+      # reference flattening's, 2 x 10^5 placements within 3x of 10^5's.
+      - run: cargo test --test scaling -- --ignored --test-threads=1
+      - run: >-
+          cargo test -p gpurify-ingest --test netlist --
+          --ignored --test-threads=1 flattening_is_linear_in_the_placements
+
+  oracles:
+    name: differentials in the oracle shell
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'heavy')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # ERC against open tools (O1): antenna ratios against KLayout's
+      # antenna_check and OpenROAD's check_antennas, the supply grid against
+      # PDNSim, floating gates against Yosys `check`. First, as the shortest.
+      - run: >-
+          nix develop .#oracles --command cargo test --test exhaustive --
+          --ignored --test-threads=1
+          klayout_antenna_differential openroad_antenna_differential
+          pdnsim_differential yosys_differential openroad_lefdef_differential
+          openrcx_differential
+      # The KLayout mirror (L6): corpus, merge-depth DRC fixtures and 3000
+      # random layouts; and `gpurify xor` against KLayout's XOR on 1000
+      # random layout pairs. One test at a time; each runs at most four klayouts.
+      - run: nix develop .#oracles --command cargo test --test klayout -- --ignored --test-threads=1
+      # Magic's extractor on X6's closed-form geometries and seeded random
+      # wires, against the analytical PEX (O2): one GDS, one Magic run.
+      - run: >-
+          nix develop .#oracles --command cargo test --test exhaustive --
+          --ignored --test-threads=1 --nocapture magic_differential
+      # Netgen on every circuit of the LVS enumeration with every single
+      # fault (4223 circuits), FastCap and FastHenry on X6's field-solved
+      # geometries, and ngspice on the inverter's Liberty tables (F3). One
+      # test at a time; each runs at most two tools at once
+      # (gpurify_testgen::oracle::MAX_RUNNING).
+      - run: >-
+          nix develop .#oracles --command cargo test --test exhaustive --
+          --ignored --test-threads=1
+          netgen_differential fastcap_differential fasthenry_differential
+      - run: >-
+          nix develop .#oracles --command cargo test --test liberty --
+          --ignored --test-threads=1 ngspice_differential
+      # The foundry cross-check (F2): each shipped deck against the foundry's
+      # own KLayout deck on the foundry's test structures and standard cells.
+      # The repositories are the commits tests/foundry/pdks.tsv pins: treeless
+      # clones checked out sparse (only the decks, structures and cell GDS),
+      # kept between runs. It runs even when a differential above failed.
+      - if: ${{ !cancelled() }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/gpurify/foundry
+          key: foundry-pdks-${{ hashFiles('tests/foundry/pdks.tsv') }}
+      - if: ${{ !cancelled() }}
+        run: |
+          set -euf
+          grep -v '^#' tests/foundry/pdks.tsv | while IFS=$'\t' read -r name url commit paths; do
+            dir="$HOME/.cache/gpurify/foundry/$name-$commit"
+            [ -d "$dir/.git" ] && continue
+            git clone -q --filter=tree:0 --no-checkout "$url" "$dir"
+            git -C "$dir" sparse-checkout set --no-cone $paths
+            git -C "$dir" checkout -q "$commit"
+          done
+      - if: ${{ !cancelled() }}
+        run: >-
+          nix develop .#oracles --command cargo test --test foundry --
+          --ignored --test-threads=1
+
+  fuzz:
+    name: fuzz ${{ matrix.target }}
+    # Not on a pull request: the nightly run on the base branch covers it,
+    # and a pull request's heavy tier proves only its differentials and the
+    # slow tests, which keeps the runners free for the merge tier.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # The seed directories are the ones tests/fuzz_regressions.rs replays.
+        include:
+          - target: gds
+            seeds: tests/fixtures/_source
+          - target: gds_structured
+            seeds: ""
+          - target: deck
+            seeds: pdks fuzz/seeds/deck
+          - target: netlist_spice
+            seeds: tests/fixtures/lvs_refs fuzz/seeds/netlist_spice
+          - target: netlist_spectre
+            seeds: fuzz/seeds/netlist_spectre
+          - target: intent
+            seeds: fuzz/seeds/intent
+          - target: liberty_spec
+            seeds: fuzz/seeds/liberty_spec
+          - target: drc_e2e
+            seeds: ""
+          - target: lefdef
+            seeds: fuzz/seeds/lefdef
+          - target: spef
+            seeds: fuzz/seeds/spef tests/golden/pex
+    steps:
+      - uses: actions/checkout@v4
+      # Nightly in this job only: cargo-fuzz needs it, and rebuilds std with
+      # the sanitizer (rust-src).
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      # The corpus carries over from night to night.
+      - uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      # One hour per target nightly, ten minutes on a pull request. A crash, a leak, an input over 2 GiB of memory or
+      # one taking over 20 s fails the job; the input is uploaded below, to be
+      # minimised (`cargo fuzz tmin`) into fuzz/regressions/<target>/.
+      - run: |
+          mkdir -p fuzz/corpus/${{ matrix.target }}
+          # The prebuilt cargo-fuzz is a musl binary and defaults to the triple
+          # it was built for; AddressSanitizer cannot link static musl.
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} ${{ matrix.seeds }} -- \
+            -max_total_time=${{ github.event_name == 'pull_request' && 600 || 3600 }} -rss_limit_mb=2048 -timeout=20
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+
+  mutants:
+    name: cargo mutants (geom, check)
+    # Not on a pull request: the nightly run on the base branch covers it,
+    # and a pull request's heavy tier proves only its differentials and the
+    # slow tests, which keeps the runners free for the merge tier.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      # A tenth of the mutants of geom and check, a different tenth each day
+      # of the year, each tested against its own crate's tests. Missed mutants
+      # (exit 2) and timeouts (exit 3) are scored below; anything else fails.
+      - run: |
+          set +e
+          cargo mutants -p gpurify-geom -p gpurify-check \
+            --shard "$(( 10#$(date +%j) % 10 ))/10" --sharding round-robin -j 2
+          code=$?
+          [ "$code" -eq 0 ] || [ "$code" -eq 2 ] || [ "$code" -eq 3 ] || exit "$code"
+      # Mutation score = (caught + timeouts) / (caught + timeouts + missed).
+      # Floors: geom 75 %, check 65 %.
+      - run: |
+          jq -r '[.outcomes[] | select(.scenario | type == "object")
+                  | {p: .scenario.Mutant.package, s: .summary}]
+                 | group_by(.p)[]
+                 | "\(.[0].p) \(map(select(.s == "CaughtMutant" or .s == "Timeout")) | length) \(map(select(.s == "MissedMutant")) | length)"' \
+            mutants.out/outcomes.json |
+          while read -r package killed missed; do
+            case "$package" in
+              gpurify-geom) floor=75 ;;
+              gpurify-check) floor=65 ;;
+            esac
+            awk -v p="$package" -v k="$killed" -v m="$missed" -v f="$floor" 'BEGIN {
+              s = 100 * k / (k + m)
+              printf "%s: %d killed, %d missed, score %.1f%% (floor %d%%)\n", p, k, m, s, f
+              exit s < f
+            }'
+          done
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-out
+          path: mutants.out
+
+  coverage:
+    name: coverage floor (geom, check)
+    # Not on a pull request: the nightly run on the base branch covers it,
+    # and a pull request's heavy tier proves only its differentials and the
+    # slow tests, which keeps the runners free for the merge tier.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - run: cargo llvm-cov --workspace --json --summary-only --output-path coverage.json
+      # Region coverage of each crate's src/, from the merge-depth suite.
+      # Floors: geom 96 %, check 95 %.
+      - run: |
+          for pair in geom:96 check:95; do
+            crate="${pair%%:*}" floor="${pair##*:}"
+            jq -r --arg dir "crates/$crate/src/" '[.data[0].files[]
+                  | select(.filename | contains($dir)) | .summary.regions]
+                | "\(map(.covered) | add) \(map(.count) | add)"' coverage.json |
+            while read -r covered count; do
+              awk -v c="$crate" -v k="$covered" -v n="$count" -v f="$floor" 'BEGIN {
+                s = 100 * k / n
+                printf "%s: %d of %d regions, %.1f%% (floor %d%%)\n", c, k, n, s, f
+                exit s < f
+              }'
+            done
+          done

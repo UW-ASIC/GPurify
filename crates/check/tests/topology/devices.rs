@@ -39,6 +39,7 @@ fn one_mos_recogniser(layers: &NetlistLayers, strings: &mut StrTable) -> DeviceR
         terminal_start: vec![0, terminal_len],
         terminal,
         model: vec![strings.intern("nch")],
+        value: Vec::new(),
     }
 }
 
@@ -300,6 +301,7 @@ fn two_terminal_positions_on_one_layer_bind_to_two_different_polygons() {
         terminal_start: vec![0, 3],
         terminal: vec![GATE, SD, SD],
         model: vec![strings.intern("nch")],
+        value: Vec::new(),
     };
     let mut devices = DeviceTable::default();
     recognise_into(&store, &nets, &recognition, &mut devices);
@@ -407,6 +409,7 @@ impl Fingers {
             terminal_start: vec![0, 3],
             terminal: vec![Self::POLY, Self::ACTIVE, Self::ACTIVE],
             model: vec![strings.intern("nch")],
+            value: Vec::new(),
         }
     }
 
@@ -455,10 +458,109 @@ fn two_gates_under_one_implant_are_refused_rather_than_reported_as_one_device() 
         devices.len(),
         0,
         "one implant rectangle over two transistors is not one device: the \
-         recogniser reported {} of them, which is a transistor dropped in \
-         silence",
+         recogniser reported {} of them",
         devices.len()
     );
+    // Nor is it dropped in silence (testing-plan F32): two gate nets for one
+    // gate position and three diffusion nets for two positions bind none of
+    // the three terminals.
+    let implant = PolyId(drawn.store.polys_on_layer(Fingers::IMPLANT).start);
+    assert_eq!(devices.refused, [(implant, 0, 3)]);
+}
+
+/// One channel, its gate, and diffusion drawn as `active` (`xlo`, `xhi`
+/// pairs, in drawing order), recognised as a three-terminal MOS: the
+/// devices, and the nets of the gate and of each diffusion rectangle.
+fn one_channel(active: &[(i64, i64)]) -> (DeviceTable, NetId, Vec<NetId>) {
+    const CHANNEL: LayerId = LayerId(0);
+    const POLY: LayerId = LayerId(1);
+    const ACTIVE: LayerId = LayerId(2);
+    let mut layout = LayoutBuilder::new(3);
+    layout.rect(CHANNEL, 200, 0, 250, 200);
+    let gate = layout.rect(POLY, 200, -50, 250, 250);
+    let drawn: Vec<_> = active
+        .iter()
+        .map(|&(xlo, xhi)| layout.rect(ACTIVE, xlo, 0, xhi, 200))
+        .collect();
+    let (store, ids) = layout.finish();
+    let connectivity = Connectivity {
+        conductors: vec![POLY, ACTIVE],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+    let mut strings = StrTable::default();
+    let recognition = DeviceRecognition {
+        kind: vec![DeviceKind::Mos],
+        marker: vec![CHANNEL],
+        terminal_start: vec![0, 3],
+        terminal: vec![POLY, ACTIVE, ACTIVE],
+        model: vec![strings.intern("nch")],
+        value: Vec::new(),
+    };
+    let mut devices = DeviceTable::default();
+    recognise_into(&store, &nets, &recognition, &mut devices);
+    let active = drawn.iter().map(|&h| nets.net_of(ids.of(h))).collect();
+    (devices, nets.net_of(ids.of(gate)), active)
+}
+
+/// Oracle: construct-from-answer, testing-plan F33. A source or a drain drawn
+/// twice is one terminal, so the channel is one device gated by its poly
+/// between the source's net and the drain's, whichever of the two is drawn
+/// twice and wherever its copy is numbered. It used to depend on numbering:
+/// a copy numbered before the other terminal's polygon took that terminal's
+/// position, and the marker was refused in silence.
+#[test]
+fn a_source_or_drain_drawn_twice_binds_wherever_its_copy_is_numbered() {
+    let (source, drain) = ((0, 200), (250, 450));
+    for active in [
+        [source, source, drain],
+        [source, drain, source],
+        [drain, source, drain],
+        [source, drain, drain],
+    ] {
+        let (devices, gate, nets) = one_channel(&active);
+        let net_of = |rect| nets[active.iter().position(|&r| r == rect).expect("drawn")];
+        let (s, d) = (net_of(source), net_of(drain));
+        assert_ne!(s, d, "source and drain are two nets");
+        assert_eq!(devices.len(), 1, "{active:?}: {:?}", devices.refused);
+        let (bound, _) = devices.terminals_of(DeviceId(0));
+        assert_eq!(bound[0], gate, "{active:?}");
+        let mut channel = [bound[1], bound[2]];
+        channel.sort_unstable();
+        let mut want = [s, d];
+        want.sort_unstable();
+        assert_eq!(channel, want, "{active:?}");
+        assert!(devices.refused.is_empty());
+    }
+}
+
+/// Oracle: construct-from-answer, testing-plan F32. A channel with its drain
+/// missing has one diffusion polygon for two positions: it is no device, and
+/// it is listed as refused with the gate and source bound of three terminals,
+/// so `lvs.terminal_net` can say where it is.
+#[test]
+fn a_channel_missing_its_drain_is_listed_as_refused() {
+    let (devices, ..) = one_channel(&[(0, 200)]);
+    assert_eq!(devices.len(), 0);
+    assert_eq!(devices.refused, [(PolyId(0), 2, 3)]);
+}
+
+/// Oracle: construct-from-answer, testing-plan F69. A channel with its
+/// source drawn twice and no drain: the copies overlap, so they are one
+/// shape, and the drain's position has no polygon of its own. It is no
+/// device, listed as refused with the gate and the source bound of three,
+/// whether the copy coincides with the source or only overlaps it. It used
+/// to bind both copies, on one net, as a transistor with its source and
+/// drain shorted.
+#[test]
+fn a_source_drawn_twice_with_no_drain_is_refused_not_shorted() {
+    for active in [[(0, 200), (0, 200)], [(0, 200), (100, 200)]] {
+        let (devices, ..) = one_channel(&active);
+        assert_eq!(devices.len(), 0, "{active:?} bound a shorted device");
+        assert_eq!(devices.refused, [(PolyId(0), 2, 3)], "{active:?}");
+    }
 }
 
 /// Oracle: construct-from-answer. One channel whose bulk layer is drawn
@@ -492,6 +594,7 @@ fn a_terminal_drawn_twice_on_one_net_still_binds() {
         terminal_start: vec![0, 4],
         terminal: vec![POLY, ACTIVE, ACTIVE, WELL],
         model: vec![strings.intern("pch")],
+        value: Vec::new(),
     };
     let mut devices = DeviceTable::default();
     recognise_into(&store, &nets, &recognition, &mut devices);
@@ -567,7 +670,12 @@ fn a_marker_drawn_per_channel_recognises_one_device_per_finger() {
     // The marker is the device's extent. Its area is W x L — on the implant it
     // was the whole active region, 33x too large, the measuring half of F8 —
     // and the flanking diffusion is offset in x, which names x the channel
-    // axis: L = 50 along the current, W = 200 across it.
+    // axis: L = 50 along the current, W = 200 across it. One channel is one
+    // finger, and the marker's perimeter is 2 (W + L). Its source, the left
+    // region 200 by 200, is its own: area 40 000, perimeter 800. Its drain,
+    // the middle region 350 by 200, is the second finger's source too, so
+    // each has half: area 70 000 and perimeter 1100, shared two ways
+    // (testing-plan F16, as `KLayout` distributes a shared diffusion).
     assert_eq!(
         devices.params_of(DeviceId(0)),
         [
@@ -579,12 +687,34 @@ fn a_marker_drawn_per_channel_recognises_one_device_per_finger() {
                 DeviceParam::Length,
                 DeviceMeasure::Length(gpurify_geom::Dbu::new_unchecked(50))
             ),
+            (DeviceParam::Fingers, DeviceMeasure::Count(1)),
             (
                 DeviceParam::Area,
                 DeviceMeasure::Area(gpurify_geom::DbuArea::new(50 * 200))
             ),
+            (
+                DeviceParam::Perimeter,
+                DeviceMeasure::Length(gpurify_geom::Dbu::new_unchecked(2 * (50 + 200)))
+            ),
+            (
+                DeviceParam::SourceArea,
+                DeviceMeasure::AreaShare(gpurify_geom::DbuArea::new(40_000), 1)
+            ),
+            (
+                DeviceParam::SourcePerimeter,
+                DeviceMeasure::LengthShare(gpurify_geom::Dbu::new_unchecked(800), 1)
+            ),
+            (
+                DeviceParam::DrainArea,
+                DeviceMeasure::AreaShare(gpurify_geom::DbuArea::new(70_000), 2)
+            ),
+            (
+                DeviceParam::DrainPerimeter,
+                DeviceMeasure::LengthShare(gpurify_geom::Dbu::new_unchecked(1100), 2)
+            ),
         ],
-        "a channel marker measures W, L and W x L"
+        "a channel marker measures W, L, one finger, W x L and 2 (W + L), and \
+         its diffusions with the shared one halved"
     );
 }
 
@@ -690,6 +820,208 @@ fn a_resistor_recogniser_gives_its_two_terminals_interchangeable_pins() {
     );
 }
 
+/// Oracle: construct-from-answer, testing-plan F16. A resistor body 1000 by
+/// 200 with its two ends abutting it: its first end sits off the body's
+/// centre along the body, so that is its axis, `L` = 1000 along it and `W` =
+/// 200 across, whichever way round the body is drawn. Its area is 200 000
+/// and its perimeter 2 (1000 + 200) = 2400, and the recogniser's `sheet` is
+/// carried to the device for LVS to compute `r` from.
+#[test]
+fn a_resistor_body_measures_its_length_between_its_ends() {
+    use gpurify_check::topology::device::{DeviceMeasure, DeviceParam};
+    use gpurify_geom::{Dbu, DbuArea};
+    use gpurify_ingest::deck::DeviceValue;
+    const BODY: LayerId = LayerId(0);
+    const END: LayerId = LayerId(1);
+    let value = DeviceValue {
+        sheet_ohm_sq: Some(100.0),
+        ..DeviceValue::default()
+    };
+    let swap = |(a, b, c, d): (i64, i64, i64, i64)| (b, a, d, c);
+    let along_x = [(0, 0, 1000, 200), (-300, 0, 0, 200), (1000, 0, 1300, 200)];
+    for rects in [along_x, along_x.map(swap)] {
+        let mut layout = LayoutBuilder::new(2);
+        let (x0, y0, x1, y1) = rects[0];
+        layout.rect(BODY, x0, y0, x1, y1);
+        for &(x0, y0, x1, y1) in &rects[1..] {
+            layout.rect(END, x0, y0, x1, y1);
+        }
+        let (store, _) = layout.finish();
+        let connectivity = Connectivity {
+            conductors: vec![END],
+            intra_layer_touch: true,
+            ..Connectivity::default()
+        };
+        let mut nets = NetTable::default();
+        extract_nets_into(&store, &connectivity, &mut nets);
+        let mut strings = StrTable::default();
+        let recognition = DeviceRecognition {
+            kind: vec![DeviceKind::Resistor],
+            marker: vec![BODY],
+            terminal_start: vec![0, 2],
+            terminal: vec![END, END],
+            model: vec![strings.intern("rpoly")],
+            value: vec![value],
+        };
+        let mut devices = DeviceTable::default();
+        recognise_into(&store, &nets, &recognition, &mut devices);
+        assert_eq!(devices.len(), 1, "{rects:?}: {:?}", devices.refused);
+        assert_eq!(
+            devices.params_of(DeviceId(0)),
+            [
+                (
+                    DeviceParam::Width,
+                    DeviceMeasure::Length(Dbu::new_unchecked(200))
+                ),
+                (
+                    DeviceParam::Length,
+                    DeviceMeasure::Length(Dbu::new_unchecked(1000))
+                ),
+                (
+                    DeviceParam::Area,
+                    DeviceMeasure::Area(DbuArea::new(200_000))
+                ),
+                (
+                    DeviceParam::Perimeter,
+                    DeviceMeasure::Length(Dbu::new_unchecked(2400))
+                ),
+            ],
+            "{rects:?}"
+        );
+        assert_eq!(devices.value, [value]);
+    }
+}
+
+/// Oracle: construct-from-answer, testing-plan F85. A diode marker drawn as a
+/// ring, 0..2000 square with a 200 wall, a pad on each side wall. The ring's
+/// area is 2000² − 1600² = 1 440 000 and its edge both rings, 4 · 2000 +
+/// 4 · 1600 = 14 400. The hole, a row of its own in the store, is part of
+/// the ring and no second marker: it used to be measured as the outer square
+/// alone (4 000 000 and 8000) and the hole refused as a marker binding
+/// nothing.
+#[test]
+fn a_marker_with_a_hole_is_one_device_measured_without_the_hole() {
+    use gpurify_check::topology::device::{DeviceMeasure, DeviceParam};
+    use gpurify_geom::{Dbu, DbuArea};
+    use gpurify_testgen::shapes::hole;
+    const MARK: LayerId = LayerId(0);
+    const ANODE: LayerId = LayerId(1);
+    const CATHODE: LayerId = LayerId(2);
+    let mut layout = LayoutBuilder::new(3);
+    layout.rect(MARK, 0, 0, 2000, 2000);
+    layout.shape(MARK, &hole(200, 200, 1800, 1800));
+    layout.rect(ANODE, 0, 900, 200, 1100);
+    layout.rect(CATHODE, 1800, 900, 2000, 1100);
+    let (store, _) = layout.finish();
+    let connectivity = Connectivity {
+        conductors: vec![ANODE, CATHODE],
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+    let mut strings = StrTable::default();
+    let recognition = DeviceRecognition {
+        kind: vec![DeviceKind::Diode],
+        marker: vec![MARK],
+        terminal_start: vec![0, 2],
+        terminal: vec![ANODE, CATHODE],
+        model: vec![strings.intern("dpn")],
+        value: Vec::new(),
+    };
+    let mut devices = DeviceTable::default();
+    recognise_into(&store, &nets, &recognition, &mut devices);
+    assert_eq!(devices.refused, [], "the hole was taken for a marker");
+    assert_eq!(devices.len(), 1);
+    assert_eq!(
+        devices.params_of(DeviceId(0)),
+        [
+            (
+                DeviceParam::Area,
+                DeviceMeasure::Area(DbuArea::new(1_440_000))
+            ),
+            (
+                DeviceParam::Perimeter,
+                DeviceMeasure::Length(Dbu::new_unchecked(14_400))
+            ),
+        ]
+    );
+}
+
+/// Oracle: construct-from-answer, testing-plan F16. A bipolar marker over
+/// three 400 nm pads, 800 apart, as base, emitter and collector: its emitter
+/// is the middle pad, area 400 · 400 = 160 000 and perimeter 1600, which the
+/// deck names as the second terminal. A source drawn in two touching pieces
+/// is one terminal but no one polygon, and its diffusion is not measured.
+#[test]
+fn a_bipolar_measures_its_emitter_and_a_split_source_is_not_measured() {
+    use gpurify_check::topology::device::{DeviceMeasure, DeviceParam};
+    use gpurify_geom::{Dbu, DbuArea};
+    const MARK: LayerId = LayerId(0);
+    const PAD: [LayerId; 3] = [LayerId(1), LayerId(2), LayerId(3)];
+    let mut layout = LayoutBuilder::new(4);
+    layout.rect(MARK, 200, 0, 1800, 400);
+    for (k, layer) in PAD.into_iter().enumerate() {
+        let x = 800 * i64::try_from(k).expect("three pads");
+        layout.rect(layer, x, 0, x + 400, 400);
+    }
+    let (store, _) = layout.finish();
+    let connectivity = Connectivity {
+        conductors: PAD.to_vec(),
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+    let mut strings = StrTable::default();
+    let recognition = DeviceRecognition {
+        kind: vec![DeviceKind::Bjt],
+        marker: vec![MARK],
+        terminal_start: vec![0, 3],
+        terminal: PAD.to_vec(),
+        model: vec![strings.intern("npn")],
+        value: Vec::new(),
+    };
+    let mut devices = DeviceTable::default();
+    recognise_into(&store, &nets, &recognition, &mut devices);
+    assert_eq!(devices.len(), 1, "{:?}", devices.refused);
+    assert_eq!(
+        devices.params_of(DeviceId(0))[2..],
+        [
+            (
+                DeviceParam::EmitterArea,
+                DeviceMeasure::Area(DbuArea::new(160_000))
+            ),
+            (
+                DeviceParam::EmitterPerimeter,
+                DeviceMeasure::Length(Dbu::new_unchecked(1600))
+            ),
+        ]
+    );
+
+    // The left finger of `Fingers`, its source drawn as two abutting halves.
+    let mut layout = LayoutBuilder::new(4);
+    layout.rect(Fingers::CHANNEL, 200, 0, 250, 200);
+    layout.rect(Fingers::POLY, 200, -50, 250, 250);
+    layout.rect(Fingers::ACTIVE, 0, 0, 100, 200);
+    layout.rect(Fingers::ACTIVE, 100, 0, 200, 200);
+    layout.rect(Fingers::ACTIVE, 250, 0, 600, 200);
+    let (store, _) = layout.finish();
+    let drawn = Fingers {
+        store,
+        channel: [PolyId(0); 2],
+        gate: [PolyId(1); 2],
+        active: [PolyId(2), PolyId(3), PolyId(4)],
+    };
+    let devices = drawn.recognise(Fingers::CHANNEL, &drawn.nets());
+    assert_eq!(devices.len(), 1, "{:?}", devices.refused);
+    let measured: Vec<DeviceParam> = devices
+        .params_of(DeviceId(0))
+        .iter()
+        .map(|&(param, _)| param)
+        .collect();
+    assert!(!measured.contains(&DeviceParam::SourceArea), "{measured:?}");
+    assert!(measured.contains(&DeviceParam::DrainArea), "{measured:?}");
+}
+
 // ---------------------------------------------------------------------------
 // The conduction guard: a MOS channel marker must not sit on live conductor
 // area, or net extraction fuses source and drain into one net in silence.
@@ -756,6 +1088,7 @@ fn a_channel_over_live_conductor_area_is_refused_naming_the_polygon() {
         terminal_start: vec![0, 3],
         terminal: vec![POLY, DIFF, DIFF],
         model: vec![strings.intern("nch")],
+        value: Vec::new(),
     };
     let connectivity = Connectivity {
         conductors: vec![POLY, DIFF],
@@ -782,20 +1115,17 @@ fn a_channel_over_live_conductor_area_is_refused_naming_the_polygon() {
     assert_eq!(poly, ids.of(channel).min(ids.of(diff)));
 }
 
-/// Oracle: construct-from-answer. A non-rectilinear source/drain layer is a
-/// channel overlap the rectilinear splitter cannot represent, so the guard
-/// must refuse it naming the polygon rather than approximate or skip it.
-#[test]
-fn a_non_rectilinear_source_drain_layer_is_refused_not_split() {
+/// A channel guard's run over one MOS row: `CHANNEL` and `POLY` boxes and one
+/// `DIFF` polygon.
+fn channel_guard(diff_x: &[i64], diff_y: &[i64]) -> (Result<(), ChannelError>, PolyId, PolyId) {
     const CHANNEL: LayerId = LayerId(0);
     const POLY: LayerId = LayerId(1);
     const DIFF: LayerId = LayerId(2);
 
     let mut layout = LayoutBuilder::new(3);
-    layout.rect(CHANNEL, 200, 0, 250, 200);
+    let channel = layout.push(CHANNEL, &[200, 250, 250, 200], &[0, 0, 200, 200]);
     layout.rect(POLY, 200, -50, 250, 250);
-    // A triangle: every edge check the boolean runs on this layer refuses.
-    let triangle = layout.push(DIFF, &[0, 500, 250], &[0, 0, 200]);
+    let diff = layout.push(DIFF, diff_x, diff_y);
     let (store, ids) = layout.finish();
 
     let mut strings = StrTable::default();
@@ -805,20 +1135,51 @@ fn a_non_rectilinear_source_drain_layer_is_refused_not_split() {
         terminal_start: vec![0, 3],
         terminal: vec![POLY, DIFF, DIFF],
         model: vec![strings.intern("nch")],
+        value: Vec::new(),
     };
     let connectivity = Connectivity {
         conductors: vec![POLY, DIFF],
         intra_layer_touch: true,
         ..Connectivity::default()
     };
+    (
+        refuse_conducting_channels(&store, &connectivity, &recognition),
+        ids.of(channel),
+        ids.of(diff),
+    )
+}
 
-    let refused = refuse_conducting_channels(&store, &connectivity, &recognition)
-        .expect_err("a slanted diffusion cannot be split and must not be guessed at");
+/// Oracle: construct-from-answer. A source/drain polygon with an edge at
+/// neither an axis nor 45 degrees cannot be intersected exactly, so the guard
+/// must refuse it naming the polygon rather than approximate or skip it.
+#[test]
+fn a_non_octilinear_source_drain_layer_is_refused_not_split() {
+    // A triangle whose sides rise 200 over 250.
+    let (refused, _, triangle) = channel_guard(&[0, 500, 250], &[0, 0, 200]);
     assert_eq!(
         refused,
-        ChannelError::Geometry(BooleanError::Validity(ValidityError::NotRectilinear(
-            ids.of(triangle)
+        Err(ChannelError::Geometry(BooleanError::Validity(
+            ValidityError::NotOctilinear(triangle)
         ))),
-        "the refusal names the polygon the splitter cannot represent"
+        "the refusal names the polygon the boolean cannot represent"
     );
+}
+
+/// Oracle: hand-derived overlap (H12). A source/drain triangle with 45-degree
+/// sides is intersected exactly: one reaching under the channel box
+/// (x 200..250, its apex at (250, 250)) is a conducting channel on `DIFF`, and
+/// one whose apex stops at x 150 is clean. The run does not refuse either.
+#[test]
+fn a_45_degree_source_drain_layer_is_intersected() {
+    let (found, channel, diff) = channel_guard(&[0, 500, 250], &[0, 0, 250]);
+    let Err(ChannelError::ConductingChannel {
+        conductor, poly, ..
+    }) = found
+    else {
+        panic!("a conducting channel, not {found:?}");
+    };
+    assert_eq!(conductor, LayerId(2));
+    assert_eq!(poly, channel.min(diff));
+    let (clean, ..) = channel_guard(&[0, 150, 0], &[0, 150, 150]);
+    assert_eq!(clean, Ok(()));
 }

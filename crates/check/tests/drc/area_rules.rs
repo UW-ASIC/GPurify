@@ -15,7 +15,7 @@
 use crate::common;
 
 use common::{Sink, A, B, RULE};
-use gpurify_check::drc::Rule;
+use gpurify_check::drc::{Rule, RuleSet};
 use gpurify_check::report::{LimitSense, Measurement, Outcome, Severity, SkipReason, Violation};
 use gpurify_geom::LayerId;
 use gpurify_ingest::StrId;
@@ -74,6 +74,9 @@ fn a_figure_one_square_unit_under_the_limit_is_reported_at_its_centre() {
     assert_eq!(run.violations, 1);
 }
 
+/// Oracle: construct-from-answer. The figure is drawn at exactly the
+/// 40 000 limit, and a minimum is violated only below it, so one figure
+/// examined and none reported.
 #[test]
 fn a_figure_exactly_at_the_area_limit_is_clean() {
     let case = area_case(40_000, 40_000);
@@ -196,6 +199,8 @@ fn a_hole_one_square_unit_under_the_limit_is_reported_at_the_hole() {
     assert_eq!(run.violations, 1);
 }
 
+/// Oracle: construct-from-answer. The hole is drawn at exactly the
+/// 20 000 limit, and a minimum is violated only below it.
 #[test]
 fn a_hole_exactly_at_the_enclosed_area_limit_is_clean() {
     let case = layout_with_violation(
@@ -268,6 +273,8 @@ fn an_unslotted_plate_one_square_unit_over_the_limit_is_reported_at_its_centre()
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
 }
 
+/// Oracle: hand-derived. The unslotted plate is 500 x 400 = 200 000, exactly
+/// the cheesing limit, which flags only a larger one.
 #[test]
 fn a_plate_exactly_at_the_unslotted_limit_is_clean() {
     let mut layout = LayoutBuilder::new(1);
@@ -448,6 +455,10 @@ fn the_minimum_sense_flags_the_sparse_windows_the_maximum_sense_ignores() {
 /// An empty layer on a non-empty die has density zero everywhere: a maximum
 /// rule runs clean over every window and a minimum rule flags every one. Only
 /// an empty layout, with no die at all, is `Skipped`.
+///
+/// Oracle: hand-derived. The die is A's 2000 x 1000 extent, two 1000 windows of
+/// density 0 on the empty B: a maximum passes both, a minimum flags both; with
+/// no die at all the documented outcome is `Skipped(EmptyLayer)`.
 #[test]
 fn an_empty_layer_has_density_zero_over_the_die() {
     let mut layout = LayoutBuilder::new(2);
@@ -489,6 +500,10 @@ fn an_empty_layer_has_density_zero_over_the_die() {
 /// the metal's own extent. Metal filling the left half of a 4 x 2 um die at
 /// 100 % passes a 30 % minimum when only its own extent is windowed; the empty
 /// right half of the die fails it.
+///
+/// Oracle: foundry example, IHP M1.j and gf180 M1.4 tile the chip boundary; by
+/// hand, two 2000 windows over the 4 x 2 um die, the left full, the right
+/// empty: one violation, at (3000, 1000), measuring 0.
 #[test]
 fn ihp_m1_j_density_windows_tile_the_die_not_the_layer() {
     let mut layout = LayoutBuilder::new(2);
@@ -521,6 +536,10 @@ fn ihp_m1_j_density_windows_tile_the_die_not_the_layer() {
 
 /// gf180 M1.4: "Metal1 minimum density 30 % over the entire die". A die
 /// 20 % covered fails; the same metal on a die half the size (40 %) passes.
+///
+/// Oracle: foundry example, gf180 M1.4 (30 % over the die), by hand: 2000 of
+/// 10 000 is 0.2 and fails, reported at the die's centre; 2000 of 5000 is
+/// 0.4 and passes.
 #[test]
 fn gf180_m1_4_whole_die_density() {
     let rule = |boundary| {
@@ -548,4 +567,196 @@ fn gf180_m1_4_whole_die_density() {
 
     sink.run(&store, &rule(LayerId(2)));
     assert_clean(&sink.runs, &sink.out, RULE);
+}
+
+/// F40: without a boundary the die is the drawn layers' extent. met1 covers
+/// 700 x 1000 of a `[0, 1000]^2` marker, 0.7, which fails a 60 % maximum. A
+/// derived layer grown 500 past met1 is not layout: counted, it would widen
+/// the die to 1700 x 2000 and read 700 000 / 3 400 000 = 0.206, clean.
+///
+/// Oracle: hand-derived, with `docs/deck.md`'s rule that a derived layer does
+/// not widen the die: 700 x 1000 of the 1000 square marker is 0.7, over a 60 %
+/// maximum, at the die's centre.
+#[test]
+fn a_derived_layer_does_not_widen_the_boundary_less_die() {
+    let halo = LayerId(2);
+    let mut layout = LayoutBuilder::new(3);
+    layout.rect(A, 0, 0, 700, 1_000);
+    layout.rect(B, 0, 0, 1_000, 1_000);
+    layout.rect(halo, -500, -500, 1_200, 1_500);
+    let (store, _ids) = layout.finish();
+    let set = RuleSet {
+        rules: vec![(
+            RULE,
+            Rule::GlobalDensity {
+                layer: A,
+                boundary: None,
+                limit: 0.6,
+                sense: LimitSense::Maximum,
+            },
+        )],
+        first_derived: Some(halo),
+        ..RuleSet::default()
+    };
+
+    let mut sink = Sink::default();
+    set.run(&store, &mut sink.out, &mut sink.runs);
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.measured[0], Measurement::Ratio(0.7));
+    assert_eq!(sink.out.at[0], point(500, 500));
+}
+
+/// F34: a figure's violation names a drawn row under the figure, never a
+/// shape that only sits inside its bounding box. Each island is drawn first,
+/// so it is the lowest row there.
+///
+/// A 500 x 400 ring with a 100 x 100 hole (190 000) holding a 60 x 60 island
+/// (3 600): under a 200 000 minimum area both fail, each naming itself, and
+/// the 10 000 hole under a 20 000 minimum names the ring. A U, 300 square
+/// with a 100 x 200 gap (70 000), around a 60 x 100 island (6 000): above a
+/// 5 000 unslotted limit both fail cheesing, each naming itself.
+///
+/// Oracle: hand-derived areas, as above, and construct-from-answer for the
+/// owner: each island is drawn as the lowest row under itself, so each
+/// violation must name the shape it measured.
+#[test]
+fn an_island_inside_a_figure_is_not_named_for_it() {
+    let mut layout = LayoutBuilder::new(1);
+    let island = layout.rect(A, 220, 170, 280, 230);
+    let ring = layout.shape(A, &rect(0, 0, 500, 400));
+    layout.shape(A, &hole(200, 150, 300, 250));
+    let (store, ids) = layout.finish();
+    let owner_of = |sink: &Sink, measured: i128| {
+        let at = sink
+            .out
+            .measured
+            .iter()
+            .position(|&m| m == Measurement::Area(area(measured)))
+            .expect("a violation measuring this area");
+        sink.out.shape_a[at]
+    };
+
+    let mut sink = Sink::default();
+    sink.run(&store, &min_area_table(200_000));
+    assert_eq!(sink.out.len(), 2);
+    assert_eq!(owner_of(&sink, 190_000), ids.of(ring));
+    assert_eq!(owner_of(&sink, 3_600), ids.of(island));
+
+    sink.run(
+        &store,
+        &[(
+            RULE,
+            Rule::MinEnclosedArea {
+                layer: A,
+                limit: area(20_000),
+            },
+        )],
+    );
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(owner_of(&sink, 10_000), ids.of(ring));
+
+    let mut layout = LayoutBuilder::new(1);
+    let island = layout.rect(A, 120, 150, 180, 250);
+    let u = layout.push(
+        A,
+        &[0, 300, 300, 200, 200, 100, 100, 0],
+        &[0, 0, 300, 300, 100, 100, 300, 300],
+    );
+    let (store, ids) = layout.finish();
+    sink.run(&store, &cheesing_table(5_000));
+    assert_eq!(sink.out.len(), 2);
+    assert_eq!(owner_of(&sink, 70_000), ids.of(u));
+    assert_eq!(owner_of(&sink, 6_000), ids.of(island));
+}
+
+/// F64: a density violation names an outer row, never a hole row. A ring
+/// `[0, 3000]` square with a `[1000, 2000]` hole, outer drawn first, under
+/// `density >= 50%` with 1000 windows stepping 1000: the die is the ring's
+/// extent, so the windows are the nine 1000 squares, and the centre one, over
+/// the hole, has density 0 and is the one violation, at `(1500, 1500)`. No
+/// outer row's box lies within it, so it names the lowest outer row, the ring.
+///
+/// Oracle: hand-derived, as above: nine 1000 windows over the 3000 ring, the
+/// centre one over the hole at density 0, at (1500, 1500), naming the ring.
+#[test]
+fn a_density_window_over_a_hole_names_the_ring_not_the_hole() {
+    let mut layout = LayoutBuilder::new(1);
+    let ring = layout.shape(A, &rect(0, 0, 3_000, 3_000));
+    layout.shape(A, &hole(1_000, 1_000, 2_000, 2_000));
+    let (store, ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(
+        &store,
+        &density_table(1_000, 1_000, 0.5, LimitSense::Minimum),
+    );
+    assert_eq!(sink.out.len(), 1);
+    assert_eq!(sink.out.at[0], point(1_500, 1_500));
+    assert_eq!(sink.out.measured[0], Measurement::Ratio(0.0));
+    assert_eq!(sink.out.shape_a[0], ids.of(ring));
+}
+
+/// Oracle: the balance worked by hand. In a 1000 x 1000 die, layer A covers
+/// 500 x 1000 and layer B 250 x 1000: the lesser over the greater is 0.5.
+/// A limit of 0.6 reports that window at its centre, measuring 0.5; a limit
+/// of 0.5 is met; and a window neither layer covers is not judged.
+#[test]
+fn density_balance_is_the_lesser_coverage_over_the_greater() {
+    let die = LayerId(2);
+    let mut layout = LayoutBuilder::new(3);
+    layout.rect(A, 0, 0, 500, 1_000);
+    layout.rect(B, 500, 0, 750, 1_000);
+    layout.rect(die, 0, 0, 2_000, 1_000);
+    let (store, _ids) = layout.finish();
+    let balance = |limit| {
+        vec![(
+            RULE,
+            Rule::DensityBalance {
+                a: A,
+                b: B,
+                boundary: Some(die),
+                window: gpurify_testgen::dbu(1_000),
+                step: gpurify_testgen::dbu(1_000),
+                limit,
+            },
+        )]
+    };
+    let mut sink = Sink::default();
+    sink.run(&store, &balance(0.6));
+    assert_eq!(sink.out.measured, [Measurement::Ratio(0.5)]);
+    assert_eq!((sink.out.at[0].x.raw(), sink.out.at[0].y.raw()), (500, 500));
+    assert_eq!(sink.runs[0].examined, 2, "two windows swept");
+    sink.run(&store, &balance(0.5));
+    assert!(sink.out.measured.is_empty());
+}
+
+/// Oracle: the closed form for two parallel lines (Koren and Koren, 1998):
+/// lines of length 500 a gap 100 apart under a square defect of half-side
+/// 100 have a short-circuit critical area of `(500 + 200)(200 - 100)`, 70000.
+/// A limit one square unit under it reports exactly that; at it, nothing.
+#[test]
+fn critical_area_of_two_parallel_lines_is_the_closed_form() {
+    let mut layout = LayoutBuilder::new(1);
+    layout.rect(A, 0, 0, 500, 50);
+    layout.rect(A, 0, 150, 500, 200);
+    let (store, _ids) = layout.finish();
+    let rule = |limit| {
+        vec![(
+            RULE,
+            Rule::CriticalArea {
+                layer: A,
+                radius: gpurify_testgen::dbu(100),
+                limit: gpurify_geom::DbuArea::new(limit),
+            },
+        )]
+    };
+    let mut sink = Sink::default();
+    sink.run(&store, &rule(69_999));
+    assert_eq!(
+        sink.out.measured,
+        [Measurement::Area(gpurify_geom::DbuArea::new(70_000))]
+    );
+    assert_eq!(sink.runs[0].examined, 2, "two figures");
+    sink.run(&store, &rule(70_000));
+    assert!(sink.out.measured.is_empty());
 }

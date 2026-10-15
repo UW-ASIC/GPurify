@@ -391,6 +391,9 @@ fn a_run_one_unit_short_of_the_threshold_is_not_judged_by_this_rule() {
     assert!(sink.out.rule.is_empty());
 }
 
+/// Oracle: construct-from-answer. The pair is drawn 100 apart with a run past
+/// the 400 threshold, so it is held to the 100 limit and sits exactly at it:
+/// examined, not reported.
 #[test]
 fn a_qualifying_run_exactly_at_the_larger_limit_is_clean() {
     let case = spaced(100, 100);
@@ -461,6 +464,8 @@ fn a_diagonal_corner_gap_is_measured_exactly_on_a_pythagorean_offset() {
     );
 }
 
+/// Oracle: closed form. Corner legs of 60 and 80 are a 3-4-5 triangle, a corner
+/// gap of exactly 100, and the limit is 100.
 #[test]
 fn a_diagonal_corner_gap_exactly_at_the_limit_is_clean() {
     let case = layout_with_violation(
@@ -607,6 +612,10 @@ fn huge_met1_table() -> Vec<(StrId, Rule)> {
 /// tab is huge where the plate is, so a wire 0.2 um from the plate fails. The
 /// old rule read the polygon's narrowest width (0.14, the tab) and called the
 /// whole plate narrow.
+///
+/// Oracle: foundry example, sky130 m1.3ab (0.28 um from huge met1, the part
+/// wider than 3 um), by hand: the wire is 200 from the 10 um plate, so one
+/// violation of 200 naming the plate and the wire.
 #[test]
 fn sky130_m1_3ab_a_plate_with_a_thin_tab_is_still_huge_where_the_plate_is() {
     let mut layout = LayoutBuilder::new(1);
@@ -629,6 +638,10 @@ fn sky130_m1_3ab_a_plate_with_a_thin_tab_is_still_huge_where_the_plate_is() {
 
 /// The same plate: a wire 0.2 um from the far end of the thin tab is not near
 /// the huge part (the tab's end is 1 um from the plate), so m1.3ab is met.
+///
+/// Oracle: foundry example, sky130 m1.3ab, by hand: the wire is 200 from the
+/// 140-wide tab's end and 1200 from the plate, so the huge part has no
+/// neighbour within 280.
 #[test]
 fn sky130_m1_3ab_the_thin_tab_is_not_huge() {
     let mut layout = LayoutBuilder::new(1);
@@ -649,6 +662,9 @@ fn sky130_m1_3ab_the_thin_tab_is_not_huge() {
 
 /// Two abutting 2 x 4 um rectangles are one 4 x 4 um plate, huge on the
 /// merged layer though neither drawn rectangle is 3 um wide.
+///
+/// Oracle: hand-derived. The two 2 um rectangles merge into a 4 um plate, wider
+/// than 3 um, and the wire is 200 from it: one violation of 200.
 #[test]
 fn a_plate_drawn_as_two_narrow_rectangles_is_huge() {
     let mut layout = LayoutBuilder::new(1);
@@ -666,6 +682,10 @@ fn a_plate_drawn_as_two_narrow_rectangles_is_huge() {
 
 /// A huge plate's own slot is not a neighbour: the hole ring is the plate's
 /// boundary, a width question, not spacing to another shape.
+///
+/// Oracle: construct-from-answer. The only other shape is exactly 280 away, at
+/// the limit, and the plate's own hole is its boundary, not a neighbour: one
+/// pair examined, clean.
 #[test]
 fn a_huge_plate_is_not_spaced_against_its_own_hole() {
     let mut layout = LayoutBuilder::new(1);
@@ -681,6 +701,51 @@ fn a_huge_plate_is_not_spaced_against_its_own_hole() {
     let mut sink = Sink::default();
     sink.run(&store, &huge_met1_table());
 
+    assert_clean(&sink.runs, &sink.out, RULE);
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
+}
+
+// ------------------------------------------------------- projection_spacing
+
+/// Oracle: construct-from-answer (`KLayout`'s projection metric, sky130
+/// lvtn.3b as its deck writes it). Two squares 100 apart side by side face
+/// each other over their whole height: one finding of 100, midway between
+/// the edges at the middle of their shared span, `(250, 100)`. Offset by 100
+/// on both axes they face nowhere and pass, though 141 apart by Euclid.
+#[test]
+fn projection_spacing_measures_only_facing_edges() {
+    let table = vec![(
+        RULE,
+        Rule::ProjectionSpacing {
+            a: A,
+            b: B,
+            limit: dbu(235),
+        },
+    )];
+    let mut layout = LayoutBuilder::new(2);
+    let left = layout.rect(A, 0, 0, 200, 200);
+    let right = layout.rect(B, 300, 0, 500, 200);
+    let (store, ids) = layout.finish();
+    let mut sink = Sink::default();
+    sink.run(&store, &table);
+    assert_only_violation(
+        &sink.out,
+        &Violation {
+            rule: RULE,
+            layer: A,
+            severity: Severity::Error,
+            at: point(250, 100),
+            measured: Measurement::Length(dbu(100)),
+            limit: Measurement::Length(dbu(235)),
+            shapes: (ids.of(left), Some(ids.of(right))),
+        },
+    );
+
+    let mut layout = LayoutBuilder::new(2);
+    layout.rect(A, 0, 0, 200, 200);
+    layout.rect(B, 300, 300, 500, 500);
+    let (store, _) = layout.finish();
+    sink.run(&store, &table);
     assert_clean(&sink.runs, &sink.out, RULE);
     assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 1);
 }

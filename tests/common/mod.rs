@@ -12,13 +12,14 @@ mod gen_fixtures;
 use gpurify::check::lvs;
 use gpurify::check::report::{Measurement, Outcome, RuleRun, SkipReason, Violation, Violations};
 use gpurify::engine::pipeline::{extract, load, Extracted, Inputs, LoadError, Loaded};
-use gpurify::engine::run::{run_checks, Checks, EngineError, Outputs, RunOptions, Summary};
+use gpurify::engine::run::{
+    run_checks, Checks, EngineError, Outputs, RunOptions, StageStatus, Summary,
+};
 use gpurify::extract::Parasitic;
 use gpurify::geom::view::{validate_layer_into, ValidatedLayer, ValidityError};
 use gpurify::geom::{Dbu, Grid};
 use gpurify::geom::{GeometryStore, LayerId, PolyId};
 use gpurify::ingest;
-use gpurify::ingest::layout::UnknownLayers;
 use gpurify_ingest::StrId;
 use gpurify_testgen::LayoutBuilder;
 use serde::Deserialize;
@@ -117,7 +118,7 @@ impl Run {
     /// Drop the reference netlist, so LVS has nothing to compare against.
     #[must_use]
     pub fn without_reference(mut self) -> Self {
-        self.inputs.reference = None;
+        self.inputs.reference = Vec::new();
         self
     }
 
@@ -141,17 +142,32 @@ impl Run {
             checks: self.checks,
             lvs: lvs::CompareOptions::default(),
             quasistatic_nets: Vec::new(),
-            quasistatic_inductance: false,
         };
         run_checks(&loaded, &extracted, &options)
     }
 
-    /// Every rule id the deck declares.
+    /// Every rule id the deck declares, as the parser alone reads the deck
+    /// file (not the compiled rule sets a run reports from), as ids in the
+    /// run's own string table.
     pub fn deck_rule_ids(&self) -> Vec<StrId> {
         let loaded = self
             .load()
             .expect("a fixture whose rules are being listed loads");
-        loaded.deck.rules.spec.iter().map(|spec| spec.id).collect()
+        let text = std::fs::read_to_string(&self.inputs.deck).expect("the fixture deck reads");
+        let mut strings = ingest::StrTable::default();
+        let deck = ingest::deck::parse_deck(&text, self.grid, &mut strings)
+            .expect("the fixture deck parses");
+        deck.rules
+            .spec
+            .iter()
+            .map(|spec| {
+                let name = strings.resolve(spec.id);
+                loaded
+                    .strings
+                    .get(name)
+                    .unwrap_or_else(|| panic!("the run never interned rule {name}"))
+            })
+            .collect()
     }
 }
 
@@ -239,13 +255,12 @@ fn build_with(tag: &str, deck_source: &str, draw: impl FnOnce(&mut LayoutBuilder
     let inputs = Inputs {
         layout: layout_path,
         deck: deck_path,
-        grid: Some(grid),
         // No reference netlist and no design intent exist yet, so `Inputs`
         // starts without them and `without_reference` / `without_intent` are
         // idempotent.
-        reference: None,
+        reference: Vec::new(),
         intent: None,
-        ..Inputs::default()
+        lef: Vec::new(),
     };
 
     // The run's own string table, from a real load, so a `StrId` in a violation
@@ -318,10 +333,11 @@ pub fn rule_run(runs: &[RuleRun], strings: &ingest::StrTable, name: &str) -> Rul
     first
 }
 
-/// Read a store back from GDS bytes held in memory.
+/// Read a store back from GDS bytes held in memory, on the layers of `deck`
+/// (a parsed or a compiled deck).
 pub fn load_bytes(
     bytes: &[u8],
-    deck: &ingest::Deck,
+    deck: &impl AsRef<ingest::deck::LayerTable>,
 ) -> Result<GeometryStore, ingest::layout::LayoutError> {
     let mut strings = ingest::StrTable::default();
     let library = ingest::layout::gds::Library::parse(bytes, &mut strings)?;
@@ -414,6 +430,28 @@ pub struct Corpus {
     pub erc: Domain<GeometryCase>,
     pub lvs: Domain<LvsCase>,
     pub pex: Domain<PexCase>,
+    /// What keeps a case from holding, by id (`F1`, ...).
+    pub blocking_findings: std::collections::BTreeMap<String, BlockingFinding>,
+}
+
+/// One entry of `expectations.json`'s `blocking_findings`.
+#[derive(Debug, Deserialize)]
+pub struct BlockingFinding {
+    pub title: String,
+}
+
+impl Corpus {
+    /// The blocking findings still open: those whose title does not begin
+    /// RESOLVED or CLOSED. A case blocked by one is expected to fail.
+    pub fn open_blockers(&self) -> std::collections::BTreeSet<&str> {
+        self.blocking_findings
+            .iter()
+            .filter(|(_, finding)| {
+                !(finding.title.starts_with("RESOLVED") || finding.title.starts_with("CLOSED"))
+            })
+            .map(|(id, _)| id.as_str())
+            .collect()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -471,11 +509,34 @@ pub struct LvsCase {
     pub expect_match: bool,
     pub expect_devices: usize,
     pub expect_nets: usize,
+    /// The LVS stage's status (`StageStatus`): `Ran` when the comparison
+    /// concludes, match or mismatch.
+    pub expect_outcome: String,
+    pub examined_min: LvsExamined,
     #[serde(rename = "assert")]
     pub asserts: Vec<String>,
     pub blocked_by: Vec<String>,
     pub strength: String,
     pub note: Option<String>,
+}
+
+/// The least the LVS stage must examine on a case's layout, from what the
+/// cell draws: `devices` is the floor on `lvs.terminal_count`'s `examined`
+/// (every device of the layout graph the comparison is handed), `nets` on
+/// `lvs.floating_net`'s (every extracted net).
+#[derive(Debug, Deserialize)]
+pub struct LvsExamined {
+    pub devices: u64,
+    pub nets: u64,
+}
+
+/// The least the PEX stage must extract on a case's layout, from what the
+/// cell draws: `nets` with a node in the parasitic network, and the
+/// network's `elements`.
+#[derive(Debug, Deserialize)]
+pub struct PexExamined {
+    pub nets: u64,
+    pub elements: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -487,6 +548,9 @@ pub struct PexCase {
     pub unit: Option<String>,
     pub tol: f64,
     pub expect_mismatch: bool,
+    /// The PEX stage's status (`StageStatus`).
+    pub expect_outcome: String,
+    pub examined_min: PexExamined,
     pub seam: String,
     pub provenance: String,
     #[serde(rename = "assert")]
@@ -527,10 +591,9 @@ fn case_inputs(
     Inputs {
         layout: fixtures().join(domain).join(format!("{id}.gds")),
         deck: fixtures().join("params.deck"),
-        grid: Some(Grid::new(DBU_PER_UM).expect("a thousand dbu per micrometre is a grid")),
-        reference,
+        reference: reference.into_iter().collect(),
         intent,
-        unknown_layers: UnknownLayers::Drop,
+        lef: Vec::new(),
     }
 }
 
@@ -539,11 +602,12 @@ pub struct CaseRun {
     pub loaded: Loaded,
     pub extracted: Extracted,
     pub outputs: Outputs,
+    pub summary: Summary,
 }
 
 /// Load, extract and check one fixture cell against `params.deck`.
 pub fn run_case(domain: &str, id: &str, checks: Checks) -> Result<CaseRun, String> {
-    run_case_inputs(case_inputs(domain, id, None, None), checks)
+    run_case_inputs(&case_inputs(domain, id, None, None), checks)
 }
 
 /// The same case with a reference netlist beside it, so the LVS stage compares
@@ -555,7 +619,7 @@ pub fn run_case_with_reference(
     reference: &str,
 ) -> Result<CaseRun, String> {
     let path = fixtures().join(reference);
-    run_case_inputs(case_inputs(domain, id, None, Some(path)), checks)
+    run_case_inputs(&case_inputs(domain, id, None, Some(path)), checks)
 }
 
 /// The same case with a design intent file written beside it.
@@ -568,7 +632,7 @@ pub fn run_case_with_intent(
     let dir = scratch_dir(id);
     let path = dir.join("intent.json");
     std::fs::write(&path, intent_source).expect("the scratch directory is writable");
-    let run = run_case_inputs(case_inputs(domain, id, Some(path), None), checks);
+    let run = run_case_inputs(&case_inputs(domain, id, Some(path), None), checks);
     // Best-effort, and silent for the reason `Run::drop` gives: a failure to
     // clean up must not turn a passing test red or mask a failing one.
     let _ = std::fs::remove_dir_all(&dir);
@@ -576,8 +640,8 @@ pub fn run_case_with_intent(
 }
 
 /// Load, extract and check whatever inputs were assembled.
-fn run_case_inputs(inputs: Inputs, checks: Checks) -> Result<CaseRun, String> {
-    let loaded = load(&inputs).map_err(|why| format!("load failed: {why}"))?;
+fn run_case_inputs(inputs: &Inputs, checks: Checks) -> Result<CaseRun, String> {
+    let loaded = load(inputs).map_err(|why| format!("load failed: {why}"))?;
     let extracted = extract(&loaded).map_err(|why| format!("extraction failed: {why}"))?;
 
     let options = RunOptions {
@@ -587,16 +651,16 @@ fn run_case_inputs(inputs: Inputs, checks: Checks) -> Result<CaseRun, String> {
         // would field-solve it, which is a different extraction and a different
         // set of expected numbers.
         quasistatic_nets: Vec::new(),
-        quasistatic_inductance: false,
     };
 
-    let (outputs, _) =
+    let (outputs, summary) =
         run_checks(&loaded, &extracted, &options).map_err(|why| format!("run failed: {why}"))?;
 
     Ok(CaseRun {
         loaded,
         extracted,
         outputs,
+        summary,
     })
 }
 
@@ -634,16 +698,16 @@ pub fn run_case_field_solved(domain: &str, id: &str) -> Result<CaseRun, String> 
         },
         lvs: gpurify::check::lvs::CompareOptions::default(),
         quasistatic_nets: named,
-        quasistatic_inductance: false,
     };
 
-    let (outputs, _) =
+    let (outputs, summary) =
         run_checks(&loaded, &extracted, &options).map_err(|why| format!("run failed: {why}"))?;
 
     Ok(CaseRun {
         loaded,
         extracted,
         outputs,
+        summary,
     })
 }
 
@@ -985,6 +1049,8 @@ fn validity_variant(error: ValidityError) -> &'static str {
         ValidityError::SelfIntersecting(_) => "SelfIntersecting",
         ValidityError::OrphanHole(_) => "OrphanHole",
         ValidityError::NotRectilinear(_) => "NotRectilinear",
+        ValidityError::NotOctilinear(_) => "NotOctilinear",
+        ValidityError::Uncomputed(_) => "Uncomputed",
     }
 }
 
@@ -1049,24 +1115,69 @@ fn context_of(case: &GeometryCase) -> String {
 // LVS.
 // ---------------------------------------------------------------------------
 
-/// Every way an LVS case's *layout side* disagreed with the geometry.
-pub fn check_lvs_case(case: &LvsCase) -> Vec<String> {
+/// A stage's status as `expect_outcome` writes it.
+fn stage_outcome(status: &StageStatus) -> &'static str {
+    match status {
+        StageStatus::Ran => "Ran",
+        StageStatus::NotSelected => "NotSelected",
+        StageStatus::Skipped(_) => "Skipped",
+        StageStatus::Refused(_) => "Refused",
+    }
+}
+
+/// Every way an LVS case disagreed with the geometry, from one run against
+/// `lvs_refs/<id>.spice`: its extraction (device and net counts), its verdict,
+/// the stage's outcome, and what the stage examined.
+///
+/// A case blocked by a finding in `open` is expected to fail its verdict; one
+/// that holds anyway is reported too, so a fix that resolves the finding is
+/// noticed and recorded rather than passing silently.
+pub fn check_lvs_case(case: &LvsCase, open: &std::collections::BTreeSet<&str>) -> Vec<String> {
     let mut failed = Vec::new();
     let blocked = format!(
-        " [strength: {}, expect_match: {} — not asserted, see this test's doc \
-         comment; blocked by {}]",
+        " [strength: {}, expect_match: {}, blocked by {}]",
         case.strength,
         case.expect_match,
         case.blocked_by.join(", ")
     );
+    let wants = |claim: &str| case.asserts.iter().any(|asserted| asserted == claim);
 
+    let reference = format!("lvs_refs/{}.spice", case.id);
     let checks = Checks {
         drc: false,
         erc: false,
-        lvs: false,
+        lvs: true,
         pex: false,
     };
-    let run = match run_case("lvs", &case.id, checks) {
+    let run = run_case_with_reference("lvs", &case.id, checks, &reference);
+
+    if wants("match") {
+        let verdict = run.as_ref().map(|run| {
+            run.outputs
+                .lvs
+                .as_ref()
+                .map(|verdict| matches!(verdict, lvs::Verdict::Match))
+        });
+        let holds = matches!(verdict, Ok(Some(matched)) if matched == case.expect_match);
+        match (
+            case.blocked_by.iter().find(|id| open.contains(id.as_str())),
+            holds,
+        ) {
+            (None, false) => failed.push(format!(
+                "{}: LVS of cell {} against {reference} gave {verdict:?} (Some(true) is a \
+                 match); the case expects match = {}{blocked}",
+                case.id, case.cell, case.expect_match
+            )),
+            (Some(finding), true) => failed.push(format!(
+                "{}: expected to fail until blocking finding {finding} is fixed, and it now \
+                 holds: mark {finding} resolved in expectations.json{blocked}",
+                case.id
+            )),
+            _ => {}
+        }
+    }
+
+    let run = match run {
         Ok(run) => run,
         Err(why) => {
             failed.push(format!(
@@ -1076,6 +1187,40 @@ pub fn check_lvs_case(case: &LvsCase) -> Vec<String> {
             return failed;
         }
     };
+
+    // An inconclusive comparison is a refused stage, and `expect_match: false`
+    // alone would read it as the mismatch the case is about.
+    if wants("outcome") && stage_outcome(&run.summary.lvs) != case.expect_outcome {
+        failed.push(format!(
+            "{}: the LVS stage on cell {} against {reference} recorded {:?}; the \
+             geometry says it records {}{blocked}",
+            case.id, case.cell, run.summary.lvs, case.expect_outcome
+        ));
+    }
+
+    if wants("examined_min") {
+        let floors = [
+            ("lvs.terminal_count", "devices", case.examined_min.devices),
+            ("lvs.floating_net", "nets", case.examined_min.nets),
+        ];
+        for (row, what, floor) in floors {
+            let examined = run.loaded.strings.get(row).and_then(|id| {
+                run.outputs
+                    .runs
+                    .iter()
+                    .find(|record| record.rule == id)
+                    .map(|record| record.examined)
+            });
+            if examined.is_none_or(|examined| examined < floor) {
+                failed.push(format!(
+                    "{}: {row} examined {examined:?} {what} on cell {}, and the \
+                     geometry draws {floor}. A verdict over fewer is a comparison \
+                     of less than the layout{blocked}",
+                    case.id, case.cell
+                ));
+            }
+        }
+    }
 
     if case.asserts.iter().any(|claim| claim == "device_count") {
         let got = run.extracted.devices.len();
@@ -1140,7 +1285,9 @@ pub fn totals_of(run: &CaseRun, only: Option<gpurify::geom::LayerId>) -> Totals 
             Parasitic::Resistance(ohm) => totals.resistance_ohm += ohm.raw(),
             Parasitic::GroundCap(ff) => totals.ground_cap_af += ff.raw() * AF_PER_FF,
             Parasitic::CouplingCap(ff) => totals.coupling_cap_af += ff.raw() * AF_PER_FF,
-            Parasitic::Inductance(_) => {}
+            Parasitic::Inductance(_)
+            | Parasitic::MutualInductance(_)
+            | Parasitic::SubstrateResistance(_) => {}
         }
     }
     totals
@@ -1159,6 +1306,83 @@ fn value_of(kind: &str, totals: &Totals) -> Option<f64> {
     })
 }
 
+/// Every way a PEX case's **field solve** (every labelled net named for
+/// `--quasistatic`) disagreed with what the closed forms and the solve's
+/// own laws say of it (testing-plan F6):
+///
+/// - the stage records the case's `expect_outcome`, and the network holds
+///   at least the nets the cell draws;
+/// - a resistance case whose closed form is derived agrees with it to the
+///   case's tolerance (a straight bar is `Rs · L / W` to both), and a
+///   negative one still disagrees;
+/// - a coupling case's coupling is finite and at least the closed form's,
+///   which leaves out every fringing field (the crate docs' "lateral
+///   coupling is a lower bound", and so is a plate overlap's `ε A / d`);
+/// - a ground-capacitance case's capacitance is finite and positive (the
+///   deck's `area_cap`/`fringe_cap` are not derived from the stack, so no
+///   closed form bounds the field's).
+pub fn check_pex_case_field_solved(case: &PexCase) -> Vec<String> {
+    let mut failed = Vec::new();
+    let run = match run_case_field_solved("pex", &case.id) {
+        Ok(run) => run,
+        Err(why) => return vec![format!("{}: did not field solve — {why}", case.id)],
+    };
+    if stage_outcome(&run.summary.pex) != case.expect_outcome {
+        failed.push(format!(
+            "{}: the field-solved PEX stage recorded {:?}, not {}",
+            case.id, run.summary.pex, case.expect_outcome
+        ));
+    }
+    let nets = run.outputs.parasitics.as_ref().map_or(0, |network| {
+        let mut nets = network.node_net.clone();
+        nets.dedup();
+        nets.len() as u64
+    });
+    if nets < case.examined_min.nets {
+        failed.push(format!(
+            "{}: the field-solved network holds {nets} nets, the cell draws {}",
+            case.id, case.examined_min.nets
+        ));
+    }
+    let scope = match case.kind.rsplit_once('_') {
+        Some((_, conductor @ ("met1" | "met2"))) => {
+            run.loaded.deck.layers.id(&run.loaded.strings, conductor)
+        }
+        _ => None,
+    };
+    let totals = totals_of(&run, scope);
+    let (Some(want), Some(got)) = (case.expect_value, value_of(&case.kind, &totals)) else {
+        return failed;
+    };
+    let resistance = case.kind.contains("resistance");
+    let derived =
+        case.asserts.iter().any(|claim| claim == "value") && case.provenance != "underivable";
+    if resistance && derived {
+        let agrees = (got - want).abs() <= case.tol;
+        if agrees == case.expect_mismatch {
+            failed.push(format!(
+                "{}: field-solved R {got} against the closed form's {want} (tolerance {}, \
+                 mismatch expected: {})",
+                case.id, case.tol, case.expect_mismatch
+            ));
+        }
+    } else if case.kind.contains("coupling") || case.kind == "interlayer_cap" {
+        if !case.expect_mismatch && !(got.is_finite() && got >= want - case.tol) {
+            failed.push(format!(
+                "{}: field-solved coupling {got} aF under the closed form's {want} aF, \
+                 which leaves out every fringing field",
+                case.id
+            ));
+        }
+    } else if !(got.is_finite() && got > 0.0) {
+        failed.push(format!(
+            "{}: field-solved capacitance {got} aF is not finite and positive",
+            case.id
+        ));
+    }
+    failed
+}
+
 /// Every way a PEX case disagreed with its closed form.
 pub fn check_pex_case(case: &PexCase) -> Vec<String> {
     let mut failed = Vec::new();
@@ -1170,13 +1394,6 @@ pub fn check_pex_case(case: &PexCase) -> Vec<String> {
             .as_ref()
             .map_or(String::new(), |d| format!(", dispute: {d}"))
     );
-
-    if case.provenance == "underivable" {
-        // Says so rather than pretending. The claims that *are* derivable about
-        // these three are relations, and they are asserted in
-        // `check_coupling_laws`.
-        return failed;
-    }
 
     let checks = Checks {
         drc: false,
@@ -1194,6 +1411,14 @@ pub fn check_pex_case(case: &PexCase) -> Vec<String> {
             return failed;
         }
     };
+    failed.extend(check_pex_examined(case, &run, &context));
+
+    if case.provenance == "underivable" {
+        // Says so rather than pretending. The value's claims that *are*
+        // derivable about these three are relations, and they are asserted in
+        // `check_coupling_laws`; what the cell draws is checked above.
+        return failed;
+    }
     // A kind ending in a conductor name scopes the fold to that conductor;
     // every other kind is the whole cell. `PEX_DIFF` is met1 *and* met2 in one
     // cell and its two cases derive 1.0 ohm and 0.8 ohm separately, so a
@@ -1204,17 +1429,15 @@ pub fn check_pex_case(case: &PexCase) -> Vec<String> {
     // the deck's layer ordering a second time.
     let scope = match case.kind.rsplit_once('_') {
         Some((_, conductor @ ("met1" | "met2"))) => {
-            match run.loaded.deck.layers.id(&run.loaded.strings, conductor) {
-                Some(layer) => Some(layer),
-                None => {
-                    failed.push(format!(
-                        "{}: kind {} names {conductor} and the deck defines no such \
-                         layer{context}",
-                        case.id, case.kind
-                    ));
-                    return failed;
-                }
-            }
+            let Some(layer) = run.loaded.deck.layers.id(&run.loaded.strings, conductor) else {
+                failed.push(format!(
+                    "{}: kind {} names {conductor} and the deck defines no such \
+                     layer{context}",
+                    case.id, case.kind
+                ));
+                return failed;
+            };
+            Some(layer)
         }
         _ => None,
     };
@@ -1277,6 +1500,38 @@ pub fn check_pex_case(case: &PexCase) -> Vec<String> {
     failed
 }
 
+/// The PEX stage recorded `expect_outcome`, and its network holds at least
+/// the nets and elements the cell draws: a value checked over a network
+/// missing them is checked over an absence.
+fn check_pex_examined(case: &PexCase, run: &CaseRun, context: &str) -> Vec<String> {
+    let mut failed = Vec::new();
+    let wants = |claim: &str| case.asserts.iter().any(|asserted| asserted == claim);
+    if wants("outcome") && stage_outcome(&run.summary.pex) != case.expect_outcome {
+        failed.push(format!(
+            "{}: the PEX stage on cell {} recorded {:?}; the geometry says it \
+             records {}{context}",
+            case.id, case.cell, run.summary.pex, case.expect_outcome
+        ));
+    }
+    if wants("examined_min") {
+        let (nets, elements) = run.outputs.parasitics.as_ref().map_or((0, 0), |network| {
+            let mut nets = network.node_net.clone();
+            nets.sort_unstable();
+            nets.dedup();
+            (nets.len() as u64, network.element_count() as u64)
+        });
+        let floor = &case.examined_min;
+        if nets < floor.nets || elements < floor.elements {
+            failed.push(format!(
+                "{}: cell {} extracted {nets} nets and {elements} elements; the \
+                 geometry draws at least {} nets and {} elements{context}",
+                case.id, case.cell, floor.nets, floor.elements
+            ));
+        }
+    }
+    failed
+}
+
 fn check_per_net(
     case: &PexCase,
     run: &CaseRun,
@@ -1304,7 +1559,10 @@ fn check_per_net(
             match network.value[row] {
                 Parasitic::Resistance(ohm) => resistance += ohm.raw(),
                 Parasitic::GroundCap(ff) => ground += ff.raw() * AF_PER_FF,
-                Parasitic::CouplingCap(_) | Parasitic::Inductance(_) => {}
+                Parasitic::CouplingCap(_)
+                | Parasitic::Inductance(_)
+                | Parasitic::MutualInductance(_)
+                | Parasitic::SubstrateResistance(_) => {}
             }
         }
 

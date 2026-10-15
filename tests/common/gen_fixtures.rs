@@ -22,8 +22,8 @@
 //! # The reconstruction rule, in full
 //!
 //! Verified byte-identical on the first 160 files against the versions that were
-//! tracked before this module existed, and re-verified by
-//! [`the_generated_corpus_matches_what_the_generator_produces`] on every run.
+//! tracked before this module existed. A file left by an older revision of this
+//! module is rewritten on every run (`write_if_different`), never reused.
 //!
 //! 1. `HEADER` and `BGNLIB` copied from the source, then a `LIBNAME` of
 //!    `GPUVERIFY_<case id>` — NUL-padded to even length *only when odd*, which
@@ -394,43 +394,4 @@ fn write_if_different(path: &Path, bytes: &[u8]) {
     let temp = path.with_extension(format!("gds.tmp.{}", std::process::id()));
     std::fs::write(&temp, bytes).unwrap_or_else(|why| panic!("{}: {why}", temp.display()));
     std::fs::rename(&temp, path).unwrap_or_else(|why| panic!("{}: {why}", path.display()));
-}
-
-/// Oracle: law — the corpus on disk is what this generator produces.
-///
-/// Written while the 160 files were still tracked, where it proved the
-/// reconstruction byte for byte against hand-drawn originals. They are ignored
-/// now, so what it proves today is narrower and worth stating plainly: that a
-/// fixture tree left behind by an older revision of this file is not silently
-/// reused. The corroboration it once carried lives in the two inputs, both of
-/// which are still tracked.
-#[test]
-fn the_generated_corpus_matches_what_the_generator_produces() {
-    let root = fixtures();
-    let text =
-        std::fs::read_to_string(root.join("manifest.json")).expect("the manifest is tracked");
-    let manifest: Manifest = serde_json::from_str(&text).expect("the manifest parses");
-    let bytes =
-        std::fs::read(root.join(&manifest.gds_file)).expect("the source library is tracked");
-    let source = Source::index(&bytes);
-
-    let mut checked = 0;
-    for domain in DOMAINS {
-        for case in manifest.domain(domain) {
-            let path = root.join(domain).join(format!("{}.gds", case.id));
-            let on_disk =
-                std::fs::read(&path).unwrap_or_else(|why| panic!("{}: {why}", path.display()));
-            assert_eq!(
-                on_disk,
-                case_gds(&source, &case.id, &case.cell),
-                "{}: the file on disk is not what this generator produces from \
-                 {} — it is stale, and every case that reads it is checking \
-                 geometry nobody derived",
-                path.display(),
-                manifest.gds_file
-            );
-            checked += 1;
-        }
-    }
-    assert_eq!(checked, CASE_COUNT);
 }

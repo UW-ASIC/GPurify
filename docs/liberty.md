@@ -6,7 +6,7 @@ with the same ports. The numbers come from your layout, extracted and
 simulated, at the accuracy you choose.
 
 ```sh
-gpurify lib strongarm.gds --deck pdks/sky130.deck --grid 1000 \
+gpurify lib strongarm.gds --deck pdks/sky130.deck \
     --spec strongarm.json --accuracy spice --output-dir lib/ \
     --reference strongarm.spice --lef strongarm.lef
 ```
@@ -27,10 +27,10 @@ spice: wrote lib/min/strongarm__tt_025C_1v80.lib
 | `--output-dir <dir>` | Where the files go. With `--accuracy all`, one subdirectory per level. |
 | `--reference <netlist>` | A `.subckt` whose ports must match the spec's pins. |
 | `--lef <file>` | A LEF whose `MACRO`'s pins must match the spec's pins. |
-| `--work <dir>` | Keep the simulator decks and logs here. Without it they go to a temporary directory that is removed on success and kept on failure. |
 
-The layout options (`--deck`, `--grid`, `--no-strict-layers`) are the other
-commands'.
+`--deck` is read as for the other commands. Simulator decks and logs go to a
+temporary directory, removed on success and kept, with its path printed, on
+failure.
 
 ## Accuracy
 
@@ -58,16 +58,20 @@ junction capacitance with no Miller term, averaged over the swing.
   rectangles are joined through the sheet resistance between their centres,
   and every via cut is its own resistor.
 - Ground capacitance comes from the stack, per rectangle. Coupling capacitance
-  comes from the analytical extractor's polygon pairs, placed between the two
-  closest rectangles. The whole design is then field-solved, wires only, and
-  every net's ground and every net pair's coupling is rescaled to the solved
-  totals.
+  comes from the analytical extractor, which measures it between conductor
+  regions (a net's merged shapes, one per edge-connected piece on a layer,
+  however many polygons drew them); each coupling is placed between the two
+  closest rectangles of its two regions. The whole design is then
+  field-solved, wires only, and every net's ground and every net pair's
+  coupling is rescaled to the solved totals.
 - Rectangles of one net that overlap, from shapes drawn over each other,
   are joined. A net whose resistor network still falls into pieces is
   refused by name, because a terminal on the detached piece would float.
 - Each device terminal sits on the rectangle touching its channel.
-- Each MOS gets its drain and source area and perimeter from its diffusions,
-  with shared diffusion split between the fingers that share it. It also gets
+- Each MOS gets its drain and source area and perimeter (`ad`, `pd`, `as`,
+  `ps`) as LVS measures them: shared diffusion split between the fingers
+  that share it, a hole out of the area and its edge in the perimeter, and
+  none for a source or drain drawn in pieces. It also gets
   its BSIM4 `sa`/`sb` (length-of-diffusion stress), the distance from each gate
   edge to the isolation edge. On sky130 that last one moves a delay by about
   15 %.
@@ -255,8 +259,9 @@ sky130_fd_sc_hd's tables and thresholds.
 
 Before anything is measured, the spec's pins are compared with:
 
-- **The layout's labels**: every label must be a spec pin, and every spec pin
-  must be found. The `substrate` pin may be found as the substrate instead.
+- **The layout's labels**: every spec pin must be found among them. The
+  `substrate` pin may be found as the substrate instead. A label the spec does
+  not list is taken as an internal net, and the run says so in a note.
 - **The reference `.subckt`'s ports**, with `--reference`.
 - **The LEF macro's pins**, with `--lef`.
 

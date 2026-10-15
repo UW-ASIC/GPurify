@@ -2,7 +2,12 @@
 //!
 //! Data in: the selected nets, solved by [`crate::field`].
 //! Data out: one node per net carrying the Maxwell matrix (row sum to ground,
-//! `-C_ij` coupling), plus a second node per net for series L and R when asked.
+//! `-C_ij` coupling), plus a second node per net for series L and R when asked,
+//! and a mutual inductance between every pair of those nets.
+//!
+//! The engine's order is [`extract_into`], then [`extract_inductance_into`] on
+//! the same network, then [`overlay`] onto the analytical network. What the
+//! solves leave out is in the [crate docs](crate#accuracy-and-known-gaps).
 
 pub use crate::field::henry::{InductMatrix, InductanceError};
 pub use crate::field::{mesh, solve, Accuracy, CapMatrix};
@@ -10,15 +15,38 @@ pub use crate::field::{mesh, solve, Accuracy, CapMatrix};
 use crate::network::{NodeId, Parasitic, ParasiticNetwork};
 use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::{GeometryStore, Grid, LayerId, Qty};
-use gpurify_ingest::deck::ProcessStack;
+use gpurify_ingest::deck::{Connectivity, ProcessStack};
 
 const FEMTOFARADS_PER_FARAD: f64 = 1e15;
 const PICOHENRIES_PER_HENRY: f64 = 1e12;
 
-/// Field-solve `selected` into `matrix`, then read it out into `out` (cleared).
+/// Field-solves the capacitance of `selected` into `matrix`, then reads it out
+/// into `out`, which is cleared first.
+///
+/// `out` gets one node per selected net, in ascending [`NetId`] order, on the
+/// net's lowest layer that is not global. Each node carries its row sum as a
+/// ground capacitance, and every pair `i < j` gets a coupling of `−C_ij`.
+/// Every pair is written, even where the solve gives zero or a slightly
+/// negative value; nothing is dropped, and a zero is `+0.0`, never `−0.0`.
+/// Ground is the substrate, a grounded plane at height 0. A net's
+/// shapes on a layer at height 0 (wells, diffusion) are junctions in that
+/// plane: they are not in the field, and the ground capacitance includes
+/// their closed form `Ca·A + Cf·P` from the layer's `pex` row. A net's
+/// resistance through them is the inductance solve's, as for any shape. A
+/// net's shapes on a global layer ([`Connectivity::global`], the substrate
+/// as a net) carry no parasitics: they are not in the field and need no
+/// `pex` row.
+///
+/// # Errors
+///
+/// Whatever [`crate::field::extract_into`] refuses: a mesh that cannot be
+/// built ([`solve::SolveError::Mesh`]), or a column that does not converge
+/// to the default tolerance. `out` is left cleared and `matrix` holds no
+/// complete result.
 pub fn extract_into(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     selected: &[NetId],
     stack: &ProcessStack,
     grid: Grid,
@@ -26,10 +54,11 @@ pub fn extract_into(
     out: &mut ParasiticNetwork,
 ) -> Result<Accuracy, solve::SolveError> {
     out.clear();
-    let accuracy = crate::field::extract_into(store, nets, selected, stack, grid, matrix)?;
+    let accuracy =
+        crate::field::extract_into(store, nets, connectivity, selected, stack, grid, matrix)?;
 
     let n = matrix.net.len();
-    push_anchors(store, nets, &matrix.net, out);
+    push_anchors(store, nets, connectivity, &matrix.net, out);
     for row in 0..n {
         let from = node(row);
         // Strict left fold in ascending index order: a reported capacitance.
@@ -43,7 +72,9 @@ pub fn extract_into(
             Parasitic::GroundCap(Qty::new(ground * FEMTOFARADS_PER_FARAD)),
         );
         for other in (row + 1)..n {
-            let coupling = -matrix.value[row * n + other] * FEMTOFARADS_PER_FARAD;
+            // `0 − x`, not `−x`: a pair with no field between them (a net of
+            // junctions only has no panels) reads +0, never −0 (F80).
+            let coupling = 0.0 - matrix.value[row * n + other] * FEMTOFARADS_PER_FARAD;
             out.push(
                 from,
                 Some(node(other)),
@@ -54,24 +85,47 @@ pub fn extract_into(
     Ok(accuracy)
 }
 
-/// Solve per-net inductance and resistance for `selected` and append them to `out`.
+/// Solves per-net inductance and resistance for `selected` and appends them to `out`.
 ///
-/// `out` is empty or the one-node-per-net network [`extract_into`] built over the
-/// same selection. Each net gains a far node beside its anchor (node `i` becomes
-/// `2i`, its far node `2i + 1`), joined by the series L and R.
+/// `out` must be empty or the one-node-per-net network [`extract_into`] built
+/// over the same selection; anything else is a wrong remapping that only
+/// debug builds catch. Each net gains a far node beside its anchor (node `i`
+/// becomes `2i`, its far node `2i + 1`), joined by the series L and R, so
+/// every [`NodeId`] read from `out` before this call is stale after it. The
+/// anchor is the end the net's port current enters. Every pair of nets
+/// `i < j` gains a [`Parasitic::MutualInductance`] from `i`'s anchor to
+/// `j`'s: the mean of `M_ij` and `M_ji`, which agree to round-off. The new
+/// elements break canonical order until the network is sorted or
+/// [`overlay`] sorts it.
+///
+/// # Errors
+///
+/// Every [`InductanceError`]: a selected net with no polygons off the global
+/// layers, a polygon on a layer with no positive sheet resistance or
+/// thickness, a net whose shapes do not join into one circuit through shared
+/// edges and vias, or a singular system. `out` is unchanged then.
 pub fn extract_inductance_into(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     selected: &[NetId],
     stack: &ProcessStack,
     grid: Grid,
     matrix: &mut InductMatrix,
     out: &mut ParasiticNetwork,
 ) -> Result<(), InductanceError> {
-    crate::field::henry::extract_inductance_into(store, nets, selected, stack, grid, matrix)?;
+    crate::field::henry::extract_inductance_into(
+        store,
+        nets,
+        connectivity,
+        selected,
+        stack,
+        grid,
+        matrix,
+    )?;
 
     if out.node_net.is_empty() {
-        push_anchors(store, nets, &matrix.net, out);
+        push_anchors(store, nets, connectivity, &matrix.net, out);
     }
     debug_assert_eq!(out.node_net, matrix.net, "remapping the wrong nodes");
 
@@ -102,6 +156,21 @@ pub fn extract_inductance_into(
             Parasitic::Resistance(Qty::new(matrix.r_ohm[row])),
         );
     }
+    for row in 0..n {
+        for other in (row + 1)..n {
+            let (there, back) = (
+                matrix.m_henry[row * n + other],
+                matrix.m_henry[other * n + row],
+            );
+            // `0 + x`, so no pair reads −0 (F80).
+            let henry = 0.0 + there.midpoint(back) * PICOHENRIES_PER_HENRY;
+            out.push(
+                node(2 * row),
+                Some(node(2 * other)),
+                Parasitic::MutualInductance(Qty::new(henry)),
+            );
+        }
+    }
     Ok(())
 }
 
@@ -111,6 +180,10 @@ pub fn extract_inductance_into(
 /// The mesh never sees an unsolved neighbour, so an analytical element between a
 /// solved net and an unsolved one is kept, moved onto the solved net's first
 /// node. Elements within or between solved nets are dropped: the solve replaces them.
+///
+/// Both networks must hold the node invariant of [`ParasiticNetwork`].
+/// Every node is renumbered, so a [`NodeId`] read from `network` before the
+/// call is stale after it.
 pub fn overlay(network: &mut ParasiticNetwork, solved: &ParasiticNetwork) {
     let analytical = std::mem::take(network);
     let highest = |nodes: &[NetId]| nodes.last().map_or(0, |net| net.0 as usize + 1);
@@ -180,12 +253,15 @@ pub fn overlay(network: &mut ParasiticNetwork, solved: &ParasiticNetwork) {
         );
     }
     network.sort_canonical();
+    network.debug_check();
 }
 
-/// One node per net, anchored on the net's lowest layer.
+/// One node per net, anchored on the net's lowest layer that is not global:
+/// a global layer carries nothing of the network.
 fn push_anchors(
     store: &GeometryStore,
     nets: &NetTable,
+    connectivity: &Connectivity,
     order: &[NetId],
     out: &mut ParasiticNetwork,
 ) {
@@ -195,6 +271,7 @@ fn push_anchors(
             .polys_of(net)
             .iter()
             .map(|&p| store.poly_layer(p))
+            .filter(|layer| !connectivity.global.contains(layer))
             .min();
         out.node_layer.push(low.unwrap_or(LayerId(u16::MAX)));
     }

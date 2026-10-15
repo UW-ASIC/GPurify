@@ -2,5 +2,8 @@
 
 mod analytical;
 mod common;
+mod compare;
 mod network;
 mod quasistatic;
+mod reduce;
+mod substrate;

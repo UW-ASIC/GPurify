@@ -1,5 +1,10 @@
 # GPurify
 
+[![CI](https://github.com/UW-ASIC/GPurify/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/UW-ASIC/GPurify/actions/workflows/ci.yml)
+[![Nightly](https://github.com/UW-ASIC/GPurify/actions/workflows/nightly.yml/badge.svg?branch=main)](https://github.com/UW-ASIC/GPurify/actions/workflows/nightly.yml)
+[![Open issues](https://img.shields.io/github/issues/UW-ASIC/GPurify)](https://github.com/UW-ASIC/GPurify/issues)
+![Rust 2021](https://img.shields.io/badge/rust-2021-orange)
+
 Physical verification for integrated circuits: DRC, LVS, ERC and PEX, in one
 tool.
 
@@ -10,6 +15,42 @@ a tool that cannot tell those apart will eventually sign off a chip it did not
 check. GPurify reports both. Every rule says whether it ran and how many shapes
 it examined, and a run that could not check everything you asked it to check
 does not pass.
+
+## Status
+
+| Domain | Implemented | Expressible | Partial | Missing |
+|---|---:|---:|---:|---:|
+| DRC | 56 | 6 | 44 | 0 |
+| LVS | 31 | 1 | 15 | 1 |
+| ERC | 64 | 4 | 13 | 0 |
+| PEX | 9 | 0 | 7 | 0 |
+| Flow | 2 | 0 | 8 | 0 |
+
+Each row of [docs/check-catalog.tsv](docs/check-catalog.tsv) is one check a
+commercial verification tool performs, with its public source. *Expressible*
+means the existing rule kinds can write it; *partial* rows say what is still
+missing; work not yet started is in the
+[issues](https://github.com/UW-ASIC/GPurify/issues). The table is recomputed
+from the catalog by `tests/doc_counts.rs`, so it cannot drift.
+
+Every check is tested against an answer derived independently of the code
+(hand-worked values, closed forms, published examples), and wherever an
+open-source tool performs the same check, against that tool too:
+
+| Checked against | What |
+|---|---|
+| KLayout | design rules on the corpus, every exhaustive fixture and random layouts (rectilinear, 45-degree, any angle); antenna ratios; layout XOR; fill |
+| Foundry KLayout decks | the shipped sky130, gf180mcu and IHP SG13G2 decks, rule by rule, on the foundries' test structures and standard cells |
+| Netgen | LVS on every small circuit with every single fault, black boxes, multi-die stacks |
+| Magic | analytical resistance and capacitance |
+| FastCap, FastHenry | field-solved capacitance and inductance |
+| OpenROAD | antenna (`check_antennas`), IR drop and currents (PDNSim), route-level extraction (OpenRCX), LEF/DEF reading |
+| Yosys | floating gates |
+| ngspice | Liberty timing and power tables |
+
+The KLayout, foundry and open-tool comparisons run nightly; fuzzing (10
+input formats), mutation testing and a coverage floor run with them. How each
+is set up is in [docs/testing-plan.md](docs/testing-plan.md).
 
 ## Install
 
@@ -23,7 +64,7 @@ it; `nix develop` gives you a pinned one.
 ## Run a check
 
 ```sh
-gpurify drc my_layout.gds --deck my_process.deck --grid 1000
+gpurify drc my_layout.gds --deck my_process.deck
 ```
 
 ```
@@ -60,6 +101,11 @@ though nothing was found.
 | `pex` | Parasitic resistance and capacitance | `--quasistatic <net>…` to field-solve a net |
 | `all` | Everything | a missing input marks its check skipped, never passed |
 | `lib` | Nothing: writes a hard macro's Liberty `.lib` per corner, and its Verilog blackbox | `--spec <file>`; ngspice above `interface` accuracy |
+| `xor` | Two layouts against each other, layer by layer | a second layout: `gpurify xor <layout> <other> --deck <deck>` |
+| `fill` | Nothing: writes the layout with density fill added, then reports DRC on it | the deck's `fill` lines; `gpurify fill <layout> <output.gds> --deck <deck>` |
+| `enhance` | Nothing: writes the layout with redundant cuts and widened straps, then reports DRC on it | the deck's `via_redundancy` rules and `widen` lines; `gpurify enhance <layout> <output.gds> --deck <deck>` |
+| `system` | Several dies as one assembly: bump bonding, LVS and system ESD | a system file and netlist: `gpurify system <stack.json> --reference <netlist>` |
+| `compare` | Two parasitic netlists (SPEF or DSPF), net by net | `gpurify compare <reference> <candidate>`; no layout or deck |
 
 Every option, the report format and the design intent file are described in
 [docs/usage.md](docs/usage.md).
@@ -86,7 +132,7 @@ rule via.4a enclosure(via1, met1) >= 55nm
 
 It is strict. Every parameter must be written out, every number carries its
 unit, and a typo is an error with a line and column, never a rule that silently
-does nothing. There are 24 design-rule kinds and 19 electrical-rule kinds.
+does nothing. There are 82 design-rule kinds and 57 electrical-rule kinds.
 [docs/deck.md](docs/deck.md) covers the language and every rule.
 
 Four decks ship in `pdks/`, each citing the rule manual release its numbers
@@ -94,26 +140,33 @@ come from and using the foundry's rule ids:
 
 | File | Drawn layers | Rules | Devices |
 |---|---:|---:|---:|
-| `ihp_sg13g2` | 62 | 413 | 10 |
-| `gf180mcu` | 55 | 228 | 27 |
-| `sky130` | 51 | 222 | 22 |
-| `generic_finfet` (ASAP7) | 45 | 168 | 0 |
+| `ihp_sg13g2` | 75 | 465 | 12 |
+| `gf180mcu` | 56 | 328 | 27 |
+| `sky130` | 74 | 302 | 30 |
+| `generic_finfet` (ASAP7) | 45 | 239 | 0 |
 
-None has been compared against foundry signoff. What each leaves out is
+From Rust, each is also compiled into the library as a constant
+(`gpurify::pdks::SKY130` and so on), so a tool built on GPurify reads the
+same deck instead of a copy. None has been compared against foundry signoff. What each leaves out is
 listed at the end of the deck and in [docs/limitations.md](docs/limitations.md#shipped-decks).
 
 ## The same input gives the same file
 
-The same inputs produce a byte-identical report on every run, and
-`--check-determinism` runs the job twice and fails if the two differ. A report
-that differs from itself cannot be diffed against yesterday's, so you could not
-tell a fixed violation from one that merely vanished.
+The same inputs produce a byte-identical report on every run. The test suite
+holds every corpus report as a golden file and runs each twice, and each
+field solve on one thread and on many, failing on any byte that differs. A
+report that differs from itself cannot be diffed against yesterday's, so you
+could not tell a fixed violation from one that merely vanished.
 
 ## Accuracy
 
-GPurify is tested against 167 real GDSII cells drawn for a real PDK, each
-containing a deliberate defect at a known coordinate with a measurement worked
-out by hand. All 167 agree with their expected answer.
+GPurify is tested against 167 GDSII cells, drawn with sky130 layer names on a
+synthetic deck, each containing a deliberate defect at a known coordinate with
+a measurement worked out by hand. All 167 agree with their expected answer.
+The shipped foundry decks are tested separately, on hand-drawn layouts at each
+rule's limit, and nightly against the foundries' own KLayout decks on their test
+structures and standard cells; every difference is recorded rule by rule in
+[docs/xcheck/](docs/xcheck).
 
 ```
 DRC   ██████████████████████████████████████  94
@@ -123,8 +176,8 @@ LVS   ██████                                  16
 ```
 
 Expected answers were derived from the geometry and the physics first, then
-compared against the previous implementation's output. 119 agree, so two
-independent routes reached the same number. 24 disagree, and each records which
+compared against the previous implementation's output. 117 agree, so two
+independent routes reached the same number. 27 disagree, and each records which
 side is wrong and why.
 
 ### The test that matters
@@ -146,13 +199,13 @@ A suite that reports only pass or fail flatters itself, so each case carries a
 grade for how much evidence is behind it:
 
 ```
-strong       ███████████████████████████████████  122   the rule ran, had real geometry to look at, and the measurement came close to the limit
-blocked      ███                                   11   the expected answer is sound but the tool cannot currently reach it
-vacuous      ███                                   10   the rule ran but never came close to the limit
+strong       ███████████████████████████████████  123   the rule ran, had real geometry to look at, and the measurement came close to the limit
+underivable  ███                                   11   nothing in the test data determines the answer
+blocked      ███                                    9   the expected answer is sound but the tool cannot currently reach it
+vacuous      ██                                     7   the rule ran but never came close to the limit
 skipped      ██                                     7   the rule reported skipped, and a clean count here would be a lie
 weak         ██                                     7   nothing to check, for a legitimate reason
-refused      █                                      5   the rule correctly refuses this input rather than guessing
-underivable  █                                      5   nothing in the test data determines the answer
+refused      █                                      3   the rule correctly refuses this input rather than guessing
 ```
 
 Nearly three quarters genuinely discriminates. The rest is accounted for by
@@ -170,12 +223,12 @@ GPurify  ███████████████████████�
 KLayout  ██████████████████████████████████████████   42 / 43
 ```
 
-That is not GPurify being more correct. The one difference is
-`DRC_MW_DIAG_FAIL`, a shape drawn at 45 degrees: KLayout measures it at 80.6 nm
-against a 100 nm limit and flags it, correctly, while GPurify is
-rectilinear-only and refuses the input. It scores the point only because
-refusing is the documented expectation. KLayout is right about the physics
-there, and GPurify cannot answer at all.
+That was not GPurify being more correct. The one difference was
+`DRC_MW_DIAG_FAIL`, a shape drawn at 45 degrees: KLayout measured it at 80.6 nm
+against a 100 nm limit and flagged it, correctly, while GPurify, then
+rectilinear-only, refused the input and scored the point only because refusing
+was the documented expectation. GPurify now measures that shape too (80 nm,
+floored), and the case expects the measurement.
 
 On the other 42, two independently written tools reach the same number.
 
@@ -237,19 +290,25 @@ per cell. At a thousand polygons neither tool is doing enough work to measure.
 This is one rule on synthetic rectilinear layout. It does not exercise KLayout's
 hierarchical or tiled modes and is not a claim about its DRC engine in general.
 KLayout's DRC is a programmable Ruby DSL, so it can express rules a fixed
-vocabulary of 24 kinds cannot; a rule count is not a comparison between the two.
+vocabulary of rule kinds cannot; a rule count is not a comparison between the two.
 
-Everything above is one release build on an Intel i9-14900HX. Timings are
-recorded, not enforced: no run fails a build for being slow. `cargo test
---release --test bench_all` reprints these tables on your own machine, including
-a per-rule breakdown of which rule costs what.
+Everything above is one release build on an Intel i9-14900HX. These timings
+are recorded, not enforced; what is enforced is their shape. The nightly tier
+times the engine on one generated layout at 1, 4 and 16 times a base size and
+fails if the cost per polygon at 16 times is over three times the base's
+(`tests/scaling.rs`), so a path that grows faster than the input fails a build
+whatever the machine. `cargo run --release --example bench_all` reprints the
+tables on your own machine, including a per-rule breakdown of which rule costs
+what.
 
 ## What it cannot do yet
 
 This is a working tool that has not been proven against foundry signoff on
-production silicon. Do not tape out on its verdict alone. Layouts must be
-rectilinear, several rules measure less than a foundry deck does, and the
-shipped decks are incomplete. [docs/limitations.md](docs/limitations.md) lists
+production silicon. Do not tape out on its verdict alone. On a layout with
+edges at 45 degrees or any other angle, width, notch, space, area, hole area,
+edge length, forbidden shapes, inside, contains and enclosure are measured;
+the other rules refuse such a layer. Several rules measure less than a foundry
+deck does, and the shipped decks are incomplete. [docs/limitations.md](docs/limitations.md) lists
 every known gap.
 
 There is no licence file yet.
@@ -262,9 +321,12 @@ There is no licence file yet.
 | [docs/deck.md](docs/deck.md) | Writing a deck, and what every rule checks. |
 | [docs/liberty.md](docs/liberty.md) | Liberty for a hard macro: accuracy levels, the macro spec, how each number is measured. |
 | [docs/limitations.md](docs/limitations.md) | What GPurify cannot check yet. |
+| [docs/check-catalog.tsv](docs/check-catalog.tsv), [docs/check-sources.md](docs/check-sources.md) | Every check a commercial tool performs, its public source and GPurify's status. |
+| [docs/klayout-mirror.md](docs/klayout-mirror.md) | How each rule kind maps onto KLayout, and where the two differ. |
+| [docs/testing-plan.md](docs/testing-plan.md) | How GPurify is tested: oracles, tiers, findings. |
 | [tests/fixtures/README.md](tests/fixtures/README.md) | The test corpus and how each expected answer was derived. |
 
 ```sh
-cargo test --workspace --release          # the test suite
-cargo test --release --test bench_all     # the timing tables above
+cargo test --workspace                    # the test suite, golden reports included
+cargo run --release --example bench_all   # the timing tables above
 ```

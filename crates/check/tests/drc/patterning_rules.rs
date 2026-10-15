@@ -4,7 +4,7 @@
 use crate::common;
 
 use common::{Sink, A, RULE};
-use gpurify_check::drc::rules::patterning::{color_into, Coloring};
+use gpurify_check::drc::rules::patterning::{anchor_conflict, color_into, Anchoring, Coloring};
 use gpurify_check::drc::Rule;
 use gpurify_check::report::Severity;
 use gpurify_ingest::StrId;
@@ -110,23 +110,44 @@ fn an_odd_cycle_is_proved_infeasible_and_leaves_no_partial_colouring_behind() {
     assert_proper(&with_three, &triangle, 3);
 }
 
-/// Oracle: determinism. The reported node is specified as a function of the
-/// graph, not of the path the search took through it, so two calls on the same
-/// graph name the same node. A search reporting wherever it happened to stop
-/// would pass the test above and fail this one.
+/// Oracle: law (F34). A node that conflicts with itself shares a mask with
+/// itself under every colouring, so no palette colours it. Three nodes, node 1
+/// looped and joined to node 2: three, four and one colours prove it
+/// infeasible at node 1, the lowest looped node, and two colours at the root
+/// of its odd-cycle component, node 1; none leaves a colouring behind.
 #[test]
-fn the_node_an_infeasible_graph_names_is_the_same_on_every_run() {
-    let five_cycle = [(0u32, 1u32), (1, 2), (2, 3), (3, 4), (4, 0)];
-    let mut first_out = Vec::new();
-    let mut second_out = Vec::new();
-    let first = color_into(5, &five_cycle, 2, &mut first_out);
-    let second = color_into(5, &five_cycle, 2, &mut second_out);
+fn a_node_conflicting_with_itself_is_infeasible_under_every_palette() {
+    let looped = [(1u32, 1u32), (1, 2)];
+    for palette in [3u8, 4, 2, 1] {
+        let mut colours = vec![7; 3];
+        assert_eq!(
+            color_into(3, &looped, palette, &mut colours),
+            Coloring::Infeasible { node: 1 },
+            "{palette} colours"
+        );
+        assert!(colours.is_empty(), "{palette} colours left a colouring");
+    }
+}
 
-    assert!(matches!(first, Coloring::Infeasible { .. }));
-    assert_eq!(
-        first, second,
-        "the node named by an infeasible verdict is a function of the graph"
-    );
+/// Oracle: the documented node, hand-derived. `Coloring::Infeasible` names,
+/// for two colours, the lowest root of an odd-cycle component. Here nodes 0
+/// and 1 form a bipartite pair and nodes 2 to 6 a five-cycle, so the answer is
+/// node 2, the five-cycle's lowest node. The edges are listed from the
+/// cycle's highest node and then reversed: a search reporting wherever it
+/// stopped, or the first edge it read, names 6 or another cycle node.
+#[test]
+fn an_infeasible_graph_names_the_lowest_node_of_its_odd_cycle_component() {
+    let mut edges = vec![(5u32, 6u32), (4, 5), (0, 1), (3, 4), (2, 3), (6, 2)];
+    for order in ["listed", "reversed"] {
+        let mut colours = vec![7; 7];
+        assert_eq!(
+            color_into(7, &edges, 2, &mut colours),
+            Coloring::Infeasible { node: 2 },
+            "edges {order}: the lowest root of the odd-cycle component"
+        );
+        assert!(colours.is_empty(), "edges {order} left a colouring");
+        edges.reverse();
+    }
 }
 
 /// Oracle: law. A graph containing a four-clique cannot be split across three
@@ -157,6 +178,45 @@ fn a_graph_with_a_four_clique_is_never_reported_three_colourable() {
         "a four-clique admits no three-colouring, so no colouring may be claimed"
     );
     assert!(colours.is_empty());
+}
+
+/// Oracle: construct-from-answer, at a size the search's bucketed queue
+/// spreads over many words. 5000 nodes, each joined to three random nodes of
+/// the other parity (so the parity is a 2-colouring) plus 300 disjoint
+/// triangles on 900 more nodes, each
+/// triangle needing all three masks. The graph is 3-colourable by
+/// construction, and DSATUR colours a bipartite part with two masks and a
+/// triangle with three without backtracking, so the answer is `Complete`
+/// and proper. More than 4096 nodes puts the queue's buckets past one
+/// summary word, the layout a wrong bucket offset scrambles.
+#[test]
+fn a_large_sparse_graph_is_coloured_completely_and_properly() {
+    let mut rng = Rng::new(21);
+    let n = 5000u32;
+    let mut edges = Vec::new();
+    for a in 0..n {
+        for _ in 0..3 {
+            let mut b = u32::try_from(rng.below(u64::from(n))).expect("below n");
+            if b % 2 == a % 2 {
+                b = (b + 1) % n;
+            }
+            edges.push((a.min(b), a.max(b)));
+        }
+    }
+    let base = n;
+    for t in 0..300 {
+        let (x, y, z) = (base + 3 * t, base + 3 * t + 1, base + 3 * t + 2);
+        edges.extend([(x, y), (y, z), (x, z)]);
+    }
+    let total = n + 900;
+    rng.shuffle(&mut edges);
+    let mut colours = Vec::new();
+    assert_eq!(
+        color_into(total, &edges, 3, &mut colours),
+        Coloring::Complete
+    );
+    assert_eq!(colours.len(), total as usize);
+    assert_proper(&colours, &edges, 3);
 }
 
 // --------------------------------------------------- check_multi_patterning
@@ -285,4 +345,108 @@ fn one_unit_of_colour_spacing_separates_a_path_from_an_odd_cycle() {
         assert_rule_ran(&outside.runs, RULE).examined,
         u64::from(case.shapes)
     );
+}
+
+/// Oracle: Calibre's self-conflict, worked by hand. A U drawn as three
+/// abutting rectangles is one figure whose arms face each other 100 apart
+/// across empty space: on one mask they are closer than a colour spacing of
+/// 101, so no number of masks splits it, while at 100 they are legal and the
+/// lone figure takes one mask.
+#[test]
+fn a_figure_whose_own_notch_is_below_the_colour_spacing_has_no_colouring() {
+    let mut layout = gpurify_testgen::shapes::LayoutBuilder::new(1);
+    layout.rect(A, 0, 0, 300, 100);
+    layout.rect(A, 0, 100, 100, 300);
+    layout.rect(A, 200, 100, 300, 300);
+    let (store, _ids) = layout.finish();
+
+    let mut sink = Sink::default();
+    sink.run(&store, &patterning_table(3, 101));
+    assert_eq!(sink.out.rule.len(), 1, "the U conflicts with itself");
+    assert_eq!(assert_rule_ran(&sink.runs, RULE).examined, 3);
+
+    sink.run(&store, &patterning_table(1, 100));
+    assert_clean(&sink.runs, &sink.out, RULE);
+}
+
+/// Whether some colouring of `0 .. n` with `k` colours is proper and, with
+/// `honour`, gives every anchored node its anchor's colour (two anchors on
+/// one node are never honoured): every one of the `k^n` assignments tried.
+fn brute_force(n: u32, edges: &[(u32, u32)], anchors: &[u8], k: u8, honour: bool) -> bool {
+    let k64 = u64::from(k);
+    (0..k64.pow(n)).any(|code| {
+        let colour = |i: u32| u8::try_from(code / k64.pow(i) % k64).expect("below k");
+        edges.iter().all(|&(a, b)| colour(a) != colour(b))
+            && (!honour
+                || (0..n)
+                    .all(|i| anchors[i as usize] == 0 || anchors[i as usize] == 1 << colour(i)))
+    })
+}
+
+/// Oracle: brute-force colouring (NV). On 4000 random connected graphs of 1 to
+/// 6 nodes, 1 to 3 colours, and random anchors (a fifth of them on two
+/// colours at once), `anchor_conflict` says Unsplittable exactly when no
+/// colouring exists, Honoured exactly when one honours the anchors, and
+/// Conflict otherwise; and the conflict it names is one: with two colours
+/// the pair it names cannot both be honoured, or the node it names holds two
+/// anchors, and with more the node it names is the lowest anchored.
+#[test]
+fn anchor_conflicts_agree_with_every_colouring_tried() {
+    let mut rng = Rng::new(0x00a1_1c40);
+    let mut out = Vec::new();
+    for _ in 0..4000 {
+        let n = u32::try_from(rng.below(6) + 1).expect("small");
+        let k = u8::try_from(rng.below(3) + 1).expect("small");
+        let mut edges: Vec<(u32, u32)> = (1..n)
+            .map(|i| (u32::try_from(rng.below(u64::from(i))).expect("small"), i))
+            .collect();
+        for a in 0..n {
+            for b in a + 1..n {
+                if rng.unit() < 0.3 {
+                    edges.push((a, b));
+                }
+            }
+        }
+        let anchors: Vec<u8> = (0..n)
+            .map(|_| {
+                if rng.unit() < 0.5 {
+                    return 0;
+                }
+                let one = 1u8 << rng.below(u64::from(k));
+                if k > 1 && rng.unit() < 0.2 {
+                    one | 1 << ((one.trailing_zeros() + 1) % u32::from(k))
+                } else {
+                    one
+                }
+            })
+            .collect();
+        let got = anchor_conflict(n, &edges, &anchors, k, &mut out);
+        let splittable = brute_force(n, &edges, &anchors, k, false);
+        let honoured = brute_force(n, &edges, &anchors, k, true);
+        let case = format!("n {n}, k {k}, edges {edges:?}, anchors {anchors:?}: {got:?}");
+        match got {
+            Anchoring::Unsplittable => assert!(!splittable, "{case}"),
+            Anchoring::Honoured => assert!(splittable && honoured, "{case}"),
+            Anchoring::Exhausted => panic!("a six-node search ran out: {case}"),
+            Anchoring::Conflict { node, other } => {
+                assert!(splittable && !honoured, "{case}");
+                assert_ne!(anchors[node as usize], 0, "{case}");
+                match (k, other) {
+                    (2, Some(v)) => {
+                        let mut pair = vec![0; n as usize];
+                        pair[node as usize] = anchors[node as usize];
+                        pair[v as usize] = anchors[v as usize];
+                        assert!(!brute_force(n, &edges, &pair, k, true), "{case}");
+                    }
+                    (_, None) if anchors[node as usize].count_ones() > 1 => {}
+                    (_, None) => {
+                        assert!(k != 2, "{case}");
+                        let lowest = anchors.iter().position(|&a| a != 0);
+                        assert_eq!(lowest, Some(node as usize), "{case}");
+                    }
+                    _ => panic!("a pair named with {k} colours: {case}"),
+                }
+            }
+        }
+    }
 }

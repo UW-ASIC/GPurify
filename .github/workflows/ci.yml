@@ -1,9 +1,17 @@
 name: CI
 
+# The merge tier of docs/testing-plan.md §5; the nightly tier is nightly.yml.
 on:
   push:
     branches: [main]
   pull_request:
+
+# A newer push supersedes an older run of the same workflow on the same
+# branch or pull request: with many branches in flight, stale runs would
+# otherwise hold the runners.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,11 +25,69 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      # ponytail: CPU path only. --features gpu needs shaderc+vulkan+a GPU
-      # (nix develop, RTX 4060) and can't run on GitHub runners.
       - run: cargo fmt --all --check
       # Workspace lints already deny clippy::correctness; pedantic stays at warn
       # (repo policy), so no blanket -D warnings here.
       - run: cargo clippy --workspace --all-targets
+      # The suite: corpus, goldens, determinism, properties at the merge
+      # count, metamorphic relations, doc counts, the catalog, and every
+      # committed fuzz crasher and seed (tests/fuzz_regressions.rs).
       - run: cargo test --workspace
+      # missing_docs and the intra-doc link lints are deny; rustdoc is what
+      # checks the links.
+      - run: cargo doc --workspace --no-deps
+      # The fuzz crate is its own workspace and runs only nightly; this keeps
+      # it compiling on stable in between.
+      - run: cargo check --manifest-path fuzz/Cargo.toml --bins
       - run: cargo build --workspace --release
+      # On a failure, regenerate what the golden and catalog tests own (the
+      # report snapshots and the generated blocks of docs/), so a branch
+      # written without a local toolchain can download, review and commit
+      # them: `gh run download <run> -n regenerated`.
+      - name: regenerate goldens and generated docs
+        if: failure()
+        run: |
+          find tests/golden -type f -delete
+          for _ in 1 2; do
+            cargo test --test golden || true
+            cargo test --test catalog || true
+          done
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regenerated
+          path: |
+            tests/golden
+            docs
+
+  mutants-in-diff:
+    # Mutants only in the lines a pull request changes in geom or check, each
+    # tested against its own crate's tests, as the nightly score is. A missed
+    # mutant fails: kill it with a test in that crate.
+    # Sharded so a large pull request still finishes: each shard takes every
+    # eighth mutant of the diff, within GitHub's six-hour job limit.
+    # Only for pull requests into main: agent branches into the working
+    # branch get the build job, and the nightly tier runs mutation too.
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    name: mutants-in-diff (shard ${{ matrix.shard }}/8)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - run: git diff "origin/${{ github.base_ref }}...HEAD" -- crates/geom crates/check > pr.diff
+      - run: |
+          if [ -s pr.diff ]; then
+            cargo mutants --in-diff pr.diff -p gpurify-geom -p gpurify-check -j 2 \
+              --shard ${{ matrix.shard }}/8
+          fi

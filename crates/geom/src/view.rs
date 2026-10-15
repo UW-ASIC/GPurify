@@ -1,5 +1,6 @@
-//! Validated geometry: simple rectilinear rings, canonical winding, holes bound to
-//! their innermost containing outer.
+//! Validated geometry: rectilinear (or, on request, octilinear or any-angle) rings, simple
+//! but where a figure meets itself at a vertex, canonical winding, holes bound
+//! to their innermost containing outer.
 //!
 //! Data in: one layer of a [`GeometryStore`].
 //! Data out: [`ValidatedLayer`], one outer-plus-holes polygon per CCW ring.
@@ -12,21 +13,74 @@ use crate::store::GeometryStore;
 use crate::{Dbu, DbuArea};
 use fearless_simd::{dispatch, i64x4, mask64x4, prelude::*, Level};
 
+/// Which edge directions [`validate_layer_with`] accepts.
+///
+/// A consumer asks for the widest class it measures exactly. The booleans and
+/// the derived-layer operations take [`Angles::Any`] input; what cuts a
+/// layer into rectangles ([`crate::rects::decompose_into`]) asserts
+/// [`ValidatedLayer::is_rectilinear`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Angles {
+    /// Horizontal and vertical edges only; any other is
+    /// [`ValidityError::NotRectilinear`].
+    #[default]
+    Rectilinear,
+    /// Also edges at 45 degrees (`|dx| == |dy|`); any other angle is
+    /// [`ValidityError::NotOctilinear`].
+    Octilinear,
+    /// Edges at every angle, as GDSII draws a curve: a polygon whose vertices
+    /// lie on the grid. [`ValidatedLayer::is_octilinear`] tells whether one
+    /// is at an angle other than a multiple of 45 degrees.
+    Any,
+}
+
 /// Why a polygon could not be validated; never a silently skipped row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ValidityError {
+    /// Fewer than three vertices, two consecutive equal vertices, or zero
+    /// signed area (a run that doubles back on itself).
     #[error("polygon {0:?} has fewer than three distinct vertices")]
     Degenerate(PolyId),
+    /// Two non-adjacent edges share a point, touching included, other than a
+    /// pinch: a vertex the ring passes more than once, where the edges out of
+    /// it point in distinct directions and, taken round the vertex, alternate
+    /// between a way in and a way out (parts of one figure meeting at a point,
+    /// so no point near it is covered twice). Checked before the edge
+    /// directions, so a skew bowtie is reported as this.
     #[error("polygon {0:?} has self-intersecting boundary")]
     SelfIntersecting(PolyId),
+    /// A clockwise ring that no counter-clockwise ring on the layer contains.
     #[error("polygon {0:?} is a hole with no containing outer ring")]
     OrphanHole(PolyId),
+    /// Under [`Angles::Rectilinear`], an edge that is neither horizontal nor
+    /// vertical.
     #[error("polygon {0:?} is not rectilinear")]
     NotRectilinear(PolyId),
+    /// Under [`Angles::Octilinear`], an edge that is neither horizontal,
+    /// vertical nor at 45 degrees.
+    #[error("polygon {0:?} has an edge at an angle other than a multiple of 45 degrees")]
+    NotOctilinear(PolyId),
+    /// A derived layer that could not be computed
+    /// ([`GeometryStore::mark_uncomputed`]): nothing on it can be read.
+    #[error("layer {0:?} could not be computed")]
+    Uncomputed(LayerId),
 }
 
 /// One layer's geometry, validated and grouped into outer-plus-holes polygons.
 /// [`PartialEq`] is structural (same rings in the same order), not region equality.
+///
+/// Every ring is rectilinear, or octilinear when validated so
+/// ([`ValidatedLayer::is_rectilinear`] tells which), and simple but at its
+/// pinches: a ring may pass a vertex more than once where parts of its figure
+/// meet ([`ValidityError::SelfIntersecting`] states the rule). Each
+/// outer is counter-clockwise and each hole clockwise, inside its outer; a hole
+/// may touch its outer, or another hole, at such a vertex. A boolean result
+/// has these touches exactly where its material meets at a corner
+/// ([`crate::boolean::union_into`]'s corner model). Built by
+/// [`validate_layer_into`] or returned by a boolean. Area, even-odd
+/// containment and the widths read such rings as they do simple ones. A layer
+/// straight from a store is *not* merged: overlapping or abutting shapes stay
+/// separate polygons until [`crate::derive::merge_into`] or a boolean.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ValidatedLayer {
     /// Owned: a boolean produces vertices no store row holds.
@@ -41,18 +95,25 @@ pub struct ValidatedLayer {
     poly_ring_start: Vec<u32>,
     poly_ring_len: Vec<u32>,
     poly_bbox: Vec<Bbox>,
+    /// Some ring has an edge that is not horizontal or vertical.
+    diagonal: bool,
+    /// Some ring has an edge at an angle other than a multiple of 45 degrees.
+    skew: bool,
 }
 
 impl ValidatedLayer {
+    /// Returns the number of polygons (outer rings); holes are not counted.
     pub fn len(&self) -> usize {
         self.poly_ring_start.len()
     }
 
+    /// Returns whether the layer holds no polygon.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Borrow one validated polygon.
+    /// Borrows polygon `idx`, for `idx < len()`. The handle's accessors
+    /// panic on an index past the end.
     pub fn get(&self, idx: u32) -> PolygonRef<'_> {
         PolygonRef { layer: self, idx }
     }
@@ -62,7 +123,28 @@ impl ValidatedLayer {
         &self.poly_bbox
     }
 
-    /// The polygons whose `keep` flag is set, in order, into `out` (cleared and refilled).
+    /// Whether every edge is horizontal or vertical: always so for a layer
+    /// validated under [`Angles::Rectilinear`] and for a boolean of such
+    /// layers; a layer validated under [`Angles::Octilinear`] may hold edges
+    /// at 45 degrees.
+    pub fn is_rectilinear(&self) -> bool {
+        !self.diagonal
+    }
+
+    /// Whether every edge is horizontal, vertical or at 45 degrees: always
+    /// so for a layer validated under [`Angles::Rectilinear`] or
+    /// [`Angles::Octilinear`] and for a boolean of such layers; a layer
+    /// validated under [`Angles::Any`] may hold an edge at any angle.
+    pub fn is_octilinear(&self) -> bool {
+        !self.skew
+    }
+
+    /// Copies the polygons whose `keep` flag is set, in order, into `out`
+    /// (cleared and refilled), keeping their store rows.
+    ///
+    /// # Panics
+    ///
+    /// When `keep.len() != self.len()`.
     pub fn select_into(&self, keep: &[bool], out: &mut ValidatedLayer) {
         assert_eq!(keep.len(), self.len(), "one flag per polygon");
         out.reset();
@@ -71,6 +153,9 @@ impl ValidatedLayer {
             let (start, len) = (self.poly_ring_start[idx], self.poly_ring_len[idx]);
             for ring in start..start + len {
                 let RingRef { xs, ys } = self.ring(ring);
+                let (diagonal, skew) = angle_flags(xs, ys);
+                out.diagonal |= diagonal;
+                out.skew |= skew;
                 out.push_ring(xs, ys, self.ring_poly[ring as usize]);
             }
             out.poly_ring_start.push(span_start);
@@ -79,7 +164,31 @@ impl ValidatedLayer {
         }
     }
 
-    /// Every ring of one polygon, outer first.
+    /// Copies polygon `idx` alone into `out` (cleared and refilled), keeping
+    /// its store rows: [`ValidatedLayer::select_into`] of one polygon, at the
+    /// cost of that polygon.
+    ///
+    /// # Panics
+    ///
+    /// On `idx >= len()`.
+    pub fn copy_polygon_into(&self, idx: u32, out: &mut ValidatedLayer) {
+        out.reset();
+        let idx = idx as usize;
+        let (start, len) = (self.poly_ring_start[idx], self.poly_ring_len[idx]);
+        for ring in start..start + len {
+            let RingRef { xs, ys } = self.ring(ring);
+            let (diagonal, skew) = angle_flags(xs, ys);
+            out.diagonal |= diagonal;
+            out.skew |= skew;
+            out.push_ring(xs, ys, self.ring_poly[ring as usize]);
+        }
+        out.poly_ring_start.push(0);
+        out.poly_ring_len.push(len);
+        out.poly_bbox.push(self.poly_bbox[idx]);
+    }
+
+    /// Every ring of polygon `idx`, outer first, then its holes ascending by
+    /// store row. Panics on `idx >= len()`.
     pub fn poly_rings(&self, idx: u32) -> impl Iterator<Item = RingRef<'_>> + '_ {
         let start = self.poly_ring_start[idx as usize];
         let len = self.poly_ring_len[idx as usize];
@@ -96,8 +205,8 @@ impl ValidatedLayer {
     }
 }
 
-/// A polygon that is known valid: simple rings, canonical winding, holes
-/// contained by their outer boundary.
+/// A polygon that is known valid: simple rings but at pinches, canonical
+/// winding, holes contained by their outer boundary.
 #[derive(Debug, Clone, Copy)]
 pub struct PolygonRef<'a> {
     layer: &'a ValidatedLayer,
@@ -119,6 +228,7 @@ impl<'a> PolygonRef<'a> {
         (start + 1..start + len).map(move |ring| layer.ring(ring))
     }
 
+    /// Returns the outer ring's bounding box, which holds every hole too.
     pub fn bbox(self) -> Bbox {
         self.layer.poly_bbox[self.idx as usize]
     }
@@ -141,7 +251,7 @@ impl<'a> PolygonRef<'a> {
     }
 }
 
-/// One validated closed ring.
+/// One validated closed ring, borrowed from its [`ValidatedLayer`].
 #[derive(Debug, Clone, Copy)]
 pub struct RingRef<'a> {
     xs: &'a [Dbu],
@@ -149,6 +259,8 @@ pub struct RingRef<'a> {
 }
 
 impl<'a> RingRef<'a> {
+    /// Returns the ring's x and y columns, open: the last vertex joins the
+    /// first and is not repeated.
     pub fn coords(self) -> (&'a [Dbu], &'a [Dbu]) {
         (self.xs, self.ys)
     }
@@ -162,16 +274,53 @@ impl<'a> RingRef<'a> {
 /// `outer_slot` marker for a hole row.
 const NOT_OUTER: u32 = u32::MAX;
 
-/// Validate every polygon on one layer into `out` (cleared and refilled).
-/// Fails on the first invalid polygon; arbitrary-angle input is
-/// [`ValidityError::NotRectilinear`], not an approximation.
+/// [`validate_layer_with`] under [`Angles::Rectilinear`]: an edge that is not
+/// horizontal or vertical is [`ValidityError::NotRectilinear`].
+///
+/// # Errors
+///
+/// As [`validate_layer_with`].
+///
+/// # Panics
+///
+/// As [`validate_layer_with`].
 pub fn validate_layer_into(
     store: &GeometryStore,
     layer: LayerId,
     out: &mut ValidatedLayer,
 ) -> Result<(), ValidityError> {
+    validate_layer_with(store, layer, Angles::Rectilinear, out)
+}
+
+/// Validates every ring on one layer of `store` into `out` (cleared and
+/// refilled), binding each clockwise ring to the innermost (smallest-box)
+/// counter-clockwise ring that contains it. An edge outside `angles` is
+/// refused ([`ValidityError::NotRectilinear`] or
+/// [`ValidityError::NotOctilinear`]), never approximated.
+///
+/// Polygons follow the store order of their outer rings, so `out.get(i)` comes
+/// from the `i`-th counter-clockwise row on the layer.
+///
+/// # Errors
+///
+/// A [`ValidityError`] naming the failing row: the first ring, in row order,
+/// that is not a valid ring, else the first hole no outer contains. `out` is
+/// then left empty.
+///
+/// # Panics
+///
+/// On a layer past [`GeometryStore::layer_count`].
+pub fn validate_layer_with(
+    store: &GeometryStore,
+    layer: LayerId,
+    angles: Angles,
+    out: &mut ValidatedLayer,
+) -> Result<(), ValidityError> {
     let rows = store.polys_on_layer(layer);
     out.reset();
+    if store.is_uncomputed(layer) {
+        return Err(ValidityError::Uncomputed(layer));
+    }
 
     // Pass one: shape validation, splitting the layer's rows by winding.
     let rows_len = (rows.end - rows.start) as usize;
@@ -185,7 +334,10 @@ pub fn validate_layer_into(
         for row in rows.clone() {
             let poly = PolyId(row);
             let (xs, ys) = store.poly_verts(poly);
-            match classify_ring(s, xs, ys, poly, &mut edges)? {
+            let (winding, diagonal, skew) = classify_ring(s, xs, ys, poly, angles, &mut edges)?;
+            out.diagonal |= diagonal;
+            out.skew |= skew;
+            match winding {
                 Winding::CounterClockwise => {
                     outer_slot.push(u32::try_from(outers.len()).expect("outers fit a u32"));
                     outers.push(poly);
@@ -199,10 +351,42 @@ pub fn validate_layer_into(
         Ok::<(), ValidityError>(())
     })?;
 
-    // Pass two: bind each hole to the innermost outer containing it. Distance-zero
-    // candidates are every touching pair, and containment implies touching.
+    // Pass two: bind each hole to its outer. A reader stores a polygon's
+    // holes right after its outer (a GDSII keyhole, a boolean's result), so
+    // the nearest outer row before a hole is its own when it contains it;
+    // where shapes overlap (cells placed over one another) another outer may
+    // contain the hole too, and a smaller one would steal it. Failing that,
+    // the innermost outer containing it. Distance-zero candidates are every
+    // touching pair, and containment implies touching.
     let mut owned: Vec<(usize, PolyId)> = Vec::with_capacity(holes.len());
     if !holes.is_empty() {
+        let contains = |outer: PolyId, hole: PolyId| {
+            let (hole_xs, hole_ys) = store.poly_verts(hole);
+            let (outer_xs, outer_ys) = store.poly_verts(outer);
+            let probe = Point {
+                x: hole_xs[0],
+                y: hole_ys[0],
+            };
+            store.poly_bbox(outer).contains(store.poly_bbox(hole))
+                && point_in_coords(outer_xs, outer_ys, probe)
+        };
+        // Per row: the slot of the nearest outer row at or before it.
+        let mut before = NOT_OUTER;
+        let mut own_slot = vec![NOT_OUTER; rows_len];
+        for row in 0..rows_len {
+            if outer_slot[row] == NOT_OUTER {
+                if before != NOT_OUTER
+                    && contains(
+                        outers[before as usize],
+                        PolyId(u32::try_from(first + row).expect("a row id")),
+                    )
+                {
+                    own_slot[row] = before;
+                }
+            } else {
+                before = outer_slot[row];
+            }
+        }
         let mut index = SpatialIndex::default();
         SpatialIndex::build_into(store, layer, &mut index);
         let mut pairs: Vec<(PolyId, PolyId)> = Vec::new();
@@ -233,14 +417,7 @@ pub fn validate_layer_into(
             } else {
                 (a, b, a_slot)
             };
-
-            let (hole_xs, hole_ys) = store.poly_verts(hole);
-            let (outer_xs, outer_ys) = store.poly_verts(outer);
-            let probe = Point {
-                x: hole_xs[0],
-                y: hole_ys[0],
-            };
-            if !point_in_coords(outer_xs, outer_ys, probe) {
+            if own_slot[hole.idx() - first] != NOT_OUTER || !contains(outer, hole) {
                 continue;
             }
             // Innermost = smallest containing box. Strict `<` over ascending pairs:
@@ -254,7 +431,12 @@ pub fn validate_layer_into(
         }
 
         for &hole in &holes {
-            let slot = best_slot[hole.idx() - first];
+            let row = hole.idx() - first;
+            let slot = if own_slot[row] == NOT_OUTER {
+                best_slot[row]
+            } else {
+                own_slot[row]
+            };
             if slot == NOT_OUTER {
                 return Err(ValidityError::OrphanHole(hole));
             }
@@ -272,6 +454,10 @@ pub fn validate_layer_into(
         out.push_ring(outer_xs, outer_ys, outer);
         while cursor < owned.len() && owned[cursor].0 == slot {
             let hole = owned[cursor].1;
+            debug_assert!(
+                store.poly_bbox(outer).contains(store.poly_bbox(hole)),
+                "a hole lies inside its outer's box"
+            );
             let (hole_xs, hole_ys) = store.poly_verts(hole);
             out.push_ring(hole_xs, hole_ys, hole);
             cursor += 1;
@@ -281,6 +467,11 @@ pub fn validate_layer_into(
         out.poly_ring_len.push(span_len - span_start);
         out.poly_bbox.push(store.poly_bbox(outer));
     }
+    debug_assert_eq!(
+        cursor,
+        owned.len(),
+        "every bound hole is emitted after its outer"
+    );
 
     Ok(())
 }
@@ -296,6 +487,8 @@ impl ValidatedLayer {
         self.poly_ring_start.clear();
         self.poly_ring_len.clear();
         self.poly_bbox.clear();
+        self.diagonal = false;
+        self.skew = false;
     }
 
     /// Copy one ring's coordinates in and append its ring row.
@@ -310,31 +503,63 @@ impl ValidatedLayer {
     }
 }
 
-/// Validate one coordinate run and report its winding. Check order is part of the
-/// answer: a bowtie is reported as self-intersecting, not non-rectilinear.
+/// Why one ring, a store row, is no valid polygon whatever its angles, checked
+/// as [`validate_layer_into`] checks it: [`ValidityError::Degenerate`] for
+/// fewer than three vertices, two equal consecutive vertices or zero signed
+/// area, and [`ValidityError::SelfIntersecting`] for two non-adjacent edges
+/// sharing a point other than a pinch. `None` for a valid ring.
+/// Rectilinearity is not asked, so a 45-degree ring is valid here, and a hole
+/// with no outer is a property of the layer, not of the ring.
+pub fn ring_defect(xs: &[Dbu], ys: &[Dbu], poly: PolyId) -> Option<ValidityError> {
+    if xs.len() < 3 || !edge_flags_scalar(xs, ys, xs[0], ys[0]).0 {
+        return Some(ValidityError::Degenerate(poly));
+    }
+    if !is_rectangle(xs, ys) && self_intersects_with(xs, ys, true, &mut Vec::new()) {
+        return Some(ValidityError::SelfIntersecting(poly));
+    }
+    winding_of(xs, ys)
+        .is_none()
+        .then_some(ValidityError::Degenerate(poly))
+}
+
+/// Validate one coordinate run and report its winding, whether it has an
+/// edge that is not horizontal or vertical, and whether it has one at an
+/// angle other than a multiple of 45 degrees. Check order is part of the answer: a bowtie is
+/// reported as self-intersecting, not as an edge outside `angles`.
 #[inline(always)]
 fn classify_ring<S: Simd>(
     s: S,
     xs: &[Dbu],
     ys: &[Dbu],
     poly: PolyId,
+    angles: Angles,
     edges: &mut Vec<SweptEdge>,
-) -> Result<Winding, ValidityError> {
+) -> Result<(Winding, bool, bool), ValidityError> {
     if xs.len() < 3 {
         return Err(ValidityError::Degenerate(poly));
     }
-    let (distinct, rectilinear) = edge_flags(s, xs, ys);
+    let (distinct, rectilinear, octilinear) = edge_flags(s, xs, ys);
     if !distinct {
         return Err(ValidityError::Degenerate(poly));
     }
-    if !is_rectangle(xs, ys) && self_intersects_with(xs, ys, edges) {
+    if !is_rectangle(xs, ys) && self_intersects_with(xs, ys, true, edges) {
         return Err(ValidityError::SelfIntersecting(poly));
     }
-    if !rectilinear {
-        return Err(ValidityError::NotRectilinear(poly));
+    match angles {
+        Angles::Rectilinear if !rectilinear => return Err(ValidityError::NotRectilinear(poly)),
+        Angles::Octilinear if !octilinear => return Err(ValidityError::NotOctilinear(poly)),
+        _ => {}
     }
     // A run doubling back on itself has zero area: degenerate.
-    winding_of(xs, ys).ok_or(ValidityError::Degenerate(poly))
+    let winding = winding_of(xs, ys).ok_or(ValidityError::Degenerate(poly))?;
+    Ok((winding, !rectilinear, !octilinear))
+}
+
+/// Whether some edge of a closed run is neither horizontal nor vertical, and
+/// whether some edge is at an angle other than a multiple of 45 degrees.
+fn angle_flags(xs: &[Dbu], ys: &[Dbu]) -> (bool, bool) {
+    let (_, rectilinear, octilinear) = edge_flags_scalar(xs, ys, xs[0], ys[0]);
+    (!rectilinear, !octilinear)
 }
 
 /// Four distinct vertices alternating vertical and horizontal edges: an axis
@@ -345,10 +570,11 @@ fn is_rectangle(xs: &[Dbu], ys: &[Dbu]) -> bool {
     (x0 == x1 && y1 == y2 && x2 == x3 && y3 == y0) || (y0 == y1 && x1 == x2 && y2 == y3 && x3 == x0)
 }
 
-/// `(distinct, rectilinear)` over every edge of a closed run of `n >= 1` vertices:
-/// no edge has both ends equal, and every edge keeps x or y.
+/// `(distinct, rectilinear, octilinear)` over every edge of a closed run of
+/// `n >= 1` vertices: no edge has both ends equal, every edge keeps x or y,
+/// and every edge keeps x or y or moves as far in x as in y.
 #[inline(always)]
-fn edge_flags<S: Simd>(s: S, xs: &[Dbu], ys: &[Dbu]) -> (bool, bool) {
+fn edge_flags<S: Simd>(s: S, xs: &[Dbu], ys: &[Dbu]) -> (bool, bool, bool) {
     let n = xs.len();
     if n <= 4 {
         return edge_flags_scalar(xs, ys, xs[0], ys[0]);
@@ -362,30 +588,42 @@ fn edge_flags<S: Simd>(s: S, xs: &[Dbu], ys: &[Dbu]) -> (bool, bool) {
     let lanes = |c: &[Dbu; 4]| i64x4::from_slice(s, &c.map(Dbu::raw));
     let mut dup = mask64x4::splat(s, false);
     let mut skew = mask64x4::splat(s, false);
+    let mut steep = mask64x4::splat(s, false);
     for (((ax, bx), ay), by) in axc.iter().zip(bxc).zip(ayc).zip(byc) {
-        let same_x = lanes(ax).simd_eq(lanes(bx));
-        let same_y = lanes(ay).simd_eq(lanes(by));
+        let (ax, bx, ay, by) = (lanes(ax), lanes(bx), lanes(ay), lanes(by));
+        let same_x = ax.simd_eq(bx);
+        let same_y = ay.simd_eq(by);
+        // |coordinate| <= 2^40, so neither delta overflows.
+        let (dx, dy) = (bx - ax, by - ay);
+        let diagonal = dx.simd_eq(dy) | dx.simd_eq(-dy);
         dup |= same_x & same_y;
         skew |= !(same_x | same_y);
+        steep |= !(same_x | same_y | diagonal);
     }
     // The tail edges plus the closing edge `n - 1 -> 0`.
     let done = 4 * axc.len();
-    let (td, tr) = edge_flags_scalar(&xs[done..], &ys[done..], xs[0], ys[0]);
-    (!dup.any_true() & td, !skew.any_true() & tr)
+    let (td, tr, to) = edge_flags_scalar(&xs[done..], &ys[done..], xs[0], ys[0]);
+    (
+        !dup.any_true() & td,
+        !skew.any_true() & tr,
+        !steep.any_true() & to,
+    )
 }
 
 /// Scalar [`edge_flags`] over the open run `xs`, closed back to `(x0, y0)`: the
 /// kernel's tail and its test oracle (`edge_flags_scalar(xs, ys, xs[0], ys[0])`).
-fn edge_flags_scalar(xs: &[Dbu], ys: &[Dbu], x0: Dbu, y0: Dbu) -> (bool, bool) {
-    let (mut distinct, mut rectilinear) = (true, true);
+fn edge_flags_scalar(xs: &[Dbu], ys: &[Dbu], x0: Dbu, y0: Dbu) -> (bool, bool, bool) {
+    let (mut distinct, mut rectilinear, mut octilinear) = (true, true, true);
     let next_x = xs[1..].iter().chain([&x0]);
     let next_y = ys[1..].iter().chain([&y0]);
     for (((x, y), nx), ny) in xs.iter().zip(ys).zip(next_x).zip(next_y) {
         let (same_x, same_y) = (x == nx, y == ny);
+        let diagonal = (nx.raw() - x.raw()).abs() == (ny.raw() - y.raw()).abs();
         distinct &= !(same_x & same_y);
         rectilinear &= same_x | same_y;
+        octilinear &= same_x | same_y | diagonal;
     }
-    (distinct, rectilinear)
+    (distinct, rectilinear, octilinear)
 }
 
 #[cfg(test)]
@@ -395,6 +633,10 @@ mod tests {
 
     /// Every distinct 4-ring over a 3x3 grid: the shortcut claims no ring the
     /// sweep would call self-intersecting.
+    ///
+    /// Oracle: differential against the self-intersection sweep, exhaustive
+    /// over every 4-ring on a 3 x 3 grid: no ring the shortcut calls a
+    /// rectangle is one the sweep rejects.
     #[test]
     fn a_rectangle_never_self_intersects() {
         let mut rects = 0;
@@ -419,6 +661,10 @@ mod tests {
 
     /// Rings over a three-value alphabet, so equal neighbours (duplicates, axis
     /// edges) and skew edges all turn up, at every length `1 ..= 13`.
+    ///
+    /// Oracle: differential against `edge_flags_scalar`, at every length 1 to
+    /// 13, over rings drawn from three values so that duplicates, axis edges
+    /// and skew edges all occur.
     #[test]
     fn edge_flags_match_the_scalar_loop() {
         for n in 1..=13usize {
@@ -441,43 +687,6 @@ mod tests {
                     "n={n} seed={seed}"
                 );
             }
-        }
-    }
-
-    /// `cargo test -p gpurify-geom --release -- --ignored --nocapture bench_`
-    #[test]
-    #[ignore = "timing, not a check"]
-    fn bench_edge_flags() {
-        use std::hint::black_box;
-        use std::time::Instant;
-        for ring in [4i64, 8, 32, 200] {
-            let rings = 400_000 / ring;
-            // A staircase: rectilinear, distinct, so neither loop exits early.
-            let (xs, ys): (Vec<Dbu>, Vec<Dbu>) = (0..ring)
-                .map(|i| (Dbu::new_unchecked((i + 1) / 2), Dbu::new_unchecked(i / 2)))
-                .unzip();
-            let simd = (0..9)
-                .map(|_| {
-                    let t = Instant::now();
-                    dispatch!(Level::new(), s => for _ in 0..rings {
-                        black_box(edge_flags(s, black_box(&xs), black_box(&ys)));
-                    });
-                    t.elapsed()
-                })
-                .min()
-                .unwrap();
-            let scalar = (0..9)
-                .map(|_| {
-                    let t = Instant::now();
-                    for _ in 0..rings {
-                        let (xs, ys) = (black_box(&xs), black_box(&ys));
-                        black_box(edge_flags_scalar(xs, ys, xs[0], ys[0]));
-                    }
-                    t.elapsed()
-                })
-                .min()
-                .unwrap();
-            println!("ring={ring}: simd {simd:?} scalar {scalar:?} (400k verts, best of 9)");
         }
     }
 }

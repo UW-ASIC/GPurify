@@ -3,6 +3,18 @@
 //!
 //! Units throughout: ns, pF, V, mA, nW, and pJ (pF·V²) for internal energy.
 //! Output is a function of the model alone: no clock, no hash order.
+//!
+//! The tables are NLDM, each restating its indices (see [`Table`]):
+//!
+//! | Group | `index_1` | `index_2` | Values |
+//! |---|---|---|---|
+//! | `cell_rise`, `cell_fall` | input transition, ns | output load, pF | delay, ns |
+//! | `rise_transition`, `fall_transition` | input transition, ns | output load, pF | transition, ns |
+//! | `rise_power`, `fall_power` | input transition, ns | output load, pF | internal energy, pJ |
+//! | `rise_constraint`, `fall_constraint` | clock transition, ns | data transition, ns | setup or hold, ns |
+//!
+//! At `statistical`, each timing table has an `ocv_sigma_*` twin of the same
+//! shape, written once with `sigma_type : early` and once with `late`.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -13,17 +25,33 @@ use crate::liberty::Accuracy;
 /// One `.lib` file's content.
 #[derive(Debug, Clone)]
 pub struct Library {
+    /// The `library (...)` name: `<cell>__<corner>`, with `__min` appended for
+    /// the best-case copy, since `OpenSTA` skips a second library whose name it
+    /// has already read.
     pub name: String,
+    /// The operating point: its supplies become `voltage_map`s, the highest
+    /// `power` supply is `nom_voltage`, and its name is the
+    /// `operating_conditions` group's.
     pub corner: CornerSpec,
+    /// Only the four threshold percentages are written from it; the rest is
+    /// ignored here.
     pub thresholds: Characterization,
+    /// Named, with its description, in the header comment.
     pub accuracy: Accuracy,
+    /// Named in the header comment.
     pub tool_version: &'static str,
+    /// The one cell the library holds.
     pub cell: Cell,
 }
 
+/// The macro as a Liberty `cell`, marked `is_macro_cell`, `dont_touch` and
+/// `dont_use`.
 #[derive(Debug, Clone)]
 pub struct Cell {
+    /// The cell name: the spec's `cell`.
     pub name: String,
+    /// Liberty `area`, µm²: the deck's outline layer if drawn, else every
+    /// shape's bounding box.
     pub area_um2: f64,
     /// Mean of the per-state leakage, nW.
     pub leakage_nw: Option<f64>,
@@ -33,18 +61,28 @@ pub struct Cell {
     pub pins: Vec<Pin>,
 }
 
+/// One pin, a `pg_pin` for a supply role and a `pin` otherwise.
 #[derive(Debug, Clone)]
 pub struct Pin {
+    /// The spec's pin, copied through: name, role, related supplies,
+    /// direction and function.
     pub spec: PinSpec,
-    /// `(rise, fall)`, pF.
+    /// `(rise, fall)`, pF; `capacitance` is written as their mean.
     pub capacitance: Option<(f64, f64)>,
+    /// Liberty `max_transition`, ns. An input's is the largest transition it
+    /// was characterized at; an output's the largest transition it produced.
     pub max_transition_ns: Option<f64>,
+    /// Liberty `max_capacitance`, pF: an output's largest characterized load.
     pub max_capacitance_pf: Option<f64>,
+    /// `timing ()` groups, on the output of a delay arc or the data pin of a
+    /// constraint.
     pub timing: Vec<Timing>,
+    /// `internal_power ()` groups, on outputs only.
     pub power: Vec<InternalPower>,
 }
 
 impl Pin {
+    /// A pin with nothing measured: what `interface` writes.
     pub fn bare(spec: PinSpec) -> Self {
         Self {
             spec,
@@ -60,34 +98,52 @@ impl Pin {
 /// One `timing ()` group.
 #[derive(Debug, Clone)]
 pub struct Timing {
+    /// `related_pin`: the arc's `from`.
     pub related: String,
+    /// `timing_type`; also decides the tables' axes, delay or constraint.
     pub kind: ArcKind,
+    /// `timing_sense` of a combinational arc: `positive_unate`,
+    /// `negative_unate` or `non_unate`, from its cases' edges. `None` for a
+    /// clocked arc, which Liberty does not give one.
     pub sense: Option<&'static str>,
+    /// The tables, in writing order.
     pub tables: Vec<NamedTable>,
 }
 
 /// One `internal_power ()` group on an output.
 #[derive(Debug, Clone)]
 pub struct InternalPower {
+    /// `related_pin`: the arc's `from`.
     pub related: String,
+    /// `rise_power`: internal energy per output rise, pJ.
     pub rise: Option<Table>,
+    /// `fall_power`: internal energy per output fall, pJ.
     pub fall: Option<Table>,
 }
 
 /// A table under its Liberty group name (`cell_rise`, `ocv_sigma_cell_rise`, ...).
 #[derive(Debug, Clone)]
 pub struct NamedTable {
+    /// The group name, which says what the values are.
     pub group: String,
-    /// `sigma_type` of an LVF table.
+    /// `sigma_type` of an LVF table: `early` or `late`.
     pub sigma: Option<&'static str>,
+    /// The indices and values.
     pub table: Table,
 }
 
-/// Row-major over `index_1` × `index_2`; `index_2` empty for a 1-D table.
+/// One NLDM table, row-major over `index_1` × `index_2`; `index_2` empty for
+/// a 1-D table. The module docs give each group's axes and units.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Table {
+    /// The row axis: input transition, or the clock's transition for a
+    /// constraint, ns.
     pub index_1: Vec<f64>,
+    /// The column axis: output load in pF, or the data pin's transition in ns
+    /// for a constraint.
     pub index_2: Vec<f64>,
+    /// `index_1.len() * n` values, where `n` is `index_2.len().max(1)`:
+    /// `values[i * n + j]` is at `index_1[i]`, `index_2[j]`.
     pub values: Vec<f64>,
 }
 
@@ -208,7 +264,15 @@ fn table(
     let _ = writeln!(out, "{:indent$}}}", "");
 }
 
-/// Write the `.lib`.
+/// Appends the `.lib` text for `lib`: the library header with units,
+/// voltages, the operating condition and thresholds, one table template per
+/// axes and shape in use, then the cell.
+///
+/// # Panics
+///
+/// In debug builds, panics on a non-finite number anywhere in the model.
+/// Release builds write it as `NaN` or `inf`, which no Liberty reader
+/// accepts; the characterizer never produces one.
 pub fn write_liberty(lib: &Library, out: &mut String) {
     let corner = &lib.corner;
     let th = &lib.thresholds;
@@ -375,7 +439,9 @@ fn write_cell(cell: &Cell, out: &mut String) {
     out.push_str("    }\n");
 }
 
-/// A signal pin's Liberty direction.
+/// A pin's Liberty and Verilog direction: `input` for an input or clock,
+/// `output` for an output, and otherwise the spec's direction, `inout` when
+/// it gives none.
 pub fn direction(spec: &PinSpec) -> Direction {
     match spec.role {
         Role::Input | Role::Clock => Direction::Input,
@@ -457,8 +523,14 @@ pub fn write_blackbox(cell: &str, pins: &[PinSpec], tool_version: &str, out: &mu
     let signals: Vec<&PinSpec> = pins.iter().filter(|p| !p.role.is_supply()).collect();
     if !supplies.is_empty() {
         out.push_str("`ifdef USE_POWER_PINS\n");
-        for pin in &supplies {
-            let _ = writeln!(out, "    inout {},", pin.name);
+        for (i, pin) in supplies.iter().enumerate() {
+            // The last supply takes a comma only if a signal follows it.
+            let comma = if i + 1 < supplies.len() || !signals.is_empty() {
+                ","
+            } else {
+                ""
+            };
+            let _ = writeln!(out, "    inout {}{comma}", pin.name);
         }
         out.push_str("`endif\n");
     }
@@ -471,9 +543,12 @@ pub fn write_blackbox(cell: &str, pins: &[PinSpec], tool_version: &str, out: &mu
 
 #[cfg(test)]
 mod tests {
-    use super::{num, write_blackbox, Table};
+    use super::{num, write_blackbox};
     use crate::liberty::spec::{PinSpec, Role};
 
+    /// Oracle: hand-derived from `num`'s format: zero bare, ten decimals in
+    /// fixed point from 1e-3 up (1.5 is 1.5000000000), and a nine-digit
+    /// mantissa below (1.25e-5 is 1.250000000e-5).
     #[test]
     fn numbers_keep_their_digits_at_every_scale() {
         for (value, text) in [
@@ -491,6 +566,10 @@ mod tests {
 
     /// A trailing comma after the last port is a Verilog syntax error, and an
     /// empty signal list after the power block is the case that would make one.
+    ///
+    /// Oracle: the Verilog grammar (IEEE 1364-2005): a port list is
+    /// comma-separated with no comma after the last port, so the expected text
+    /// is written by hand for both cases.
     #[test]
     fn the_blackbox_has_no_trailing_comma() {
         let pin = |name: &str, role| PinSpec {
@@ -517,10 +596,18 @@ mod tests {
             out.contains("    inout vdd,\n`endif\n    input a,\n    output y\n);"),
             "{out}"
         );
-        let _ = Table {
-            index_1: vec![],
-            index_2: vec![],
-            values: vec![],
-        };
+
+        // Supplies and no signal (F35): the last supply ends the list.
+        out.clear();
+        write_blackbox(
+            "m",
+            &[pin("vdd", Role::Power), pin("vss", Role::Ground)],
+            "t",
+            &mut out,
+        );
+        assert!(
+            out.contains("`ifdef USE_POWER_PINS\n    inout vdd,\n    inout vss\n`endif\n);"),
+            "{out}"
+        );
     }
 }

@@ -1,19 +1,29 @@
 //! GDSII reader: a record stream to one flat, layer-sorted `GeometryStore`.
 //!
-//! Data in: GDSII bytes (gzip or plain) and a [`Deck`] mapping stream pairs to layers.
+//! Data in: GDSII bytes (gzip or plain) and a deck's [`LayerTable`] mapping stream pairs to layers.
 //! Data out: [`gds::Library::flatten`]'s store with deck-derived layers appended, and placed
 //! labels. An inexact transform is an error, never rounded.
+//!
+//! Three steps, in order: [`read_gds_bytes`] loads and un-gzips the file,
+//! [`gds::Library::parse`] reads the records with the hierarchy intact and
+//! states the grid ([`gds::Library::grid`]), and [`gds::Library::flatten`]
+//! places every shape in the root frame on the deck's layers. Coordinates stay
+//! in the file's database units throughout; nothing is scaled. Cell names are
+//! gone after the walk, except as the deck's `in_cells` selections read them.
 
-use crate::deck::{Deck, DerivedOp, LayerTable};
+use crate::deck::{DerivedOp, LayerTable};
 use crate::provenance::{PlacedLabel, Provenance};
 use gpurify_geom::boolean::{intersection_into, subtraction_into, union_into, BooleanError};
 use gpurify_geom::derive::{
-    edge_boolean_into, edge_interacting_into, edge_part_into, edges_into, extents_into, holes_into,
-    inside_into, interacting_into, merge_into, outside_into, sized_into, with_area_into,
-    with_length_into, with_width_into, EdgeOp,
+    boxes_into, covering_into, edge_boolean_into, edge_interacting_into, edge_part_into,
+    edges_into, extended_into, extents_into, holes_into, inside_into, interacting_into, merge_into,
+    outside_into, overlapping_into, rectangles_into, sized_into, with_area_into, with_bbox_into,
+    with_length_into, with_rect_into, with_width_into, EdgeOp,
 };
 use gpurify_geom::ops::{point_in_ring, point_seg_dist2, Point, Seg};
-use gpurify_geom::view::{validate_layer_into, PolygonRef, RingRef, ValidatedLayer};
+use gpurify_geom::view::{
+    validate_layer_with, Angles, PolygonRef, RingRef, ValidatedLayer, ValidityError,
+};
 use gpurify_geom::Dbu;
 use gpurify_geom::GeometryStore;
 use gpurify_geom::LayerId;
@@ -23,34 +33,114 @@ use gpurify_geom::{Bbox, StrTable};
 /// transform moves geometry and moves verdicts.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum LayoutError {
+    /// The bytes, after any gunzip, do not open with a GDSII `HEADER` record
+    /// (OASIS is not read).
     #[error("unrecognised file format")]
     UnknownFormat,
+    /// The stream ends inside a record or before `ENDLIB`, a record's length
+    /// is under 4 or odd, a payload is shorter than its type needs, or a
+    /// structure is still open at `ENDLIB`. Carries the record's byte offset.
     #[error("truncated record at byte {0}")]
     Truncated(usize),
+    /// A record outside the reader's subset or out of place (an element
+    /// outside a structure, a nested `BGNSTR`), or an element missing what it
+    /// needs: no `LAYER`/`DATATYPE`/`XY`, a boundary under three vertices, a
+    /// `TEXT` without exactly one point, a reference without its name or
+    /// points, a `PATH` of odd or non-positive `WIDTH` or a `PATHTYPE` other
+    /// than 0, 2 or 4. Carries the record type (or the element's) and its
+    /// byte offset.
     #[error("unsupported record type {0:#06x} at byte {1}")]
     UnsupportedRecord(u16, usize),
+    /// A placed vertex or label lies outside `±2^40` database units
+    /// ([`gpurify_geom::MAX_ABS_DBU`]) once its placements are composed.
     #[error("coordinate {0} exceeds the representable range")]
     CoordinateOutOfRange(i64),
+    /// A placement that would move geometry off the integer grid or overflow:
+    /// absolute `STRANS` magnification or angle, a magnification that is not
+    /// a whole number from 1 to 10^6, an angle not a multiple of 90°, an
+    /// `AREF` whose pitch does not divide exactly or with a zero count, or
+    /// composed transforms overflowing `i64`. Also a `PATH` with a diagonal or
+    /// zero-length segment or a vertex that turns back on itself.
     #[error("instance transform is not representable exactly")]
     UnsupportedTransform,
+    /// An `SREF` or `AREF` names a structure the library does not define.
     #[error("cell {0} is referenced but not defined")]
     MissingCell(String),
+    /// Two structures share a name. GDSII names a structure once (the
+    /// format's `STRNAME`); with two, which one a reference places is not
+    /// stated, and reading either would drop the other's geometry.
+    #[error("cell {0} is defined more than once")]
+    DuplicateCell(String),
+    /// A structure reaches itself again through its references, whether a
+    /// root reaches it or not (a library whose every structure is referenced
+    /// has such a cycle).
     #[error("cell hierarchy contains a cycle through {0}")]
     CyclicHierarchy(String),
-    #[error("layer {0}/{1} is not in the deck's layer table")]
+    /// A layout that would flatten to more than [`MAX_FLAT_POLYGONS`] polygons,
+    /// counted from the hierarchy before anything is expanded.
+    #[error(
+        "the layout flattens to {0} polygons, over the {MAX_FLAT_POLYGONS} a flat run \
+         holds; GPurify flattens every placement and array"
+    )]
+    TooManyPolygons(u64),
+    /// Under [`LabelDepth::All`], a layout that would place more than
+    /// [`MAX_FLAT_POLYGONS`] labels, every cell's texts once per placement,
+    /// counted from the hierarchy before anything is expanded. Labels are
+    /// held to the polygons' cap.
+    #[error(
+        "the layout places {0} labels, over the {MAX_FLAT_POLYGONS} a flat run \
+         holds; every cell's labels were asked for, once per placement"
+    )]
+    TooManyLabels(u64),
+    /// A placement chain deeper than [`MAX_HIERARCHY_DEPTH`] levels, refused
+    /// rather than walked: flattening recurses once per level.
+    #[error("cell hierarchy is deeper than {MAX_HIERARCHY_DEPTH} levels at {0}")]
+    HierarchyTooDeep(String),
+    /// A shape or text on a stream pair the deck neither declares nor ignores,
+    /// under [`UnknownLayers::Reject`].
+    #[error(
+        "layer {0}/{1} is in neither the deck's layer table nor its ignore list \
+         (`ignore gds({0}, {1})`)"
+    )]
     UnknownLayer(u16, u16),
-    #[error("derived layer {0:?} could not be computed: {1}")]
-    Derived(gpurify_geom::LayerId, BooleanError),
+    /// Without `UNITS`, no length in the deck can be converted to the layout's grid.
+    #[error("the layout has no UNITS record, so its database unit is unknown")]
+    NoUnits,
+    /// Every length is measured on an integer grid of database units per micrometre.
+    #[error("a database unit of {0:e} m is not a whole number of units per micrometre")]
+    UnsupportedUnits(f64),
+    /// The file could not be read or un-gzipped.
     #[error("io: {0}")]
     Io(String),
 }
 
-/// How to treat geometry on a stream pair the deck does not declare.
+/// The deepest placement chain a layout may have, root included.
+///
+/// Flattening recurses once per level, so without a cap a deep enough chain
+/// would overflow the stack instead of returning an error. Real layouts nest
+/// tens of levels; 1024 leaves room for any of them and stays well inside a
+/// test thread's 2 MiB stack.
+pub const MAX_HIERARCHY_DEPTH: u32 = 1024;
+
+/// The most polygons a layout may flatten to.
+///
+/// `GPurify` checks a flat copy of the layout, so a 32767 × 32767 array of a
+/// cell is about 10⁹ polygons per shape in it: hours of expansion and more
+/// memory than any machine, before the polygon ids (`u32`) overflow. The count
+/// is taken from the hierarchy first, and a layout over the cap is refused
+/// before anything is expanded. 2²⁸ polygons is about 20 GB of flat geometry.
+// ponytail: a flat cap; checking hierarchically, without flattening, is the
+// upgrade that lifts it.
+pub const MAX_FLAT_POLYGONS: u64 = 1 << 28;
+
+/// How to treat geometry on a stream pair the deck neither declares nor
+/// ignores. A pair listed with `ignore gds(L, D)` is dropped either way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnknownLayers {
     /// Refuse the layout. What a signoff run uses.
     Reject,
-    /// Drop the shape or label, uncounted.
+    /// Drop the shape or label, uncounted. Not for signoff: what is dropped
+    /// is checked by no rule.
     Drop,
 }
 
@@ -65,8 +155,14 @@ pub enum LabelDepth {
     All,
 }
 
-/// A GDSII file's bytes, gunzipped when the file is gzip. `UnknownFormat` when the
-/// decompressed bytes do not open with a GDSII `HEADER` record.
+/// A GDSII file's bytes, gunzipped when the file is gzip (every member of a
+/// multi-member gzip, so a concatenated file is never read partially).
+///
+/// # Errors
+///
+/// [`LayoutError::Io`] when the file cannot be read or decompressed, and
+/// [`LayoutError::UnknownFormat`] when the bytes do not open with a GDSII
+/// `HEADER` record.
 pub fn read_gds_bytes(path: &std::path::Path) -> Result<Vec<u8>, LayoutError> {
     use std::io::Read;
     let io = |e: std::io::Error| LayoutError::Io(e.to_string());
@@ -91,27 +187,53 @@ pub fn read_gds_bytes(path: &std::path::Path) -> Result<Vec<u8>, LayoutError> {
 }
 
 /// Compute `deck`'s derived layers into a store built in memory from its base
-/// layers, as [`gds::Library::flatten`] does after reading a stream. `with_text`
-/// reads `provenance`'s placed labels; bind them afterwards with
+/// layers, as [`gds::Library::flatten`] does after reading a stream. `deck` is
+/// anything holding the layer table: a [`Deck`](crate::deck::Deck), or a deck
+/// compiled from one.
+/// `with_text` reads `provenance`'s placed labels; bind them afterwards with
 /// [`Provenance::resolve_labels`].
-pub fn derive_layers(
+///
+/// `store` must have been finished with the table's
+/// [`len`](LayerTable::len) layers and hold shapes on drawn layers only;
+/// derived layers are appended in id order.
+///
+/// A derived layer that cannot be computed (an operand edge at an angle
+/// other than a multiple of 45 degrees, `sized` past the coordinate domain,
+/// or an operand that was not computed itself) is left empty and marked
+/// ([`GeometryStore::mark_uncomputed`]): only the rules that read it refuse.
+///
+/// # Errors
+///
+/// None today; the `Result` is kept for the reader's other refusals.
+///
+/// # Panics
+///
+/// When `store` has fewer layers than the deck, or already holds shapes on a
+/// derived layer.
+pub fn derive_layers<D: AsRef<LayerTable> + ?Sized>(
     store: &mut GeometryStore,
-    deck: &Deck,
+    deck: &D,
     provenance: &Provenance,
     strings: &StrTable,
 ) -> Result<(), LayoutError> {
-    derive_layers_into(store, &deck.layers, &provenance.placed, strings)
+    // A store built in memory has no cells: every shape's tag is empty.
+    derive_layers_into(store, deck.as_ref(), &provenance.placed, strings, &[]);
+    Ok(())
 }
 
 /// Compute every deck-derived layer and append it to the store, in id order.
 /// Operands only name lower ids, so one forward pass suffices. `labels` are
-/// the placed texts, named in `strings`, that `with_text` reads.
+/// the placed texts, named in `strings`, that `with_text` reads. `cells` is
+/// each stored row's cell tag, bit `k` set when a cell on its placement path
+/// matches the deck's `k`th cell selection ([`LayerTable::cell_selections`]);
+/// a row past its end has no bit set.
 fn derive_layers_into(
     store: &mut GeometryStore,
     layers: &LayerTable,
     labels: &[PlacedLabel],
     strings: &StrTable,
-) -> Result<(), LayoutError> {
+    cells: &[u64],
+) {
     let mut folded = ValidatedLayer::default();
     let mut operand = ValidatedLayer::default();
     let mut combined = ValidatedLayer::default();
@@ -119,129 +241,242 @@ fn derive_layers_into(
     let (mut edges, mut edges_out) = (Vec::<Seg>::new(), Vec::<Seg>::new());
     let (mut xs, mut ys) = (Vec::<Dbu>::new(), Vec::<Dbu>::new());
     let (mut start, mut len) = (Vec::<u32>::new(), Vec::<u32>::new());
+    let mut selection = 0;
 
     for (layer, op, operands) in layers.derived() {
-        let blame = |why: BooleanError| LayoutError::Derived(*layer, why);
-        // An operand's polygons, merged: selections and sizing read whole shapes.
-        let mut merged = |id: LayerId, out: &mut ValidatedLayer| {
-            validate_layer_into(store, id, &mut raw)?;
-            merge_into(&raw, out)
-        };
-
-        if layers.is_edges(*layer) {
-            let receiver = operands[0];
-            match *op {
-                DerivedOp::Edges => {
-                    merged(receiver, &mut folded).map_err(blame)?;
-                    edges_into(&folded, &mut edges);
+        // The receiver's rows as drawn, unmerged: a tag belongs to a drawn ring.
+        if let DerivedOp::InCells { keep, .. } = *op {
+            let bit = 1u64 << selection;
+            selection += 1;
+            xs.clear();
+            ys.clear();
+            start.clear();
+            len.clear();
+            for row in store.polys_on_layer(operands[0]) {
+                let tagged = cells.get(row as usize).is_some_and(|&tag| tag & bit != 0);
+                if tagged == keep {
+                    let (ring_xs, ring_ys) = store.poly_verts(gpurify_geom::PolyId(row));
+                    start.push(crate::narrow(xs.len()));
+                    len.push(crate::narrow(ring_xs.len()));
+                    xs.extend_from_slice(ring_xs);
+                    ys.extend_from_slice(ring_ys);
                 }
-                DerivedOp::And | DerivedOp::Or | DerivedOp::Not => {
-                    let how = match op {
-                        DerivedOp::And => EdgeOp::And,
-                        DerivedOp::Or => EdgeOp::Or,
-                        _ => EdgeOp::Not,
-                    };
-                    edges.clear();
-                    edges.extend_from_slice(store.edges_on_layer(receiver));
-                    for &next in &operands[1..] {
-                        edge_boolean_into(&edges, store.edges_on_layer(next), how, &mut edges_out);
-                        std::mem::swap(&mut edges, &mut edges_out);
-                    }
-                }
-                DerivedOp::Interacting(keep) => {
-                    merged(operands[1], &mut operand).map_err(blame)?;
-                    edge_interacting_into(
-                        store.edges_on_layer(receiver),
-                        &operand,
-                        keep,
-                        &mut edges,
-                    );
-                }
-                DerivedOp::Part(inside) => {
-                    merged(operands[1], &mut operand).map_err(blame)?;
-                    edge_part_into(store.edges_on_layer(receiver), &operand, inside, &mut edges);
-                }
-                DerivedOp::WithLength(lo, hi) => {
-                    with_length_into(store.edges_on_layer(receiver), lo..=hi, &mut edges);
-                }
-                _ => unreachable!("the parser gives an edge result only to edge operations"),
             }
-            store.append_edges(*layer, &edges);
+            store.append_layer(*layer, &xs, &ys, &start, &len);
             continue;
         }
+        // A layer that cannot be computed is marked and left empty: the rules
+        // that read it refuse, and every other rule runs.
+        let computed = (|| -> Result<bool, BooleanError> {
+            // An edge operand is read straight from the store, so its own mark
+            // is checked here; a polygon operand's is checked by validation.
+            if let Some(&id) = operands.iter().find(|&&id| store.is_uncomputed(id)) {
+                return Err(ValidityError::Uncomputed(id).into());
+            }
+            // An operand's polygons, merged: selections and sizing read whole
+            // shapes. Every operation takes edges at any angle.
+            let mut merged = |id: LayerId, out: &mut ValidatedLayer| {
+                validate_layer_with(store, id, Angles::Any, &mut raw)?;
+                merge_into(&raw, out)
+            };
 
-        match *op {
-            DerivedOp::And | DerivedOp::Or | DerivedOp::Not => {
-                validate_layer_into(store, operands[0], &mut folded)
-                    .map_err(|why| blame(why.into()))?;
-                for &next in &operands[1..] {
-                    validate_layer_into(store, next, &mut operand)
-                        .map_err(|why| blame(why.into()))?;
-                    match op {
-                        DerivedOp::And => intersection_into(&folded, &operand, &mut combined),
-                        DerivedOp::Or => union_into(&folded, &operand, &mut combined),
-                        _ => subtraction_into(&folded, &operand, &mut combined),
-                    }
-                    .map_err(blame)?;
-                    std::mem::swap(&mut folded, &mut combined);
-                }
-            }
-            _ => {
-                merged(operands[0], &mut operand).map_err(blame)?;
-                // `with_text` reads the texts on its layer argument, not its shapes.
-                if let (Some(&other), false) =
-                    (operands.get(1), matches!(op, DerivedOp::WithText { .. }))
-                {
-                    merged(other, &mut combined).map_err(blame)?;
-                }
-                let (a, b) = (&operand, &combined);
+            if layers.is_edges(*layer) {
+                let receiver = operands[0];
                 match *op {
-                    DerivedOp::Sized(by) => sized_into(a, by, &mut folded),
+                    DerivedOp::Edges => {
+                        merged(receiver, &mut folded)?;
+                        edges_into(&folded, &mut edges);
+                    }
+                    DerivedOp::And | DerivedOp::Or | DerivedOp::Not => {
+                        let how = match op {
+                            DerivedOp::And => EdgeOp::And,
+                            DerivedOp::Or => EdgeOp::Or,
+                            _ => EdgeOp::Not,
+                        };
+                        edges.clear();
+                        edges.extend_from_slice(store.edges_on_layer(receiver));
+                        for &next in &operands[1..] {
+                            edge_boolean_into(
+                                &edges,
+                                store.edges_on_layer(next),
+                                how,
+                                &mut edges_out,
+                            );
+                            std::mem::swap(&mut edges, &mut edges_out);
+                        }
+                    }
                     DerivedOp::Interacting(keep) => {
-                        interacting_into(a, b, keep, &mut folded);
-                        Ok(())
+                        merged(operands[1], &mut operand)?;
+                        edge_interacting_into(
+                            store.edges_on_layer(receiver),
+                            &operand,
+                            keep,
+                            &mut edges,
+                        );
                     }
-                    DerivedOp::Inside => inside_into(a, b, &mut folded),
-                    DerivedOp::Outside => outside_into(a, b, &mut folded),
-                    DerivedOp::Holes => holes_into(a, &mut folded),
-                    DerivedOp::Extents => extents_into(a, &mut folded),
-                    DerivedOp::WithArea(lo, hi) => {
-                        with_area_into(a, lo..=hi, &mut folded);
-                        Ok(())
+                    DerivedOp::Part(inside) => {
+                        merged(operands[1], &mut operand)?;
+                        edge_part_into(
+                            store.edges_on_layer(receiver),
+                            &operand,
+                            inside,
+                            &mut edges,
+                        );
                     }
-                    DerivedOp::WithWidth(lo, hi) => {
-                        with_width_into(a, lo..=hi, &mut folded);
-                        Ok(())
+                    DerivedOp::WithLength(lo, hi) => {
+                        with_length_into(store.edges_on_layer(receiver), lo..=hi, &mut edges);
                     }
-                    DerivedOp::WithText { keep, text } => {
-                        let pattern = layers.text(text);
-                        let matching: Vec<Point> = labels
-                            .iter()
-                            .filter(|label| {
-                                label.layer == operands[1]
-                                    && glob_matches(pattern, strings.resolve(label.name))
-                            })
-                            .map(|label| label.at)
-                            .collect();
-                        // ponytail: every matching text against every shape; index the
-                        // points by x if a layer carries thousands of texts.
-                        let flags: Vec<bool> = (0..crate::narrow(a.len()))
-                            .map(|idx| {
-                                let poly = a.get(idx);
-                                let holds = matching.iter().any(|&p| {
-                                    poly.bbox().contains(Bbox::point(p.x, p.y))
-                                        && on_material(poly, p)
-                                });
-                                holds == keep
-                            })
-                            .collect();
-                        a.select_into(&flags, &mut folded);
-                        Ok(())
+                    DerivedOp::Oriented(vertical) => {
+                        edges.clear();
+                        edges.extend(
+                            store
+                                .edges_on_layer(receiver)
+                                .iter()
+                                .filter(|e| {
+                                    if vertical {
+                                        e.a.x == e.b.x
+                                    } else {
+                                        e.a.y == e.b.y
+                                    }
+                                })
+                                .copied(),
+                        );
                     }
-                    _ => unreachable!("the parser gives an edge operation an edge result"),
+                    _ => unreachable!("the parser gives an edge result only to edge operations"),
                 }
-                .map_err(blame)?;
+                return Ok(true);
             }
+
+            match *op {
+                DerivedOp::And | DerivedOp::Or | DerivedOp::Not => {
+                    validate_layer_with(store, operands[0], Angles::Any, &mut folded)?;
+                    for &next in &operands[1..] {
+                        validate_layer_with(store, next, Angles::Any, &mut operand)?;
+                        match op {
+                            DerivedOp::And => intersection_into(&folded, &operand, &mut combined),
+                            DerivedOp::Or => union_into(&folded, &operand, &mut combined),
+                            _ => subtraction_into(&folded, &operand, &mut combined),
+                        }?;
+                        std::mem::swap(&mut folded, &mut combined);
+                    }
+                }
+                DerivedOp::Extended {
+                    begin,
+                    end,
+                    outside,
+                    inside,
+                } => extended_into(
+                    store.edges_on_layer(operands[0]),
+                    (begin, end, outside, inside),
+                    &mut folded,
+                )?,
+                _ => {
+                    merged(operands[0], &mut operand)?;
+                    // `with_text` reads the texts on its layer argument, not its shapes.
+                    if let (Some(&other), false) =
+                        (operands.get(1), matches!(op, DerivedOp::WithText { .. }))
+                    {
+                        merged(other, &mut combined)?;
+                    }
+                    let (a, b) = (&operand, &combined);
+                    match *op {
+                        DerivedOp::Sized(dx, dy) => sized_into(a, dx, dy, &mut folded),
+                        DerivedOp::Interacting(keep) => {
+                            interacting_into(a, b, keep, &mut folded);
+                            Ok(())
+                        }
+                        DerivedOp::Inside => inside_into(a, b, &mut folded),
+                        DerivedOp::Outside => outside_into(a, b, &mut folded),
+                        DerivedOp::Overlapping => overlapping_into(a, b, true, &mut folded),
+                        DerivedOp::Covering(keep) => covering_into(a, b, keep, &mut folded),
+                        DerivedOp::Holes => holes_into(a, &mut folded),
+                        DerivedOp::Extents => extents_into(a, &mut folded),
+                        DerivedOp::WithArea(lo, hi) => {
+                            with_area_into(a, lo..=hi, &mut folded);
+                            Ok(())
+                        }
+                        DerivedOp::WithWidth(lo, hi) => {
+                            with_width_into(a, lo..=hi, &mut folded);
+                            Ok(())
+                        }
+                        DerivedOp::Rectangles { square, keep } => {
+                            rectangles_into(a, square, keep, &mut folded);
+                            Ok(())
+                        }
+                        DerivedOp::WithBbox { longer, lo, hi } => {
+                            with_bbox_into(a, longer, lo..=hi, &mut folded);
+                            Ok(())
+                        }
+                        DerivedOp::WithRect { keep, w, h } => {
+                            with_rect_into(a, w, h, keep, &mut folded)
+                        }
+                        DerivedOp::TextsOutside => {
+                            // ponytail: every text against every shape; index the
+                            // points by x if a layer carries thousands of texts.
+                            let outside: Vec<Bbox> = labels
+                                .iter()
+                                .filter(|label| label.layer == operands[0])
+                                .map(|label| label.at)
+                                .filter(|&p| {
+                                    !(0..crate::narrow(b.len())).any(|idx| {
+                                        let poly = b.get(idx);
+                                        poly.bbox().contains(Bbox::point(p.x, p.y))
+                                            && on_material(poly, p)
+                                    })
+                                })
+                                .map(|p| {
+                                    let up = |v: Dbu| Dbu::new_unchecked(v.raw() + 1);
+                                    Bbox {
+                                        xlo: p.x,
+                                        ylo: p.y,
+                                        xhi: up(p.x),
+                                        yhi: up(p.y),
+                                    }
+                                })
+                                .collect();
+                            boxes_into(&outside, &mut folded)
+                        }
+                        DerivedOp::WithText { keep, text } => {
+                            let pattern = layers.text(text);
+                            let matching: Vec<Point> = labels
+                                .iter()
+                                .filter(|label| {
+                                    label.layer == operands[1]
+                                        && glob_matches(pattern, strings.resolve(label.name))
+                                })
+                                .map(|label| label.at)
+                                .collect();
+                            // ponytail: every matching text against every shape; index the
+                            // points by x if a layer carries thousands of texts.
+                            let flags: Vec<bool> = (0..crate::narrow(a.len()))
+                                .map(|idx| {
+                                    let poly = a.get(idx);
+                                    let holds = matching.iter().any(|&p| {
+                                        poly.bbox().contains(Bbox::point(p.x, p.y))
+                                            && on_material(poly, p)
+                                    });
+                                    holds == keep
+                                })
+                                .collect();
+                            a.select_into(&flags, &mut folded);
+                            Ok(())
+                        }
+                        _ => unreachable!("the parser gives an edge operation an edge result"),
+                    }?;
+                }
+            }
+
+            Ok(false)
+        })();
+        let edge_layer = computed.unwrap_or_else(|_| {
+            store.mark_uncomputed(*layer);
+            folded = ValidatedLayer::default();
+            edges.clear();
+            layers.is_edges(*layer)
+        });
+        if edge_layer {
+            store.append_edges(*layer, &edges);
+            continue;
         }
 
         xs.clear();
@@ -261,7 +496,6 @@ fn derive_layers_into(
         }
         store.append_layer(*layer, &xs, &ys, &start, &len);
     }
-    Ok(())
 }
 
 /// Whether `p` lies on the polygon's material, its boundary included.
@@ -284,8 +518,12 @@ fn on_material(poly: PolygonRef<'_>, p: Point) -> bool {
 }
 
 /// A glob over the whole text: `*` matches any run, `?` one character, and
-/// every other character itself.
-fn glob_matches(pattern: &str, text: &str) -> bool {
+/// every other character itself, case included. The deck's text patterns
+/// (`with_text`, `lvs connect_implicit`) and cell names (`in_cells`)
+/// match so. `KLayout`'s glob also reads `[…]`, `{a,b}` and `\`
+/// (docs/klayout-mirror.md, Q3); a cell-name pattern holding one is
+/// refused by the deck parser, so the two read every accepted pattern alike.
+pub fn glob_matches(pattern: &str, text: &str) -> bool {
     let (pattern, text): (Vec<char>, Vec<char>) =
         (pattern.chars().collect(), text.chars().collect());
     let (mut p, mut t) = (0, 0);
@@ -316,14 +554,86 @@ fn glob_matches(pattern: &str, text: &str) -> bool {
 
 /// GDSII: a record stream of `(length, tag, payload)`.
 pub mod gds {
-    use super::{Deck, LabelDepth, LayoutError, UnknownLayers};
+    use super::{
+        LabelDepth, LayerTable, LayoutError, UnknownLayers, MAX_FLAT_POLYGONS, MAX_HIERARCHY_DEPTH,
+    };
     use crate::narrow;
     use crate::provenance::Provenance;
     use fearless_simd::{dispatch, i64x4, mask64x4, prelude::*, Level};
     use gpurify_geom::boolean::canonical_rings_into;
-    use gpurify_geom::{Dbu, LayerId, MAX_ABS_DBU};
+    use gpurify_geom::{Bbox, Dbu, Grid, LayerId, MAX_ABS_DBU};
     use gpurify_geom::{GeometryStore, GeometryStoreBuilder};
     use gpurify_geom::{StrId, StrTable};
+
+    /// `bytes`, a GDSII stream as [`super::read_gds_bytes`] returns it, with
+    /// one `BOUNDARY` per box on its stream pair added to the first root
+    /// structure (the first in the file that no reference places): a layout
+    /// edit (density fill, a redundant cut) in the coordinates
+    /// [`Library::flatten`] reads, every other record left byte for byte.
+    /// Flattening places every root at the origin, so any root would do.
+    ///
+    /// # Errors
+    ///
+    /// [`LayoutError::Truncated`] for a stream that does not read to
+    /// `ENDLIB` (or has no structure to add to, at its end), and
+    /// [`LayoutError::CoordinateOutOfRange`] for a box past GDSII's 32-bit
+    /// coordinates.
+    pub fn with_boxes(
+        bytes: &[u8],
+        boxes: &[((u16, u16), gpurify_geom::Bbox)],
+    ) -> Result<Vec<u8>, LayoutError> {
+        let (mut at, mut name) = (0, String::new());
+        let mut ends: Vec<(String, usize)> = Vec::new();
+        let mut placed: Vec<String> = Vec::new();
+        loop {
+            let (tag, payload, next) = record(bytes, at)?;
+            match tag {
+                STRNAME => name = ascii(payload).into_owned(),
+                SNAME => placed.push(ascii(payload).into_owned()),
+                ENDSTR => ends.push((std::mem::take(&mut name), at)),
+                ENDLIB => break,
+                _ => {}
+            }
+            at = next;
+        }
+        let root = ends
+            .iter()
+            .find(|(name, _)| !placed.contains(name))
+            .ok_or(LayoutError::Truncated(at))?
+            .1;
+        let mut added = Vec::with_capacity(boxes.len() * 64);
+        let put = |out: &mut Vec<u8>, tag: u16, payload: &[u8]| {
+            let len = u16::try_from(payload.len() + 4).expect("a short record");
+            out.extend_from_slice(&len.to_be_bytes());
+            out.extend_from_slice(&tag.to_be_bytes());
+            out.extend_from_slice(payload);
+        };
+        for &((layer, datatype), b) in boxes {
+            let mut xy = Vec::with_capacity(40);
+            for (x, y) in [
+                (b.xlo, b.ylo),
+                (b.xhi, b.ylo),
+                (b.xhi, b.yhi),
+                (b.xlo, b.yhi),
+                (b.xlo, b.ylo),
+            ] {
+                for v in [x.raw(), y.raw()] {
+                    let v = i32::try_from(v).map_err(|_| LayoutError::CoordinateOutOfRange(v))?;
+                    xy.extend_from_slice(&v.to_be_bytes());
+                }
+            }
+            put(&mut added, BOUNDARY, &[]);
+            put(&mut added, LAYER, &layer.to_be_bytes());
+            put(&mut added, DATATYPE, &datatype.to_be_bytes());
+            put(&mut added, XY, &xy);
+            put(&mut added, ENDEL, &[]);
+        }
+        let mut out = Vec::with_capacity(bytes.len() + added.len());
+        out.extend_from_slice(&bytes[..root]);
+        out.extend_from_slice(&added);
+        out.extend_from_slice(&bytes[root..]);
+        Ok(out)
+    }
 
     // Record tags as on the wire: `(record type << 8) | data type`.
     const HEADER: u16 = 0x0002;
@@ -495,8 +805,19 @@ pub mod gds {
     ///
     /// [`Library::parse`] interns every layout string (cell names, `TEXT`s,
     /// `PROPVALUE`s) in file order; [`Library::flatten`] interns nothing.
+    ///
+    /// Shapes are already normalised as parsed: every `BOUNDARY` and `BOX` is
+    /// one counter-clockwise outer ring without its repeated closing point, a
+    /// keyhole boundary (how GDSII writes a hole) is split into its outer and
+    /// clockwise holes, and every `PATH` is stroked into its outline, exactly
+    /// (an outline that revisits a vertex, a path running back over itself,
+    /// is split as a keyhole is, into the region it sweeps).
+    /// Rings are not otherwise validated here: a diagonal or self-crossing
+    /// boundary is refused where a check or derived layer reads its layer.
     #[derive(Default)]
     pub struct Library {
+        /// The `UNITS` record's second value; `None` until one is read.
+        metres_per_dbu: Option<f64>,
         cells: Vec<Cell>,
         elems: Vec<Elem>,
         refs: Vec<Ref>,
@@ -577,7 +898,7 @@ pub mod gds {
         if !payload.len().is_multiple_of(8) {
             return Err(LayoutError::Truncated(at));
         }
-        for (x, y) in payload.chunks_exact(8).map(xy) {
+        for (x, y) in payload.as_chunks::<8>().0.iter().map(|p| xy(p)) {
             xs.push(x);
             ys.push(y);
         }
@@ -585,7 +906,44 @@ pub mod gds {
     }
 
     impl Library {
-        /// Read the record stream, one pass. Every record is consumed, skipped, or refused.
+        /// The layout's grid, from its `UNITS` record: how many database units
+        /// make one micrometre.
+        ///
+        /// # Errors
+        ///
+        /// [`LayoutError::NoUnits`] when the stream has no `UNITS` record, and
+        /// [`LayoutError::UnsupportedUnits`] when its database unit is not a
+        /// whole fraction of a micrometre (within the 1e-9 relative error an
+        /// eight-byte GDSII real carries, so a written 1 nm reads as exactly 1000).
+        pub fn grid(&self) -> Result<Grid, LayoutError> {
+            let metres = self.metres_per_dbu.ok_or(LayoutError::NoUnits)?;
+            let per_um = 1e-6 / metres;
+            let whole = per_um.round();
+            // `!(a <= b)` refuses NaN and infinities with the misfits.
+            if !(whole >= 1.0 && (per_um - whole).abs() <= whole * 1e-9 && whole < 1e15) {
+                return Err(LayoutError::UnsupportedUnits(metres));
+            }
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "whole is a positive integer below 1e15"
+            )]
+            let per_um = whole as i64;
+            Grid::new(per_um).map_err(|_| LayoutError::UnsupportedUnits(metres))
+        }
+
+        /// Reads the record stream in one pass. Every record is consumed,
+        /// skipped, or refused; bytes after `ENDLIB` (block padding) are ignored.
+        /// Glyph records on a `TEXT` (font, size, angle) and properties are
+        /// accepted and discarded.
+        ///
+        /// # Errors
+        ///
+        /// [`LayoutError::Truncated`], [`LayoutError::UnsupportedRecord`] or
+        /// [`LayoutError::UnsupportedTransform`] at the first record that cannot
+        /// be read exactly, [`LayoutError::DuplicateCell`] for a name two
+        /// structures share, and [`LayoutError::MissingCell`] for a reference
+        /// to an undefined structure. On error, `strings` may have gained
+        /// names.
         pub fn parse(bytes: &[u8], strings: &mut StrTable) -> Result<Self, LayoutError> {
             let mut lib = Library::default();
             let mut stroke = Stroke::default();
@@ -597,9 +955,13 @@ pub mod gds {
                 let in_cell = move || open.ok_or(LayoutError::UnsupportedRecord(tag, at));
                 match tag {
                     ENDLIB => break,
-                    // `UNITS` is discarded: coordinates are database units and never rescaled.
-                    HEADER | BGNLIB | LIBNAME | UNITS | REFLIBS | FONTS | GENERATIONS
-                    | ATTRTABLE | FORMAT | MASK | ENDMASKS | LIBDIRSIZE | SRFNAME | LIBSECUR => {}
+                    // Coordinates stay database units; `UNITS` only names their size.
+                    UNITS => {
+                        let metres = payload.get(8..).ok_or(LayoutError::Truncated(at))?;
+                        lib.metres_per_dbu = Some(real(metres, at)?);
+                    }
+                    HEADER | BGNLIB | LIBNAME | REFLIBS | FONTS | GENERATIONS | ATTRTABLE
+                    | FORMAT | MASK | ENDMASKS | LIBDIRSIZE | SRFNAME | LIBSECUR => {}
                     BGNSTR => {
                         if open.is_some() {
                             return Err(LayoutError::UnsupportedRecord(tag, at));
@@ -668,6 +1030,12 @@ pub mod gds {
             // Resolve every reference to its cell index. Sorted by name, then index.
             let mut by_name: Vec<u32> = (0..narrow(lib.cells.len())).collect();
             by_name.sort_unstable_by_key(|&i| (lib.cells[i as usize].name, i));
+            let name_of = |i: u32| lib.cells[i as usize].name;
+            if let Some(pair) = by_name.windows(2).find(|w| name_of(w[0]) == name_of(w[1])) {
+                return Err(LayoutError::DuplicateCell(
+                    strings.resolve(name_of(pair[0])).to_owned(),
+                ));
+            }
             for r in &mut lib.refs {
                 let found = by_name.binary_search_by_key(&r.cell, |&i| lib.cells[i as usize].name);
                 r.child = match found {
@@ -677,6 +1045,29 @@ pub mod gds {
                     }
                 };
             }
+            debug_assert!(
+                lib.xs.len() == lib.ys.len()
+                    && lib.elems.iter().all(|e| {
+                        e.vert_len >= 3
+                            && e.vert_start as usize + e.vert_len as usize <= lib.xs.len()
+                    }),
+                "every element is a ring of at least three vertices inside the coordinate columns"
+            );
+            debug_assert!(
+                lib.cells.iter().all(|c| {
+                    c.elem_start <= c.elem_end
+                        && c.elem_end as usize <= lib.elems.len()
+                        && c.ref_start <= c.ref_end
+                        && c.ref_end as usize <= lib.refs.len()
+                        && c.text_start <= c.text_end
+                        && c.text_end as usize <= lib.texts.len()
+                }) && lib
+                    .refs
+                    .iter()
+                    .all(|r| (r.child as usize) < lib.cells.len()),
+                "every cell's ranges lie in the element, reference and text lists, and every \
+                 reference names a cell"
+            );
             Ok(lib)
         }
     }
@@ -776,6 +1167,32 @@ pub mod gds {
         seen.windows(2).any(|w| w[0] == w[1])
     }
 
+    /// Whether two axis-parallel edges of a ring share a stretch of one line:
+    /// the ring folds back over itself. A keyhole whose way back out runs on
+    /// along the hole's side, past where the way in started, does so without
+    /// revisiting a vertex (`sky130_fd_sc_hd`'s level shifters draw poly this
+    /// way). Sorts, so O(n log n).
+    fn ring_overlaps_itself(xs: &[i64], ys: &[i64]) -> bool {
+        let n = xs.len();
+        let (mut vertical, mut horizontal) = (Vec::new(), Vec::new());
+        for i in 0..n {
+            let j = if i + 1 == n { 0 } else { i + 1 };
+            let (x0, y0, x1, y1) = (xs[i], ys[i], xs[j], ys[j]);
+            if x0 == x1 && y0 != y1 {
+                vertical.push((x0, y0.min(y1), y0.max(y1)));
+            } else if y0 == y1 && x0 != x1 {
+                horizontal.push((y0, x0.min(x1), x0.max(x1)));
+            }
+        }
+        // Sorted by line, then start: an overlap shows between neighbours.
+        [vertical, horizontal].iter_mut().any(|edges| {
+            edges.sort_unstable();
+            edges
+                .windows(2)
+                .any(|w| w[0].0 == w[1].0 && w[1].1 < w[0].2)
+        })
+    }
+
     /// Whether every vertex is inside the domain `canonical_rings_into` asserts.
     /// A ring outside is left for `emit` to refuse with a better message.
     fn ring_is_in_domain(xs: &[i64], ys: &[i64]) -> bool {
@@ -792,6 +1209,50 @@ pub mod gds {
             area2 += i128::from(xs[i]) * i128::from(ys[j]) - i128::from(xs[j]) * i128::from(ys[i]);
         }
         area2 < 0
+    }
+
+    /// Decompose the ring `lib.xs/ys[first..]`, when it revisits a vertex or
+    /// folds back along one line (how
+    /// GDSII writes a hole), into its outer ring and holes, each pushed as an
+    /// element; returns whether it did. Only then: the sweep reorders vertices,
+    /// and vertex 0 is a shape's report point (`erc::first_vertex`). A ring
+    /// outside the domain, or one that fails to decompose or traces no ring, is
+    /// left untouched for the plain path, where `geom::view` names what is wrong.
+    fn push_keyhole(lib: &mut Library, first: usize, layer: u16, datatype: u16) -> bool {
+        let (xs, ys) = (&lib.xs[first..], &lib.ys[first..]);
+        if !((ring_revisits_a_vertex(xs, ys) || ring_overlaps_itself(xs, ys))
+            && ring_is_in_domain(xs, ys))
+        {
+            return false;
+        }
+        let (mut rx, mut ry, mut starts) = (Vec::new(), Vec::new(), Vec::new());
+        if canonical_rings_into(
+            &lib.xs[first..],
+            &lib.ys[first..],
+            &mut rx,
+            &mut ry,
+            &mut starts,
+        )
+        .is_err()
+            || starts.len() < 2
+        {
+            return false;
+        }
+        lib.xs.truncate(first);
+        lib.ys.truncate(first);
+        for ring in starts.windows(2) {
+            let (lo, hi) = (ring[0] as usize, ring[1] as usize);
+            let ring_start = narrow(lib.xs.len());
+            lib.xs.extend_from_slice(&rx[lo..hi]);
+            lib.ys.extend_from_slice(&ry[lo..hi]);
+            lib.elems.push(Elem {
+                layer,
+                datatype,
+                vert_start: ring_start,
+                vert_len: narrow(lib.xs.len()) - ring_start,
+            });
+        }
+        true
     }
 
     /// Consume a `BOUNDARY` or `BOX` through its `ENDEL`. Returns the offset past it.
@@ -827,8 +1288,37 @@ pub mod gds {
             at = next;
         };
 
-        // Drop the closing point the format repeats.
+        // A vertex repeated at once is an edge of length zero: it carries no
+        // geometry, writers emit it (gf180mcu's unit structures do), and the
+        // validator would refuse the ring as degenerate. A ring that would
+        // keep fewer than three vertices, its closing point not counted, is
+        // left whole for the validator to name as degenerate. Counting
+        // without the closing point keeps this a fixed point: written back
+        // with its closing point, the stored ring reads back unchanged.
         let first = vert_start as usize;
+        let past = lib.xs.len();
+        let repeats_previous = |xs: &[i64], ys: &[i64], i: usize| {
+            i > first && (xs[i], ys[i]) == (xs[i - 1], ys[i - 1])
+        };
+        let distinct = (first..past)
+            .filter(|&i| !repeats_previous(&lib.xs, &lib.ys, i))
+            .count();
+        let closed =
+            distinct >= 2 && (lib.xs[first], lib.ys[first]) == (lib.xs[past - 1], lib.ys[past - 1]);
+        if distinct - usize::from(closed) >= 3 {
+            let mut kept = first;
+            for i in first..lib.xs.len() {
+                if !repeats_previous(&lib.xs, &lib.ys, i) {
+                    lib.xs[kept] = lib.xs[i];
+                    lib.ys[kept] = lib.ys[i];
+                    kept += 1;
+                }
+            }
+            lib.xs.truncate(kept);
+            lib.ys.truncate(kept);
+        }
+
+        // Drop the closing point the format repeats.
         let last = lib.xs.len().wrapping_sub(1);
         if lib.xs.len() - first >= 2
             && lib.xs[first] == lib.xs[last]
@@ -846,41 +1336,8 @@ pub mod gds {
             return Err(LayoutError::UnsupportedRecord(kind, start));
         }
 
-        // A keyhole (a ring revisiting a vertex) is how GDSII writes a hole; decompose it
-        // into an outer ring plus holes. Only then: the sweep reorders vertices, and
-        // vertex 0 is a shape's report point (`erc::first_vertex`).
-        if ring_revisits_a_vertex(&lib.xs[first..], &lib.ys[first..])
-            && ring_is_in_domain(&lib.xs[first..], &lib.ys[first..])
-        {
-            let (mut rx, mut ry, mut starts) = (Vec::new(), Vec::new(), Vec::new());
-            // A failed decomposition, or one tracing no ring, falls through to the
-            // plain path, where `geom::view` names what is wrong.
-            if canonical_rings_into(
-                &lib.xs[first..],
-                &lib.ys[first..],
-                &mut rx,
-                &mut ry,
-                &mut starts,
-            )
-            .is_ok()
-                && starts.len() > 1
-            {
-                lib.xs.truncate(first);
-                lib.ys.truncate(first);
-                for ring in starts.windows(2) {
-                    let (lo, hi) = (ring[0] as usize, ring[1] as usize);
-                    let ring_start = narrow(lib.xs.len());
-                    lib.xs.extend_from_slice(&rx[lo..hi]);
-                    lib.ys.extend_from_slice(&ry[lo..hi]);
-                    lib.elems.push(Elem {
-                        layer,
-                        datatype,
-                        vert_start: ring_start,
-                        vert_len: narrow(lib.xs.len()) - ring_start,
-                    });
-                }
-                return Ok(end);
-            }
+        if push_keyhole(lib, first, layer, datatype) {
+            return Ok(end);
         }
 
         // Every BOUNDARY/BOX is an outer ring, stored counter-clockwise whatever the
@@ -1051,6 +1508,12 @@ pub mod gds {
         lib.ys.extend(stroke.right.iter().map(|p| p.1));
         lib.ys.extend(stroke.left.iter().rev().map(|p| p.1));
 
+        // A path that runs back over itself strokes an outline that revisits a
+        // vertex: read it as a written keyhole is, the region it sweeps, so a
+        // path and the boundary its outline is written as read back the same.
+        if push_keyhole(lib, first, layer, datatype) {
+            return Ok(end);
+        }
         lib.elems.push(Elem {
             layer,
             datatype,
@@ -1115,7 +1578,7 @@ pub mod gds {
                     if !payload.len().is_multiple_of(8) {
                         return Err(LayoutError::Truncated(at));
                     }
-                    for (slot, p) in pt.iter_mut().zip(payload.chunks_exact(8)) {
+                    for (slot, p) in pt.iter_mut().zip(payload.as_chunks::<8>().0) {
                         *slot = xy(p);
                     }
                     points_seen = payload.len() / 8;
@@ -1230,7 +1693,7 @@ pub mod gds {
     /// The hierarchy walk and the tables it fills.
     struct Flatten<'a> {
         lib: &'a Library,
-        deck: &'a Deck,
+        layers: &'a LayerTable,
         strings: &'a StrTable,
         unknown: UnknownLayers,
         labels: LabelDepth,
@@ -1238,6 +1701,17 @@ pub mod gds {
         provenance: Provenance,
         /// Cells on the current root-to-here chain, for the cycle check.
         on_chain: Vec<bool>,
+        /// Each cell's flat polygon and text counts, from
+        /// [`Library::flat_counts`].
+        counts: Vec<[u64; 2]>,
+        /// Each cell's own tag: bit `k` when its name matches the deck's
+        /// `k`th cell selection. Empty when the deck makes none, and then
+        /// nothing is tagged.
+        own: Vec<u64>,
+        /// The tag of the current placement path: its cells' own tags, or-ed.
+        tag: u64,
+        /// One tag per pushed ring, in arrival order, while `own` is not empty.
+        tags: Vec<u64>,
         level: Level,
         /// Per-element scratch.
         rx: Vec<i64>,
@@ -1247,70 +1721,469 @@ pub mod gds {
     }
 
     impl Library {
-        /// Resolve the hierarchy into one flat, layer-sorted store with the deck's
+        /// Resolves the hierarchy into one flat, layer-sorted store with the deck's
         /// derived layers appended, plus every root cell's label placed in the
         /// root frame ([`LabelDepth::Top`]).
-        /// `strings` is the table [`Self::parse`] interned into; used for error names only.
-        pub fn flatten(
+        ///
+        /// A root is a structure no reference names; a library with several
+        /// roots flattens them all into one store. Rows on one layer keep the
+        /// walk's order: roots in file order, each cell's own shapes before its
+        /// references'. `deck` is anything holding the layer table (a
+        /// [`Deck`](crate::deck::Deck), or a deck compiled from one) and must
+        /// have been parsed against [`Self::grid`]; nothing checks it. `strings` is the table [`Self::parse`] and the
+        /// deck interned into; it is read for error names and `with_text`
+        /// patterns, never written.
+        ///
+        /// The returned [`Provenance`] holds the placed labels, bound to no
+        /// shape yet: call [`Provenance::resolve_labels`] next.
+        ///
+        /// The walk costs the flat polygon count times the depth: a
+        /// placement of a cell holding no polygon is skipped, never expanded.
+        ///
+        /// Cell names survive only as the deck asks for them: when it makes
+        /// `in_cells` selections ([`crate::deck::DerivedOp::InCells`]), each
+        /// placed ring carries a 64-bit tag, bit `k` set when a cell on its
+        /// placement path matches selection `k`, read while derived layers
+        /// are computed and then dropped. A deck without one pays nothing.
+        ///
+        /// # Errors
+        ///
+        /// From the count, before anything is expanded:
+        /// [`LayoutError::CyclicHierarchy`],
+        /// [`LayoutError::HierarchyTooDeep`] and
+        /// [`LayoutError::TooManyPolygons`]. Then
+        /// [`LayoutError::UnknownLayer`] (under [`UnknownLayers::Reject`]),
+        /// [`LayoutError::UnsupportedTransform`] or
+        /// [`LayoutError::CoordinateOutOfRange`] while placing. A derived layer
+        /// that cannot be computed is marked, not an error
+        /// ([`GeometryStore::mark_uncomputed`]).
+        pub fn flatten<D: AsRef<LayerTable> + ?Sized>(
             &self,
-            deck: &Deck,
+            deck: &D,
             strings: &StrTable,
             unknown: UnknownLayers,
         ) -> Result<(GeometryStore, Provenance), LayoutError> {
             self.flatten_labels(deck, strings, unknown, LabelDepth::Top)
         }
 
-        /// [`Self::flatten`], placing the labels `labels` selects.
-        pub fn flatten_labels(
+        /// [`Self::flatten`], placing the labels `labels` selects: with
+        /// [`LabelDepth::All`], every cell's `TEXT`s, transformed into the root
+        /// frame. Those are counted with the polygons and held to the same
+        /// cap, and the walk then also expands a placement of a cell that
+        /// holds only text: it costs the flat polygon and label counts times
+        /// the depth.
+        ///
+        /// # Errors
+        ///
+        /// As [`Self::flatten`], and with [`LabelDepth::All`]
+        /// [`LayoutError::TooManyLabels`] from the count, after
+        /// [`LayoutError::TooManyPolygons`].
+        pub fn flatten_labels<D: AsRef<LayerTable> + ?Sized>(
             &self,
-            deck: &Deck,
+            deck: &D,
             strings: &StrTable,
             unknown: UnknownLayers,
             labels: LabelDepth,
         ) -> Result<(GeometryStore, Provenance), LayoutError> {
-            let mut referenced = vec![false; self.cells.len()];
-            for reference in &self.refs {
-                referenced[reference.child as usize] = true;
+            let ([polygons, texts], counts) = self.flat_counts(strings)?;
+            if polygons > MAX_FLAT_POLYGONS {
+                return Err(LayoutError::TooManyPolygons(polygons));
             }
-            // Every cell referenced means no root, which means a cycle.
-            if !self.cells.is_empty() && referenced.iter().all(|&r| r) {
-                return Err(LayoutError::CyclicHierarchy(
-                    strings.resolve(self.cells[0].name).to_owned(),
-                ));
+            if labels == LabelDepth::All && texts > MAX_FLAT_POLYGONS {
+                return Err(LayoutError::TooManyLabels(texts));
             }
+
+            let layers = deck.as_ref();
+            let selections: Vec<&[String]> = layers.cell_selections().collect();
+            let own = if selections.is_empty() {
+                Vec::new()
+            } else {
+                let tag_of = |cell: &Cell| {
+                    let name = strings.resolve(cell.name);
+                    (0..).zip(&selections).fold(0u64, |tag, (k, patterns)| {
+                        let hit = patterns.iter().any(|p| super::glob_matches(p, name));
+                        tag | (u64::from(hit) << k)
+                    })
+                };
+                self.cells.iter().map(tag_of).collect()
+            };
 
             let mut walk = Flatten {
                 lib: self,
-                deck,
+                layers,
                 strings,
                 unknown,
                 labels,
                 builder: GeometryStoreBuilder::with_capacity(self.elems.len(), self.xs.len()),
                 provenance: Provenance::default(),
                 on_chain: vec![false; self.cells.len()],
+                counts,
+                own,
+                tag: 0,
+                tags: Vec::new(),
                 level: Level::new(),
                 rx: Vec::new(),
                 ry: Vec::new(),
                 tx: Vec::new(),
                 ty: Vec::new(),
             };
-            for (index, &is_referenced) in referenced.iter().enumerate() {
+            for (index, &is_referenced) in self.referenced().iter().enumerate() {
                 if !is_referenced {
-                    walk.visit(narrow(index), Xform::IDENTITY, true)?;
+                    walk.visit(narrow(index), Xform::IDENTITY, true, 1)?;
                 }
             }
 
-            // Labels are not bound yet, so the layer-sort permutation has nothing to move.
-            let (mut store, _) = walk.builder.finish(deck.layers.len());
-            super::derive_layers_into(&mut store, &deck.layers, &walk.provenance.placed, strings)?;
+            // Labels are not bound yet; only the cell tags follow the layer sort.
+            let (mut store, order) = walk.builder.finish(layers.len());
+            let cells: Vec<u64> = if walk.tags.is_empty() {
+                Vec::new()
+            } else {
+                order.iter().map(|&old| walk.tags[old as usize]).collect()
+            };
+            super::derive_layers_into(&mut store, layers, &walk.provenance.placed, strings, &cells);
             Ok((store, walk.provenance))
+        }
+    }
+
+    /// What [`Library::black_boxes`] reads per cell, memoised: its extent
+    /// in its own frame as `[xlo, ylo, xhi, yhi]` (`None` for a cell holding
+    /// no shape at any depth), and whether a boxed cell is placed under it.
+    #[derive(Clone, Copy)]
+    struct Reach {
+        extent: Option<[i64; 4]>,
+        holds_box: bool,
+    }
+
+    impl Library {
+        /// Every placement of a cell whose name matches one of `patterns`
+        /// (whole-name globs, `*` and `?`, case included; the deck's `lvs
+        /// blackbox`), in the root frame: the cell's name, the extent of
+        /// every shape below it on any layer, and its own `TEXT`s on layers
+        /// the deck declares, placed as [`Self::flatten`] places a root's:
+        /// its pins (catalog LVS-033). A placement under another such
+        /// placement is part of it and not listed, and a root is never a
+        /// black box. In walk order: roots in file order, each cell's
+        /// references in order, an array row by row.
+        ///
+        /// The geometry is untouched: [`Self::flatten`] still draws every
+        /// shape, for DRC and for the nets LVS traces; LVS leaves out the
+        /// devices inside each extent and compares the placement by its pins.
+        ///
+        /// # Errors
+        ///
+        /// As [`Self::flatten`]'s count: [`LayoutError::CyclicHierarchy`]
+        /// and [`LayoutError::HierarchyTooDeep`]; then
+        /// [`LayoutError::UnsupportedTransform`] or
+        /// [`LayoutError::CoordinateOutOfRange`] for a pin placed out of the
+        /// coordinate domain.
+        pub fn black_boxes<D: AsRef<LayerTable> + ?Sized>(
+            &self,
+            patterns: &[String],
+            deck: &D,
+            strings: &StrTable,
+        ) -> Result<Vec<crate::provenance::BlackBox>, LayoutError> {
+            if patterns.is_empty() {
+                return Ok(Vec::new());
+            }
+            // Refuses a cycle and a chain past the depth cap, so the walks
+            // below recurse a bounded number of levels.
+            self.flat_counts(strings)?;
+            let boxed: Vec<bool> = self
+                .cells
+                .iter()
+                .map(|cell| {
+                    let name = strings.resolve(cell.name);
+                    patterns.iter().any(|p| super::glob_matches(p, name))
+                })
+                .collect();
+            let mut reach = vec![None; self.cells.len()];
+            let mut out = Vec::new();
+            let layers = deck.as_ref();
+            for (index, &is_referenced) in self.referenced().iter().enumerate() {
+                if !is_referenced {
+                    let walk = (&boxed[..], layers);
+                    self.find_boxes(narrow(index), Xform::IDENTITY, walk, &mut reach, &mut out)?;
+                }
+            }
+            Ok(out)
+        }
+
+        /// Pushes every black box placed below `cell`, placed at `at`.
+        fn find_boxes(
+            &self,
+            cell: u32,
+            at: Xform,
+            (boxed, layers): (&[bool], &LayerTable),
+            reach: &mut [Option<Reach>],
+            out: &mut Vec<crate::provenance::BlackBox>,
+        ) -> Result<(), LayoutError> {
+            let entry = &self.cells[cell as usize];
+            for reference in &self.refs[entry.ref_start as usize..entry.ref_end as usize] {
+                let child = reference.child;
+                let holds = self.reach(child, boxed, reach).holds_box;
+                if !boxed[child as usize] && !holds {
+                    continue;
+                }
+                for r in 0..reference.rows {
+                    for c in 0..reference.cols {
+                        let placed = at
+                            .compose(reference.element(r, c))
+                            .ok_or(LayoutError::UnsupportedTransform)?;
+                        if boxed[child as usize] {
+                            out.push(self.placed_box(child, placed, layers, reach, boxed)?);
+                        } else {
+                            self.find_boxes(child, placed, (boxed, layers), reach, out)?;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        /// One placement of the boxed `cell` at `at`.
+        fn placed_box(
+            &self,
+            cell: u32,
+            at: Xform,
+            layers: &LayerTable,
+            reach: &mut [Option<Reach>],
+            boxed: &[bool],
+        ) -> Result<crate::provenance::BlackBox, LayoutError> {
+            let entry = &self.cells[cell as usize];
+            let extent = match self.reach(cell, boxed, reach).extent {
+                Some(own) => {
+                    let [xlo, ylo, xhi, yhi] =
+                        transformed(own, at).ok_or(LayoutError::UnsupportedTransform)?;
+                    for v in [xlo, ylo, xhi, yhi] {
+                        if v.unsigned_abs() > MAX_ABS_DBU.unsigned_abs() {
+                            return Err(LayoutError::CoordinateOutOfRange(v));
+                        }
+                    }
+                    let dbu = Dbu::new_unchecked;
+                    Bbox {
+                        xlo: dbu(xlo),
+                        ylo: dbu(ylo),
+                        xhi: dbu(xhi),
+                        yhi: dbu(yhi),
+                    }
+                }
+                None => Bbox::EMPTY,
+            };
+            let mut pins = Vec::new();
+            for text in &self.texts[entry.text_start as usize..entry.text_end as usize] {
+                let Some(layer) = layers.of_stream(text.layer, text.texttype) else {
+                    continue;
+                };
+                let (x, y) = at
+                    .apply(text.x, text.y)
+                    .ok_or(LayoutError::UnsupportedTransform)?;
+                for v in [x, y] {
+                    if v.unsigned_abs() > MAX_ABS_DBU.unsigned_abs() {
+                        return Err(LayoutError::CoordinateOutOfRange(v));
+                    }
+                }
+                pins.push(crate::provenance::PlacedLabel {
+                    at: gpurify_geom::ops::Point {
+                        x: Dbu::new_unchecked(x),
+                        y: Dbu::new_unchecked(y),
+                    },
+                    layer,
+                    name: text.string,
+                });
+            }
+            Ok(crate::provenance::BlackBox {
+                cell: entry.name,
+                extent,
+                pins,
+            })
+        }
+
+        /// `cell`'s [`Reach`], memoised. The hierarchy is acyclic and
+        /// depth-capped ([`Self::flat_counts`]), so the recursion is bounded.
+        fn reach(&self, cell: u32, boxed: &[bool], memo: &mut [Option<Reach>]) -> Reach {
+            if let Some(known) = memo[cell as usize] {
+                return known;
+            }
+            let entry = &self.cells[cell as usize];
+            let mut extent: Option<[i64; 4]> = None;
+            let mut grow = |b: [i64; 4]| {
+                extent = Some(match extent {
+                    None => b,
+                    Some(e) => [
+                        e[0].min(b[0]),
+                        e[1].min(b[1]),
+                        e[2].max(b[2]),
+                        e[3].max(b[3]),
+                    ],
+                });
+            };
+            for elem in &self.elems[entry.elem_start as usize..entry.elem_end as usize] {
+                let run = elem.vert_start as usize..(elem.vert_start + elem.vert_len) as usize;
+                for (&x, &y) in self.xs[run.clone()].iter().zip(&self.ys[run]) {
+                    grow([x, y, x, y]);
+                }
+            }
+            let mut holds_box = false;
+            for reference in &self.refs[entry.ref_start as usize..entry.ref_end as usize] {
+                let child = self.reach(reference.child, boxed, memo);
+                holds_box |= boxed[reference.child as usize] || child.holds_box;
+                let Some(own) = child.extent else { continue };
+                // An array's extent is its corner elements': the steps are
+                // linear in the row and the column.
+                let (last_row, last_col) = (reference.rows - 1, reference.cols - 1);
+                for (r, c) in [(0, 0), (0, last_col), (last_row, 0), (last_row, last_col)] {
+                    // An overflow cannot be placed; `black_boxes` refuses it
+                    // where a box is placed under it.
+                    if let Some(placed) = transformed(own, reference.element(r, c)) {
+                        grow(placed);
+                    }
+                }
+            }
+            let known = Reach { extent, holds_box };
+            memo[cell as usize] = Some(known);
+            known
+        }
+    }
+
+    /// `[xlo, ylo, xhi, yhi]` under `at`: the box of its four corners.
+    /// `None` on overflow.
+    fn transformed(b: [i64; 4], at: Xform) -> Option<[i64; 4]> {
+        let mut out = [i64::MAX, i64::MAX, i64::MIN, i64::MIN];
+        for (x, y) in [(b[0], b[1]), (b[2], b[1]), (b[0], b[3]), (b[2], b[3])] {
+            let (x, y) = at.apply(x, y)?;
+            out = [out[0].min(x), out[1].min(y), out[2].max(x), out[3].max(y)];
+        }
+        Some(out)
+    }
+
+    impl Ref {
+        /// The transform of array element `(row, col)` relative to the
+        /// parent: the placement moved by the steps.
+        fn element(&self, row: u32, col: u32) -> Xform {
+            Xform {
+                dx: self.place.dx
+                    + i64::from(col) * self.col_step.0
+                    + i64::from(row) * self.row_step.0,
+                dy: self.place.dy
+                    + i64::from(col) * self.col_step.1
+                    + i64::from(row) * self.row_step.1,
+                ..self.place
+            }
+        }
+    }
+
+    impl Library {
+        /// How many polygons [`Self::flatten`] would produce, before derived
+        /// layers and keyhole splitting, counted from the hierarchy without
+        /// expanding anything: each root's elements plus each placed child's
+        /// count times the placement's array size, saturating. Linear in the
+        /// library, so a caller can refuse a layout too large to flatten.
+        ///
+        /// # Errors
+        ///
+        /// [`LayoutError::CyclicHierarchy`] for any structure that reaches
+        /// itself, whether a root reaches it or not, and
+        /// [`LayoutError::HierarchyTooDeep`].
+        pub fn flat_polygons(&self, strings: &StrTable) -> Result<u64, LayoutError> {
+            self.flat_counts(strings).map(|([polygons, _], _)| polygons)
+        }
+
+        /// The flat `[polygons, texts]` of the roots, as
+        /// [`Self::flat_polygons`] counts them, and of each cell.
+        fn flat_counts(
+            &self,
+            strings: &StrTable,
+        ) -> Result<([u64; 2], Vec<[u64; 2]>), LayoutError> {
+            let referenced = self.referenced();
+            let mut counted = vec![None; self.cells.len()];
+            let mut on_chain = vec![false; self.cells.len()];
+            let mut total = [0u64; 2];
+            for (index, &is_referenced) in referenced.iter().enumerate() {
+                if !is_referenced {
+                    let (count, _) =
+                        self.flat_count(narrow(index), strings, &mut counted, &mut on_chain, 1)?;
+                    total = [0, 1].map(|k| total[k].saturating_add(count[k]));
+                }
+            }
+            // A cycle no root reaches is as malformed as one a root reaches:
+            // counting what is left refuses it. A library whose every cell is
+            // referenced has no root and is caught here too.
+            for index in 0..self.cells.len() {
+                if counted[index].is_none() {
+                    self.flat_count(narrow(index), strings, &mut counted, &mut on_chain, 1)?;
+                }
+            }
+            let each = counted.iter().map(|c| c.map_or([0; 2], |(count, _)| count));
+            Ok((total, each.collect()))
+        }
+
+        /// Whether each cell is placed by some reference; the roots are the rest.
+        fn referenced(&self) -> Vec<bool> {
+            let mut referenced = vec![false; self.cells.len()];
+            for reference in &self.refs {
+                referenced[reference.child as usize] = true;
+            }
+            referenced
+        }
+
+        /// How many `[polygons, texts]` `cell` flattens to: its own elements
+        /// and texts, plus each placed child's counts times the placement's
+        /// array size, saturating; and how many levels it spans, itself
+        /// included. Memoised in `counted`, both, so a cell first met shallow
+        /// and met again at `depth` is held to the depth cap as walking it
+        /// again would be. Refuses a cycle and a chain past the depth cap.
+        fn flat_count(
+            &self,
+            cell: u32,
+            strings: &StrTable,
+            counted: &mut [Option<([u64; 2], u32)>],
+            on_chain: &mut [bool],
+            depth: u32,
+        ) -> Result<([u64; 2], u32), LayoutError> {
+            let index = cell as usize;
+            let name = || strings.resolve(self.cells[index].name).to_owned();
+            if let Some((count, levels)) = counted[index] {
+                if depth + levels - 1 > MAX_HIERARCHY_DEPTH {
+                    return Err(LayoutError::HierarchyTooDeep(name()));
+                }
+                return Ok((count, levels));
+            }
+            if on_chain[index] {
+                return Err(LayoutError::CyclicHierarchy(name()));
+            }
+            if depth > MAX_HIERARCHY_DEPTH {
+                return Err(LayoutError::HierarchyTooDeep(name()));
+            }
+            on_chain[index] = true;
+            let entry = &self.cells[index];
+            let mut count = [
+                u64::from(entry.elem_end - entry.elem_start),
+                u64::from(entry.text_end - entry.text_start),
+            ];
+            let mut levels = 1;
+            for reference in &self.refs[entry.ref_start as usize..entry.ref_end as usize] {
+                let (child, below) =
+                    self.flat_count(reference.child, strings, counted, on_chain, depth + 1)?;
+                let copies = u64::from(reference.rows) * u64::from(reference.cols);
+                count = [0, 1].map(|k| count[k].saturating_add(child[k].saturating_mul(copies)));
+                levels = levels.max(below + 1);
+            }
+            on_chain[index] = false;
+            counted[index] = Some((count, levels));
+            Ok((count, levels))
         }
     }
 
     impl Flatten<'_> {
         /// Emit one cell's geometry under `at`, then recurse into its references.
         /// Its labels are placed when `root`, or under [`LabelDepth::All`].
-        fn visit(&mut self, cell: u32, at: Xform, root: bool) -> Result<(), LayoutError> {
+        fn visit(
+            &mut self,
+            cell: u32,
+            at: Xform,
+            root: bool,
+            depth: u32,
+        ) -> Result<(), LayoutError> {
             let lib = self.lib;
             let index = cell as usize;
             if self.on_chain[index] {
@@ -1318,7 +2191,14 @@ pub mod gds {
                     self.strings.resolve(lib.cells[index].name).to_owned(),
                 ));
             }
+            if depth > MAX_HIERARCHY_DEPTH {
+                return Err(LayoutError::HierarchyTooDeep(
+                    self.strings.resolve(lib.cells[index].name).to_owned(),
+                ));
+            }
             self.on_chain[index] = true;
+            let parent = self.tag;
+            self.tag |= self.own.get(index).copied().unwrap_or(0);
 
             let entry = &lib.cells[index];
             let elems = &lib.elems[entry.elem_start as usize..entry.elem_end as usize];
@@ -1333,33 +2213,35 @@ pub mod gds {
                 }
             }
             for reference in &lib.refs[entry.ref_start as usize..entry.ref_end as usize] {
+                // Below the root only polygons are placed, and texts under
+                // `All`, so a cell holding neither, at any depth, is not
+                // walked: an array of an empty cell is up to 32767²
+                // placements no budget counts.
+                let [polygons, texts] = self.counts[reference.child as usize];
+                if polygons == 0 && (self.labels == LabelDepth::Top || texts == 0) {
+                    continue;
+                }
                 for r in 0..reference.rows {
                     for c in 0..reference.cols {
-                        let placed = Xform {
-                            dx: reference.place.dx
-                                + i64::from(c) * reference.col_step.0
-                                + i64::from(r) * reference.row_step.0,
-                            dy: reference.place.dy
-                                + i64::from(c) * reference.col_step.1
-                                + i64::from(r) * reference.row_step.1,
-                            ..reference.place
-                        };
                         let at = at
-                            .compose(placed)
+                            .compose(reference.element(r, c))
                             .ok_or(LayoutError::UnsupportedTransform)?;
-                        self.visit(reference.child, at, false)?;
+                        self.visit(reference.child, at, false, depth + 1)?;
                     }
                 }
             }
 
+            self.tag = parent;
             self.on_chain[index] = false;
             Ok(())
         }
 
-        /// The deck layer for a stream pair; `None` means drop it.
+        /// The deck layer for a stream pair; `None` means drop it. A pair the
+        /// deck ignores is dropped whatever `unknown` says.
         fn layer(&self, layer: u16, datatype: u16) -> Result<Option<LayerId>, LayoutError> {
-            match (self.deck.layers.of_stream(layer, datatype), self.unknown) {
+            match (self.layers.of_stream(layer, datatype), self.unknown) {
                 (Some(id), _) => Ok(Some(id)),
+                (None, _) if self.layers.is_ignored(layer, datatype) => Ok(None),
                 (None, UnknownLayers::Reject) => Err(LayoutError::UnknownLayer(layer, datatype)),
                 (None, UnknownLayers::Drop) => Ok(None),
             }
@@ -1488,6 +2370,9 @@ pub mod gds {
                 self.ty[1..].reverse();
             }
             self.builder.push(layer, &self.tx, &self.ty);
+            if !self.own.is_empty() {
+                self.tags.push(self.tag);
+            }
         }
     }
 }
@@ -1497,8 +2382,9 @@ pub mod gds {
 /// test.
 #[cfg(test)]
 mod tests {
-    use super::{gds, Deck, LayoutError, UnknownLayers};
+    use super::{gds, LayoutError, UnknownLayers};
     use crate::deck::tests::{layer_table, ROWS};
+    use crate::deck::Deck;
     use gpurify_geom::StrTable;
     use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId};
     use gpurify_testgen::shapes::polygon_area;
@@ -1875,6 +2761,11 @@ mod tests {
 
     /// One rectangle written at chosen coordinates: the store has a known
     /// answer down to the vertex.
+    ///
+    /// Oracle: construct-from-answer. The square was written at (0, 0) to
+    /// (400, 400) on the deck's first layer, so the store holds those four
+    /// vertices, without the closing point a GDSII BOUNDARY repeats, and one
+    /// layer range per deck layer.
     #[test]
     fn a_boundary_reads_back_on_the_layer_and_at_the_coordinates_it_was_written_at() {
         let mut strings = StrTable::default();
@@ -2012,8 +2903,147 @@ mod tests {
         );
     }
 
+    /// N-c7-3 (found by the `gds` fuzz target's round trip on C7's branch):
+    /// a `PATH` that runs back over itself strokes an outline that revisits a
+    /// vertex, which was stored as drawn (one self-intersecting row, refused
+    /// by every check on its layer) while the same outline written as a
+    /// `BOUNDARY` read back as a keyhole: `parse -> write -> parse` changed
+    /// the store. Both now read as the region the path sweeps.
+    ///
+    /// Oracle: hand-derived. The centreline (0,0) (4000,0) (4000,3000)
+    /// (0,3000) (0,0), width 2000 with half-width end caps (`PATHTYPE` 2),
+    /// sweeps the box -1000..5000 x -1000..4000 less the hole 1000..3000 x
+    /// 1000..2000 the loop encloses: one polygon with one hole, area
+    /// 6000 x 5000 - 2000 x 1000.
+    #[test]
+    fn a_path_running_back_over_itself_reads_as_the_region_it_sweeps() {
+        use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+        const PATH: u16 = 0x0900;
+        const WIDTH: u16 = 0x0F03;
+        const PATHTYPE: u16 = 0x2102;
+
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let mut bytes = Vec::new();
+        record(&mut bytes, HEADER, &600u16.to_be_bytes());
+        record(&mut bytes, BGNLIB, &[0u8; 24]);
+        record(&mut bytes, LIBNAME, &ascii("GPURIFY.DB"));
+        let mut units = Vec::with_capacity(16);
+        units.extend_from_slice(&gds_real(1e-3));
+        units.extend_from_slice(&gds_real(1e-9));
+        record(&mut bytes, UNITS, &units);
+        record(&mut bytes, BGNSTR, &[0u8; 24]);
+        record(&mut bytes, STRNAME, &ascii("TOP"));
+        record(&mut bytes, PATH, &[]);
+        record(&mut bytes, LAYER, &ROWS[0].1.to_be_bytes());
+        record(&mut bytes, DATATYPE, &ROWS[0].2.to_be_bytes());
+        record(&mut bytes, PATHTYPE, &2u16.to_be_bytes());
+        record(&mut bytes, WIDTH, &2000i32.to_be_bytes());
+        let mut xy = Vec::new();
+        for (x, y) in [(0i32, 0i32), (4000, 0), (4000, 3000), (0, 3000), (0, 0)] {
+            xy.extend_from_slice(&x.to_be_bytes());
+            xy.extend_from_slice(&y.to_be_bytes());
+        }
+        record(&mut bytes, XY, &xy);
+        record(&mut bytes, ENDEL, &[]);
+        record(&mut bytes, ENDSTR, &[]);
+        record(&mut bytes, ENDLIB, &[]);
+
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let mut valid = ValidatedLayer::default();
+        validate_layer_into(&layout.store, LayerId(0), &mut valid)
+            .expect("the swept region is a valid polygon, not a self-crossing outline");
+        assert_eq!(valid.len(), 1, "one swept region");
+        let polygon = valid.get(0);
+        assert_eq!(polygon.holes().count(), 1, "the loop encloses one hole");
+        assert_eq!(polygon_area(polygon).raw(), 6000 * 5000 - 2000 * 1000);
+    }
+
+    /// Oracle: `KLayout` 0.30.8 — merging this ring gives one polygon with one
+    /// hole of area 1 199 825 (testing-plan F2, finding N-f2-1).
+    ///
+    /// The poly ring of `sky130_fd_sc_hd__lpflow_lsbuf_lh_isowell_tap_1` enters
+    /// its hole along x = 5700 and leaves along the hole's right side, running
+    /// on past where it entered, so no vertex is revisited. The ring was kept
+    /// whole, every derived layer reading it was refused as self-intersecting,
+    /// and with it the whole library.
+    #[test]
+    fn a_keyhole_leaving_along_the_holes_side_reads_back_with_its_hole() {
+        use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let bytes = gds_library(
+            "TOP",
+            &[boundary(
+                ROWS[0].1,
+                ROWS[0].2,
+                &[
+                    5140, 5140, 5155, 5155, 5700, 5700, 5305, 5305, 5700, 5700, 5710, 5710, 6055,
+                    6055, 5850, 5850, 5290, 5290,
+                ],
+                &[
+                    160, 1220, 1220, 2655, 2655, 2505, 2505, 1485, 1485, 4355, 4355, 4375, 4375,
+                    4015, 4015, 1015, 1015, 160,
+                ],
+            )],
+        );
+
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        let mut valid = ValidatedLayer::default();
+        validate_layer_into(&layout.store, LayerId(0), &mut valid)
+            .expect("the ring denotes an outer and the hole it contains");
+        assert_eq!(valid.len(), 1, "one polygon");
+        let polygon = valid.get(0);
+        assert_eq!(polygon.holes().count(), 1, "with one hole");
+        assert_eq!(polygon_area(polygon).raw(), 1_199_825, "KLayout's area");
+    }
+
+    /// Oracle: closed form — a ring that repeats a vertex at once draws the
+    /// ring without the repeat (testing-plan F2, finding N-f2-4).
+    ///
+    /// gf180mcu's `comp.gds` unit structure draws this U (a 27 x 8 um bar
+    /// with a 6 x 6 um notch from below) with its notch corner twice in a
+    /// row. The zero-length edge made the validator refuse the ring as
+    /// degenerate, and with it every derived layer and the whole layout.
+    #[test]
+    fn a_vertex_repeated_at_once_is_dropped() {
+        use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let bytes = gds_library(
+            "TOP",
+            &[boundary(
+                ROWS[0].1,
+                ROWS[0].2,
+                &[0, 0, 6_000, 6_000, 6_000, 8_849, 8_849, -18_151, -18_151],
+                &[0, 6_000, 6_000, 0, 0, 0, 8_000, 8_000, 0],
+            )],
+        );
+
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("a well-formed library");
+        assert_eq!(
+            layout.store.poly_verts(PolyId(0)).0.len(),
+            8,
+            "the repeat is gone"
+        );
+        let mut valid = ValidatedLayer::default();
+        validate_layer_into(&layout.store, LayerId(0), &mut valid).expect("a simple U");
+        assert_eq!(
+            polygon_area(valid.get(0)).raw(),
+            27_000 * 8_000 - 6_000 * 6_000,
+            "the bar less its notch"
+        );
+    }
+
     /// One shape on a known layer and one on an unknown one: `Reject` names the
     /// undeclared stream pair, `Drop` keeps exactly the declared shape.
+    ///
+    /// Oracle: construct-from-answer, against the documented `UnknownLayers`:
+    /// the shape on 99/7, which the deck does not declare, refuses the read
+    /// under `Reject` naming 99/7 and is removed under `Drop`, which keeps the
+    /// declared square as written.
     #[test]
     fn an_undeclared_layer_is_refused_under_reject_and_dropped_under_drop() {
         let mut strings = StrTable::default();
@@ -2050,8 +3080,336 @@ mod tests {
         );
     }
 
+    /// A chain of nested cells, each placing the next, the last holding one
+    /// square.
+    fn chain(levels: usize) -> Vec<u8> {
+        let names: Vec<&'static str> = (0..levels)
+            .map(|level| &*Box::leak(format!("C{level}").into_boxed_str()))
+            .collect();
+        let square = [first_layer_square()];
+        let refs: Vec<[Ref; 1]> = (0..levels)
+            .map(|level| [sref(names[(level + 1) % levels], 0, 0.0, 0, 0)])
+            .collect();
+        let cells: Vec<(&str, &[Boundary], &[Ref])> = (0..levels)
+            .map(|level| {
+                let last = level + 1 == levels;
+                let elements: &[Boundary] = if last { &square } else { &[] };
+                let placed: &[Ref] = if last { &[] } else { &refs[level] };
+                (names[level], elements, placed)
+            })
+            .collect();
+        gds_hierarchy(&cells)
+    }
+
+    /// Oracle: the stated cap. A chain exactly [`super::MAX_HIERARCHY_DEPTH`]
+    /// deep flattens to its one square; one level deeper is refused with an
+    /// error, not a stack overflow.
+    #[test]
+    fn a_hierarchy_deeper_than_the_cap_is_refused_not_overflowed() {
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let at_cap = super::MAX_HIERARCHY_DEPTH as usize;
+        let layout = read(&chain(at_cap), &deck, UnknownLayers::Reject)
+            .expect("a chain at the cap flattens");
+        assert_eq!(layout.store.poly_count(), 1);
+        assert!(matches!(
+            read(&chain(at_cap + 1), &deck, UnknownLayers::Reject),
+            Err(LayoutError::HierarchyTooDeep(_))
+        ));
+    }
+
+    /// F35: a reference cycle is refused whether a root reaches it or not.
+    /// `TOP` places nothing, and `A` and `B` place each other: `TOP` is the
+    /// only root, the count then starts at `A` (the first cell left), and the
+    /// chain `A`, `B`, `A` closes at `A`.
+    ///
+    /// Oracle: construct-from-answer. `A` and `B` place each other and no root
+    /// reaches them, so the hierarchy is cyclic by construction, and the
+    /// count's documented start after the roots is `A`.
+    #[test]
+    fn a_reference_cycle_no_root_reaches_is_refused() {
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let square = [first_layer_square()];
+        let (to_a, to_b) = ([sref("A", 0, 0.0, 0, 0)], [sref("B", 0, 0.0, 0, 0)]);
+        let unreached =
+            gds_hierarchy(&[("TOP", &square, &[]), ("A", &[], &to_b), ("B", &[], &to_a)]);
+        assert!(matches!(
+            read(&unreached, &deck, UnknownLayers::Reject),
+            Err(LayoutError::CyclicHierarchy(name)) if name == "A"
+        ));
+    }
+
+    /// Found by the `gds_structured` fuzz target (E1): the flat count
+    /// memoised a cell's count, so a cell first reached from a shallow root
+    /// was not held to the depth cap when a deep chain reached it again.
+    /// `A` places `LEAF`, then `C0` … `C1023` each place the next and `C1023`
+    /// places `LEAF`: from `C0`, `LEAF` is level 1025, one past the cap,
+    /// though `A` counted it first at level 2.
+    ///
+    /// Oracle: construct-from-answer. The chain is built one level past
+    /// `MAX_HIERARCHY_DEPTH` (1024), so `LEAF` reached from `C0` is past the
+    /// cap whatever the walk memoised from `A`; both the flat count and the
+    /// read must say `HierarchyTooDeep`.
+    #[test]
+    fn a_cell_counted_shallow_is_still_held_to_the_depth_cap_when_reached_deep() {
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let chain = super::MAX_HIERARCHY_DEPTH as usize;
+        let names: Vec<&'static str> = (0..chain)
+            .map(|level| &*Box::leak(format!("C{level}").into_boxed_str()))
+            .collect();
+        let square = [first_layer_square()];
+        let to_leaf = [sref("LEAF", 0, 0.0, 0, 0)];
+        let refs: Vec<[Ref; 1]> = (1..chain)
+            .map(|next| [sref(names[next], 0, 0.0, 0, 0)])
+            .collect();
+        let mut cells: Vec<(&str, &[Boundary], &[Ref])> = vec![("A", &[], &to_leaf)];
+        for (level, &name) in names.iter().enumerate() {
+            let placed: &[Ref] = if level + 1 == chain {
+                &to_leaf
+            } else {
+                &refs[level]
+            };
+            cells.push((name, &[], placed));
+        }
+        cells.push(("LEAF", &square, &[]));
+        let bytes = gds_hierarchy(&cells);
+        let mut library_strings = StrTable::default();
+        let library =
+            gds::Library::parse(&bytes, &mut library_strings).expect("the library parses");
+        assert!(matches!(
+            library.flat_polygons(&library_strings),
+            Err(LayoutError::HierarchyTooDeep(_))
+        ));
+        assert!(matches!(
+            read(&bytes, &deck, UnknownLayers::Reject),
+            Err(LayoutError::HierarchyTooDeep(_))
+        ));
+    }
+
+    /// Found by the `gds_structured` fuzz target (E1): flattening walked
+    /// every placement of a cell holding nothing, uncounted by the polygon
+    /// budget. `SQUARE` holds the square; `TOP` is a 32767 × 32767 array of
+    /// `MID`, itself a 32767 × 32767 array of the empty `EMPTY`: about 10^18
+    /// placements and one polygon, which flattening must return at once.
+    ///
+    /// Oracle: construct-from-answer. The arrays place only the empty cell, so
+    /// the flat store is the one square of `SQUARE`; the test finishing at all
+    /// is the other half, since the placements number about 10^18.
+    #[test]
+    fn arrays_of_an_empty_cell_are_not_walked() {
+        let mut bytes = gds_hierarchy(&[
+            ("SQUARE", &[first_layer_square()], &[]),
+            ("EMPTY", &[], &[]),
+        ]);
+        bytes.truncate(bytes.len() - 4);
+        append_array(&mut bytes, "MID", "EMPTY", i16::MAX, i16::MAX);
+        append_array(&mut bytes, "TOP", "MID", i16::MAX, i16::MAX);
+        record(&mut bytes, ENDLIB, &[]);
+
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let mut layout_strings = StrTable::default();
+        let library = gds::Library::parse(&bytes, &mut layout_strings).expect("it parses");
+        let (store, _) = library
+            .flatten(&deck, &layout_strings, UnknownLayers::Reject)
+            .expect("one square flattens");
+        assert_eq!(store.poly_count(), 1);
+    }
+
+    /// A two-cell library: `TOP` holds one `AREF` of `cols` × `rows` copies of
+    /// `UNIT`, which holds the deck's first-layer square.
+    fn gds_array(cols: i16, rows: i16) -> Vec<u8> {
+        let mut out = gds_hierarchy(&[("UNIT", &[first_layer_square()], &[])]);
+        // Drop the ENDLIB the helper wrote, and append TOP.
+        out.truncate(out.len() - 4);
+        append_array(&mut out, "TOP", "UNIT", cols, rows);
+        record(&mut out, ENDLIB, &[]);
+        out
+    }
+
+    /// Appends structure `cell` holding one `AREF` of `cols` × `rows` copies
+    /// of `child`, 1000 apart.
+    fn append_array(out: &mut Vec<u8>, cell: &str, child: &str, cols: i16, rows: i16) {
+        const AREF: u16 = 0x0B00;
+        const COLROW: u16 = 0x1302;
+        record(out, BGNSTR, &[0u8; 24]);
+        record(out, STRNAME, &ascii(cell));
+        record(out, AREF, &[]);
+        record(out, SNAME, &ascii(child));
+        let mut colrow = Vec::new();
+        colrow.extend_from_slice(&cols.to_be_bytes());
+        colrow.extend_from_slice(&rows.to_be_bytes());
+        record(out, COLROW, &colrow);
+        let pitch = 1_000i32;
+        let mut xy = Vec::new();
+        for (x, y) in [
+            (0, 0),
+            (pitch * i32::from(cols), 0),
+            (0, pitch * i32::from(rows)),
+        ] {
+            xy.extend_from_slice(&x.to_be_bytes());
+            xy.extend_from_slice(&y.to_be_bytes());
+        }
+        record(out, XY, &xy);
+        record(out, ENDEL, &[]);
+        record(out, ENDSTR, &[]);
+    }
+
+    /// Oracle: the count, `cols × rows` squares, against
+    /// [`super::MAX_FLAT_POLYGONS`]. A small array flattens to its count; the
+    /// largest array GDSII can state is refused before anything is expanded,
+    /// and so returns at once instead of expanding 10⁹ squares.
+    #[test]
+    fn an_array_over_the_flat_budget_is_refused_before_it_is_expanded() {
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let small = read(&gds_array(3, 2), &deck, UnknownLayers::Reject).expect("6 squares");
+        assert_eq!(small.store.poly_count(), 6);
+
+        let started = std::time::Instant::now();
+        let refused = read(&gds_array(i16::MAX, i16::MAX), &deck, UnknownLayers::Reject);
+        assert!(
+            matches!(refused, Err(LayoutError::TooManyPolygons(count)) if count == 32_767 * 32_767),
+            "{:?}",
+            refused.map(|layout| layout.store.poly_count())
+        );
+        assert!(started.elapsed().as_secs() < 5, "refused without expanding");
+    }
+
+    /// Testing-plan F90. Under [`super::LabelDepth::All`], which `read` asks
+    /// for, an array of a cell holding one `TEXT` and no polygon is walked to
+    /// place its labels: 3 × 2 places 6, and the largest array GDSII can
+    /// state, 32767², is refused before anything is expanded.
+    ///
+    /// Oracle: the count, `cols × rows` labels, against
+    /// [`super::MAX_FLAT_POLYGONS`].
+    #[test]
+    fn an_array_of_text_over_the_flat_budget_is_refused_before_it_is_expanded() {
+        let texts = |cols, rows| {
+            let unit = label(ROWS[0].1, ROWS[0].2, 100, 100, "A");
+            let mut out = gds_labelled("UNIT", &[], &[unit]);
+            // Drop the ENDLIB, and append TOP.
+            out.truncate(out.len() - 4);
+            append_array(&mut out, "TOP", "UNIT", cols, rows);
+            record(&mut out, ENDLIB, &[]);
+            out
+        };
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let small = read(&texts(3, 2), &deck, UnknownLayers::Reject).expect("6 labels");
+        assert_eq!(small.provenance.placed().len(), 6);
+
+        let started = std::time::Instant::now();
+        let refused = read(&texts(i16::MAX, i16::MAX), &deck, UnknownLayers::Reject);
+        assert!(
+            matches!(refused, Err(LayoutError::TooManyLabels(count)) if count == 32_767 * 32_767),
+            "{:?}",
+            refused.map(|layout| layout.provenance.placed().len())
+        );
+        assert!(started.elapsed().as_secs() < 5, "refused without expanding");
+    }
+
+    /// The deck's ignore list drops a stream pair even under `Reject`: the deck,
+    /// not the run, decides which layers a signoff may skip. A pair neither
+    /// declared nor ignored is still refused.
+    ///
+    /// Oracle: the deck's documented `ignore` (`docs/deck.md`, Layers: an
+    /// ignored pair's shapes are dropped, an undeclared one refuses the
+    /// layout): the met1 square survives, 99/7 is dropped, 99/8 is refused.
+    #[test]
+    fn an_ignored_pair_is_dropped_even_under_reject() {
+        let mut strings = StrTable::default();
+        let deck = crate::deck::parse_deck(
+            "layer met1 = gds(68, 20)\nignore gds(99, 7)\n",
+            gpurify_geom::Grid::new(1000).expect("a 1 nm grid"),
+            &mut strings,
+        )
+        .expect("a deck with one layer and one ignored pair");
+        let square_on =
+            |layer, datatype| boundary(layer, datatype, &[0, 400, 400, 0], &[0, 0, 400, 400]);
+
+        let ignored = gds_library("TOP", &[square_on(68, 20), square_on(99, 7)]);
+        let layout = read(&ignored, &deck, UnknownLayers::Reject).expect("99/7 is ignored");
+        assert_eq!(
+            layout.store.poly_count(),
+            1,
+            "only the met1 square survives"
+        );
+
+        let stray = gds_library("TOP", &[square_on(68, 20), square_on(99, 8)]);
+        assert!(matches!(
+            read(&stray, &deck, UnknownLayers::Reject),
+            Err(LayoutError::UnknownLayer(99, 8))
+        ));
+    }
+
+    /// A one-cell library whose `UNITS` record states `metres` per database
+    /// unit, or that has no `UNITS` record at all.
+    fn gds_with_units(metres: Option<f64>) -> Vec<u8> {
+        let mut out = Vec::new();
+        record(&mut out, HEADER, &600u16.to_be_bytes());
+        record(&mut out, BGNLIB, &[0u8; 24]);
+        record(&mut out, LIBNAME, &ascii("UNITS.DB"));
+        if let Some(metres) = metres {
+            let mut units = Vec::with_capacity(16);
+            units.extend_from_slice(&gds_real(1e-3));
+            units.extend_from_slice(&gds_real(metres));
+            record(&mut out, UNITS, &units);
+        }
+        record(&mut out, BGNSTR, &[0u8; 24]);
+        record(&mut out, STRNAME, &ascii("TOP"));
+        record(&mut out, ENDSTR, &[]);
+        record(&mut out, ENDLIB, &[]);
+        out
+    }
+
+    /// Oracle: the GDSII definition, database units per micrometre being
+    /// 1e-6 m over the stated metres per unit.
+    #[test]
+    fn the_units_record_is_the_grid() {
+        for (metres, per_um) in [(1e-9, 1000), (5e-9, 200), (2.5e-10, 4000), (1e-6, 1)] {
+            let library =
+                gds::Library::parse(&gds_with_units(Some(metres)), &mut StrTable::default())
+                    .expect("a well-formed library");
+            assert_eq!(
+                library.grid().map(gpurify_geom::Grid::dbu_per_um).ok(),
+                Some(per_um),
+                "{metres} m per database unit"
+            );
+        }
+    }
+
+    /// A grid the deck cannot be converted onto is refused before any deck is read.
+    ///
+    /// Oracle: hand-derived. A unit of 3e-9 m is 333.3 units per um and 2e-6 m
+    /// half a unit per um, neither a whole number, and a library with no UNITS
+    /// record states no grid at all.
+    #[test]
+    fn a_missing_or_fractional_unit_is_refused() {
+        let grid = |metres| {
+            gds::Library::parse(&gds_with_units(metres), &mut StrTable::default())
+                .expect("a well-formed library")
+                .grid()
+        };
+        assert!(matches!(grid(None), Err(LayoutError::NoUnits)));
+        assert!(
+            matches!(grid(Some(3e-9)), Err(LayoutError::UnsupportedUnits(_))),
+            "333.3 per um"
+        );
+        assert!(
+            matches!(grid(Some(2e-6)), Err(LayoutError::UnsupportedUnits(_))),
+            "half a unit per um"
+        );
+    }
+
     /// `UnknownLayers` is not a correctness switch: where every layer is
     /// declared, both settings produce the same store.
+    ///
+    /// Oracle: law, as a differential between the two settings. `UnknownLayers`
+    /// decides only what happens to an undeclared pair, so with all three
+    /// layers declared `Reject` and `Drop` give the same store.
     #[test]
     fn the_two_unknown_layer_settings_agree_when_every_layer_is_declared() {
         let mut strings = StrTable::default();
@@ -2083,6 +3441,10 @@ mod tests {
 
     /// A record whose declared length runs past the end of the file is a
     /// truncation, reported at an offset inside the file.
+    ///
+    /// Oracle: construct-from-answer. One byte is cut from a well-formed
+    /// library, so its last record's header states a length the file does not
+    /// hold: a truncation, at an offset inside the file.
     #[test]
     fn a_record_running_past_the_end_of_the_file_is_a_truncation_not_a_short_read() {
         let mut strings = StrTable::default();
@@ -2105,6 +3467,11 @@ mod tests {
 
     /// The reader has to turn the GDSII library into the builder-made store,
     /// vertex by vertex. Asserting the whole store also pins push order.
+    ///
+    /// Oracle: construct-from-answer. `corpus` states one layout twice, as a
+    /// store built with `LayoutBuilder` and as the GDSII library the Stream
+    /// Format specification says holds it; reading the second must give the
+    /// first, row for row.
     #[test]
     fn a_library_holding_a_known_layout_reads_back_as_that_exact_store() {
         let mut strings = StrTable::default();
@@ -2119,6 +3486,10 @@ mod tests {
     }
 
     /// Stream properties are accepted and leave the geometry as it was.
+    ///
+    /// Oracle: metamorphic relation. Tagging every element of `corpus` with
+    /// PROPATTR/PROPVALUE records leaves the geometry alone, so the store is
+    /// still the builder-made store of the untagged layout.
     #[test]
     fn stream_properties_are_accepted_and_change_no_geometry() {
         let mut strings = StrTable::default();
@@ -2140,6 +3511,10 @@ mod tests {
 
     /// Nested magnifications overflow i64 in `compose` (four levels of 1e6) or in
     /// the vertex transform (three). Either is a refusal, never a wrapped coordinate.
+    ///
+    /// Oracle: hand-derived. Four levels of magnification 1e6 compose to 1e24,
+    /// and three put a 400 dbu vertex at 4e20 dbu; both are past i64's 9.2e18,
+    /// so the only correct answer is `UnsupportedTransform`.
     #[test]
     fn a_magnification_chain_past_i64_is_refused_rather_than_wrapped() {
         let mut strings = StrTable::default();
@@ -2170,6 +3545,163 @@ mod tests {
         }
     }
 
+    /// Catalog DRC-124: each layout input exception Calibre grades (`LAYOUT
+    /// INPUT EXCEPTION SEVERITY`) has one answer here, refused by name or
+    /// read exactly: a reference to no structure, two structures of one name
+    /// (refused since X2: the reference resolved to either), a placement
+    /// turned 45 degrees, a fractional magnification, a `PATH` of odd or
+    /// zero width; an integral magnification is read as the scaling it
+    /// states, a spike (a vertex the outline runs out to and straight back
+    /// from) as the region its ring encloses, without it, and an
+    /// 8000-vertex boundary whole. None is reported as a rule: a refusal
+    /// stops the run, and what is read is read exactly.
+    ///
+    /// Oracle: the GDSII format (`STRNAME` once per structure; a `PATH`
+    /// outline at half its width from the centreline) and `LayoutError`'s
+    /// documented refusals; the magnified square's box by hand (3 x 100);
+    /// a spike encloses no area, so the region is the square. Metamorphic:
+    /// the duplicates in either order are refused alike, and adding the
+    /// spike leaves the square's store unchanged.
+    #[test]
+    fn each_layout_input_exception_is_refused_by_name_or_read_as_stated() {
+        let mut strings = StrTable::default();
+        let deck = three_layer_deck(&mut strings);
+        let square = [first_layer_square()];
+        let refused = |bytes: &[u8]| read(bytes, &deck, UnknownLayers::Reject).map(|_| ());
+
+        let missing = [sref("NOWHERE", 0, 0.0, 0, 0)];
+        assert!(matches!(
+            refused(&gds_hierarchy(&[("TOP", &[], &missing)])),
+            Err(LayoutError::MissingCell(name)) if name == "NOWHERE"
+        ));
+        let leaf = [sref("LEAF", 0, 0.0, 0, 0)];
+        assert!(matches!(
+            refused(&gds_hierarchy(&[("TOP", &[], &leaf), ("LEAF", &square, &[]), ("LEAF", &[], &[])])),
+            Err(LayoutError::DuplicateCell(name)) if name == "LEAF"
+        ));
+        assert!(
+            matches!(
+                refused(&gds_hierarchy(&[("LEAF", &[], &[]), ("TOP", &[], &leaf), ("LEAF", &square, &[])])),
+                Err(LayoutError::DuplicateCell(name)) if name == "LEAF"
+            ),
+            "whichever comes first"
+        );
+        let turned = [sref("LEAF", 0, 45.0, 0, 0)];
+        assert!(matches!(
+            refused(&gds_hierarchy(&[
+                ("TOP", &[], &turned),
+                ("LEAF", &square, &[])
+            ])),
+            Err(LayoutError::UnsupportedTransform)
+        ));
+        let tripled = [sref("LEAF", 0, 0.0, 0, 0).magnified(3)];
+        let bytes = gds_hierarchy(&[("TOP", &[], &tripled), ("LEAF", &square, &[])]);
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("an integral magnification");
+        let b = first_square_bbox();
+        assert_eq!(
+            layout.store.poly_bbox(PolyId(0)),
+            Bbox {
+                xlo: gpurify_geom::Dbu::new_unchecked(3 * b.xlo.raw()),
+                ylo: gpurify_geom::Dbu::new_unchecked(3 * b.ylo.raw()),
+                xhi: gpurify_geom::Dbu::new_unchecked(3 * b.xhi.raw()),
+                yhi: gpurify_geom::Dbu::new_unchecked(3 * b.yhi.raw()),
+            },
+            "the square three times over"
+        );
+        // The same library with the MAG record's real 3.0 replaced by 2.5.
+        let (three, half) = (gds_real(3.0), gds_real(2.5));
+        let at = bytes
+            .windows(8)
+            .position(|w| w == three)
+            .expect("the MAG record");
+        let mut fractional = bytes.clone();
+        fractional[at..at + 8].copy_from_slice(&half);
+        assert!(matches!(
+            refused(&fractional),
+            Err(LayoutError::UnsupportedTransform)
+        ));
+
+        for width in [0i32, 101] {
+            const PATH: u16 = 0x0900;
+            const WIDTH: u16 = 0x0F03;
+            let mut bytes = gds_hierarchy(&[]);
+            bytes.truncate(bytes.len() - 4);
+            record(&mut bytes, BGNSTR, &[0u8; 24]);
+            record(&mut bytes, STRNAME, &ascii("TOP"));
+            record(&mut bytes, PATH, &[]);
+            record(&mut bytes, LAYER, &ROWS[0].1.to_be_bytes());
+            record(&mut bytes, DATATYPE, &ROWS[0].2.to_be_bytes());
+            record(&mut bytes, WIDTH, &width.to_be_bytes());
+            let mut xy = Vec::new();
+            for (x, y) in [(0i32, 0i32), (4000, 0)] {
+                xy.extend_from_slice(&x.to_be_bytes());
+                xy.extend_from_slice(&y.to_be_bytes());
+            }
+            record(&mut bytes, XY, &xy);
+            record(&mut bytes, ENDEL, &[]);
+            record(&mut bytes, ENDSTR, &[]);
+            record(&mut bytes, ENDLIB, &[]);
+            assert!(
+                matches!(
+                    refused(&bytes),
+                    Err(LayoutError::UnsupportedRecord(WIDTH, _))
+                ),
+                "a path {width} wide"
+            );
+        }
+
+        // A spike out of the square's top edge and straight back encloses no
+        // area: the ring is read as the region it encloses, the square.
+        let spiked = boundary(
+            ROWS[0].1,
+            ROWS[0].2,
+            &[0, 100, 100, 50, 50, 50, 0],
+            &[0, 0, 100, 100, 200, 100, 100],
+        );
+        let layout = read(&gds_library("TOP", &[spiked]), &deck, UnknownLayers::Reject)
+            .expect("a spike is read, not refused");
+        let plain = boundary(ROWS[0].1, ROWS[0].2, &[0, 100, 100, 0], &[0, 0, 100, 100]);
+        let unspiked =
+            read(&gds_library("TOP", &[plain]), &deck, UnknownLayers::Reject).expect("a square");
+        // The same ring, wherever it starts.
+        let corners = |store: &GeometryStore| {
+            let (xs, ys) = store.poly_verts(PolyId(0));
+            let mut corners: Vec<(i64, i64)> =
+                xs.iter().zip(ys).map(|(x, y)| (x.raw(), y.raw())).collect();
+            corners.sort_unstable();
+            corners
+        };
+        assert_eq!(
+            corners(&layout.store),
+            corners(&unspiked.store),
+            "adding a spike changes nothing"
+        );
+        assert_eq!(layout.store.poly_count(), 1);
+        assert_eq!(
+            layout.store.poly_bbox(PolyId(0)),
+            Bbox {
+                xlo: gpurify_geom::Dbu::new_unchecked(0),
+                ylo: gpurify_geom::Dbu::new_unchecked(0),
+                xhi: gpurify_geom::Dbu::new_unchecked(100),
+                yhi: gpurify_geom::Dbu::new_unchecked(100),
+            },
+            "the spike encloses nothing"
+        );
+
+        // 8000 vertices, a staircase of 3999 steps closing back along the axes.
+        let (mut xs, mut ys) = (vec![0i64], vec![0i64]);
+        for step in 0..3999 {
+            xs.extend([step * 10 + 10, step * 10 + 10]);
+            ys.extend([step * 10, step * 10 + 10]);
+        }
+        xs.push(0);
+        ys.push(3999 * 10);
+        let stairs = boundary(ROWS[0].1, ROWS[0].2, &xs, &ys);
+        let layout = read(&gds_library("TOP", &[stairs]), &deck, UnknownLayers::Reject)
+            .expect("a long boundary is read whole");
+        assert_eq!(layout.store.poly_verts(PolyId(0)).0.len(), 8000);
+    }
+
     /// The cell every mirroring test below instantiates: a counter-clockwise
     /// right triangle. Chirality is the point — a rectangle is its own mirror
     /// image, so a reader dropping the reflection would reproduce one exactly.
@@ -2189,6 +3721,11 @@ mod tests {
     /// `TOP` places `LEAF` twice, plain and under `STRANS 0x8000`. The mirrored
     /// copy is `(x, −y)` shifted by the reference point — determinant −1, so the
     /// ring reverses.
+    ///
+    /// Oracle: hand-derived. STRANS 0x8000 reflects about x before rotation, so
+    /// the triangle (0, 0), (200, 0), (0, 100) under (x, -y) + (1000, 0) is
+    /// clockwise, and the store's counter-clockwise rings with vertex 0 fixed
+    /// give the listed vertices, reversed from vertex 1.
     #[test]
     fn a_mirrored_instance_keeps_the_orientation_the_cell_was_drawn_with() {
         use gpurify_geom::ops::{winding_of, Winding};
@@ -2246,6 +3783,9 @@ mod tests {
     /// Two reflections compose to a rotation, so the doubly nested copy must be
     /// the cell as drawn, vertex for vertex. The parity path: a fix that
     /// reversed per level rather than on the composed transform fails here.
+    ///
+    /// Oracle: law. Two reflections compose to the identity, so the nested copy
+    /// is the direct copy vertex for vertex, order included.
     #[test]
     fn a_doubly_mirrored_instance_is_the_cell_as_drawn() {
         let mut strings = StrTable::default();
@@ -2275,9 +3815,15 @@ mod tests {
         );
     }
 
-    /// `TOP` places `LEAF` four times, each mirrored and rotated one more
-    /// quarter turn. The composed linear part `R_q · diag(1, −1)` has
-    /// determinant −1 in all four, so all four rings reverse.
+    /// DRC-123, hierarchy flattened at load: `TOP` places `LEAF` four times,
+    /// each mirrored and rotated one more quarter turn. The composed linear
+    /// part `R_q · diag(1, −1)` has determinant −1 in all four, so all four
+    /// rings reverse.
+    ///
+    /// Oracle: hand-derived. Each placement is the drawn triangle through
+    /// `R_q · diag(1, -1)` (GDSII reflects, then rotates) plus its offset,
+    /// worked out by hand, reversed from vertex 1 because the determinant is
+    /// -1; every ring winds counter-clockwise.
     #[test]
     fn a_mirror_composed_with_each_quarter_turn_still_flattens_counter_clockwise() {
         use gpurify_geom::ops::{winding_of, Winding};
@@ -2332,6 +3878,10 @@ mod tests {
     /// rotation, so `F · R₉₀ · p = (−y, −x)` and `R₉₀ · F · p = (y, x)`. A
     /// composition that *added* the quadrants would give both the same answer;
     /// the `assert_ne!` carries that asymmetry. Both determinants are −1.
+    ///
+    /// Oracle: hand-derived. `F · R90` maps a point to (-y, -x) and `R90 · F`
+    /// to (y, x); the triangle through each, offset and reversed from vertex 1,
+    /// is worked out in the comments, and the two must differ.
     #[test]
     fn a_mirror_and_a_rotation_split_across_two_levels_do_not_commute() {
         use gpurify_geom::ops::{winding_of, Winding};
@@ -2449,6 +3999,9 @@ mod tests {
 
     /// The label is written inside a square the test chose, so which polygon it
     /// must name is known before the reader runs.
+    ///
+    /// Oracle: construct-from-answer. The one label is drawn at (200, 200),
+    /// inside the one 400 square, so it names that polygon.
     #[test]
     fn a_text_inside_a_shape_names_the_net_that_shape_is_on() {
         let mut strings = StrTable::default();
@@ -2467,6 +4020,10 @@ mod tests {
     /// The boundary counts as inside: pin labels are routinely written at a
     /// corner or an edge midpoint. All four cases the half-open ray cast alone
     /// answers `false` for.
+    ///
+    /// Oracle: the label binding's documented contract (`provenance.rs`: "The
+    /// boundary counts as inside"): each label sits on the square's boundary,
+    /// so each names polygon 0.
     #[test]
     fn a_text_on_a_shapes_edge_or_corner_still_names_it() {
         let mut strings = StrTable::default();
@@ -2493,6 +4050,10 @@ mod tests {
 
     /// A text on a layer no `connectivity.labels` row pairs is documentation,
     /// not a net label, and is passed over in silence.
+    ///
+    /// Oracle: the label binding's documented contract (`provenance.rs`: "A
+    /// text on a layer no pairing row names binds nothing"): 68/20 is paired
+    /// with nothing.
     #[test]
     fn a_text_on_an_unpaired_layer_is_documentation_and_binds_nothing() {
         let mut strings = StrTable::default();
@@ -2515,6 +4076,10 @@ mod tests {
 
     /// A label the deck *claims* that lands on no shape is refused: a dropped
     /// one leaves the net with its geometry and without its name.
+    ///
+    /// Oracle: the label binding's documented contract (`provenance.rs`:
+    /// `Unplaced` "for a claimed label on no shape"): (9000, 9000) is far from
+    /// the only square (0..400), so the refusal names that point.
     #[test]
     fn a_claimed_label_on_no_shape_is_refused_rather_than_dropped() {
         let mut strings = StrTable::default();
@@ -2544,6 +4109,10 @@ mod tests {
     /// at y 600..1000 and the label at (200, 800), so a reader leaving it in the
     /// child's frame refuses it. A shift of 400 would be worthless — (200, 200)
     /// is a fixed point of `y ↦ 400 − y`.
+    ///
+    /// Oracle: hand-derived. The reflection with offset (0, 1000) maps y to
+    /// 1000 - y: the square to y 600..1000 and the label to (200, 800), inside
+    /// it, so the label binds polygon 0.
     #[test]
     fn a_label_under_a_mirrored_instance_moves_with_the_shape_it_names() {
         let mut strings = StrTable::default();
@@ -2580,6 +4149,10 @@ mod tests {
 
     /// By default a sub-cell's label is not a design label: the same library
     /// that binds `VDD` under [`super::LabelDepth::All`] binds nothing.
+    ///
+    /// Oracle: the documented `LabelDepth`: `Top` (root cells only, Calibre's
+    /// `TEXT DEPTH PRIMARY` default) places no `CHILD` text, and `All` places
+    /// the one there is.
     #[test]
     fn a_sub_cell_label_is_not_placed_by_default() {
         let mut strings = StrTable::default();
@@ -2733,6 +4306,9 @@ mod tests {
     /// `Err(LayoutError::CoordinateOutOfRange(_))` is a pass — `W` may leave the
     /// representable domain — but only that one variant, since a reader refusing
     /// every wrapped library would otherwise satisfy the law.
+    ///
+    /// Oracle: metamorphic relation, transform equivariance: clauses (a) to (c)
+    /// above, the unwrapped result through `W`.
     #[test]
     fn wrapping_the_root_in_one_transformed_instance_transforms_the_whole_store() {
         use gpurify_geom::MAX_ABS_DBU;
@@ -2947,6 +4523,9 @@ mod tests {
 
     /// The placement kernels match their scalar oracles at every length around the
     /// lane count, on random and edge values.
+    ///
+    /// Oracle: differential against `max_abs_scalar` and `shift_scalar`, at
+    /// every length 0 to 13 around the lane count, on random and edge values.
     #[test]
     fn the_placement_kernels_agree_with_their_scalar_versions() {
         use fearless_simd::{dispatch, Level};
@@ -2988,6 +4567,10 @@ mod tests {
     /// `met2` holds s1 inside the L, s2 touching its 4 um arm from outside, s3
     /// far away, and s4 straddling the 2 um arm's end. Expected areas and
     /// lengths are worked out by hand from those coordinates.
+    ///
+    /// Oracle: hand-derived. Each derived layer's areas and lengths are worked
+    /// out from the coordinates above under the operation's definition in
+    /// `docs/deck.md`, Layers.
     #[test]
     fn every_derived_operation_reads_through_the_deck_into_the_store() {
         let deck_text = "grid 1nm
@@ -3101,55 +4684,16 @@ rule huge.w width(huge) >= 1um
         assert_eq!(deck.rules.layers_of(rule), [id("huge")]);
     }
 
-    /// Flatten timing: 4000 placements (every quarter turn, half mirrored) of a
-    /// 400-rectangle cell. `cargo test --release -p gpurify-ingest -- --ignored flatten_timing --nocapture`.
-    #[test]
-    #[ignore = "timing, not a check"]
-    fn flatten_timing() {
-        let leaf: Vec<Boundary> = (0..400)
-            .map(|i| {
-                let (x, y) = ((i % 20) * 50, (i / 20) * 50);
-                boundary(
-                    ROWS[0].1,
-                    ROWS[0].2,
-                    &[x, x + 30, x + 30, x],
-                    &[y, y, y + 30, y + 30],
-                )
-            })
-            .collect();
-        let refs: Vec<Ref> = (0..4000)
-            .map(|i| {
-                let strans = if i % 2 == 0 { 0 } else { REFLECT };
-                sref(
-                    "LEAF",
-                    strans,
-                    f64::from(u8::try_from(i % 4).expect("0..4")) * 90.0,
-                    (i % 64) * 2000,
-                    (i / 64) * 2000,
-                )
-            })
-            .collect();
-        let bytes = gds_hierarchy(&[("LEAF", &leaf, &[]), ("TOP", &[], &refs)]);
-        let mut strings = StrTable::default();
-        let deck = three_layer_deck(&mut strings);
-        let library = gds::Library::parse(&bytes, &mut strings).expect("parses");
-        let mut best = std::time::Duration::MAX;
-        for _ in 0..5 {
-            let t = std::time::Instant::now();
-            let out = library
-                .flatten(&deck, &strings, UnknownLayers::Reject)
-                .expect("flattens");
-            best = best.min(t.elapsed());
-            std::hint::black_box(out);
-        }
-        eprintln!("flatten 1.6M rects: best of 5 {best:?}");
-    }
-
     /// IHP picks devices by their text (`ext_interacting_with_text(..,
     /// "npn13G2*")`). Squares labelled "npn13G2" and, on the square's edge,
     /// "npn13G2L" match the glob; "pnpMPA" does not. An L whose label sits in
     /// its notch, inside its bounding box but off the shape, holds no text, and
     /// a matching string on another text layer is not read.
+    ///
+    /// Oracle: construct-from-answer, under `with_text` as `docs/deck.md`
+    /// defines it (`*` any run, `?` one character, a text on the edge counts,
+    /// `T` a drawn layer): the squares at 0 and 200 hold a match, the others do
+    /// not.
     #[test]
     fn with_text_keeps_the_shapes_holding_a_matching_text() {
         let mut strings = StrTable::default();
@@ -3203,6 +4747,125 @@ layer rest = activ.without_text(text, \"npn13G2*\")
         );
     }
 
+    /// DRC-092: `in_cells` keeps the shapes placed under a matching cell, the
+    /// cell itself or any cell above it, root included, and `not_in_cells` the
+    /// rest. `PAD_A` holds a square and places `INNER`; `TOP` places `PAD_A`
+    /// under each of the eight orientations (`STRANS` reflect × four angles)
+    /// and once magnified two times, which takes the per-element path rather
+    /// than the per-placement one, and places `core` and `INNER` directly.
+    /// Every square is centred on its cell's origin, so each placement's boxes
+    /// are known without composing a transform.
+    ///
+    /// Oracle: construct-from-answer under `DerivedOp::InCells`'s definition:
+    /// the `INNER` under a `PAD_A` is in `PAD_*`, the one `TOP` places is not;
+    /// `TOP` matching makes every shape in; the glob is case-sensitive, so
+    /// `pad_*` holds nothing.
+    #[test]
+    fn in_cells_keeps_the_shapes_under_a_matching_cell_in_every_orientation() {
+        let mut strings = StrTable::default();
+        let grid = gpurify_geom::Grid::new(1000).expect("1 nm");
+        let deck = crate::deck::parse_deck(
+            "grid 1nm
+layer m = gds(1, 0)
+layer pad = m.in_cells(\"PAD_*\")
+layer rest = m.not_in_cells(\"PAD_*\")
+layer every = m.in_cells(\"core\", \"T?P\")
+layer nothing = m.in_cells(\"pad_*\")
+",
+            grid,
+            &mut strings,
+        )
+        .expect("the deck parses");
+        let square = |half: i64| {
+            boundary(
+                1,
+                0,
+                &[-half, half, half, -half],
+                &[-half, -half, half, half],
+            )
+        };
+        let mut refs = Vec::new();
+        let orientations = [0, REFLECT]
+            .into_iter()
+            .flat_map(|s| [0.0, 90.0, 180.0, 270.0].map(|a| (s, a)));
+        for (i, (strans, angle)) in (1..).zip(orientations) {
+            refs.push(sref("PAD_A", strans, angle, 1_000 * i, 0));
+        }
+        refs.push(sref("PAD_A", 0, 0.0, 9_000, 0).magnified(2));
+        refs.push(sref("core", 0, 0.0, 0, 3_000));
+        refs.push(sref("INNER", 0, 0.0, 0, 6_000));
+        let top_square = [boundary(
+            1,
+            0,
+            &[4_990, 5_010, 5_010, 4_990],
+            &[4_990, 4_990, 5_010, 5_010],
+        )];
+        let bytes = gds_hierarchy(&[
+            ("TOP", &top_square, &refs),
+            ("PAD_A", &[square(50)], &[sref("INNER", 0, 0.0, 0, 0)]),
+            ("core", &[square(30)], &[]),
+            ("INNER", &[square(20)], &[]),
+        ]);
+        let layout = read(&bytes, &deck, UnknownLayers::Reject).expect("reads");
+        let boxes = |name: &str| {
+            let layer = deck.layers.id(&strings, name).expect("declared");
+            let mut out: Vec<_> = layout
+                .store
+                .polys_on_layer(layer)
+                .map(|row| {
+                    let b = layout.store.poly_bbox(PolyId(row));
+                    (b.xlo.raw(), b.ylo.raw(), b.xhi.raw(), b.yhi.raw())
+                })
+                .collect();
+            out.sort_unstable();
+            out
+        };
+        let at = |x: i64, y: i64, half: i64| (x - half, y - half, x + half, y + half);
+        let mut pad: Vec<_> = (1..=8)
+            .flat_map(|i| [at(1_000 * i, 0, 50), at(1_000 * i, 0, 20)])
+            .chain([at(9_000, 0, 100), at(9_000, 0, 40)])
+            .collect();
+        pad.sort_unstable();
+        let mut rest = vec![at(5_000, 5_000, 10), at(0, 3_000, 30), at(0, 6_000, 20)];
+        rest.sort_unstable();
+        let mut all: Vec<_> = pad.iter().chain(&rest).copied().collect();
+        all.sort_unstable();
+        assert_eq!(boxes("pad"), pad);
+        assert_eq!(boxes("rest"), rest);
+        assert_eq!(boxes("every"), all);
+        assert_eq!(boxes("nothing"), []);
+    }
+
+    /// A store built in memory has no cells: `in_cells` selects nothing and
+    /// `not_in_cells` the whole layer, whatever the pattern.
+    ///
+    /// Oracle: `DerivedOp::InCells`'s rustdoc, which states this case.
+    #[test]
+    fn a_store_built_in_memory_is_in_no_cell() {
+        let mut strings = StrTable::default();
+        let grid = gpurify_geom::Grid::new(1000).expect("1 nm");
+        let deck = crate::deck::parse_deck(
+            "grid 1nm\nlayer m = gds(1, 0)\nlayer sel = m.in_cells(\"*\")\nlayer unsel = m.not_in_cells(\"*\")\n",
+            grid,
+            &mut strings,
+        )
+        .expect("the deck parses");
+        let mut builder = LayoutBuilder::new(deck.layers.len());
+        builder.push(LayerId(0), &[0, 100, 100, 0], &[0, 0, 100, 100]);
+        let (mut store, _) = builder.finish();
+        super::derive_layers(&mut store, &deck, &crate::Provenance::default(), &strings)
+            .expect("derives");
+        let count = |name: &str| {
+            store
+                .polys_on_layer(deck.layers.id(&strings, name).expect("declared"))
+                .len()
+        };
+        assert_eq!((count("sel"), count("unsel")), (0, 1));
+    }
+
+    /// Oracle: the glob `docs/deck.md` documents for `with_text`: `*` any run,
+    /// `?` one character, every other character itself, case included, over the
+    /// whole text; each pair is decided by hand (`[V]DD` is literal).
     #[test]
     fn a_glob_matches_the_whole_text() {
         use super::glob_matches;

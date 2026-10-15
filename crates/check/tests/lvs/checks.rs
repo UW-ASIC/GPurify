@@ -7,9 +7,10 @@
 //! *this rule ran, it examined N things, and it found nothing* — and both are
 //! asserted here every time.
 //!
-//! The extracted tables hold private fields and offer no constructor, so these
-//! tests run [`check_layout`] over empty tables and a hand-built graph, and read
-//! back the two structural rows (`lvs.terminal_net`, `lvs.terminal_count`).
+//! The extracted tables hold private fields and offer no constructor, so most
+//! of these tests run [`check_layout`] over empty tables and a hand-built graph,
+//! and read back the two structural rows (`lvs.terminal_net`,
+//! `lvs.terminal_count`); the last two build the tables they need.
 
 use crate::common;
 
@@ -17,6 +18,9 @@ use common::{mos_and_bjt, stacked_pair};
 use gpurify_check::lvs::{check_layout, intern_rule_ids, Graph};
 use gpurify_check::report::{Outcome, RuleRun, Violations};
 use gpurify_check::topology::{DeviceTable, NetTable, PortTable};
+use gpurify_check::Design;
+use gpurify_geom::GeometryStore;
+use gpurify_ingest::deck::LvsControls;
 use gpurify_ingest::StrTable;
 
 /// The structural rows `check_layout` writes for `graph`, and their violations.
@@ -26,10 +30,13 @@ fn check_topology(graph: &Graph, out: &mut Violations, runs: &mut Vec<RuleRun>) 
     let mut all = Vec::new();
     check_layout(
         graph,
-        &NetTable::default(),
-        &DeviceTable::default(),
+        Design {
+            store: &GeometryStore::default(),
+            nets: &NetTable::default(),
+            devices: &DeviceTable::default(),
+        },
         &PortTable::default(),
-        &strings,
+        (&strings, &LvsControls::default()),
         out,
         &mut all,
     );
@@ -37,7 +44,7 @@ fn check_topology(graph: &Graph, out: &mut Violations, runs: &mut Vec<RuleRun>) 
         strings.get("lvs.terminal_net"),
         strings.get("lvs.terminal_count"),
     ];
-    assert_eq!(all.len(), 8, "check_layout writes eight rows");
+    assert_eq!(all.len(), 5, "check_layout writes five rows");
     runs.extend(
         all.into_iter()
             .filter(|run| structural.contains(&Some(run.rule))),
@@ -165,4 +172,401 @@ fn a_graph_with_devices_but_no_terminal_csr_refuses_rather_than_reporting_clean(
         terminal_count.examined, 0,
         "a check that read no column examined nothing, and must say so"
     );
+}
+
+/// Oracle: construct-from-answer. Two touching rectangles are one net, and
+/// labelling them `VDD` (the right one) and `VSS` (the left) is a short
+/// between two named nets (testing-plan F13, F14). It is one
+/// `lvs.net_seed_conflict` row naming both labelled shapes, `VDD`'s first
+/// since `VDD` is interned first, located at that shape's first vertex
+/// (90, 0) on its layer: the row says which two labels and where. With one
+/// of the labels removed, the same layout has no conflict.
+#[test]
+fn two_names_on_one_net_are_one_seed_conflict_row_at_the_first_label() {
+    use gpurify_check::lvs::graph::from_layout;
+    use gpurify_check::report::Measurement;
+    use gpurify_check::topology::{bind_ports_into, extract_nets_into};
+    use gpurify_geom::ops::Point;
+    use gpurify_geom::{Dbu, LayerId};
+    use gpurify_ingest::deck::Connectivity;
+    use gpurify_ingest::Provenance;
+    use gpurify_testgen::LayoutBuilder;
+
+    let metal = LayerId(0);
+    let mut layout = LayoutBuilder::new(1);
+    let left = layout.rect(metal, 0, 0, 100, 100);
+    let right = layout.rect(metal, 90, 0, 200, 100);
+    let (store, ids) = layout.finish();
+    let (left, right) = (ids.of(left), ids.of(right));
+    let connectivity = Connectivity {
+        conductors: vec![metal],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+    assert!(nets.same_net(left, right), "the fixture is one net");
+
+    let mut strings = StrTable::default();
+    intern_rule_ids(&mut strings);
+    let (vdd, vss) = (strings.intern("VDD"), strings.intern("VSS"));
+    let rule = strings.get("lvs.net_seed_conflict").expect("interned");
+    let devices = DeviceTable::default();
+    let design = Design {
+        store: &store,
+        nets: &nets,
+        devices: &devices,
+    };
+
+    for (labels, rows) in [
+        (&[(right, vdd), (left, vss)][..], 1),
+        (&[(right, vdd)][..], 0),
+    ] {
+        let mut provenance = Provenance::default();
+        for &(poly, name) in labels {
+            provenance.label(poly, name);
+        }
+        let mut ports = PortTable::default();
+        bind_ports_into(&nets, &provenance, &mut ports).expect("a short binds");
+        let graph = from_layout(&nets, &devices, &ports, &strings, None);
+        let (mut out, mut runs) = (Violations::default(), Vec::new());
+        check_layout(
+            &graph,
+            design,
+            &ports,
+            (&strings, &LvsControls::default()),
+            &mut out,
+            &mut runs,
+        );
+
+        let run = runs.iter().find(|run| run.rule == rule).expect("a row");
+        assert_eq!(run.outcome, Outcome::Ran);
+        assert_eq!(run.examined, labels.len() as u64, "every binding");
+        let found: Vec<_> = (0..out.len())
+            .map(|row| out.get(row))
+            .filter(|row| row.rule == rule)
+            .collect();
+        assert_eq!(found.len(), rows, "{found:?}");
+        if let Some(row) = found.first() {
+            assert_eq!(row.shapes, (right, Some(left)), "VDD's shape, then VSS's");
+            let at = Point {
+                x: Dbu::new_unchecked(90),
+                y: Dbu::new_unchecked(0),
+            };
+            assert_eq!((row.at, row.layer), (at, metal));
+            assert_eq!(
+                (row.measured, row.limit),
+                (Measurement::Count(2), Measurement::Count(1))
+            );
+        }
+    }
+}
+
+/// Oracle: construct-from-answer, testing-plan F70. Three rectangles on one
+/// conductor, apart: the first unlabelled and on no device, so a floating
+/// net; the other two both labelled `VDD`, one name on two nets, an open.
+/// Each row is located on the shape it names, at that shape's first vertex
+/// on its layer: the floating net at its rectangle's (600, 0), the open at the
+/// first labelled rectangle's (200, 0), naming both labelled rectangles. Both
+/// used to report no layer and the origin.
+#[test]
+fn a_floating_net_and_a_split_label_are_located_on_their_shapes() {
+    use gpurify_check::lvs::graph::from_layout;
+    use gpurify_check::report::Measurement;
+    use gpurify_check::topology::{bind_ports_into, extract_nets_into};
+    use gpurify_geom::ops::Point;
+    use gpurify_geom::{Dbu, LayerId};
+    use gpurify_ingest::deck::Connectivity;
+    use gpurify_ingest::Provenance;
+    use gpurify_testgen::LayoutBuilder;
+
+    let metal = LayerId(0);
+    let mut layout = LayoutBuilder::new(1);
+    let lone = layout.rect(metal, 600, 0, 700, 100);
+    let left = layout.rect(metal, 200, 0, 300, 100);
+    let right = layout.rect(metal, 400, 0, 500, 100);
+    let (store, ids) = layout.finish();
+    let (lone, left, right) = (ids.of(lone), ids.of(left), ids.of(right));
+    let connectivity = Connectivity {
+        conductors: vec![metal],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+
+    let mut strings = StrTable::default();
+    intern_rule_ids(&mut strings);
+    let vdd = strings.intern("VDD");
+    let mut provenance = Provenance::default();
+    provenance.label(left, vdd);
+    provenance.label(right, vdd);
+    let mut ports = PortTable::default();
+    bind_ports_into(&nets, &provenance, &mut ports).expect("an open binds");
+    let devices = DeviceTable::default();
+    let design = Design {
+        store: &store,
+        nets: &nets,
+        devices: &devices,
+    };
+    let graph = from_layout(&nets, &devices, &ports, &strings, None);
+    let (mut out, mut runs) = (Violations::default(), Vec::new());
+    check_layout(
+        &graph,
+        design,
+        &ports,
+        (&strings, &LvsControls::default()),
+        &mut out,
+        &mut runs,
+    );
+
+    let point = |x| Point {
+        x: Dbu::new_unchecked(x),
+        y: Dbu::new_unchecked(0),
+    };
+    for (name, shapes, at, counts) in [
+        ("lvs.floating_net", (lone, None), point(600), (0, 1)),
+        (
+            "lvs.label_conflict",
+            (left, Some(right)),
+            point(200),
+            (2, 1),
+        ),
+    ] {
+        let rule = strings.get(name).expect("interned");
+        let found: Vec<_> = (0..out.len())
+            .map(|row| out.get(row))
+            .filter(|row| row.rule == rule)
+            .collect();
+        assert_eq!(found.len(), 1, "{name}: {found:?}");
+        let row = found[0];
+        assert_eq!(row.shapes, shapes, "{name}");
+        assert_eq!((row.at, row.layer), (at, metal), "{name}");
+        assert_eq!(
+            (row.measured, row.limit),
+            (Measurement::Count(counts.0), Measurement::Count(counts.1)),
+            "{name}"
+        );
+    }
+
+    // `check_layout`'s rustdoc: the split label is an error, and a warning
+    // when the deck says the label's nets connect outside the layout (a
+    // `connect_implicit` pattern matching it, or a `connect_explicit` group
+    // naming it); a pattern that does not match changes nothing.
+    use gpurify_check::report::Severity;
+    let gnd = strings.intern("GND");
+    let conflict = strings.get("lvs.label_conflict").expect("interned");
+    for (controls, severity) in [
+        (LvsControls::default(), Severity::Error),
+        (
+            LvsControls {
+                connect_implicit: vec!["VD*".to_owned()],
+                ..LvsControls::default()
+            },
+            Severity::Warning,
+        ),
+        (
+            LvsControls {
+                connect_implicit: vec!["VSS*".to_owned()],
+                ..LvsControls::default()
+            },
+            Severity::Error,
+        ),
+        (
+            LvsControls {
+                connect_explicit: vec![vec![gnd, vdd]],
+                ..LvsControls::default()
+            },
+            Severity::Warning,
+        ),
+        (
+            LvsControls {
+                connect_explicit: vec![vec![gnd]],
+                ..LvsControls::default()
+            },
+            Severity::Error,
+        ),
+    ] {
+        let (mut out, mut runs) = (Violations::default(), Vec::new());
+        check_layout(
+            &graph,
+            design,
+            &ports,
+            (&strings, &controls),
+            &mut out,
+            &mut runs,
+        );
+        let severities: Vec<Severity> = (0..out.len())
+            .map(|row| out.get(row))
+            .filter(|row| row.rule == conflict)
+            .map(|row| row.severity)
+            .collect();
+        assert_eq!(severities, [severity], "{controls:?}");
+    }
+}
+
+/// Oracle: construct-from-answer, `check_layout`'s rustdoc: the substrate
+/// alone (a net of only global-layer shapes) does not float, a conductor
+/// with nothing on it does. One metal rectangle and one substrate
+/// rectangle, nothing labelled, no device: the metal's net is the one
+/// floating row, and the table says which net is the substrate's.
+#[test]
+fn the_substrate_alone_is_not_a_floating_net() {
+    use gpurify_check::lvs::graph::from_layout;
+    use gpurify_check::topology::extract_nets_into;
+    use gpurify_geom::LayerId;
+    use gpurify_ingest::deck::Connectivity;
+    use gpurify_testgen::LayoutBuilder;
+
+    let (metal, substrate) = (LayerId(0), LayerId(1));
+    let mut layout = LayoutBuilder::new(2);
+    let wire = layout.rect(metal, 0, 0, 100, 100);
+    let body = layout.rect(substrate, 500, 0, 600, 100);
+    let (store, ids) = layout.finish();
+    let (wire, body) = (ids.of(wire), ids.of(body));
+    let connectivity = Connectivity {
+        conductors: vec![metal],
+        global: vec![substrate],
+        intra_layer_touch: true,
+        ..Connectivity::default()
+    };
+    let mut nets = NetTable::default();
+    extract_nets_into(&store, &connectivity, &mut nets);
+    assert!(!nets.is_global_only(nets.net_of(wire)));
+    assert!(nets.is_global_only(nets.net_of(body)));
+
+    let mut strings = StrTable::default();
+    intern_rule_ids(&mut strings);
+    let rule = strings.get("lvs.floating_net").expect("interned");
+    let (devices, ports) = (DeviceTable::default(), PortTable::default());
+    let graph = from_layout(&nets, &devices, &ports, &strings, None);
+    let (mut out, mut runs) = (Violations::default(), Vec::new());
+    check_layout(
+        &graph,
+        Design {
+            store: &store,
+            nets: &nets,
+            devices: &devices,
+        },
+        &ports,
+        (&strings, &LvsControls::default()),
+        &mut out,
+        &mut runs,
+    );
+    let floating: Vec<_> = (0..out.len())
+        .map(|row| out.get(row))
+        .filter(|row| row.rule == rule)
+        .map(|row| row.shapes)
+        .collect();
+    assert_eq!(floating, [(wire, None)]);
+}
+
+/// Oracle: construct-from-answer, testing-plan F32. A marker recognition
+/// refused, here with 2 of its 3 terminals bound, never reaches the graph,
+/// so `lvs.terminal_net` reads it from the device table: one row on the
+/// marker, at its first vertex (200, 0) on its layer, measuring the 2
+/// terminals bound against the 3 listed. It examines the refused marker too.
+#[test]
+fn a_refused_marker_is_one_terminal_net_row_on_the_marker() {
+    use gpurify_check::report::Measurement;
+    use gpurify_geom::ops::Point;
+    use gpurify_geom::{Dbu, LayerId};
+    use gpurify_testgen::LayoutBuilder;
+
+    let layer = LayerId(0);
+    let mut layout = LayoutBuilder::new(1);
+    let marker = layout.rect(layer, 200, 0, 250, 200);
+    let (store, ids) = layout.finish();
+    let marker = ids.of(marker);
+    let mut devices = DeviceTable::default();
+    devices.refused.push((marker, 2, 3));
+
+    let mut strings = StrTable::default();
+    intern_rule_ids(&mut strings);
+    let rule = strings.get("lvs.terminal_net").expect("interned");
+    let (mut out, mut runs) = (Violations::default(), Vec::new());
+    check_layout(
+        &Graph::default(),
+        Design {
+            store: &store,
+            nets: &NetTable::default(),
+            devices: &devices,
+        },
+        &PortTable::default(),
+        (&strings, &LvsControls::default()),
+        &mut out,
+        &mut runs,
+    );
+
+    let run = runs.iter().find(|run| run.rule == rule).expect("a row");
+    assert_eq!(
+        (run.outcome, run.examined, run.violations),
+        (Outcome::Ran, 1, 1)
+    );
+    let row = out.get(0);
+    assert_eq!(row.rule, rule);
+    assert_eq!(row.shapes, (marker, None));
+    let at = Point {
+        x: Dbu::new_unchecked(200),
+        y: Dbu::new_unchecked(0),
+    };
+    assert_eq!((row.at, row.layer), (at, layer));
+    assert_eq!(
+        (row.measured, row.limit),
+        (Measurement::Count(2), Measurement::Count(3))
+    );
+}
+
+/// Oracle: the definition (`unpaired_instances`' rustdoc), by hand. Four
+/// placements in flattening order: `X0` over rows 1..3, `X1` over 3..5
+/// and `X1.X2` inside it over 4..5, and `X3` over 5..6, whose one row the
+/// deck left out. Reduced device 1 stands for rows 1 and 2, merged. Rows 3
+/// and 4 unpaired name `X1` alone, measured 2, not `X1.X2` again; row 4
+/// alone names only `X1.X2`; device 1 unpaired names `X0` with both its
+/// rows; row 0, placed by no instance, names nothing; `X3`, holding no row
+/// the comparison kept, is never named, and nor is anything for an
+/// unpaired layout device. Breaks if an inner placement is named under an
+/// outer one, a partly paired one is named, or a merged device's rows are
+/// not all read.
+#[test]
+fn an_instance_is_named_when_every_device_it_placed_is_unpaired() {
+    use gpurify_check::lvs::verdict::{Discrepancy, Side};
+    use gpurify_check::lvs::{unpaired_instances, UnpairedInstance};
+    use gpurify_ingest::netlist::Placement;
+    use gpurify_ingest::StrId;
+    let placement = |devices: std::ops::Range<u32>| Placement {
+        path: StrId(0),
+        cell: StrId(0),
+        devices,
+    };
+    let placements = [
+        placement(1..3),
+        placement(3..5),
+        placement(4..5),
+        placement(5..6),
+    ];
+    // Reduced device d stands for these rows; row 5 was left out.
+    let rows = vec![vec![0], vec![1, 2], vec![3], vec![4]];
+    let unpaired = |devices: &[u32]| -> Vec<Discrepancy> {
+        devices
+            .iter()
+            .map(|&device| Discrepancy::UnpairedDevice {
+                side: Side::Reference,
+                device,
+                model: StrId(0),
+            })
+            .collect()
+    };
+    let found = |devices: &[u32]| unpaired_instances(&unpaired(devices), &rows, &placements);
+    let named = |placement, devices| UnpairedInstance { placement, devices };
+    assert_eq!(found(&[2, 3]), [named(1, 2)]);
+    assert_eq!(found(&[3]), [named(2, 1)]);
+    assert_eq!(found(&[1]), [named(0, 2)]);
+    assert!(found(&[0]).is_empty());
+    let layout_side = [Discrepancy::UnpairedDevice {
+        side: Side::Layout,
+        device: 3,
+        model: StrId(0),
+    }];
+    assert!(unpaired_instances(&layout_side, &rows, &placements).is_empty());
 }

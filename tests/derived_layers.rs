@@ -223,6 +223,7 @@ fn no_gds_stream_pair_maps_onto_a_derived_layer() {
 /// session: the hole was extracted as solid and every inner net merged.
 #[test]
 fn a_ring_on_a_derived_layer_keeps_its_hole_for_net_extraction() {
+    const SD: LayerId = LayerId(2);
     let deck = deck(
         "grid 1nm
 layer diff = gds(2, 0)
@@ -232,7 +233,6 @@ connect conductors [sd]
 connect touch_within_layer
 ",
     );
-    const SD: LayerId = LayerId(2);
 
     let mut layout = LayoutBuilder::new(deck.layers.len());
     // The ring: outer (0,0)-(2000,2000), hole (200,200)-(1800,1800).
@@ -277,8 +277,8 @@ connect touch_within_layer
 /// Oracle: construct-from-answer, on the shipped sky130 deck. A 1 um x 1 um n+
 /// diffusion under `areaid.diode` is a `pw2nd_05v5` diode: its anode is the
 /// substrate net, which the p-tap beside it joins through `psub_tie`, and its
-/// area is the junction's, 1 um^2. A p-tap inside deep n-well sits in an
-/// isolated p-well, so it stays off the substrate net.
+/// area and perimeter are the junction's, 1 um^2 and 4 um. A p-tap inside
+/// deep n-well sits in an isolated p-well, so it stays off the substrate net.
 #[test]
 fn a_sky130_pw2nd_diode_has_its_anode_on_the_substrate() {
     use gpurify_check::topology::device::{DeviceMeasure, DeviceParam};
@@ -335,10 +335,16 @@ fn a_sky130_pw2nd_diode_has_its_anode_on_the_substrate() {
     );
     assert_eq!(
         devices.params_of(DeviceId(0)),
-        &[(
-            DeviceParam::Area,
-            DeviceMeasure::Area(gpurify_geom::DbuArea::new(1_000_000))
-        )],
-        "the junction's area"
+        &[
+            (
+                DeviceParam::Area,
+                DeviceMeasure::Area(gpurify_geom::DbuArea::new(1_000_000))
+            ),
+            (
+                DeviceParam::Perimeter,
+                DeviceMeasure::Length(gpurify_geom::Dbu::new_unchecked(4_000))
+            ),
+        ],
+        "the junction's area and perimeter"
     );
 }

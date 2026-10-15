@@ -1,0 +1,95 @@
+# helpers: build an in-memory layout and make it the DRC source
+def mk(spec)
+  ly = RBA::Layout.new
+  ly.dbu = 0.001
+  top = ly.create_cell("TOP")
+  spec.each do |ld, shapes|
+    li = ly.layer(ld[0], ld[1])
+    shapes.each do |s|
+      if s.is_a?(Array) && s[0].is_a?(Array)
+        top.shapes(li).insert(RBA::Polygon.new(s.map { |x, y| RBA::Point.new(x, y) }))
+      elsif s.is_a?(String)
+        x, y, t = s.split(",")
+        top.shapes(li).insert(RBA::Text.new(t, RBA::Trans.new(x.to_i, y.to_i)))
+      else
+        top.shapes(li).insert(RBA::Box.new(*s))
+      end
+    end
+  end
+  ly
+end
+def use(spec)
+  $ly = mk(spec)
+  source($ly, "TOP")
+end
+def ep_s(ep)
+  r = []
+  ep.data.each { |e| r << "#{e.first} | #{e.second} d=#{e.distance}" }
+  r.join("; ")
+end
+def show(name, layer)
+  d = layer.data
+  n = layer.count
+  items = []
+  d.each { |o| items << o.to_s } if n < 12
+  puts "#{name}: count=#{n} #{items.join(' ; ')}"
+end
+flat
+
+# F1: what the translator (tests/klayout/translate.rs) settles.
+# Z1 the corner model: a ring closed only at a corner (###|#.#|.##) has a hole
+# at KLayout's default (maximum) coherence and none at minimum coherence; the
+# touch point is a 0-width neck; a chain joined at corners is one figure.
+use({[1,0] => [[0,2],[1,2],[2,2],[0,1],[2,1],[1,0],[2,0]].map { |x,y| [x*100, y*100, x*100+100, y*100+100] }})
+a = input(1,0)
+puts "Z1 max merged: #{a.data.merged.each.map { |p| [p.to_s, p.holes] }.inspect}"
+m = a.data.dup ; m.min_coherence = true
+puts "Z1 min merged: #{m.merged.each.map { |p| [p.to_s, p.holes] }.inspect}"
+show("Z1 width(50, euclidian)", a.width(50, euclidian))
+use({[1,0] => [[0,0,100,100],[100,100,200,200],[200,0,300,100]]})
+show("Z1 chain notch(150, projection)", input(1,0).notch(150, projection))
+# Z2 EdgePair#distance is 0 for two degenerate edges (a neck between two corners).
+use({[1,0] => [[0,0,1000,1000],[930,930,1930,1930]]})
+input(1,0).width(99, euclidian).data.each { |e| puts "Z2 #{e} distance=#{e.distance}" }
+# Z3 a raw polygon never overlaps itself: w - t is w when t is empty, and
+# w.overlapping(w - t) then finds nothing; a copy (sized(0)) does.
+use({[1,0] => [[0,0,1000,400]]})
+w = input(1,0).dup.raw ; t = input(3,0)
+show("Z3 overlapping(w - t)", w.overlapping(w - t.sized(600)))
+show("Z3 overlapping((w - t).sized(0))", w.overlapping((w - t.sized(600)).sized(0)))
+# Z4 `covering` drops an outer figure that any inner shape straddles.
+use({[1,0] => [[990,1310,1440,1730]], [2,0] => [[1080,1500,1120,1510],[1200,1290,1240,1350]]})
+m = input(1,0) ; v = input(2,0)
+show("Z4 not_covering(v, 1)", m.not_covering(v, 1))
+show("Z4 not_covering(v.inside(m), 1)", m.not_covering(v.inside(m), 1))
+# Z5 a transparent `enclosing` pairs edges that face the same way whether or
+# not one shape is inside the other.
+use({[1,0] => [[1510,1380,1520,1670]], [2,0] => [[1530,1180,2000,1700]]})
+show("Z5 A.enclosing(B) transparent", input(1,0).enclosing(input(2,0), 50, projection, transparent, without_touching_edges))
+# Z6 `|` on edges cancels coincident edges of opposite direction;
+# `inside_part` splits a run where the other layer's drawn shapes meet.
+use({[1,0] => [[0,0,500,300]], [2,0] => [[500,-100,1000,200]]})
+show("Z6 a.edges | b.edges", input(1,0).edges | input(2,0).edges)
+use({[1,0] => [[300,1500,600,1590]], [2,0] => [[300,1510,600,1650],[450,1430,620,1630]]})
+show("Z6 inside_part", input(1,0).edges.inside_part(input(2,0)))
+show("Z6 inside_part merged", input(1,0).edges.inside_part(input(2,0)).merged)
+# Z7 a raw `isolated` pairs abutting cuts (at 0) but not overlapping ones.
+use({[1,0] => [[0,0,100,100],[50,0,150,100],[150,0,250,100]]})
+show("Z7 raw isolated(50)", input(1,0).dup.raw.isolated(50, euclidian, transparent))
+# Z8 a cut is a conductor: one cut on two met1 shapes joins them.
+use({[1,0] => [[0,0,500,500],[550,0,1050,500]], [2,0] => [[450,200,600,300]], [3,0] => [[0,1000,1050,1500]]})
+m1 = input(1,0) ; v = input(2,0) ; m2 = input(3,0)
+connect(m1, m1) ; connect(m1, v) ; connect(v, m2)
+show("Z8 nets props_ne", m1.nets.isolated(100, euclidian, transparent, props_ne))
+show("Z8 nets props_eq", m1.nets.isolated(100, euclidian, transparent, props_eq))
+clear_connections
+# Z9 `width` compares the true distance with a whole limit, and the universal
+# `width <= v` is `width < v + 1`: a neck between corners 140 and 2 apart,
+# sqrt(19604) = 140.01, is under 141 but not 140, and `<= 140` flags it; one
+# between corners 40 and 140 apart, sqrt(21200) = 145.6, is under 146 but not 145.
+[[140, 2, [140, 141]], [40, 140, [145, 146]]].each do |dx, dy, lims|
+  use({[1,0] => [[0,0,2000,2000],[2000-dx,2000-dy,4000-dx,4000-dy]]})
+  a = input(1,0)
+  lims.each { |l| show("Z9 #{dx},#{dy} width(#{l}, euclidian)", a.width(l, euclidian)) }
+  show("Z9 #{dx},#{dy} drc(width <= #{lims[0]})", a.drc(width(euclidian) <= lims[0]))
+end

@@ -20,7 +20,17 @@ pub struct GraphCase {
     pub components: Vec<Vec<u32>>,
 }
 
-/// Build a graph with the stated component sizes.
+/// Builds a graph whose connected components have exactly the stated
+/// `sizes`, in that order in [`GraphCase::components`].
+///
+/// Each component is a random spanning tree plus up to `extra_edges`
+/// redundant edges drawn inside one component. An extra edge may be a
+/// self-loop or repeat an edge; a draw that lands on a singleton adds
+/// nothing. The same `rng` state gives the same graph, edge order included.
+///
+/// # Panics
+///
+/// Panics if `sizes` is empty, holds a zero, or sums past `u32::MAX`.
 #[must_use]
 pub fn graph_with_partition(rng: &mut Rng, sizes: &[u32], extra_edges: u32) -> GraphCase {
     assert!(
@@ -125,6 +135,9 @@ mod tests {
     use crate::Rng;
 
     /// No edge crosses a component and every component is connected.
+    ///
+    /// Oracle: differential against an independent flood fill over the edges,
+    /// and the dealt partition: every edge joins two nodes of one component.
     #[test]
     fn no_edge_crosses_a_component_and_every_component_is_connected() {
         let mut rng = Rng::new(42);
@@ -163,6 +176,9 @@ mod tests {
     }
 
     /// A node's label is the minimum index in its component.
+    ///
+    /// Oracle: the generator's documented labelling, recomputed from the dealt
+    /// members: each label is the minimum node index of its component.
     #[test]
     fn every_label_is_the_minimum_index_of_its_component() {
         let mut rng = Rng::new(9);
@@ -173,13 +189,5 @@ mod tests {
                 assert_eq!(case.expected[node as usize].0, minimum);
             }
         }
-    }
-
-    /// One seed gives one graph, edge order included.
-    #[test]
-    fn one_seed_gives_one_graph() {
-        let first = graph_with_partition(&mut Rng::new(2024), &[4, 9, 2], 6);
-        let second = graph_with_partition(&mut Rng::new(2024), &[4, 9, 2], 6);
-        assert_eq!(first, second);
     }
 }

@@ -1,12 +1,11 @@
 # The fixture corpus
 
-161 GDSII files, one deck, and two files of expectations.
+One GDSII library, one deck, and two files of expectations.
 
 ```
 _source/conformance.gds   every cell, in one file
-drc/  erc/  lvs/  pex/    94 + 23 + 16 + 27 single-cell extracts of the same cells
+drc/  erc/  lvs/  pex/    94 + 30 + 16 + 27 single-case extracts, generated at test time
 params.deck               the deck: layers, rules, limits, connectivity, process stack
-klayout/drc_oracle.rb     a KLayout script from the old tree; not used by this suite
 manifest.json             the OLD tree's answers. Historical record. Do not edit.
 expectations.json         the re-derived answers. What the harness reads.
 ```
@@ -60,13 +59,13 @@ rather than pretending. `strength` grades each case:
 
 | `strength` | meaning | count |
 |---|---|---:|
-| `strong` | rule ran, jurisdiction non-empty, measurement approaches the limit | 109 |
-| `weak` | rule ran with a legitimately empty jurisdiction, or right for an unrelated reason | 9 |
-| `vacuous` | rule ran but never approached the limit | 11 |
-| `blocked` | derivation sound, corpus or frozen interface prevents reaching it | 13 |
-| `refused` | rule fails closed on this input; assert `Refused`, never a clean `Ran` | 11 |
-| `skipped` | rule recorded `Skipped`; a clean count here is a false clean | 2 |
-| `underivable` | nothing determines the answer | 5 |
+| `strong` | rule ran, jurisdiction non-empty, measurement approaches the limit | 123 |
+| `underivable` | nothing determines the answer | 11 |
+| `blocked` | derivation sound, corpus or frozen interface prevents reaching it | 9 |
+| `vacuous` | rule ran but never approached the limit | 7 |
+| `skipped` | rule recorded `Skipped`; a clean count here is a false clean | 7 |
+| `weak` | rule ran with a legitimately empty jurisdiction, or right for an unrelated reason | 7 |
+| `refused` | rule fails closed on this input; assert `Refused`, never a clean `Ran` | 3 |
 
 Nine cases (`DRC_WDS_PASS`, `DRC_VAS_PASS`, `DRC_EOL_SIDE`, `DRC_EOL_WIDE`,
 and five like them) have `examined = 0` for a *correct* reason: the rule
@@ -78,64 +77,78 @@ frozen signature exposes.
 
 ## What the corpus proves
 
-160 cases. 114 of them are corroborated by physics — the manifest and the
-derivation agree. 33 disagree or could not be checked, and each one is a
-finding rather than a number to pick.
+`tests/doc_counts.rs` recomputes every number in this section from
+`expectations.json` and fails when one goes stale.
 
-| domain | cases | manifest agrees | count only | disagrees | uncheckable | underivable |
-|---|---:|---:|---:|---:|---:|---:|
-| drc | 94 | 66 | 13 | 15 | — | 0 |
-| erc | 23 | 12 | 2 | 9 | — | 2 |
-| lvs | 16 | 16 | — | 0 | — | 0 |
-| pex | 27 | 20 | — | 3 | 3 (+1 partial) | 3 |
-| **total** | **160** | **114** | **15** | **27** | **3** | **5** |
+How each case's derived answer compares with the old implementation's
+(`corroboration`):
+
+| domain | cases | manifest agrees | count only | disagrees | partial | uncheckable | no manifest entry |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| drc | 94 | 73 | 10 | 11 | 0 | 0 | 0 |
+| erc | 30 | 11 | 6 | 11 | 0 | 0 | 2 |
+| lvs | 16 | 14 | 0 | 2 | 0 | 0 | 0 |
+| pex | 27 | 19 | 0 | 3 | 2 | 3 | 0 |
+| **total** | **167** | **117** | **16** | **27** | **2** | **3** | **2** |
 
 "count only" means the manifest carried a violation count but no measurement,
 so only the count could be compared; the measurement in `expectations.json` is
 new.
 
 Disagreement on the *number* and disagreement on the *meaning* are not the same
-thing, so `dispute` is tracked separately from `corroboration`. Four cases
-agree with the manifest's count while disagreeing with what it means — a
-refusal and a clean check both report zero. 38 cases carry a `dispute`, and the
-split is the point:
+thing, so `dispute` is tracked separately from `corroboration`. A refusal and a
+clean check both report zero, so a case can agree with the manifest's count
+while disagreeing with what it means. The split is the point:
 
-- **13 where the old implementation is superseded.** 7 it simply got wrong
-  (`manifest_wrong`), 2 reported per-side where the frozen doc says per-pair
-  (`convention`), 2 state a claim that is not a rule kind at all
-  (`not_a_rule`), and 2 draw geometry outside what this rectilinear-only tree
-  represents, where it fails closed (`fixture_out_of_domain`). The derivation
-  stands.
-- **9 where the manifest is physically right and the frozen implementation
-  cannot reach it** (`code_wrong`) — four named defects, listed under
-  `known_defects`. The expectation is the physics, and those cases are expected
-  to fail until the defect is fixed. Weakening them to match the code would
-  erase the finding.
-- **6 the fixture cannot express** (`fixture_incomplete`). Almost all of these
-  are one missing layer: **no cell in the corpus draws a `licon`**, so `li`
-  never contacts `poly` or `diff`, and every case whose premise is "a strap
-  ties X to Y" extracts two separate nets instead.
-- **10 blocked by the deck or the frozen interface** — 4 intent-gated rules
-  with no design-intent file, 4 coupling values with no coefficient column in
-  the process stack, one tap that cannot be spelled as a derived layer, one
-  condition a frozen signature makes unsatisfiable. All under
-  `blocking_findings`.
+| `dispute` | meaning | cases |
+|---|---|---:|
+| `manifest_wrong` | the old implementation got it wrong; the derivation stands | 10 |
+| `convention` | the old tree reported per side where the frozen doc says per pair | 2 |
+| `not_a_rule` | the manifest states a claim that is not a rule kind | 2 |
+| `code_wrong` | the manifest is physically right and the implementation cannot reach it (`known_defects`) | 3 |
+| `fixture_incomplete` | the fixture cannot express the premise (no cell draws a `licon`) | 5 |
+| `no_intent_fixture` | an intent-gated rule with no design-intent file | 14 |
+| `no_deck_coefficient` | a coupling value with no coefficient column in the process stack | 4 |
+| `deck_gap` | a tap that cannot be spelled as a derived layer | 1 |
+| `signature_defect` | a condition a frozen signature makes unsatisfiable | 1 |
+| **total** | | **41** |
 
-LVS is the one domain where every claim held: all 16 `expect_match` booleans
-are corroborated by the geometry. Five of them still cannot be reached, because
-series/parallel reduction and device flavour have no representation in the
-frozen interface.
+Cases expected to fail are explained under `known_defects` and
+`blocking_findings` at the top of `expectations.json`. Weakening them to match
+the code would erase the finding.
+
+167 of 167 cases carry `expect_outcome` and `examined_min`. On an LVS
+case they are the LVS stage's status (`Ran` when the comparison concludes,
+so an inconclusive one cannot pass as a mismatch) and the devices and nets
+the cell draws, floors on what `lvs.terminal_count` and `lvs.floating_net`
+examine in the run that compares. On a PEX case they are the PEX stage's
+status and the nets and elements (series R and ground C per region, one
+resistor per via array, the couplings the cell draws) its parasitic network
+must hold at least, counted in each case's note under EXAMINED.
+
+LVS cases assert device and net counts, and their verdict against their own
+reference netlist in `lvs_refs/<id>.spice`. Each reference was transcribed once
+from the manifest's `reference_netlist` for that case, the schematic the case was
+designed around (an input, not an answer), and is reviewed like any fixture. The
+three HVT/LVT cases are expected to fail until device flavour is recognised
+(blocking finding F6), and the harness reports it if one starts to hold.
 
 ## Using it
 
 `expectations.json` is table-driven. Per case: `id`, `cell`, `domain`, the rule
 or check, `expect_violations`, `expect_outcome`, `examined_min`, and for
-positive cases the `measured` value and the `at` coordinate in dbu.
+positive cases the `measured` value and the `at` coordinate in dbu. An LVS
+case's `examined_min` is `{devices, nets}` and a PEX case's `{nets,
+elements}`; `examined_semantics` says what each counts.
 
 **Read `assert` before asserting anything.** It lists the only claims derivable
 for that case. A field absent from it was not derivable and must not be
 checked. `known_defects` and `blocking_findings` at the top of the file explain
 every case that is expected to fail, and name the file and function to fix.
+
+In the release tier, `tests/klayout` also runs every DRC cell through the
+KLayout mirror deck ([klayout-mirror.md](../../docs/klayout-mirror.md)) and
+compares rule by rule.
 
 `manifest.json` stays exactly as it is. It is the historical record and the
 thing `expectations.json` is checked against; overwriting it would destroy the

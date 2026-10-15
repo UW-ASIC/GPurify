@@ -13,7 +13,7 @@
 use crate::common;
 
 use common::{head, rule};
-use gpurify_check::erc::facts::{classify_nets_into, NetFacts};
+use gpurify_check::erc::facts::{classify_nets_into, IntentMap, NetFacts};
 use gpurify_check::erc::rules::supply::{
     check_esd_topological, check_missing_tie, check_soft_connection, check_supply_short,
     check_tie_high_low, EsdTopologicalTable, MissingTieTable, SoftConnectionTable,
@@ -514,6 +514,7 @@ fn soft_connection_table(id: StrId) -> SoftConnectionTable {
         head: head(id),
         soft_start: vec![0, 1],
         soft: vec![LayerId(2)],
+        connectivity: via_connectivity(LayerId(1), &[LayerId(2)]),
     }
 }
 
@@ -582,8 +583,12 @@ fn a_net_that_survives_losing_its_soft_layer_is_clean() {
 
 /// A layout emitted from `spec`, extracted and classified, together with every
 /// polygon of netlist net zero — the net each case below is built around, and
-/// the one a per-net violation has to name.
-fn tie_case(spec: &NetlistSpec) -> (Drawn, NetFacts, Vec<PolyId>) {
+/// the one a per-net violation has to name — and intent declaring netlist
+/// nets `power` and `ground` the supplies (no intent for `None`).
+fn tie_case(
+    spec: &NetlistSpec,
+    rails: Option<(usize, usize)>,
+) -> (Drawn, NetFacts, Vec<PolyId>, IntentMap) {
     let mut strings = StrTable::default();
     let case = layout_from_netlist(spec, Floorplan::default(), &mut strings);
     let mut nets = NetTable::default();
@@ -597,6 +602,10 @@ fn tie_case(spec: &NetlistSpec) -> (Drawn, NetFacts, Vec<PolyId>) {
     );
     let mut facts = NetFacts::default();
     classify_nets_into(&nets, &devices, &mut facts);
+    let intent = rails.map_or_else(IntentMap::default, |(power, ground)| {
+        let net = |n: usize| nets.net_of(case.expected_net_polys[n][0]);
+        common::declared_supplies(net(power), net(ground), 1_800.0)
+    });
     let net_zero = case.expected_net_polys[0].clone();
     (
         Drawn {
@@ -606,10 +615,13 @@ fn tie_case(spec: &NetlistSpec) -> (Drawn, NetFacts, Vec<PolyId>) {
         },
         facts,
         net_zero,
+        intent,
     )
 }
 
-fn tied_off(drain_net: u32) -> NetlistSpec {
+/// One transistor with its gate and its first channel end on net zero, its
+/// other end on `other_end`, and its bulk on net two.
+fn tied_off(other_end: u32) -> NetlistSpec {
     NetlistSpec {
         nets: 3,
         devices: vec![DeviceSpec {
@@ -618,64 +630,91 @@ fn tied_off(drain_net: u32) -> NetlistSpec {
             terminals: vec![
                 (TerminalRole::Gate, 0),
                 (TerminalRole::Source, 0),
-                (TerminalRole::Drain, drain_net),
+                (TerminalRole::Drain, other_end),
                 (TerminalRole::Bulk, 2),
             ],
         }],
     }
 }
 
-/// Oracle: construct-from-answer. Net zero carries a gate and a source and no
-/// drain, so nothing in the design can change its state: it is held at a rail.
-/// Often that is deliberate, which is why the severity is a deck column — but
-/// the rule still has to find it.
+/// Oracle: construct-from-answer. Net zero is declared a power rail and
+/// carries a transistor gate: the gate is tied straight to the rail, and
+/// nothing in the design can change its state. Often that is deliberate,
+/// which is why the severity is a deck column — but the rule still has to
+/// find it. The rail decides, not the channel end extraction calls the
+/// source: with the transistor's other end on the rail too (net zero then
+/// extracts as a drain as well), the gate is still tied (F28).
 #[test]
-fn a_net_holding_a_gate_and_a_source_with_no_drain_is_flagged() {
-    let (drawn, facts, net_zero) = tie_case(&tied_off(1));
-    let id = rule(59);
-    let (mut violations, mut runs) = report();
-    check_tie_high_low(
-        drawn.design(),
-        &facts,
-        &TieHighLowTable { head: head(id) },
-        &mut violations,
-        &mut runs,
-    );
+fn a_rail_reaching_a_gate_is_flagged() {
+    for other_end in [1, 0] {
+        let (drawn, facts, net_zero, intent) = tie_case(&tied_off(other_end), Some((0, 2)));
+        let id = rule(59);
+        let (mut violations, mut runs) = report();
+        check_tie_high_low(
+            drawn.design(),
+            &facts,
+            &intent,
+            &TieHighLowTable { head: head(id) },
+            &mut violations,
+            &mut runs,
+        );
 
-    assert_eq!(violations.rule.len(), 1);
-    assert_eq!(violations.rule[0], id);
-    assert_eq!(
-        violations.shape_a[0], net_zero[0],
-        "the tied-off net is net zero, and a per-net violation is reported at its \
-         lowest-numbered polygon"
-    );
-    assert_eq!(
-        violations.layer[0],
-        drawn.store.poly_layer(net_zero[0]),
-        "the reported layer is the layer of the reported shape"
-    );
-    common::assert_at_is_on_a_named_shape(&drawn.store, &violations, 0);
-    let run = assert_rule_ran(&runs, id);
-    assert_eq!(run.examined, 1, "one net carries a gate terminal");
-    assert_eq!(run.violations, 1);
+        assert_eq!(violations.rule.len(), 1, "other end on net {other_end}");
+        assert_eq!(violations.rule[0], id);
+        assert_eq!(
+            violations.shape_a[0], net_zero[0],
+            "the tied rail is net zero, and a per-net violation is reported at its \
+             lowest-numbered polygon"
+        );
+        assert_eq!(
+            violations.layer[0],
+            drawn.store.poly_layer(net_zero[0]),
+            "the reported layer is the layer of the reported shape"
+        );
+        common::assert_at_is_on_a_named_shape(&drawn.store, &violations, 0);
+        let run = assert_rule_ran(&runs, id);
+        assert_eq!(run.examined, 1, "one net carries a gate terminal");
+        assert_eq!(run.violations, 1);
+    }
 }
 
-/// Oracle: construct-from-answer. The same net, now also carrying the drain, is
-/// drivable and is not tied off. Three bit tests per net, and this is the one
-/// that must come out the other way.
+/// Oracle: construct-from-answer. Net zero holds a gate and the channel end
+/// extraction calls the source, with no drain: the old proxy for a rail. But
+/// the rails are nets one and two, so net zero is a signal (the transistor
+/// pulls it to rail one) and no gate is tied off (F28).
 #[test]
-fn a_net_that_also_holds_a_drain_is_not_tied_off() {
-    let (drawn, facts, _) = tie_case(&tied_off(0));
+fn a_gate_on_a_signal_net_is_not_tied_off_whatever_its_channel_end_is_called() {
+    let (drawn, facts, _, intent) = tie_case(&tied_off(1), Some((1, 2)));
     let id = rule(60);
     let (mut violations, mut runs) = report();
     check_tie_high_low(
         drawn.design(),
         &facts,
+        &intent,
         &TieHighLowTable { head: head(id) },
         &mut violations,
         &mut runs,
     );
     assert_clean(&runs, &violations, id);
+}
+
+/// Oracle: construct-from-answer. Without intent no net is known to be a
+/// rail, so no gate can be shown tied to one: the rule skips rather than
+/// report every gate clean.
+#[test]
+fn tie_high_low_skips_without_intent() {
+    let (drawn, facts, _, intent) = tie_case(&tied_off(1), None);
+    let id = rule(62);
+    let (mut violations, mut runs) = report();
+    check_tie_high_low(
+        drawn.design(),
+        &facts,
+        &intent,
+        &TieHighLowTable { head: head(id) },
+        &mut violations,
+        &mut runs,
+    );
+    common::assert_skipped_for_intent(&runs, &violations, id);
 }
 
 // ------------------------------------------------------------ ESD topological
@@ -746,5 +785,167 @@ fn esd_topological_skips_without_intent() {
     assert_eq!(
         runs[0].outcome,
         gpurify_check::report::Outcome::Skipped(gpurify_check::report::SkipReason::NoDesignIntent)
+    );
+}
+
+/// Two metal shapes that overlap are one conductor without the resistive
+/// body too, so a net of them and the body beside them is no bridge.
+///
+/// Oracle: construct-from-answer: layer-0 shapes `[0, 2000]` and
+/// `[1000, 4000]` overlap (touch within a layer is on), and the body on
+/// layer 2 is cut to both; removing the soft layer leaves one component,
+/// so the one net is examined and clean.
+#[test]
+fn two_overlapping_shapes_left_by_the_soft_layer_are_one_piece() {
+    let mut layout = LayoutBuilder::new(3);
+    layout.rect(LayerId(0), 0, 0, 2_000, 1_000);
+    layout.rect(LayerId(0), 1_000, 0, 4_000, 1_000);
+    layout.rect(LayerId(2), 0, 200, 4_000, 800);
+    layout.rect(LayerId(1), 400, 400, 600, 600);
+    layout.rect(LayerId(1), 3_400, 400, 3_600, 600);
+    let (store, _) = layout.finish();
+    let connectivity = Connectivity {
+        intra_layer_touch: true,
+        ..via_connectivity(LayerId(1), &[LayerId(2)])
+    };
+    let drawn = Drawn::new(store, &connectivity);
+    let id = rule(59);
+    let table = SoftConnectionTable {
+        connectivity,
+        ..soft_connection_table(id)
+    };
+    let mut scratch = Scratch::default();
+    let (mut violations, mut runs) = report();
+    check_soft_connection(
+        drawn.design(),
+        &table,
+        &mut scratch,
+        &mut violations,
+        &mut runs,
+    );
+    assert_clean(&runs, &violations, id);
+    assert_eq!(assert_rule_ran(&runs, id).examined, 1);
+}
+
+/// `mixed_tag` flags an untagged figure whose net holds a tagged one, and
+/// only that: a tagged figure on a net of its own or an untagged one alone
+/// is no mix, whatever other nets hold.
+///
+/// Oracle: construct-from-answer. Wells on layer 0: W1 and W2 strapped on
+/// layer 2 through cuts (one net), W2 under the tag on layer 3; W4 tagged
+/// alone; W3 untagged alone, drawn last. Four figures examined, one
+/// violation: W1, measuring 1 tagged figure on its net against 0, naming W2.
+#[test]
+fn mixed_tag_flags_only_an_untagged_figure_sharing_a_net_with_a_tagged_one() {
+    use gpurify_check::erc::rules::supply::{check_mixed_tag, MixedTagTable};
+    let mut layout = LayoutBuilder::new(4);
+    let w1 = layout.rect(LayerId(0), 0, 0, 1_000, 1_000);
+    let w2 = layout.rect(LayerId(0), 3_000, 0, 4_000, 1_000);
+    layout.rect(LayerId(0), 9_000, 0, 10_000, 1_000);
+    layout.rect(LayerId(0), 6_000, 0, 7_000, 1_000);
+    layout.rect(LayerId(2), 0, 300, 4_000, 700);
+    layout.rect(LayerId(1), 400, 400, 600, 600);
+    layout.rect(LayerId(1), 3_400, 400, 3_600, 600);
+    layout.rect(LayerId(3), 2_900, -100, 4_100, 1_100);
+    layout.rect(LayerId(3), 8_900, -100, 10_100, 1_100);
+    let (store, ids) = layout.finish();
+    let drawn = Drawn::new(store, &via_connectivity(LayerId(1), &[LayerId(2)]));
+    let id = rule(62);
+    let (mut violations, mut runs) = report();
+    check_mixed_tag(
+        drawn.design(),
+        &MixedTagTable {
+            head: head(id),
+            layer: vec![LayerId(0)],
+            tag: vec![LayerId(3)],
+        },
+        &mut violations,
+        &mut runs,
+    );
+    assert_eq!(assert_rule_ran(&runs, id).examined, 4);
+    assert_eq!(violations.rule, vec![id]);
+    assert_eq!(violations.shape_a, vec![ids.of(w1)]);
+    assert_eq!(violations.shape_b, vec![Some(ids.of(w2))]);
+    assert_eq!(violations.measured, vec![Measurement::Count(1)]);
+    assert_eq!(violations.limit, vec![Measurement::Count(0)]);
+}
+
+/// `esd_latchup`'s guard rings: each ring narrower than the minimum width
+/// is reported at its width, and each ring further than `max_tap_distance`
+/// from every supply shape at that gap, both strictly.
+///
+/// Oracle: construct-from-answer, gaps and widths by hand: a supply bar
+/// `[0, 1000]²`; ring R1 50 wide at x = 1500 (gap 500), R3 exactly 100
+/// wide at x = 2000 (gap exactly 1000), R2 200 wide at x = 5000 (gap
+/// 4000); limits 100 wide and 1000 away: R1 is narrow, R2 is far, R3 is
+/// at both limits and clean. No pad is drawn, so three rings are examined.
+#[test]
+fn esd_latchup_reports_narrow_rings_and_rings_far_from_a_supply() {
+    use gpurify_check::erc::rules::reliability::{check_esd_latchup, EsdLatchupTable};
+    use gpurify_ingest::intent::{DomainId, SupplyRole};
+    let mut layout = LayoutBuilder::new(3);
+    let bar = layout.rect(LayerId(0), 0, 0, 1_000, 1_000);
+    let r1 = layout.rect(LayerId(1), 1_500, 0, 1_550, 1_000);
+    layout.rect(LayerId(1), 2_000, 0, 2_100, 1_000);
+    let r2 = layout.rect(LayerId(1), 5_000, 0, 5_200, 1_000);
+    let (store, ids) = layout.finish();
+    let connectivity = Connectivity {
+        conductors: vec![LayerId(0)],
+        ..no_connectivity()
+    };
+    let drawn = Drawn::new(store, &connectivity);
+    let intent = IntentMap {
+        declared: true,
+        supply_net: vec![drawn.nets.net_of(ids.of(bar))],
+        supply_role: vec![SupplyRole::Power],
+        supply_domain: vec![DomainId(0)],
+        supply_voltage: vec![common::millivolts(1_800.0)],
+        limit_net: Vec::new(),
+        limit: Vec::new(),
+    };
+    let id = rule(63);
+    let table = EsdLatchupTable {
+        head: head(id),
+        pad: vec![LayerId(2)],
+        guard_ring: vec![LayerId(1)],
+        min_guard_ring_width: vec![dbu(100)],
+        max_tap_distance: vec![dbu(1_000)],
+        clamp_start: vec![0, 0],
+        clamp: Vec::new(),
+    };
+    let mut scratch = Scratch::default();
+    let (mut violations, mut runs) = report();
+    check_esd_latchup(
+        drawn.design(),
+        &intent,
+        &table,
+        &mut scratch,
+        &mut violations,
+        &mut runs,
+    );
+    assert_eq!(assert_rule_ran(&runs, id).examined, 3);
+    let found: Vec<_> = (0..violations.rule.len())
+        .map(|row| {
+            (
+                violations.shape_a[row],
+                violations.measured[row],
+                violations.limit[row],
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (
+                ids.of(r1),
+                Measurement::Length(dbu(50)),
+                Measurement::Length(dbu(100))
+            ),
+            (
+                ids.of(r2),
+                Measurement::Length(dbu(4_000)),
+                Measurement::Length(dbu(1_000))
+            ),
+        ]
     );
 }

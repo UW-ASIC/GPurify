@@ -3,8 +3,8 @@
 use std::fmt::Write as _;
 
 use crate::export::json::format_f64;
-use crate::export::parasitic::{node_place, spice_card, DELIMITER};
-use crate::export::{narrow, Header, WriteError};
+use crate::export::parasitic::{check_finite, mutual_couplings, node_place, spice_card, DELIMITER};
+use crate::export::{check_labels_one_to_one, narrow, Header, WriteError};
 use gpurify_check::topology::device::{DeviceId, DeviceMeasure, DeviceParam};
 use gpurify_check::topology::{Extraction, NetId, PortTable, TerminalRole};
 use gpurify_extract::network::NodeId;
@@ -12,7 +12,7 @@ use gpurify_extract::ParasiticNetwork;
 use gpurify_ingest::deck::DeviceKind;
 use gpurify_ingest::StrTable;
 
-/// The subcircuit's name, matching what `engine` hands `gds::write_store`.
+/// The subcircuit's name, the same for every layout.
 /// Never `header.layout_path`: a path in a body is what the [`Header`] keeps out.
 const CELL: &str = "TOP";
 
@@ -41,7 +41,9 @@ const fn card_rank(role: TerminalRole) -> u8 {
 pub enum Detail {
     /// Devices and their connectivity only.
     Schematic,
-    /// Devices plus lumped per-net parasitic R and C.
+    /// Devices plus every element of the parasitic network (R, C, and L and
+    /// mutual L where a net was field-solved), with each device terminal on
+    /// its net's first node.
     WithParasitics,
 }
 
@@ -51,6 +53,31 @@ pub enum Detail {
 /// or by their `NetId` where they have no name; both are canonical, so the file
 /// is a function of the layout alone. `parasitics` is the source and `detail`
 /// the decision: a network passed with [`Detail::Schematic`] is not read.
+///
+/// The subcircuit is `TOP`, its pins are the labelled nets in ascending net
+/// order, and device sizes are integers in database units (the file says
+/// so, since no grid is passed). An unlabelled net is named `n` and its id,
+/// lengthened with `_` until no label has that name. Parasitic cards are
+/// `Rp`, `Cp`, `Lp` or `Kp` and the element's row; a `Kp` card couples the
+/// two `Lp` cards of a mutual inductance by their coefficient `M / √(L₁L₂)`.
+///
+/// A pin is one node, so the labels must name nets one to one: a label on
+/// several disconnected nets would join the pieces into one node and hide the
+/// open, and a net with several labels would hide the short. Nothing is
+/// written when they do not.
+///
+/// # Errors
+///
+/// [`WriteError::SplitLabel`] for a label on several nets,
+/// [`WriteError::ShortedLabels`] for a net with several labels, and
+/// [`WriteError::Unrepresentable`] for a spliced network holding a NaN or
+/// infinite value, or a mutual inductance on a node no inductance starts at
+/// or larger than its two inductances allow, all checked before anything is
+/// written;
+/// [`WriteError::Unrepresentable`] for a port bound to a net outside the
+/// extraction, found
+/// after the `.subckt` line is written, or a parasitic element on a node
+/// outside the network.
 pub fn write_spice(
     extraction: Extraction<'_>,
     parasitics: Option<&ParasiticNetwork>,
@@ -80,10 +107,17 @@ pub fn write_spice(
     // No entry assert that `ports.len() <= net_count`: the pin loop below
     // settles it as a typed error, and a panic here would abort the one path a
     // test of that refusal walks.
-
     let before = out.len();
 
     let spliced = parasitics.filter(|_| detail == Detail::WithParasitics);
+    check_labels_one_to_one((0..net_count).map(|net| NetId(narrow(net))), ports, strings)?;
+    let couplings = match spliced {
+        Some(network) => {
+            check_finite(network)?;
+            mutual_couplings(network)?
+        }
+        None => Vec::new(),
+    };
 
     let _ = writeln!(out, "* {} SPICE netlist", header.tool_version);
     let _ = writeln!(out, "* deck: {}", header.deck_path);
@@ -96,7 +130,7 @@ pub fn write_spice(
     let _ = writeln!(out, "* lengths below are in database units");
 
     // ponytail: `O(nets · log ports)`, because `PortTable` publishes none of
-    // its four columns and `name_of` — a binary search — is the only way to read
+    // its columns and `name_of` — a binary search — is the only way to read
     // one. The port list is the named nets in ascending `NetId`, and named nets
     // are a cell's pins, hundreds against a net count in the millions, so the
     // scan is the wrong way round. Only the `log ports` factor is debt: a merge
@@ -150,6 +184,9 @@ pub fn write_spice(
             DeviceKind::Resistor => 'R',
             DeviceKind::Capacitor => 'C',
             DeviceKind::Diode => 'D',
+            DeviceKind::Inductor => 'L',
+            // No recogniser has the kind, so no extracted device does.
+            DeviceKind::Cell => 'X',
         };
         // Parasitic elements below carry a `p` in the same slot, so an
         // extracted `R0` and a parasitic `Rp0` cannot collide.
@@ -185,14 +222,27 @@ pub fn write_spice(
                 DeviceParam::Area => "area",
                 DeviceParam::Perimeter => "perim",
                 DeviceParam::Fingers => "nf",
+                DeviceParam::SourceArea => "as",
+                DeviceParam::DrainArea => "ad",
+                DeviceParam::SourcePerimeter => "ps",
+                DeviceParam::DrainPerimeter => "pd",
+                DeviceParam::EmitterArea => "ae",
+                DeviceParam::EmitterPerimeter => "pe",
             };
             // Integers, exactly as measured: these are `Dbu` and `DbuArea`, and
             // `format_f64` would round a coordinate into a physical quantity it
-            // has no `Grid` to become.
-            let _ = match measure {
-                DeviceMeasure::Length(value) => write!(out, " {key}={}", value.raw()),
-                DeviceMeasure::Area(value) => write!(out, " {key}={}", value.raw()),
-                DeviceMeasure::Count(value) => write!(out, " {key}={value}"),
+            // has no `Grid` to become. A share is the exact quotient, quoted.
+            let (raw, ways) = match measure {
+                DeviceMeasure::Length(value) => (i128::from(value.raw()), 1),
+                DeviceMeasure::Area(value) => (value.raw(), 1),
+                DeviceMeasure::Count(value) => (i128::from(value), 1),
+                DeviceMeasure::LengthShare(value, ways) => (i128::from(value.raw()), ways),
+                DeviceMeasure::AreaShare(value, ways) => (value.raw(), ways),
+            };
+            let _ = if ways == 1 {
+                write!(out, " {key}={raw}")
+            } else {
+                write!(out, " {key}='{raw}/{ways}'")
             };
         }
         out.push('\n');
@@ -201,7 +251,13 @@ pub fn write_spice(
     if let Some(network) = spliced {
         let elements = network.element_count();
 
-        for row in 0..elements {
+        for (row, &coupling) in couplings.iter().enumerate().take(elements) {
+            if let Some((a, b, k)) = coupling {
+                let _ = write!(out, "Kp{row} Lp{a} Lp{b} ");
+                format_f64(k, out);
+                out.push('\n');
+                continue;
+            }
             // Through the same decision `write_dspf` cards an element with, so
             // the two files agree about both the letter and the scale factor.
             let (letter, _, magnitude, suffix) = spice_card(network.value[row]);
@@ -295,7 +351,19 @@ fn put_node(
     Ok(())
 }
 
-/// The name of one net in the emitted netlist, shared with the parasitic writers.
+/// The name of one net in the emitted SPICE netlist: its label, or `n` and
+/// its id when it has none.
+///
+/// The fallback is lengthened with `_` until no label carries it, so it never
+/// names another net. The parasitic writers do not use it: SPEF and DSPF
+/// refuse an unlabelled net instead.
+///
+/// A label on several disconnected nets names each of them; [`write_spice`]
+/// refuses such a label before naming anything.
+///
+/// # Panics
+///
+/// In debug builds, if `net` is [`NetId::NONE`].
 pub fn net_name(
     net: gpurify_check::topology::NetId,
     ports: &PortTable,
@@ -323,7 +391,7 @@ pub fn net_name(
         // and nowhere else, so lengthen the fallback until no port carries it.
         while strings
             .get(&out[before..])
-            .is_some_and(|taken| ports.net_of(taken).is_some())
+            .is_some_and(|taken| !ports.nets_of(taken).is_empty())
         {
             out.push(FALLBACK_PAD);
         }
@@ -337,11 +405,10 @@ pub fn net_name(
     debug_assert!(
         strings
             .get(&out[before..])
-            .and_then(|name| ports.net_of(name))
-            .is_none_or(|owner| owner == net),
-        "net {} was named {:?}, which is net {:?}'s label",
+            .is_none_or(|name| ports.nets_of(name).iter().all(|&owner| owner == net)),
+        "net {} was named {:?}, which labels nets {:?}",
         net.0,
         &out[before..],
-        strings.get(&out[before..]).and_then(|n| ports.net_of(n))
+        strings.get(&out[before..]).map(|n| ports.nets_of(n))
     );
 }

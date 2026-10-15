@@ -68,6 +68,8 @@ fn run(deck: &str, rects: &[(&str, [i64; 4])]) -> Found {
     let (store, provenance) = library
         .flatten(&deck, &strings, UnknownLayers::Reject)
         .expect("reads back");
+    let deck =
+        gpurify::deck::CompiledDeck::from_deck(deck, grid(), &strings).expect("the deck compiles");
     let loaded = Loaded {
         strings,
         grid: grid(),
@@ -76,6 +78,7 @@ fn run(deck: &str, rects: &[(&str, [i64; 4])]) -> Found {
         provenance,
         reference: None,
         intent: None,
+        design: None,
     };
     let extracted = extract(&loaded).expect("extracts");
     let options = RunOptions {
@@ -87,7 +90,6 @@ fn run(deck: &str, rects: &[(&str, [i64; 4])]) -> Found {
         },
         lvs: CompareOptions::default(),
         quasistatic_nets: Vec::new(),
-        quasistatic_inductance: false,
     };
     let (out, _) = run_checks(&loaded, &extracted, &options).expect("the deck builds");
     let name = |id| loaded.strings.resolve(id).to_owned();
@@ -133,6 +135,10 @@ layer met1  = gds(68, 20)
 /// reports the area of the triple overlap, 100 x 50. The licon that only
 /// abuts a poly and a diff on two of its sides overlaps neither: a rule that
 /// flagged licons *interacting* with both would report it.
+///
+/// Oracle: foundry example, sky130 licon.17, by hand: the triple overlap is x
+/// 0..100, y 0..50, area 5000; the abutting licon and the one over poly alone
+/// overlap no diff or tap.
 #[test]
 fn licon_17_flags_the_triple_overlap_and_not_a_licon_that_only_abuts() {
     let deck = format!("{SKY130}rule licon.17 forbidden(licon and poly and (diff or tap))\n");
@@ -161,6 +167,10 @@ fn licon_17_flags_the_triple_overlap_and_not_a_licon_that_only_abuts() {
 /// edge exactly is clean; one covering only its upper half leaves 250 of the
 /// 500-long edge outside, which a rule asking only whether the implant touches
 /// the edge would pass.
+///
+/// Oracle: foundry example, sky130 n/psd.6 (enclosure of the butting edge 0),
+/// by hand: the second implant covers y 2250..2500 of the 500-long edge,
+/// leaving 250 bare with its midpoint at (1000, 2125).
 #[test]
 fn psd_6_flags_the_part_of_the_butting_edge_outside_the_implant() {
     let deck = format!(
@@ -192,6 +202,10 @@ fn psd_6_flags_the_part_of_the_butting_edge_outside_the_implant() {
 /// straddling the tap's edge is not enclosed. The L-shaped tap's bounding box
 /// holds a licon that sits in the L's notch, off the tap: a containment test
 /// on boxes would count it.
+///
+/// Oracle: foundry example, sky130 licon.16, by hand: the first tap holds its
+/// licon; the straddling licon and the one in the L's notch are on no tap
+/// entirely, so two taps hold 0 of 1.
 #[test]
 fn licon_16_counts_only_licons_entirely_on_the_tap() {
     let deck = format!("{SKY130}rule licon.16 contains(tap, licon) >= 1\n");
@@ -220,6 +234,9 @@ fn licon_16_counts_only_licons_entirely_on_the_tap() {
 
 /// Two licons that touch are one shape, so a tap holding only that pair holds
 /// one, short of two.
+///
+/// Oracle: `docs/deck.md`'s `contains` ("touching inner shapes count as one"):
+/// the first tap holds two apart, the second one touching pair, 1 of 2.
 #[test]
 fn contains_counts_touching_inner_shapes_as_one() {
     let deck = format!("{SKY130}rule two contains(tap, licon) >= 2\n");
@@ -244,6 +261,10 @@ fn contains_counts_touching_inner_shapes_as_one() {
 /// npc edge from inside is enclosed; one sticking 20 out of it leaves
 /// 20 x 170 outside. The third sits in the notch of an L-shaped npc, inside
 /// the npc's bounding box but on none of it.
+///
+/// Oracle: foundry example, sky130 licon.18, by hand: the second licon sticks
+/// 20 out of its npc, 20 x 170 outside; the third, in the L's notch, is wholly
+/// outside, 170 x 170.
 #[test]
 fn licon_18_reports_the_area_outside_the_npc() {
     let deck = format!("{SKY130}rule licon.18 inside(licon and poly, npc)\n");
@@ -283,6 +304,10 @@ rule NW.2b space(nwell; nets: different) >= 1400nm
 /// through metal, so they are one net: NW.2a flags them and NW.2b does not,
 /// though a rule that took "not touching" for "different nets" would. W3 is
 /// 800 from W2 and tied to nothing: NW.2b flags it, NW.2a does not.
+///
+/// Oracle: foundry example, gf180 NW.2a (0.6 um, same potential) and NW.2b
+/// (1.4 um, different), by hand: W1 and W2 are one net through the strap,
+/// 500 apart; W3 is 800 from W2 on its own net.
 #[test]
 fn nwell_spacing_follows_the_extracted_net_not_the_drawing() {
     let found = run(
@@ -303,6 +328,9 @@ fn nwell_spacing_follows_the_extracted_net_not_the_drawing() {
 }
 
 /// A layer that carries no net cannot be asked which net it is on.
+///
+/// Oracle: `docs/deck.md`'s `space(L; nets: ...)`: "`L` must be a conductor",
+/// and this deck connects nothing.
 #[test]
 fn net_spacing_on_a_layer_that_is_not_a_conductor_is_refused_at_load() {
     let mut strings = StrTable::default();
@@ -318,6 +346,11 @@ fn net_spacing_on_a_layer_that_is_not_a_conductor_is_refused_at_load() {
 }
 
 /// Without nets the rule cannot run, and says so.
+///
+/// Oracle: the contract of `RuleSet::run`, which records one `RuleRun` row per
+/// rule and `Refused` for a net spacing rule without nets. The deck has two
+/// rules, NW.2a and NW.2b, so two refused rows that examined nothing and no
+/// violation; an empty `runs` would pass the `all` alone.
 #[test]
 fn net_spacing_without_nets_is_refused_not_clean() {
     let mut strings = StrTable::default();
@@ -328,7 +361,13 @@ fn net_spacing_without_nets_is_refused_not_clean() {
     let (store, _) = layout.finish();
     let (mut out, mut runs) = (gpurify_check::report::Violations::default(), Vec::new());
     rules.run(&store, &mut out, &mut runs);
-    assert!(runs.iter().all(|r| r.outcome == Outcome::Refused));
+    assert_eq!(runs.len(), 2, "one row per rule: {runs:?}");
+    assert!(
+        runs.iter()
+            .all(|r| r.outcome == Outcome::Refused && r.examined == 0 && r.violations == 0),
+        "{runs:?}"
+    );
+    assert!(out.is_empty());
 }
 
 // ---------------------------------------------------------- spacing table
@@ -358,6 +397,10 @@ rule M1.bef space_table(met1;
 /// - a 12 µm plate with a 200-wide tab 3 µm long, and a line 500 past the
 ///   tab's end: only the tab is near, and the tab is not wide, so 180 applies
 ///   and 500 is clean. Holding the whole shape to its widest part would ask 600.
+///
+/// Oracle: foundry example, IHP SG13G2 Metal1 M1.b/e/f as a spacing table, each
+/// pair's cell picked by hand in the list above: two pairs flagged, 200 against
+/// 220 and 500 against 600.
 #[test]
 fn m1_e_f_pick_the_cell_by_the_wider_line_and_the_run() {
     let found = run(
@@ -384,6 +427,372 @@ fn m1_e_f_pick_the_cell_by_the_wider_line_and_the_run() {
     );
 }
 
+// ---------------------------------------------------------- tip table
+
+/// ASAP7 M1.S.1 to M1.S.5 (DRM r1p7, Table 3.12.1) as one tip table: edges
+/// below 24 nm, from 24 to 36 nm, and above 36 nm.
+const ASAP7_M1: &str = "grid 1nm
+layer met1 = gds(68, 20)
+rule M1.S tip_space_table(met1;
+    length: [0nm, 24nm, 37nm],
+    space:  [[31nm, 31nm, 25nm],
+             [31nm, 27nm, 25nm],
+             [25nm, 25nm, 18nm]])
+";
+
+/// Five pairs, each 26 apart and 2 µm from the next, read off the table by
+/// the lengths of the two edges that face each other:
+/// - two 1000 nm sides: M1.S.1, 18, clean;
+/// - a 20 wide tip under a 1000 wide bar: M1.S.2, 25, clean;
+/// - two 30 wide tips: M1.S.3, 27, flagged;
+/// - two 20 wide tips: M1.S.4, 31, flagged;
+/// - a 30 wide tip facing a 20 wide one: M1.S.5, 31, flagged.
+///
+/// A table keyed on one edge, or on the shapes' widths, gets one of them
+/// wrong: both tips of M1.S.5 are lines, but only the pair of lengths picks
+/// 31 over 27.
+///
+/// Oracle: the ASAP7 M1.S.1 to M1.S.5 values (foundry rule), construct-from-answer for the pairs.
+#[test]
+fn m1_s_1_to_5_pick_the_cell_by_both_facing_edges() {
+    let found = run(
+        ASAP7_M1,
+        &[
+            ("met1", [0, 0, 100, 1_000]),
+            ("met1", [126, 0, 226, 1_000]),
+            ("met1", [2_000, 0, 2_020, 1_000]),
+            ("met1", [1_500, 1_026, 2_500, 1_126]),
+            ("met1", [4_000, 0, 4_030, 1_000]),
+            ("met1", [4_000, 1_026, 4_030, 2_026]),
+            ("met1", [6_000, 0, 6_020, 1_000]),
+            ("met1", [6_000, 1_026, 6_020, 2_026]),
+            ("met1", [8_000, 0, 8_030, 1_000]),
+            ("met1", [8_000, 1_026, 8_020, 2_026]),
+        ],
+    );
+    let got = found.of("M1.S");
+    let count = |want: (Measurement, Measurement)| got.iter().filter(|&&f| f == want).count();
+    assert_eq!(got.len(), 3, "{got:?}");
+    assert_eq!(count((len(26), len(27))), 1, "{got:?}");
+    assert_eq!(count((len(26), len(31))), 2, "{got:?}");
+    assert_eq!(found.outcome("M1.S"), Outcome::Ran);
+}
+
+/// A tip table must be symmetric: which of two facing edges is "first" is
+/// not a property of the layout, so an asymmetric table has no meaning and
+/// the deck is refused when the rules are built.
+///
+/// Oracle: the kind's contract (a tip table is symmetric), construct-from-answer.
+#[test]
+fn an_asymmetric_tip_table_is_refused_at_load() {
+    let mut strings = StrTable::default();
+    let deck = parse_deck(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule t tip_space_table(met1; length: [0nm, 24nm], space: [[31nm, 25nm], [27nm, 18nm]])\n",
+        grid(),
+        &mut strings,
+    )
+    .expect("parses");
+    let built = gpurify_check::drc::RuleSet::from_deck(&deck, &strings);
+    assert!(
+        matches!(&built, Err(gpurify_check::drc::DrcError::BadTable(id)) if id == "t"),
+        "{built:?}"
+    );
+}
+
+// ---------------------------------------------------------- two widths
+
+/// LEF/DEF 5.8 Language Reference, "Two-Width Spacing Tables", written as
+/// the manual prints it, and its four worked cases, each pair 1 nm under the
+/// space the manual gives: width1 0.25 and width2 0.25, prl 0.0, 0.15; 0.25
+/// and 0.26, prl 0.0, 0.15; 0.25 and 0.26, prl 0.1, 0.20; 0.26 and 0.26, prl
+/// 0.1, 0.25. A table keyed on the wider shape alone would ask 0.20 of the
+/// second (its wider shape is 0.26) and 0.25 of the third.
+///
+/// Oracle: LEF/DEF 5.8's own worked example (spec example).
+#[test]
+fn lef_two_width_example_gives_the_manual_s_spacings() {
+    let found = run(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule tw two_width_table(met1;
+             width: [0um, 0.25um, 1.5um, 3um],
+             prl:   [none, 0um, 1.5um, 3um],
+             space: [[0.15um, 0.2um, 0.5um, 1um],
+                     [0.2um, 0.25um, 0.5um, 1um],
+                     [0.5um, 0.5um, 0.6um, 1um],
+                     [1um, 1um, 1um, 1.2um]])\n",
+        &[
+            ("met1", [0, 0, 250, 2_000]),
+            ("met1", [399, 2_000, 649, 4_000]),
+            ("met1", [10_000, 0, 10_250, 2_000]),
+            ("met1", [10_399, 2_000, 10_659, 4_000]),
+            ("met1", [20_000, 0, 20_250, 2_000]),
+            ("met1", [20_449, 1_900, 20_709, 3_900]),
+            ("met1", [30_000, 0, 30_260, 2_000]),
+            ("met1", [30_509, 1_900, 30_769, 3_900]),
+        ],
+    );
+    let got = found.of("tw");
+    let count = |want: (Measurement, Measurement)| got.iter().filter(|&&f| f == want).count();
+    assert_eq!(got.len(), 4, "{got:?}");
+    assert_eq!(count((len(149), len(150))), 2, "{got:?}");
+    assert_eq!(count((len(199), len(200))), 1, "{got:?}");
+    assert_eq!(count((len(249), len(250))), 1, "{got:?}");
+}
+
+// ---------------------------------------------------------- end of line
+
+/// LEF/DEF 5.8 Language Reference, Example 1-18 and Figure 1-23, as the
+/// manual writes it: `SPACING 1.2 ENDOFLINE 1.3 WITHIN 0.6`. Four 1 µm lines
+/// (each end, 1.0, is under 1.3), 10 µm apart, each with one shape above:
+/// a) a bar 1.2 above: no violation ("has 1.2 µm spacing");
+/// b) a bar 1.0 above: violation ("has only 1.0 µm spacing");
+/// c) a block 0.8 above whose side is 0.5 past the end's: violation ("<1.2
+///    µm spacing within 0.6 µm away");
+/// d) the block 0.6 past: no violation (within is "less than" 0.6).
+///
+/// Oracle: LEF/DEF 5.8 Example 1-18 and Figure 1-23 (spec example).
+#[test]
+fn lef_example_1_18_holds_the_end_of_line_within() {
+    let found = run(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule e eol_space(met1; eol_width: 1.3um, within: 0.6um, parallel: none, \
+         end_to_end: none) >= 1.2um\n",
+        &[
+            ("met1", [0, -5_000, 1_000, 0]),
+            ("met1", [-2_000, 1_200, 3_000, 2_200]),
+            ("met1", [10_000, -5_000, 11_000, 0]),
+            ("met1", [8_000, 1_000, 13_000, 2_000]),
+            ("met1", [20_000, -5_000, 21_000, 0]),
+            ("met1", [21_500, 800, 23_500, 2_800]),
+            ("met1", [30_000, -5_000, 31_000, 0]),
+            ("met1", [31_600, 800, 33_600, 2_800]),
+        ],
+    );
+    let got = found.of("e");
+    let count = |want: (Measurement, Measurement)| got.iter().filter(|&&f| f == want).count();
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(count((len(1_000), len(1_200))), 1, "{got:?}");
+    assert_eq!(count((len(800), len(1_200))), 1, "{got:?}");
+}
+
+// ---------------------------------------------------------- forbidden range
+
+/// A forbidden range written as `LEF58_TWOWIRESFORBIDDENSPACING 0.10 0.15
+/// PRL 0.20`, which `TritonRoute` reads closed on both ends with the run
+/// strictly longer than 0.20 (`isForbiddenSpacing`, `isValidPrl`). Three
+/// pairs of 1 µm bars: 99 apart (below the range: legal), 100 (its lower
+/// end: forbidden) and 150 (its upper end: forbidden). The limit reported is
+/// the narrowest legal gap above the range, 151.
+///
+/// Oracle: `TritonRoute`'s `isForbiddenSpacing` and `isValidPrl`, construct-from-answer.
+#[test]
+fn a_forbidden_range_is_closed_at_both_ends() {
+    let found = run(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule fs forbidden_space(met1; min: 100nm, max: 150nm, prl: 200nm)\n",
+        &[
+            ("met1", [0, 0, 100, 1_000]),
+            ("met1", [199, 0, 299, 1_000]),
+            ("met1", [2_000, 0, 2_100, 1_000]),
+            ("met1", [2_200, 0, 2_300, 1_000]),
+            ("met1", [4_000, 0, 4_100, 1_000]),
+            ("met1", [4_250, 0, 4_350, 1_000]),
+        ],
+    );
+    let got = found.of("fs");
+    let count = |want: (Measurement, Measurement)| got.iter().filter(|&&f| f == want).count();
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(count((len(100), len(151))), 1, "{got:?}");
+    assert_eq!(count((len(150), len(151))), 1, "{got:?}");
+}
+
+/// A range that ends before it starts forbids nothing a deck could mean,
+/// and is refused when the rules are built.
+///
+/// Oracle: the kind's contract (min at most max), construct-from-answer.
+#[test]
+fn a_forbidden_range_that_ends_before_it_starts_is_refused_at_load() {
+    let mut strings = StrTable::default();
+    let deck = parse_deck(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule fs forbidden_space(met1; min: 150nm, max: 100nm, prl: 0nm)\n",
+        grid(),
+        &mut strings,
+    )
+    .expect("parses");
+    let built = gpurify_check::drc::RuleSet::from_deck(&deck, &strings);
+    assert!(
+        matches!(&built, Err(gpurify_check::drc::DrcError::BadTable(id)) if id == "fs"),
+        "{built:?}"
+    );
+}
+
+// ---------------------------------------------------------- influence
+
+/// LEF/DEF 5.8 Language Reference, "Using Spacing Rules": `SPACING 0.5 RANGE
+/// 2.01 2000.0 ;` with `SPACING 0.5 RANGE 2.01 2000.0 INFLUENCE 1.000 ;`,
+/// "Stub wires <= 1.0 um from wide wires >= 2.01 require 0.5 um spacing",
+/// written as one row: the wide part where a 2.01 µm square fits, grown by
+/// 1 µm within its own shape. Two 2.01 µm wide wires, each with a 0.2 µm
+/// stub 2 µm long rising from its top, and a line 0.45 µm beside the stub:
+/// - the first line starts 0.5 µm above its wire, beside the stub's first
+///   micron: 0.45 from the influenced stub, flagged against 0.5 (and exactly
+///   0.5 from the wide wire, which is legal);
+/// - the second starts 1.25 µm above, beside only the stub past its first
+///   micron: 0.515 µm from the influenced stub's corner and 1.25 µm from the
+///   wire, clean. Holding the whole stub to 0.5 would flag it.
+///
+/// Oracle: LEF/DEF 5.8's INFLUENCE example rule and its stated meaning (spec example), distances derived by hand.
+#[test]
+fn lef_influence_holds_the_stub_s_first_micron_to_the_wide_spacing() {
+    let found = run(
+        "grid 1nm\nlayer met1 = gds(68, 20)\n\
+         rule inf wide_space(met1; width: 2.01um, attached: 1um) >= 0.5um\n",
+        &[
+            ("met1", [0, 0, 10_000, 2_010]),
+            ("met1", [5_000, 2_010, 5_200, 4_010]),
+            ("met1", [5_650, 2_510, 5_850, 4_000]),
+            ("met1", [20_000, 0, 30_000, 2_010]),
+            ("met1", [25_000, 2_010, 25_200, 4_010]),
+            ("met1", [25_650, 3_260, 25_850, 4_500]),
+        ],
+    );
+    assert_eq!(found.of("inf"), [(len(450), len(500))]);
+}
+
+/// A map of the plane.
+type Symmetry = fn(i64, i64) -> (i64, i64);
+
+/// The eight symmetries of the square.
+const SYMMETRIES: [Symmetry; 8] = [
+    |x, y| (x, y),
+    |x, y| (-y, x),
+    |x, y| (-x, -y),
+    |x, y| (y, -x),
+    |x, y| (-x, y),
+    |x, y| (x, -y),
+    |x, y| (y, x),
+    |x, y| (-y, -x),
+];
+
+/// `M1.bef` on a 200 nm line 1.2 um long carrying a tab that makes it
+/// 330 nm wide for `tab` nm of its length, and a 200 nm line `gap` beside
+/// it, under symmetry `s`: the findings' measured and limit, one per drawn
+/// rectangle of the tabbed line that is too close.
+fn tabbed_line(s: Symmetry, tab: i64, gap: i64) -> Vec<(Measurement, Measurement)> {
+    let rects = [
+        [0, 0, 200, 1_200],
+        [-130, 0, 200, tab],
+        [200 + gap, 0, 400 + gap, 1_200],
+    ];
+    let moved: Vec<(&str, [i64; 4])> = rects
+        .iter()
+        .map(|&[xlo, ylo, xhi, yhi]| {
+            let ((ax, ay), (bx, by)) = (s(xlo, ylo), s(xhi, yhi));
+            ("met1", [ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)])
+        })
+        .collect();
+    run(IHP_M1, &moved).of("M1.bef")
+}
+
+/// IHP M1.e "Min. space of Metal1 lines if, at least one line is wider than
+/// 0.3 um and the parallel run is more than 1.0 um: 0.22" (SG13G2 layout
+/// rules 5.16; IHP-Open-PDK `drc/docs/main_rules.md`). The run is the wide
+/// line's: a 200 nm line with a 330 x 305 nm tab (`sg13g2_buf_2`'s Metal1)
+/// runs 1.2 um beside its neighbour, but its wide part only 305 nm, so the
+/// 0.18 um of M1.b holds, as IHP's `5_16_metal1.drc` reads it (separation
+/// from the wide part, projected). A tab 1001 nm long runs past 1 um and
+/// asks 0.22.
+///
+/// Oracle: foundry example, IHP M1.e on `sg13g2_buf_2` (clean under IHP's
+/// deck, finding N-f2-6), the cells by hand; under all eight symmetries, the
+/// gap swept one unit either side of each limit: a 305 nm tab flags 179 and
+/// not 180 or 181, a 1001 nm tab flags 219 and not 220 or 221, and a 1000 nm
+/// tab, whose run is not more than 1 um, does not flag 219.
+#[test]
+fn m1_e_reads_the_run_of_the_wide_part_not_of_the_whole_line() {
+    for (k, s) in SYMMETRIES.into_iter().enumerate() {
+        let found = tabbed_line(s, 305, 179);
+        assert!(
+            !found.is_empty() && found.iter().all(|&f| f == (len(179), len(180))),
+            "symmetry {k}: short tab, 179: {found:?}"
+        );
+        for gap in [180, 181] {
+            assert!(
+                tabbed_line(s, 305, gap).is_empty(),
+                "symmetry {k}: short tab, {gap}"
+            );
+        }
+        let found = tabbed_line(s, 1_001, 219);
+        assert!(
+            !found.is_empty() && found.iter().all(|&f| f == (len(219), len(220))),
+            "symmetry {k}: long tab, 219: {found:?}"
+        );
+        for gap in [220, 221] {
+            assert!(
+                tabbed_line(s, 1_001, gap).is_empty(),
+                "symmetry {k}: long tab, {gap}"
+            );
+        }
+        assert!(
+            tabbed_line(s, 1_000, 219).is_empty(),
+            "symmetry {k}: a 1 um tab, 219"
+        );
+    }
+}
+
+/// `M1.bef` on `rects` under symmetry `s`: the findings' measured and limit.
+fn moved_m1(s: Symmetry, rects: &[[i64; 4]]) -> Vec<(Measurement, Measurement)> {
+    let moved: Vec<(&str, [i64; 4])> = rects
+        .iter()
+        .map(|&[xlo, ylo, xhi, yhi]| {
+            let ((ax, ay), (bx, by)) = (s(xlo, ylo), s(xhi, yhi));
+            ("met1", [ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)])
+        })
+        .collect();
+    run(IHP_M1, &moved).of("M1.bef")
+}
+
+/// IHP M1.e reads the gap and the run on one stretch. The Metal1 of
+/// `sg13g2_dlhr_1`: a VSS rail 440 nm tall with a 330 nm finger, and a net
+/// 215 nm from the finger along 590 nm, and `low` nm above the rail along
+/// 1085 nm. The 215 gap runs only 590 nm, so 0.18 holds there; the 1085 nm
+/// stretch runs past 1 um, so 0.22 holds there, and 220 is clean. Joining
+/// the long run of one stretch to the short gap of another flagged 215
+/// against 0.22 on a cell IHP's deck passes.
+///
+/// Oracle: foundry example, IHP M1.e on `sg13g2_dlhr_1` (clean under IHP's
+/// `5_16_metal1.drc`, which projects each edge pair), the stretches by hand;
+/// under all eight symmetries, the long stretch's gap swept: 220 and 221
+/// clean, 219 flagged against 0.22.
+#[test]
+fn m1_e_reads_the_gap_and_the_run_on_the_same_stretch() {
+    let net = |low: i64| {
+        [
+            [0, -220, 8_640, 220],
+            [910, 220, 1_240, 1_250],
+            [1_455, 660, 1_930, 1_250],
+            [1_930, 720, 3_275, 890],
+            [3_105, 220 + low, 4_190, 630],
+            [3_105, 630, 3_275, 720],
+        ]
+    };
+    for (k, s) in SYMMETRIES.into_iter().enumerate() {
+        for low in [220, 221] {
+            assert!(
+                moved_m1(s, &net(low)).is_empty(),
+                "symmetry {k}: long stretch {low} above the rail"
+            );
+        }
+        let found = moved_m1(s, &net(219));
+        assert!(
+            !found.is_empty() && found.iter().all(|&f| f == (len(219), len(220))),
+            "symmetry {k}: long stretch 219: {found:?}"
+        );
+    }
+}
+
 // ---------------------------------------------------------- huge metal
 
 /// sky130 m1.3a "Min. spacing of features attached to or extending from
@@ -393,6 +802,10 @@ fn m1_e_f_pick_the_cell_by_the_wider_line_and_the_run() {
 /// only about 201 from the finger's first 280: m1.3a flags it, and spacing
 /// measured from the plate alone does not. A line starting 700 above the
 /// plate is clear of both.
+///
+/// Oracle: foundry example, sky130 m1.3a, by hand: the line is 200 beside and
+/// 20 above the finger's first 280, sqrt(200^2 + 20^2) = 200.99, floored to
+/// 200; it is 300 from the plate, so m1.3b is clean.
 #[test]
 fn m1_3a_measures_from_what_is_attached_to_huge_metal() {
     let deck = format!(
@@ -410,7 +823,7 @@ fn m1_3a_measures_from_what_is_attached_to_huge_metal() {
     );
     // sqrt(200² + 20²) = 200.99, reported rounded down.
     assert_eq!(found.of("m1.3a"), [(len(200), len(280))]);
-    assert!(found.of("m1.3b").is_empty());
+    assert_eq!(found.of("m1.3b"), []);
 }
 
 // ---------------------------------------------------------- edge checks
@@ -420,6 +833,10 @@ fn m1_3a_measures_from_what_is_attached_to_huge_metal() {
 /// bound by two diffusions 0.40" (`.space(0.4, projection)` on the same
 /// edges). One tap butts one diff along 250; another sits 350 wide between
 /// two diffs; a third is exactly 400 wide, which is legal.
+///
+/// Oracle: foundry example, sky130 difftap.4 (0.29) and difftap.5 (0.40), by
+/// hand: one butting edge 250 long, one pair of butting edges 350 apart, and a
+/// 400 pair at the limit.
 #[test]
 fn difftap_4_and_5_measure_the_butting_edges() {
     let deck = format!(
@@ -451,6 +868,11 @@ fn difftap_4_and_5_measure_the_butting_edges() {
 /// end to end. So is a tap whose corner sits 60 right and 80 above the diff's
 /// corner, 100 on the diagonal, from its bottom and from its left edge; a
 /// rule measuring only edges that face each other would miss it.
+///
+/// Oracle: foundry example, sky130 difftap.7 (0.13), by hand: the first tap is
+/// 100 above its diff, twice; the second's corner is 60 by 80 from the diff's,
+/// 100 on the diagonal, twice; the locations are the midpoints worked out from
+/// the coordinates.
 #[test]
 fn difftap_7_measures_edge_to_edge_on_the_diagonal_too() {
     let deck = format!(
@@ -477,6 +899,11 @@ fn difftap_7_measures_edge_to_edge_on_the_diagonal_too() {
 /// covered right up to the butting corner. Measured to the corner point
 /// itself, the nsdm's end at the butting edge would be a zero enclosure. A
 /// second diff whose nsdm reaches only 100 below it is flagged at 100.
+///
+/// Oracle: foundry example, sky130 n/psd.5a (0.125, except the butting edge),
+/// by hand: the first diff is covered 125 everywhere it is measured; the
+/// second's nsdm reaches 100 below it, at the bottom edge's midpoint (500,
+/// 2000).
 #[test]
 fn nsd_5a_is_measured_on_every_edge_but_the_butting_one() {
     let deck =
@@ -504,6 +931,9 @@ fn nsd_5a_is_measured_on_every_edge_but_the_butting_one() {
 /// A pad dropped inside a wider shape of the same layer is one figure with it:
 /// boundary distance alone reads the pad's inset as a 100 nm gap. Reported by
 /// the Philis session (a via landing pad on a rail).
+///
+/// Oracle: construct-from-answer. The pad lies wholly inside the rail, so the
+/// two merge into one figure and there is no gap to space.
 #[test]
 fn a_shape_nested_in_another_is_not_a_spacing_gap() {
     let deck = "grid 1nm\nlayer m1 = gds(8, 0)\nrule M1.b space(m1) >= 180nm\n";
@@ -516,6 +946,9 @@ fn a_shape_nested_in_another_is_not_a_spacing_gap() {
 
 /// A derived guard ring is one polygon with a hole. Its ring width is not a
 /// gap, and an island in the hole is spaced from the hole's edge only.
+///
+/// Oracle: construct-from-answer. The ring's 150 width is not a gap; an island
+/// at the centre is 750 from the hole's edge, one at x 200 is 50 from it.
 #[test]
 fn a_holed_polygon_is_spaced_from_its_hole_edge_only() {
     let deck = "grid 1nm\nlayer m1 = gds(8, 0)\nlayer cut = gds(9, 0)\nlayer d = m1 not cut\nrule S space(d) >= 180nm\n";
@@ -549,6 +982,10 @@ fn a_holed_polygon_is_spaced_from_its_hole_edge_only() {
 /// four abutting bands. The host is the merged implant, not any one band, or
 /// no single band covers the ring and it reads as unhosted (0). Reported by
 /// the Philis session (sky130 nsd.5b on every tap ring).
+///
+/// Oracle: construct-from-answer. The implant bands merge into one ring
+/// reaching 125 past every edge of the tap ring, hole edges included; with
+/// 100 past the hole edges it is one violation of 100.
 #[test]
 fn a_ring_is_enclosed_by_a_ring_drawn_as_bands() {
     let deck =
@@ -581,6 +1018,9 @@ fn a_ring_is_enclosed_by_a_ring_drawn_as_bands() {
 /// Width is the merged figure's: a 170 nm strip drawn inside a 1 um square adds
 /// no width of its own, while the same strip alone is too narrow. Reported by
 /// the Philis session (an implant fill drawn inside a band).
+///
+/// Oracle: construct-from-answer. The 170 strip inside the 1 um square adds no
+/// width to the merged figure; alone it is 170 against 380.
 #[test]
 fn a_narrow_shape_drawn_inside_a_wide_one_is_not_a_width_violation() {
     let deck = "grid 1nm\nlayer psdm = gds(94, 20)\nrule psd.1 width(psdm) >= 380nm\n";

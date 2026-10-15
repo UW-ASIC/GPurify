@@ -134,6 +134,7 @@ impl World {
             &Report {
                 header: &self.header,
                 violations: &self.violations,
+                waived: &gpurify_check::report::Violations::default(),
                 runs: &self.runs,
                 strings: &self.strings,
                 grid: Grid::new(1000).expect("a 1 nm grid"),
@@ -160,7 +161,7 @@ impl World {
     /// terminals in the recogniser's order (gate, source, drain, bulk).
     fn spice(&mut self, detail: Detail) -> Result<String, WriteError> {
         let (vdd, up) = (
-            self.ports.net_of(self.strings.intern("VDD")).expect("VDD"),
+            self.ports.nets_of(self.strings.intern("VDD"))[0],
             self.upper_net,
         );
         let mut devices = DeviceTable::default();
@@ -175,10 +176,14 @@ impl World {
             TerminalRole::Drain,
             TerminalRole::Bulk,
         ];
-        devices.param_start = vec![0, 2];
+        devices.param_start = vec![0, 3];
         devices.param = vec![
             (DeviceParam::Width, DeviceMeasure::Length(dbu(100))),
             (DeviceParam::Length, DeviceMeasure::Length(dbu(50))),
+            (
+                DeviceParam::SourceArea,
+                DeviceMeasure::AreaShare(gpurify_geom::DbuArea::new(70_000), 2),
+            ),
         ];
         let mut out = String::new();
         netlist::write_spice(
@@ -212,6 +217,11 @@ impl World {
 
 /// The table's own order (not canonical), floats through `format_f64`, the
 /// skipped rule carried beside the ones that ran.
+///
+/// Oracle: golden, written by hand from the known world (module doc): the
+/// violation rows in the table's order, floats at six decimals, the skipped
+/// rule beside the ones that ran; and determinism, two worlds built apart give
+/// the same bytes.
 #[test]
 fn the_json_report_is_exactly_these_bytes() {
     let expected = concat!(
@@ -226,6 +236,8 @@ fn the_json_report_is_exactly_these_bytes() {
     assert_eq!(World::new(Some("VSS")).json().expect("writable"), expected);
 }
 
+/// Oracle: RFC 8259 §7: a JSON string escapes the quote, the backslash and the
+/// controls below U+0020, and nothing else (DEL and non-ASCII pass through).
 #[test]
 fn a_json_string_escapes_quotes_backslashes_and_controls_only() {
     let mut world = World::new(Some("VSS"));
@@ -240,6 +252,9 @@ fn a_json_string_escapes_quotes_backslashes_and_controls_only() {
     );
 }
 
+/// Oracle: RFC 8259 §6 ("Numeric values that cannot be represented ... such as
+/// Infinity and NaN are not permitted") and `format_f64`'s doc: `write_report`
+/// refuses one.
 #[test]
 fn a_non_finite_measurement_is_refused_before_a_byte_is_written() {
     let mut world = World::new(Some("VSS"));
@@ -250,6 +265,9 @@ fn a_non_finite_measurement_is_refused_before_a_byte_is_written() {
     );
 }
 
+/// Oracle: golden, written by hand from the known network in the layouts IEEE
+/// 1481-1998 (SPEF) and DSPF 1.4 define: ground C 0.25 fF, coupling 0.125 fF, R
+/// 12.5 ohm, totals 0.375 and 0.125.
 #[test]
 fn the_spef_and_dspf_files_are_exactly_these_bytes() {
     let world = World::new(Some("VSS"));
@@ -258,7 +276,7 @@ fn the_spef_and_dspf_files_are_exactly_these_bytes() {
         "*SPEF \"IEEE 1481-1998\"\n*DESIGN \"layouts/test.gds\"\n*DATE \"2020-01-01T00:00:00Z\"\n\
          *VENDOR \"gpurify\"\n*PROGRAM \"gpurify\"\n*VERSION \"gpurify-test\"\n// deck decks/test.json\n\
          *DESIGN_FLOW \"EXTRACTED\"\n*DIVIDER /\n*DELIMITER :\n*BUS_DELIMITER [ ]\n*T_UNIT 1 NS\n\
-         *C_UNIT 1 FF\n*R_UNIT 1 OHM\n*L_UNIT 1 PH\n\n\
+         *C_UNIT 1 FF\n*R_UNIT 1 OHM\n*L_UNIT 0.000001 UH\n\n\
          *D_NET VDD 0.375000\n*CONN\n*P VDD B\n*CAP\n1 VDD:0 0.250000\n2 VDD:1 VSS:0 0.125000\n\
          *RES\n1 VDD:0 VDD:1 12.500000\n*INDUC\n*END\n\n\
          *D_NET VSS 0.125000\n*CONN\n*P VSS B\n*CAP\n*RES\n*INDUC\n*END\n\n"
@@ -274,9 +292,46 @@ fn the_spef_and_dspf_files_are_exactly_these_bytes() {
     );
 }
 
+/// What the writers write, the foreign reader reads back: the same nets,
+/// and `compare` finds every metric equal.
+///
+/// Oracle: round trip through `gpurify_extract::foreign`: VDD totals
+/// 0.375 fF (0.25 ground and 0.125 coupling) with 12.5 Ω from its first
+/// node, VSS 0.125 fF, in both SPEF and DSPF, and the two reads compare
+/// with no error.
+#[test]
+fn the_spef_and_dspf_files_read_back_as_written() {
+    use gpurify_extract::compare::compare;
+    use gpurify_extract::foreign::{read_dspf, read_spef};
+    let world = World::new(Some("VSS"));
+    let spef = read_spef(&world.spef().expect("written")).expect("reads back");
+    let dspf = read_dspf(&world.dspf().expect("written")).expect("reads back");
+    for read in [&spef, &dspf] {
+        assert_eq!(read.names, ["VDD", "VSS"]);
+        assert_eq!(read.network.capacitance_per_net(), [0.375, 0.125]);
+    }
+    let both = compare(&spef.network, &dspf.network);
+    assert_eq!(both.resistance.reference, [12.5, 0.0]);
+    for metric in [
+        &both.total_cap,
+        &both.ground_cap,
+        &both.resistance,
+        &both.delay,
+    ] {
+        assert_eq!(metric.reference, metric.candidate);
+    }
+    assert_eq!(both.coupling.reference, both.coupling.candidate);
+    assert_eq!(both.coupling.reference, [0.125]);
+}
+
 /// The device card goes out drain, gate, source, bulk whatever order the
 /// recogniser listed the terminals in; with parasitics, terminals and pins
-/// attach at each net's first node.
+/// attach at each net's first node. A source diffusion shared two ways is
+/// written as the exact quotient, `as='70000/2'` (testing-plan F16).
+///
+/// Oracle: golden, written by hand: the SPICE `M` card's drain, gate, source,
+/// bulk order, and the shared source's area as the exact quotient `70000/2`
+/// (F16).
 #[test]
 fn the_spice_netlist_is_exactly_these_bytes() {
     let head =
@@ -285,12 +340,14 @@ fn the_spice_netlist_is_exactly_these_bytes() {
     let mut world = World::new(Some("VSS"));
     assert_eq!(
         world.spice(Detail::Schematic).expect("writable"),
-        format!("{head}.subckt TOP VDD VSS\nM0 VDD VSS VDD VDD nch w=100 l=50\n.ends TOP\n")
+        format!(
+            "{head}.subckt TOP VDD VSS\nM0 VDD VSS VDD VDD nch w=100 l=50 as='70000/2'\n.ends TOP\n"
+        )
     );
     assert_eq!(
         world.spice(Detail::WithParasitics).expect("writable"),
         format!(
-            "{head}.subckt TOP VDD:0 VSS:0\nM0 VDD:0 VSS:0 VDD:0 VDD:0 nch w=100 l=50\n\
+            "{head}.subckt TOP VDD:0 VSS:0\nM0 VDD:0 VSS:0 VDD:0 VDD:0 nch w=100 l=50 as='70000/2'\n\
              Cp0 VDD:0 0 0.250000f\nRp1 VDD:0 VDD:1 12.500000\nCp2 VDD:1 VSS:0 0.125000f\n.ends TOP\n"
         )
     );
@@ -298,6 +355,9 @@ fn the_spice_netlist_is_exactly_these_bytes() {
 
 /// SPICE carries its own netlist, so it numbers an anonymous net where SPEF
 /// and DSPF refuse it.
+///
+/// Oracle: construct-from-answer. The upper rectangle has no label, so SPICE,
+/// which carries its own netlist, names it `n` and its net number.
 #[test]
 fn spice_numbers_an_anonymous_net() {
     let mut world = World::new(None);
@@ -310,6 +370,9 @@ fn spice_numbers_an_anonymous_net() {
 }
 
 /// A placeholder name would change between runs, so an anonymous net is refused by number.
+///
+/// Oracle: construct-from-answer. The upper net has no label, and a placeholder
+/// name would change between runs, so both formats refuse it by number.
 #[test]
 fn both_parasitic_formats_refuse_an_anonymous_net() {
     let world = World::new(None);
@@ -318,6 +381,8 @@ fn both_parasitic_formats_refuse_an_anonymous_net() {
     assert_eq!(world.dspf(), refusal);
 }
 
+/// Oracle: construct-from-answer. The resistor's far node is removed, and
+/// SPEF's `*RES` and DSPF's `R` cards need two nodes.
 #[test]
 fn both_parasitic_formats_refuse_a_resistor_with_no_far_node() {
     let mut world = World::new(Some("VSS"));
@@ -329,8 +394,93 @@ fn both_parasitic_formats_refuse_a_resistor_with_no_far_node() {
     assert_eq!(world.dspf(), refusal);
 }
 
+/// One label on two disconnected nets (F31): SPEF and DSPF would write two
+/// `*D_NET VDD` blocks that a reader merges into one net, and SPICE would join
+/// the two pieces into one node (debug builds panicked instead). Every writer
+/// that names nets by label refuses it, naming the label.
+///
+/// Oracle: construct-from-answer (F31). `VDD` labels both rectangles, two nets,
+/// so every writer that names nets by label refuses it.
+#[test]
+fn every_writer_refuses_a_label_on_two_nets() {
+    let mut world = World::new(Some("VDD"));
+    let refusal = Err(WriteError::SplitLabel("VDD".to_owned()));
+    assert_eq!(world.spef(), refusal);
+    assert_eq!(world.dspf(), refusal);
+    assert_eq!(world.spice(Detail::Schematic), refusal);
+    assert_eq!(world.spice(Detail::WithParasitics), refusal);
+}
+
+/// Two labels on one net, a short (F71): SPEF's `*D_NET` and DSPF's `*|NET`
+/// take one name and neither format has an alias, so writing the net under
+/// its first label drops the other, and a SPICE node is one name too. Every
+/// writer that names nets by label refuses it, naming both labels.
+///
+/// Oracle: construct-from-answer (F71). `VDD` and `AVDD` label one net, and
+/// neither SPEF, DSPF nor a SPICE node has an alias, so every writer refuses
+/// it, naming both.
+#[test]
+fn every_writer_refuses_a_net_with_two_labels() {
+    let mut world = World::new(Some("VSS"));
+    let lower = world.nets.polys_of(world.parasitics.node_net[0])[0];
+    let upper = world.nets.polys_of(world.upper_net)[0];
+    let mut provenance = Provenance::default();
+    for (poly, name) in [(lower, "VDD"), (lower, "AVDD"), (upper, "VSS")] {
+        provenance.label(poly, world.strings.intern(name));
+    }
+    bind_ports_into(&world.nets, &provenance, &mut world.ports).expect("every label on a net");
+    // In the port table's order: `VDD` was interned first.
+    let refusal = Err(WriteError::ShortedLabels(vec![
+        "VDD".to_owned(),
+        "AVDD".to_owned(),
+    ]));
+    assert_eq!(world.spef(), refusal);
+    assert_eq!(world.dspf(), refusal);
+    assert_eq!(world.spice(Detail::Schematic), refusal);
+    assert_eq!(world.spice(Detail::WithParasitics), refusal);
+}
+
+/// A NaN or an infinity in any element is refused by every writer that
+/// prints parasitics (F30): SPEF and DSPF would print `NaN` or `inf`, which no
+/// reader parses as a value, and SPICE would hand a simulator a value it
+/// should not believe.
+///
+/// Oracle: construct-from-answer (F30). Each row in turn is made NaN or
+/// infinite, which no SPEF or DSPF reader parses, so every parasitic writer
+/// refuses it; the schematic netlist carries none.
+#[test]
+fn every_parasitic_writer_refuses_a_value_that_is_not_finite() {
+    let refusal = Err(WriteError::Unrepresentable("a non-finite parasitic value"));
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for row in 0..3 {
+            let mut world = World::new(Some("VSS"));
+            world.parasitics.value[row] = match world.parasitics.value[row] {
+                Parasitic::GroundCap(_) => Parasitic::GroundCap(Qty::new(bad)),
+                Parasitic::Resistance(_) => Parasitic::Resistance(Qty::new(bad)),
+                Parasitic::CouplingCap(_) => Parasitic::CouplingCap(Qty::new(bad)),
+                Parasitic::Inductance(_) => Parasitic::Inductance(Qty::new(bad)),
+                Parasitic::MutualInductance(_) => Parasitic::MutualInductance(Qty::new(bad)),
+                Parasitic::SubstrateResistance(_) => Parasitic::SubstrateResistance(Qty::new(bad)),
+            };
+            assert_eq!(world.spef(), refusal, "spef, {bad} in row {row}");
+            assert_eq!(world.dspf(), refusal, "dspf, {bad} in row {row}");
+            assert_eq!(
+                world.spice(Detail::WithParasitics),
+                refusal,
+                "spice, {bad} in row {row}"
+            );
+            world
+                .spice(Detail::Schematic)
+                .expect("no parasitics to refuse");
+        }
+    }
+}
+
 /// Every record is padded to an even length (the odd `TOP` is the case a
 /// missing pad gets wrong), and the reader accepts what the writer emits.
+///
+/// Oracle: round trip, and the GDSII Stream Format rule that every record has
+/// an even length.
 #[test]
 fn an_empty_store_writes_a_library_the_reader_reads_back_empty() {
     let store = LayoutBuilder::new(0).finish().0;
@@ -346,6 +496,9 @@ fn an_empty_store_writes_a_library_the_reader_reads_back_empty() {
     assert_eq!(store.poly_count(), 0);
 }
 
+/// Oracle: `format_f64`'s doc ("`{:.6}`, six decimal places, never an
+/// exponent"), worked by hand: 4e-7 is below 5e-7 and prints 0, and 1e30 is the
+/// nearest double's digits.
 #[test]
 fn format_f64_writes_six_decimal_places_and_no_exponent() {
     for (value, text) in [

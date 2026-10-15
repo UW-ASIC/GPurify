@@ -1,0 +1,344 @@
+# Ledger F2: pdks/sky130.deck against the foundry's KLayout deck, sky130A_mr.drc
+# (release 2025.11.17_01.10, fossi-foundation/sky130_klayout_pdk; pinned in
+# tests/foundry/pdks.tsv). tests/foundry holds every row to it.
+#   ours     our rule ids (several: one foundry check our deck splits)
+#   foundry  the SKY130 periphery manual's rule id
+#   check    the foundry deck's report categories for it
+#   status   agrees | differs | ours_missing | theirs_missing | not_comparable
+#   note     how it differs, or why one side has no rule
+# Compared on open_pdks' test_violators.gds (held to the foundry deck's own
+# findings) and on every sky130_fd_sc_hd cell (held clean).
+ours	foundry	check	status	note
+dnwell.2	dnwell.2	MRW_dnwell.WID.1	agrees	
+dnwell.3 dnwell.3.notch	dnwell.3	MRW_dnwell.SP.1	agrees	
+nwell.1	nwell.1	MR_nwell.WID.1	agrees	
+nwell.2a nwell.2a.notch	nwell.2a	MR_nwell.SP.1	agrees	
+nwell.6	nwell.6	MR_nwell.ENC.1	agrees	
+nwell.9	nwell.9	MR_nwell.CON.1	agrees	
+hvtp.1	hvtp.1	MR_hvtp.WID.1	agrees	
+hvtp.2 hvtp.2.notch	hvtp.2	MR_hvtp.SP.1	agrees	
+hvtr.1	hvtr.1	hvtr.1	agrees	
+hvtr.2	hvtr.2	hvtr.2	agrees	
+lvtn.1a	lvtn.1a	lvtn.1a	agrees	
+lvtn.2 lvtn.2.notch	lvtn.2	lvtn.2	agrees	
+ncm.1	ncm.1	MR_ncm.WID.1	agrees	
+ncm.2a ncm.2a.notch	ncm.2a	ncm.2a	agrees	
+difftap.1	difftap.1	difftap.1 difftap.1_a	agrees	
+difftap.1.tap	difftap.1	difftap.1_b MR_diff.WID.2	agrees	
+difftap.3 difftap.3.notch	difftap.3	difftap.3	agrees	
+poly.1a	poly.1a	MR_poly.WID.2	agrees	
+poly.2 poly.2.notch	poly.2	MR_poly.SP.1	agrees	
+poly.3	poly.3	MR_poly.WID.3	agrees	
+rpm.1a	rpm.1a	MR_rpm.WID.1	agrees	
+rpm.2 rpm.2.notch	rpm.2	MR_rpm.SP.1	agrees	
+npc.1	npc.1	MR_npc.WID.1	agrees	
+npc.2 npc.2.notch	npc.2	npc.2	agrees	
+nsd.1	nsd.1	MR_nsdm.WID.1 MR_nsdm.WID.2	agrees	
+nsd.2 nsd.2.notch	nsd.2	MR_nsdm.SP.1 MR_nsdm.SP.2	agrees	
+psd.1	psd.1	MR_psdm.WID.1 MR_psdm.WID.2	agrees	
+psd.2 psd.2.notch	psd.2	MR_psdm.SP.1 MR_psdm.SP.2	agrees	
+nsd.8	nsd.8	nsdm_psdm_overlap	agrees	
+licon.1	licon.1	licon.1 licon.1_c MR_licon.WID.1	agrees	
+licon.1b	licon.1b	MR_licon.WID.2	agrees	
+licon.2	licon.2	MR_licon.SP.1	agrees	
+licon.5b	licon.5b	MR_licon.SP.5	agrees	
+licon.9	licon.9	MR_licon.SP.6	agrees	
+licon.11	licon.11	MR_licon.SP.8	agrees	
+licon.13	licon.13	licon.13 licon.13_a	agrees	
+licon.17	licon.17	licon.17	agrees	
+li.1	li.1	li.1	agrees	
+li.1a	li.1a	-	theirs_missing	sky130A_mr.drc has no check for it
+li.3 li.3.notch	li.3	li.3	agrees	
+li.5	li.5	li.5	agrees	
+li.6	li.6	li.6	agrees	
+li.7	li.7	MR_li.WID.4	agrees	
+ct.1	ct.1	MR_mcon.WID.1 MR_mcon.LEN.1	agrees	
+ct.2	ct.2	MR_mcon.SP.1	agrees	
+ct.4	ct.4	MR_mcon.CON.10	agrees	
+m1.1	m1.1	MR_met1.WID.1	agrees	
+m1.2 m1.2.notch	m1.2	MR_met1.SP.1	agrees	
+m1.3a m1.3b	m1.3a m1.3b	MRW_met1.SP.2	agrees	
+m1.4	m1.4	MR_met1.ENC.1 MR_met1.CON.1	agrees	
+m1.5	m1.5	m1.5	differs	Documented implementation difference: an mcon outside met1 (test_violators' 6 x 11 nm mcon) has no enclosure, and GPurify flags it under m1.5 as well as m1.4; the foundry deck flags it only under MR_met1.CON.1 (row m1.4, which agrees). The manual's m1.5 ('Mcon must be enclosed by Met1 on one of two adjacent sides by at least 0.060') does not say whether an unenclosed mcon also breaks it.
+m1.6	m1.6	MR_met1.AR.1	differs	Not a GPurify difference: both decks flag the 0.29 x 0.23 um met1 pad of tapvgnd_1 and tapvgnd2_1, 0.067 um2 against the manual's m1.6 'Min metal 1 area 0.083 um2'; the cell is legal only abutting the VGND rail in a row, so the harness's clean-cell oracle does not hold for it.
+m1.7	m1.7	MR_met1.AR.2	agrees	
+via.1a	via.1a	via.1a via.1a_a via.1a_b	agrees	
+via.2	via.2	via.2	agrees	
+via.4a	via.4a	MR_via1.ENC.1 MR_via1.CON.1	agrees	
+via.5a	via.5a	via.5a	agrees	
+m2.1	m2.1	MR_met2.WID.1	agrees	
+m2.2 m2.2.notch	m2.2	m2.2	agrees	
+m2.3a m2.3b	m2.3a m2.3b	MRW_met2.SP.2	agrees	
+m2.4	m2.4	m2.4 m2.4_a	agrees	
+m2.5	m2.5	m2.5	agrees	
+m2.6	m2.6	MR_met2.AR.1	agrees	
+m2.7	m2.7	MR_met2.AR.2	agrees	
+via2.1a	via2.1a	via2.1a via2.1a_a MR_via2.LEN.1	agrees	
+via2.2	via2.2	via2.2	agrees	
+via2.4	via2.4	via2.4 MR_via2.CON.1	agrees	
+via2.5	via2.5	via2.5	agrees	
+m3.1	m3.1	MR_met3.WID.1	agrees	
+m3.2 m3.2.notch	m3.2	m3.2	agrees	
+m3.3c m3.3d	m3.3c m3.3d	MRW_met3.SP.2	agrees	
+m3.4	m3.4	m3.4 MR_met3.CON.1	agrees	
+m3.6	m3.6	MR_met3.AR.1	agrees	
+via3.1	via3.1	via3.1 via3.1_a MR_via3.LEN.1	agrees	
+via3.2	via3.2	via3.2	agrees	
+via3.4	via3.4	via3.4 via3.4_a	agrees	
+via3.5	via3.5	via3.5	agrees	
+m4.1	m4.1	MR_met4.WID.1	agrees	
+m4.2 m4.2.notch	m4.2	m4.2	agrees	
+m4.3	m4.3	m4.3 MR_met4.CON.1	agrees	
+m4.4a	m4.4a	MR_met4.AR.1	agrees	
+m4.5a m4.5b	m4.5a m4.5b	MRW_met4.SP.2	agrees	
+via4.1	via4.1	via4.1 via4.1_a via4.1_b	agrees	
+via4.2	via4.2	MR_via4.SP.1	agrees	
+via4.4	via4.4	via4.4 MR_via4.CON.1	agrees	
+m5.1	m5.1	MR_met5.WID.1	agrees	
+m5.2 m5.2.notch	m5.2	MR_met5.SP.1	agrees	
+m5.3	m5.3	m5.3 MR_met5.CON.1	agrees	
+m5.4	m5.4	MR_met5.AR.1	agrees	
+capm.1	capm.1	MR_capm.WID.1	agrees	
+capm.2a	capm.2a	MR_capm.SP.1	agrees	
+capm.3	capm.3	MR_capm.ENC.1	agrees	
+capm.4	capm.4	MR_capm.ENC.2	agrees	
+capm.11	capm.11	MR_capm.SP.2	agrees	
+cap2m.1	cap2m.1	MR_cap2m.WID.1	agrees	
+cap2m.2a	cap2m.2a	MR_cap2m.SP.1	agrees	
+cap2m.3	cap2m.3	MR_cap2m.ENC.1	agrees	
+cap2m.4	cap2m.4	MR_cap2m.ENC.2	agrees	
+cap2m.11	cap2m.11	MR_cap2m.SP.2	agrees	
+pad.2	pad.2	pad.2	agrees	
+nsm.1	nsm.1	MR_nsm.WID.1	agrees	
+nsm.2	nsm.2	MR_nsm.SP.1	agrees	
+hvi.1	hvi.1	hvi.1	agrees	
+hvi.2a hvi.2a.notch	hvi.2a	hvi.2a	agrees	
+hvntm.1	hvntm.1	hvntm.1	agrees	
+hvntm.2 hvntm.2.notch	hvntm.2	hvntm.2	agrees	
+x.1b	x.1b	dnwell_OFFGRID nwell_OFFGRID pwbm_OFFGRID pwde_OFFGRID hvtp_OFFGRID hvtr_OFFGRID lvtn_OFFGRID ncm_OFFGRID diff_OFFGRID tap_OFFGRID tunm_OFFGRID poly_OFFGRID rpm_OFFGRID npc_OFFGRID nsdm_OFFGRID psdm_OFFGRID licon_OFFGRID li_OFFGRID ct_OFFGRID vpp_OFFGRID m1_OFFGRID via_OFFGRID m2_OFFGRID via2_OFFGRID m3_OFFGRID via3_OFFGRID nsm_OFFGRID m4_OFFGRID via4_OFFGRID m5_OFFGRID pad_OFFGRID mf_OFFGRID hvi_OFFGRID hvntm_OFFGRID vhvi_OFFGRID uhvi_OFFGRID pwell_rs_OFFGRID areaid_re_OFFGRID	agrees	
+x.3a	x.3a	dnwell_angle nwell_angle pwbm_angle pwde_angle hvtp_angle hvtr_angle lvtn_angle ncm_angle diff_angle tap_angle tunm_angle poly_angle rpm_angle npc_angle nsdm_angle psdm_angle licon_angle li_angle ct_angle vpp_angle m1_angle via_angle m2_angle via2_angle m3_angle via3_angle nsm_angle m4_angle via4_angle m5_angle pad_angle mf_angle hvi_angle hvntm_angle vhvi_angle uhvi_angle pwell_rs_angle	agrees	
+-	pwde.1	pwde.1	ours_missing	pwde (p-well drain extension, 20 V devices) is not declared
+-	pwde.2	MR_pwde.SP.1	ours_missing	pwde is not declared
+-	hvtr.4	MR_hvtr.CON.1	ours_missing	hvtr overlapping hvtp: no forbidden row yet
+-	lvtn.10	MR_lvtn.OVL.2	ours_missing	lvtn straddling nwell: no forbidden row yet
+-	difftap.2	difftap.2	ours_missing	diff width inside areaid.ce (0.14): the deck holds the core to the periphery 0.15
+-	tunm.1	tunm.1	ours_missing	the tunm (SONOS) rules are left out
+-	tunm.2	tunm.2	ours_missing	the tunm (SONOS) rules are left out
+-	tunm	MR_tunm.CON.1	ours_missing	the foundry prohibits tunm outright; the deck checks only hvi.4
+-	thkox.1	thkox.1	ours_missing	thkox (75/21) is not declared
+-	thkox.2	thkox.2	ours_missing	thkox (75/21) is not declared
+-	thkox	MR_thkox.CON.1	ours_missing	thkox (75/21) is not declared
+-	hv.*	MR_hv.SP.10	ours_missing	high-voltage net rules need voltage propagation
+-	poly.2	MR_poly.SP.4	ours_missing	core: the deck holds areaid.core to the periphery 0.21, stricter than 0.16
+-	poly.res	MR_poly.LEN.2	ours_missing	poly:res length of rpoly_hp: a resistor length is not a width
+-	ldntm.1	ldntm.1	ours_missing	ldntm is not declared
+-	ldntm.2	ldntm.2	ours_missing	ldntm is not declared
+-	rdl.1	MR_rdl.WID.1	ours_missing	the redistribution layer is left out
+-	rdl.2	MR_rdl.SP.1	ours_missing	the redistribution layer is left out
+-	rdl	MR_rdl.CON.1	ours_missing	the redistribution layer is left out
+-	urpm.1	MR_urpm.WID.1	ours_missing	urpm width is not stated in the deck
+-	urpm.2	MR_urpm.SP.1	ours_missing	urpm spacing is not stated in the deck
+-	nsd.1	MR_nsdm.WID.3	ours_missing	core: the deck holds areaid.ce to the periphery 0.38
+-	nsd.2	MR_nsdm.SP.3	ours_missing	core: the deck holds areaid.ce to the periphery 0.38
+-	nsd.2	nsdm.6a	ours_missing	core parallel-edge spacing in areaid.ce
+-	psd.1	MR_psdm.WID.3	ours_missing	core: the deck holds areaid.ce to the periphery 0.38
+-	psd.2	MR_psdm.SP.3	ours_missing	core: the deck holds areaid.ce to the periphery 0.38
+-	psd.2	psdm.6a	ours_missing	core parallel-edge spacing in areaid.ce
+-	licon.6(core)	licon.6	ours_missing	npc enclosure of poly licon inside areaid.core; the deck's licon.6 is the periphery's tap straddle
+-	licon	MR_licon.ANG.1	ours_missing	angle: x.3a allows 45 degrees on every layer
+-	licon.1b-c	MR_licon.CON.13	ours_missing	licon bars: needs a shape class (H item)
+-	licon.1b-c	MR_licon.CON.xx	ours_missing	licon squares on rpm/urpm: needs a shape class (H item)
+licon.2b	licon.2b licon.2c licon.2d	MR_licon.SP.2 MR_licon.SP.3 MR_licon.SP.4	agrees	One cut-class table in the deck (slotted licons 0.35 end to end, 0.51 otherwise and from a square licon); the foundry writes three checks. Neither test_violators nor sky130_fd_sc_hd draws a slotted licon.
+-	licon.SP.15	MRW_licon.SP.15	ours_missing	post-maskgen bar spacing: needs a shape class (H item)
+-	licon.SP.16	MRW_licon.SP.16	ours_missing	post-maskgen bar spacing: needs a shape class (H item)
+-	capm.5	MR_capm.SP.3	ours_missing	capm to via3 spacing conflicts with capm.4 over the plate (deck note)
+-	cap2m.5	MR_cap2m.SP.3	ours_missing	cap2m to via4 spacing, as capm.5
+-	li.7(core)	li.7	ours_missing	li spacing in areaid.ce (0.14): the deck holds the core to 0.17; the deck's li.7 is li:res width
+-	li.8	li.8	ours_missing	li width in areaid.ce (0.14): the deck holds the core to 0.17
+-	ct	MR_mcon.ANG.1	ours_missing	angle: x.3a allows 45 degrees on every layer
+-	ct.ring	MR_mcon.WID.2	ours_missing	ring-shaped mcon (seal ring): left out
+-	ct.ring	MR_mcon.WID.3	ours_missing	ring-shaped mcon (seal ring): left out
+-	ct.ring	MR_mcon.CON.1	ours_missing	ring-shaped mcon (seal ring): left out
+m1.4a	m1.4a	m1.4a m1.4a_a	agrees	both decks scope it to the six cells m1.4a names, sky130A_mr.drc with `select`; m1.4a_a (an mcon not enclosed at all) is caught by our 5nm minimum
+-	via.3	via.3	ours_missing	ring-shaped via (seal ring): left out
+-	via.3	via.3_a	ours_missing	ring-shaped via (seal ring): left out
+-	via.3	via.3_b	ours_missing	ring-shaped via (seal ring): left out
+-	m2.4(core)	m2.4_b	ours_missing	core enclosure (0.045): the deck holds the core to 0.055
+-	via2.3	via2.3	ours_missing	ring-shaped via2 (seal ring): left out
+-	via2.3	via2.3_a	ours_missing	ring-shaped via2 (seal ring): left out
+-	via2.3	via2.3_b	ours_missing	ring-shaped via2 (seal ring): left out
+-	m3.7	MR_met3.AR.2	ours_missing	met3 hole area: not in the deck
+-	m4.7	MR_met4.AR.2	ours_missing	met4 hole area: not in the deck
+-	via4.3	via4.3	ours_missing	ring-shaped via4 (seal ring): left out
+-	via4.3	via4.3_a	ours_missing	ring-shaped via4 (seal ring): left out
+-	via4.3	via4.3_b	ours_missing	ring-shaped via4 (seal ring): left out
+-	m5.7	MR_met5.AR.2	ours_missing	met5 hole area: not in the deck
+-	moduleCut	moduleCut.1	ours_missing	SkyWater-only layer, not declared
+nwell.5	nwell.5	-	theirs_missing	sky130A_mr.drc has no check for it
+hvtp.3	hvtp.3	-	theirs_missing	sky130A_mr.drc has no check for it
+hvtp.4	hvtp.4	-	theirs_missing	sky130A_mr.drc has no check for it
+hvtp.5	hvtp.5	-	theirs_missing	sky130A_mr.drc has no check for it
+hvtp.6	hvtp.6	-	theirs_missing	sky130A_mr.drc has no check for it
+hvtr.3	hvtr.3	-	theirs_missing	sky130A_mr.drc has no check for it
+lvtn.3a	lvtn.3a	-	theirs_missing	sky130A_mr.drc has no check for it
+lvtn.4b	lvtn.4b	-	theirs_missing	sky130A_mr.drc has no check for it
+lvtn.9	lvtn.9	-	theirs_missing	sky130A_mr.drc has no check for it
+lvtn.10	lvtn.10	-	theirs_missing	sky130A_mr.drc has no enclosure check for it; its MR_lvtn.OVL.2 (lvtn straddling nwell) is another check and stays ours_missing
+lvtn.12	lvtn.12	-	theirs_missing	sky130A_mr.drc has no check for it
+lvtn.13	lvtn.13	-	theirs_missing	sky130A_mr.drc has no check for it
+lvtn.14	lvtn.14	-	theirs_missing	sky130A_mr.drc has no check for it
+ncm.3	ncm.3	-	theirs_missing	sky130A_mr.drc has no check for it
+ncm.5	ncm.5	-	theirs_missing	sky130A_mr.drc has no check for it
+ncm.6	ncm.6	-	theirs_missing	sky130A_mr.drc has no check for it
+ncm.7	ncm.7	-	theirs_missing	sky130A_mr.drc has no check for it
+ncm.8	ncm.8	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.8	difftap.8	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.9	difftap.9	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.10	difftap.10	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.11	difftap.11	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.1b	poly.1b	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.4	poly.4	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.5	poly.5	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.7	poly.7	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.8	poly.8	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.9	poly.9	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.9.difftap	poly.9.difftap	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.10	poly.10	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.11	poly.11	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.3	rpm.3	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.4	rpm.4	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.5	rpm.5	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.6	rpm.6	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.7	rpm.7	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.9	rpm.9	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.1b	rpm.1b rpm.1c rpm.1d rpm.1e rpm.1f	-	theirs_missing	sky130A_mr.drc has no check for it; one allowed-width row stands for rpm.1b-1f
+rpm.1g	rpm.1g	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.1h	rpm.1h	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.1i	rpm.1i	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.1j	rpm.1j	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.1k	rpm.1k	-	theirs_missing	sky130A_mr.drc has no check for it
+varac.1	varac.1	-	theirs_missing	sky130A_mr.drc has no check for it
+varac.2	varac.2	-	theirs_missing	sky130A_mr.drc has no check for it
+varac.3	varac.3	-	theirs_missing	sky130A_mr.drc has no check for it
+varac.4	varac.4	-	theirs_missing	sky130A_mr.drc has no check for it
+varac.5	varac.5	-	theirs_missing	sky130A_mr.drc has no check for it
+varac.8	varac.8	-	theirs_missing	sky130A_mr.drc has no check for it
+npc.4	npc.4	-	theirs_missing	sky130A_mr.drc has no check for it
+npc.5	npc.5	-	theirs_missing	sky130A_mr.drc has no check for it
+nsd.5a	nsd.5a	-	theirs_missing	sky130A_mr.drc has no check for it
+psd.5a	psd.5a	-	theirs_missing	sky130A_mr.drc has no check for it
+nsd.5b	nsd.5b	-	theirs_missing	sky130A_mr.drc has no check for it
+psd.5b	psd.5b	-	theirs_missing	sky130A_mr.drc has no check for it
+nsd.7	nsd.7	-	theirs_missing	sky130A_mr.drc has no check for it
+psd.7	psd.7	-	theirs_missing	sky130A_mr.drc has no check for it
+nsd.10a	nsd.10a	-	theirs_missing	sky130A_mr.drc has no check for it
+psd.10b	psd.10b	-	theirs_missing	sky130A_mr.drc has no check for it
+nsd.11	nsd.11	-	theirs_missing	sky130A_mr.drc has no check for it
+psd.11	psd.11	-	theirs_missing	sky130A_mr.drc has no check for it
+licon.5a	licon.5a	-	theirs_missing	sky130A_mr.drc has no check for it
+licon.5c	licon.5c	-	theirs_missing	sky130A_mr.drc has no check for it
+licon.7	licon.7	-	theirs_missing	sky130A_mr.drc has no check for it
+licon.8	licon.8	-	theirs_missing	sky130A_mr.drc has no check for it
+licon.8a	licon.8a	-	theirs_missing	sky130A_mr.drc has no check for it
+licon.10	licon.10	-	theirs_missing	sky130A_mr.drc has no check for it
+licon.11a	licon.11a	-	theirs_missing	sky130A_mr.drc has no check for it
+licon.14	licon.14	-	theirs_missing	sky130A_mr.drc has no check for it
+licon.15	licon.15	-	theirs_missing	sky130A_mr.drc has no check for it
+hvi.5	hvi.5	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.14	difftap.14	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.15a	difftap.15a	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.15b	difftap.15b	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.17	difftap.17	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.18	difftap.18	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.19	difftap.19	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.20	difftap.20	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.22	difftap.22	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.23	difftap.23	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.24	difftap.24	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.13	poly.13	-	theirs_missing	sky130A_mr.drc has no check for it
+hvntm.3	hvntm.3	-	theirs_missing	sky130A_mr.drc has no check for it
+hvntm.4	hvntm.4	-	theirs_missing	sky130A_mr.drc has no check for it
+hvntm.5	hvntm.5	-	theirs_missing	sky130A_mr.drc has no check for it
+hvntm.6a	hvntm.6a	-	theirs_missing	sky130A_mr.drc has no check for it
+ar.poly.1	ar.poly.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+ar.licon.1	ar.licon.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+ar.li.1	ar.li.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+ar.mcon.1	ar.mcon.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+ar.met1.1	ar.met1.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+ar.via.1	ar.via.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+ar.met2.1	ar.met2.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+ar.via2.1	ar.via2.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+ar.met3.1	ar.met3.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+ar.via3.1	ar.via3.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+ar.met4.1	ar.met4.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+ar.via4.1	ar.via4.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+ar.met5.1	ar.met5.1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+x.22	x.22	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+x.25	x.25	-	theirs_missing	sky130A_mr.drc has no check for it
+nwell.4	nwell.4	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+supply_short	supply_short	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+soft_connection	soft_connection	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+floating_gate	floating_gate	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+tie_high_low	tie_high_low	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+ir_drop	ir_drop	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+multiple_drivers	multiple_drivers	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+esd.pad	esd.pad	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+vgs.01v8	vgs.01v8	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+vds.01v8	vds.01v8	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+vgs.g5v0	vgs.g5v0	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+vgs.esd_nfet	vgs.esd_nfet	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+vds.d10v5	vds.d10v5	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+well_bias	well_bias	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+EM.met1_mcon	EM.met1_mcon	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+EM.met2_via1	EM.met2_via1	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+EM.met3_via2	EM.met3_via2	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+EM.met4_via3	EM.met4_via3	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+EM.met5_via4	EM.met5_via4	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+m1.density	m1.density	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+m2.density	m2.density	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+m3.density	m3.density	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+m4.density	m4.density	-	theirs_missing	an electrical (ERC) rule; sky130A_mr.drc has no electrical check
+x.10	x.10	-	theirs_missing	sky130A_mr.drc has no check for it
+dnwell.4	dnwell.4	-	theirs_missing	sky130A_mr.drc has no check for it
+licon.4	licon.4	-	theirs_missing	sky130A_mr.drc has no check for it
+licon.6	licon.6	-	theirs_missing	sky130A_mr.drc has no check for it
+licon.16	licon.16	-	theirs_missing	sky130A_mr.drc has no check for it
+licon.18	licon.18	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.12	poly.12	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.14	poly.14	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.15	poly.15	-	theirs_missing	sky130A_mr.drc has no check for it
+nsd.9	nsd.9	-	theirs_missing	sky130A_mr.drc has no check for it
+rpm.8	rpm.8	-	theirs_missing	sky130A_mr.drc has no check for it
+varac.7	varac.7	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.21	difftap.21	-	theirs_missing	sky130A_mr.drc has no check for it
+hvi.4	hvi.4	-	theirs_missing	sky130A_mr.drc has no check for it
+hvntm.9	hvntm.9	-	theirs_missing	sky130A_mr.drc has no check for it
+hvntm.10	hvntm.10	-	theirs_missing	sky130A_mr.drc has no check for it
+diff.oldfill.1	diff.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+diff.oldfill.2	diff.oldfill.2	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+poly.oldfill.1	poly.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+poly.oldfill.2	poly.oldfill.2	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+li.oldfill.1	li.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m1.oldfill.1	m1.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m1.oldfill.2	m1.oldfill.2	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m2.oldfill.1	m2.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m2.oldfill.2	m2.oldfill.2	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m3.oldfill.1	m3.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m3.oldfill.2	m3.oldfill.2	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m4.oldfill.1	m4.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m4.oldfill.2	m4.oldfill.2	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m5.oldfill.1	m5.oldfill.1	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+m5.oldfill.2	m5.oldfill.2	-	theirs_missing	sky130A_mr.drc has no check for it (a warning of Cadence's SKY130 DRM, deck note)
+difftap.4	difftap.4	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.5	difftap.5	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.7	difftap.7	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.7.diff	difftap.7.diff	-	theirs_missing	sky130A_mr.drc has no check for it
+nsd.5a.butted	nsd.5a.butted	-	theirs_missing	sky130A_mr.drc has no check for it
+psd.5a.butted	psd.5a.butted	-	theirs_missing	sky130A_mr.drc has no check for it
+nsd.5b.butted	nsd.5b.butted	-	theirs_missing	sky130A_mr.drc has no check for it
+psd.5b.butted	psd.5b.butted	-	theirs_missing	sky130A_mr.drc has no check for it
+nsd.6	nsd.6	-	theirs_missing	sky130A_mr.drc has no check for it
+poly.6	poly.6	-	theirs_missing	sky130A_mr.drc has no check for it
+hvntm.6b	hvntm.6b	-	theirs_missing	sky130A_mr.drc has no check for it
+difftap.2 difftap.2b	difftap.2	-	theirs_missing	channel width (the gate's sides on the diffusion's edge); sky130A_mr.drc has no such check (its difftap.2 is the areaid.ce diff width, row ours_missing)
+capm.7	capm.7	-	theirs_missing	sky130A_mr.drc has no check for it

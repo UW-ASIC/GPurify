@@ -1,0 +1,92 @@
+# The fuzz targets of docs/testing-plan.md L4: `cargo +nightly fuzz run <target>`
+# from the repository root. Each target's entry point and oracle is in
+# `oracles.rs`, which `tests/fuzz_regressions.rs` also replays on stable.
+[package]
+name = "gpurify-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+gpurify = { path = ".." }
+gpurify-ingest = { path = "../crates/ingest" }
+gpurify-testgen = { path = "../crates/testgen" }
+
+# Its own workspace: it builds only on nightly, with the sanitizer flags
+# cargo-fuzz passes, and the main workspace never depends on libfuzzer-sys.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "gds"
+path = "fuzz_targets/gds.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gds_structured"
+path = "fuzz_targets/gds_structured.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "deck"
+path = "fuzz_targets/deck.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "netlist_spice"
+path = "fuzz_targets/netlist_spice.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "netlist_spectre"
+path = "fuzz_targets/netlist_spectre.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "intent"
+path = "fuzz_targets/intent.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "liberty_spec"
+path = "fuzz_targets/liberty_spec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "drc_e2e"
+path = "fuzz_targets/drc_e2e.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "spef"
+path = "fuzz_targets/spef.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lefdef"
+path = "fuzz_targets/lefdef.rs"
+test = false
+doc = false
+bench = false

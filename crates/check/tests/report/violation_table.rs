@@ -103,6 +103,7 @@ fn table_of(rows: &[Violation]) -> Violations {
         table.limit.push(row.limit);
         table.shape_a.push(row.shapes.0);
         table.shape_b.push(row.shapes.1);
+        table.fix.push(None);
     }
     table
 }
@@ -133,7 +134,7 @@ fn render(table: &Violations) -> Vec<u8> {
 /// Every column is a column of the same table.
 ///
 /// The `SoA` invariant with no compiler behind it. A push or a sort that
-/// touches seven of the eight columns leaves a table that still answers
+/// touches all but one of the nine columns leaves a table that still answers
 /// `len()` correctly and is wrong everywhere else.
 fn assert_columns_are_parallel(table: &Violations, what: &str) {
     let rows = table.rule.len();
@@ -145,6 +146,7 @@ fn assert_columns_are_parallel(table: &Violations, what: &str) {
         ("limit", table.limit.len()),
         ("shape_a", table.shape_a.len()),
         ("shape_b", table.shape_b.len()),
+        ("fix", table.fix.len()),
     ] {
         assert!(
             length == rows,
@@ -340,10 +342,10 @@ fn extending_by_an_empty_table_changes_nothing() {
     assert_violations_eq(&table, &table_of(&rows));
 }
 
-/// Oracle: law. `Warning` is defined as never downgrading a genuine violation,
-/// which is a statement about the derived order: a writer reducing a set of
-/// findings to their worst must land on `Error`. The variant order is the only
-/// thing carrying that, and swapping the two variants is a silent change.
+/// Oracle: the order `Severity` documents, "Ordered, `Warning < Error`, so the
+/// `max` over a run is its worst": a writer reducing a set of findings to
+/// their worst must land on `Error`. The variant order is the only thing
+/// carrying that, and swapping the two variants is a silent change.
 #[test]
 fn a_warning_never_outranks_an_error() {
     assert!(Severity::Warning < Severity::Error);
@@ -351,4 +353,32 @@ fn a_warning_never_outranks_an_error() {
         [Severity::Error, Severity::Warning].into_iter().max(),
         Some(Severity::Error)
     );
+}
+
+/// Oracle: law. Rows equal in every key field but a ratio measured sort by
+/// the ratio in numeric order, negatives first, the sign deciding before the
+/// magnitude: the input is the answer reversed, so a key that ignored the
+/// value would leave it reversed.
+#[test]
+fn rows_differing_only_in_a_ratio_sort_by_its_numeric_value() {
+    let ratios = [-3.0, -0.5, -0.0, 0.25, 2.0, 1e300];
+    let row = |value: f64| Violation {
+        rule: StrId(1),
+        layer: LayerId(1),
+        severity: Severity::Error,
+        at: point(0, 0),
+        measured: Measurement::Ratio(value),
+        limit: Measurement::Count(0),
+        shapes: (PolyId(0), None),
+    };
+    let reversed: Vec<Violation> = ratios.iter().rev().map(|&v| row(v)).collect();
+    let mut table = table_of(&reversed);
+    table.sort_canonical();
+    let got: Vec<f64> = (0..ratios.len())
+        .map(|i| match row_at(&table, i).measured {
+            Measurement::Ratio(v) => v,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(got, ratios);
 }

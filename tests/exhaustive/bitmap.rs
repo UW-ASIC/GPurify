@@ -1,0 +1,685 @@
+//! The bitmap reference DRC (X3): every small pattern, run through `GPurify` and
+//! through an oracle written from each `drc::Rule` variant's rustdoc alone.
+//!
+//! A pattern is an n×n grid of cells of side [`S`], each filled or empty, and
+//! each filled cell is drawn as its own rectangle, so abutting cells merge only
+//! if the tool merges them. The oracle works on the cells and is meant to be
+//! read, not to be fast. Its semantics, as the rustdoc states them:
+//!
+//! - **Figures, and the corner model.** Shapes that touch or overlap are one
+//!   figure, and touching at a corner is touching: the merge,
+//!   `geom::boolean::union_into`, joins two cells that meet only at a corner
+//!   into one polygon. So figures are the 8-connected components of the
+//!   filled cells, and empty space is 4-connected: it does not pass a corner
+//!   where material meets, so a ring closed only at a corner encloses a hole.
+//! - **`min_width`** (DRC-010): per figure, the narrowest of (a) the gap
+//!   between parallel edges facing across material with overlapping
+//!   projections, on cells the shortest run of a row or column, and (b) the
+//!   Euclidean gap between two concave corners facing across material: voids
+//!   pointing away from each other, each corner on the other's material side.
+//!   Where two cells of a figure meet only at a corner, the corner is two
+//!   concave corners at one point with opposite voids: a neck of width 0.
+//!   One finding per figure under the limit.
+//! - **`min_spacing`** (DRC-023): every pair of drawn rows (cells) in different
+//!   figures, Euclidean, boundary to boundary. Two figures never touch, so no
+//!   pair measures 0.
+//! - **`notch`** (DRC-024): per figure, the narrowest gap between two of its
+//!   cells in one row or column with none of its cells between: parallel edges
+//!   facing across empty space with overlapping projections, holes included,
+//!   corner-to-corner gaps not measured. A gap between two parts of a figure
+//!   joined only at corners is a notch (`.#.|#.#` has one of 100).
+//! - **`min_area`** (DRC-017): per figure, its cell count times `S²`.
+//! - **`min_enclosed_area`** (DRC-019): per figure, each bounded 4-connected
+//!   component of the cells not in it, times `S²`.
+//! - **`min_enclosure`** (DRC-040): each inner cell, drawn inset by [`INSET`],
+//!   is its own polygon; its host is the outer figure under it, and its
+//!   enclosure the Euclidean distance to the nearest point outside the host;
+//!   unhosted measures 0.
+//! - **`min_extension`** (DRC-045) and **`overlap`** (DRC-046), on every pair
+//!   of one rectangle per layer: see [`extension`] and [`overlap`].
+//!
+//! Lengths are compared exactly (squared, in nm²), and `measured` is the
+//! distance floored to a whole nm, as the `Rule` rustdoc states.
+//!
+//! The nightly depth enumerates every 4×4 single-layer pattern (65 536, which
+//! hold every 3×3 pattern at the origin), every 3×3 two-layer enclosure
+//! pattern (2^18), and every pair of rectangles on a 5×5 lattice. The merge
+//! depth runs a fixed-seed sample of [`SAMPLE`] of each. Pictures are rows
+//! top to bottom.
+
+use crate::harness::{Depth, Expect, Finding, Fixture, Layout, DRC};
+use gpurify_testgen::Rng;
+use std::fmt::Write as _;
+
+/// The side of a cell, in nm.
+const S: i64 = 100;
+/// How far an enclosed cell is drawn inside its cell on every side, in nm.
+const INSET: i64 = 30;
+/// Patterns per kind at the merge depth.
+const SAMPLE: usize = 300;
+/// The merge sample's seed.
+const SEED: u64 = 0x0b17_3a9e;
+
+/// Every fixture this module generates at `depth`.
+pub fn fixtures(depth: Depth) -> Vec<Fixture> {
+    // One thread per kind: the nightly enumeration is about 600 000 fixtures.
+    std::thread::scope(|scope| {
+        let mut jobs: Vec<_> = KINDS
+            .iter()
+            .map(|kind| scope.spawn(move || single_layer(kind, depth)))
+            .collect();
+        jobs.push(scope.spawn(move || enclosures(depth)));
+        jobs.extend(
+            PAIRS
+                .iter()
+                .map(|kind| scope.spawn(move || rect_pairs(kind, depth))),
+        );
+        jobs.into_iter()
+            .flat_map(|job| job.join().expect("generating fixtures does not panic"))
+            .collect()
+    })
+}
+
+/// One case of the whole domain [`fixtures`] samples, at the identity, or
+/// `None` where the rule's words do not decide it. The cases are numbered
+/// each single-layer kind's 4×4 patterns first, then the two-layer 3×3
+/// enclosure patterns, then each pair kind's pairs of lattice rectangles;
+/// `index` is taken modulo their count. The `drc_e2e` fuzz target
+/// (`fuzz/oracles.rs`) reads cases here, under transforms the enumeration
+/// does not try.
+#[allow(
+    dead_code,
+    reason = "fuzz/oracles.rs reads it; the enumeration does not"
+)]
+pub fn case(index: u32) -> Option<Fixture> {
+    const CASES: u32 = 5 * (1 << 16) + (1 << 18) + 2 * 100 * 100;
+    let index = index % CASES;
+    let singles = u32::try_from(KINDS.len()).expect("five kinds") << 16;
+    if index < singles {
+        let kind = &KINDS[(index >> 16) as usize];
+        let deck = deck(&["met1"], kind.name, kind.check, kind.unit, kind.limits);
+        return Some(single_case(kind, &deck, index & 0xffff));
+    }
+    let index = index - singles;
+    if index < 1 << 18 {
+        let outer = Pattern {
+            n: 3,
+            bits: index & 0x1ff,
+        };
+        return Some(enclosure(&enclosure_deck(), index, hosting(outer)));
+    }
+    let index = (index - (1 << 18)) as usize;
+    let rects = rects();
+    let pairs = rects.len() * rects.len();
+    let kind = PAIRS.get(index / pairs)?;
+    let deck = deck(&["poly", "diff"], kind.name, kind.check, "nm", PAIR_LIMITS);
+    let i = index % pairs;
+    rect_pair(&deck, kind, rects[i / rects.len()], rects[i % rects.len()])
+}
+
+/// Every index below `domain` at nightly; a fixed-seed sample of [`SAMPLE`] at
+/// merge, drawn per kind so the kinds see different patterns.
+fn sample(depth: Depth, domain: u32, kind: &str) -> Vec<u32> {
+    let mut all: Vec<u32> = (0..domain).collect();
+    if depth == Depth::Merge {
+        let salt = kind
+            .bytes()
+            .fold(SEED, |h, b| h.rotate_left(5) ^ u64::from(b));
+        Rng::new(salt).shuffle(&mut all);
+        all.truncate(SAMPLE);
+    }
+    all
+}
+
+// ---------------------------------------------------------------- patterns ---
+
+/// A cell `(x, y)`: the square `[x S, (x+1) S] × [y S, (y+1) S]`.
+type Cell = (i64, i64);
+
+/// A set of cells with `-1 <= x, y <= 6`, cell `(x, y)` as bit
+/// `8 (y + 1) + x + 1`. Patterns are at most 4×4, so the set holds the grid,
+/// the ring of cells around it that stands for everything outside, and two
+/// empty columns that keep a shift by one bit from wrapping onto real cells.
+type Set = u64;
+
+fn bit((x, y): Cell) -> Set {
+    1 << (8 * (y + 1) + x + 1)
+}
+
+fn has(set: Set, (x, y): Cell) -> bool {
+    (-1..=6).contains(&x) && (-1..=6).contains(&y) && set & bit((x, y)) != 0
+}
+
+fn cells(mut set: Set) -> impl Iterator<Item = Cell> {
+    std::iter::from_fn(move || {
+        let i = i64::from(set.trailing_zeros());
+        set &= set.wrapping_sub(1);
+        (i < 64).then_some((i % 8 - 1, i / 8 - 1))
+    })
+}
+
+/// The n×n grid and its ring.
+fn padded(n: i64) -> Set {
+    (-1..=n)
+        .flat_map(|x| (-1..=n).map(move |y| bit((x, y))))
+        .sum()
+}
+
+/// The components of `set`, 4-connected or 8-connected.
+fn components(mut left: Set, eight: bool) -> Vec<Set> {
+    let mut out = Vec::new();
+    while left != 0 {
+        let mut part = left & left.wrapping_neg();
+        loop {
+            let mut grown = part | part << 1 | part >> 1 | part << 8 | part >> 8;
+            if eight {
+                grown |= part << 7 | part >> 7 | part << 9 | part >> 9;
+            }
+            grown &= left;
+            if grown == part {
+                break;
+            }
+            part = grown;
+        }
+        left &= !part;
+        out.push(part);
+    }
+    out
+}
+
+/// An n×n pattern: bit `y n + x` fills cell `(x, y)`.
+#[derive(Debug, Clone, Copy)]
+struct Pattern {
+    n: i64,
+    bits: u32,
+}
+
+impl Pattern {
+    fn set(self) -> Set {
+        (0..self.n * self.n)
+            .filter(|i| self.bits >> i & 1 == 1)
+            .map(|i| bit((i % self.n, i / self.n)))
+            .sum()
+    }
+
+    /// The merged figures: material joins across a corner.
+    fn figures(self) -> Vec<Set> {
+        components(self.set(), true)
+    }
+
+    /// The cells as rectangles on `layer`, each inset by `inset`.
+    fn draw(self, mut layout: Layout, layer: &str, inset: i64) -> Layout {
+        for (x, y) in cells(self.set()) {
+            let (x0, y0) = (x * S, y * S);
+            layout = layout.rect(
+                layer,
+                x0 + inset,
+                y0 + inset,
+                x0 + S - inset,
+                y0 + S - inset,
+            );
+        }
+        layout
+    }
+}
+
+/// The gap along one axis between two cells `d` apart, the first drawn
+/// `inset` inside its cell: 0 where they share the axis' span.
+fn gap(d: i64, inset: i64) -> i64 {
+    if d == 0 {
+        0
+    } else {
+        inset + (d.abs() - 1) * S
+    }
+}
+
+/// Squared Euclidean distance between cell `a` (inset by `inset`) and cell `b`.
+fn dist2(a: Cell, b: Cell, inset: i64) -> i64 {
+    gap(a.0 - b.0, inset).pow(2) + gap(a.1 - b.1, inset).pow(2)
+}
+
+/// A finding for a squared length under `limit`, measured floored to a nm.
+fn short(d2: i64, limit: i64) -> Option<Finding> {
+    (d2 < limit * limit).then(|| Finding::length(d2.isqrt()))
+}
+
+/// A finding for an area under `limit`.
+fn small(area: i64, limit: i64) -> Option<Finding> {
+    (area < limit).then(|| Finding::area(i128::from(area)))
+}
+
+fn area(set: Set) -> i64 {
+    i64::from(set.count_ones()) * S * S
+}
+
+// ------------------------------------------------------------------ oracles ---
+
+/// Squared narrowest width of a figure, in nm².
+fn width2(fig: Set) -> i64 {
+    let mut best = i64::MAX;
+    // Parallel edges across material: every maximal run of a row or column.
+    for (x, y) in cells(fig) {
+        if !has(fig, (x - 1, y)) {
+            let run = (1..8).find(|k| !has(fig, (x + k, y))).expect("finite");
+            best = best.min((run * S).pow(2));
+        }
+        if !has(fig, (x, y - 1)) {
+            let run = (1..8).find(|k| !has(fig, (x, y + k))).expect("finite");
+            best = best.min((run * S).pow(2));
+        }
+    }
+    // Concave corners: lattice points with exactly three of the four cells
+    // around them in the figure; the void points at the fourth. Lattice point
+    // `(x, y)` is the bottom-left corner of cell `(x, y)` and takes its bit, so
+    // shifting the figure by 1, 8 or 9 bits lines up the cell to its west,
+    // south or south-west with it. A lattice point with only two diagonal
+    // cells in the figure joins them, and is a concave corner of each with
+    // the voids on the other diagonal: two corners at one point, width 0.
+    let (ne, nw, se, sw) = (fig, fig << 1, fig << 8, fig << 9);
+    let (rising, falling) = (ne & !nw & !se & sw, !ne & nw & se & !sw);
+    let corners = [
+        ((1, 1), !ne & nw & se & sw | falling),
+        ((-1, 1), ne & !nw & se & sw | rising),
+        ((1, -1), ne & nw & !se & sw | rising),
+        ((-1, -1), ne & nw & se & !sw | falling),
+    ];
+    for (v, ps) in corners {
+        for (w, qs) in corners {
+            if w != (-v.0, -v.1) {
+                continue;
+            }
+            for p in cells(ps) {
+                for q in cells(qs) {
+                    if (q.0 - p.0) * v.0 <= 0 && (q.1 - p.1) * v.1 <= 0 {
+                        best = best.min(((q.0 - p.0) * S).pow(2) + ((q.1 - p.1) * S).pow(2));
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+fn min_width(figs: &[Set], _n: i64) -> Vec<i64> {
+    figs.iter().map(|&f| width2(f)).collect()
+}
+
+fn min_spacing(figs: &[Set], _n: i64) -> Vec<i64> {
+    let mut out = Vec::new();
+    for (i, &a) in figs.iter().enumerate() {
+        for &b in &figs[i + 1..] {
+            for c in cells(a) {
+                out.extend(cells(b).map(|d| dist2(c, d, 0)));
+            }
+        }
+    }
+    out
+}
+
+/// Squared narrowest gap between two cells of `fig` in one row or column with
+/// none of its cells between.
+fn notch2(fig: Set) -> Option<i64> {
+    let mut gaps = Vec::new();
+    for (x, y) in cells(fig) {
+        for (dx, dy) in [(1, 0), (0, 1)] {
+            let next = (1..6).find(|&k| has(fig, (x + k * dx, y + k * dy)));
+            gaps.extend(next.filter(|&k| k > 1).map(|k| ((k - 1) * S).pow(2)));
+        }
+    }
+    gaps.into_iter().min()
+}
+
+fn notch(figs: &[Set], _n: i64) -> Vec<i64> {
+    figs.iter().filter_map(|&f| notch2(f)).collect()
+}
+
+fn min_area(figs: &[Set], _n: i64) -> Vec<i64> {
+    figs.iter().map(|&f| area(f)).collect()
+}
+
+fn min_enclosed_area(figs: &[Set], n: i64) -> Vec<i64> {
+    let ring = padded(n) & !(padded(n - 2) << 9);
+    figs.iter()
+        .flat_map(|&f| components(padded(n) & !f, false))
+        .filter(|&hole| hole & ring == 0)
+        .map(area)
+        .collect()
+}
+
+// -------------------------------------------------------- single-layer kinds ---
+
+/// One single-layer kind: its deck check, catalog row, limits and oracle.
+struct Kind {
+    name: &'static str,
+    catalog: &'static str,
+    /// The deck check, before `>= <limit><unit>`.
+    check: &'static str,
+    /// `nm` for a length, `nm2` for an area.
+    unit: &'static str,
+    /// Chosen between and on the values a 4×4 pattern can measure.
+    limits: &'static [i64],
+    /// What each finding-to-be measures before the limit, from the figures of
+    /// an n×n pattern: a squared length or an area, both in nm².
+    measure: fn(&[Set], i64) -> Vec<i64>,
+}
+
+/// Widths on cells: 0 (a corner contact), 100, 141 (√2·S), 200, 223 (√5·S),
+/// 282, 300, 400. Notches are 100 or 200. Areas and holes are
+/// multiples of 10 000 nm².
+const KINDS: &[Kind] = &[
+    Kind {
+        name: "min_width",
+        catalog: "DRC-010",
+        check: "width(met1)",
+        unit: "nm",
+        limits: &[120, 150, 200, 250],
+        measure: min_width,
+    },
+    Kind {
+        name: "min_spacing",
+        catalog: "DRC-023",
+        check: "space(met1)",
+        unit: "nm",
+        limits: &[50, 120, 150, 200, 250],
+        measure: min_spacing,
+    },
+    Kind {
+        name: "notch",
+        catalog: "DRC-024",
+        check: "notch(met1)",
+        unit: "nm",
+        limits: &[150, 200, 250],
+        measure: notch,
+    },
+    Kind {
+        name: "min_area",
+        catalog: "DRC-017",
+        check: "area(met1)",
+        unit: "nm2",
+        limits: &[15_000, 20_000, 35_000, 50_000],
+        measure: min_area,
+    },
+    Kind {
+        name: "min_enclosed_area",
+        catalog: "DRC-019",
+        check: "hole_area(met1)",
+        unit: "nm2",
+        limits: &[15_000, 20_000, 25_000],
+        measure: min_enclosed_area,
+    },
+];
+
+/// The rule id for one limit of a kind.
+fn rule_id(kind: &str, limit: i64) -> String {
+    format!("{kind}.{limit}")
+}
+
+/// A deck on a 1 nm grid declaring `layers`, with `check >= <limit><unit>`
+/// once per limit.
+fn deck(layers: &[&str], kind: &str, check: &str, unit: &str, limits: &[i64]) -> String {
+    let mut deck = String::from("grid 1nm\n");
+    for (gds, layer) in (68..).zip(layers) {
+        writeln!(deck, "layer {layer} = gds({gds}, 0)").expect("a String takes any text");
+    }
+    for &limit in limits {
+        let id = rule_id(kind, limit);
+        writeln!(deck, "rule {id} {check} >= {limit}{unit}").expect("a String takes any text");
+    }
+    deck
+}
+
+fn single_layer(kind: &Kind, depth: Depth) -> Vec<Fixture> {
+    let deck = deck(&["met1"], kind.name, kind.check, kind.unit, kind.limits);
+    sample(depth, 1 << 16, kind.name)
+        .into_iter()
+        .map(|bits| single_case(kind, &deck, bits))
+        .collect()
+}
+
+/// The 4×4 pattern `bits` of `kind`, or `None` where the corner model decides it.
+fn single_case(kind: &Kind, deck: &str, bits: u32) -> Fixture {
+    single(kind, deck, Pattern { n: 4, bits })
+}
+
+fn single(kind: &Kind, deck: &str, p: Pattern) -> Fixture {
+    let name = format!("bitmap/{}/4x4/{:04x}", kind.name, p.bits);
+    let mut fixture = Fixture::new(&name, &[kind.catalog], deck, DRC).layout(p.draw(
+        Layout::default(),
+        "met1",
+        0,
+    ));
+    let values = (kind.measure)(&p.figures(), p.n);
+    for &limit in kind.limits {
+        let findings = values.iter().filter_map(|&v| {
+            if kind.unit == "nm" {
+                short(v, limit)
+            } else {
+                small(v, limit)
+            }
+        });
+        let id = rule_id(kind.name, limit);
+        fixture = fixture.expect(Expect::rule(&id, findings.collect()));
+    }
+    fixture
+}
+
+// ------------------------------------------------------------ min_enclosure ---
+
+/// Enclosure on inset cells: 0 unhosted, 30 beside the host's edge, 42 (√2·30)
+/// off its corner, 130 one cell in, 133 beside that.
+const ENCLOSURE_LIMITS: &[i64] = &[30, 40, 50, 131];
+
+/// What one outer 3×3 pattern does to an inner cell at each of the nine
+/// places: its squared enclosure, then the finding that fails it today. Inner
+/// cells never touch, so each is measured alone and this is all there is.
+type Hosting = ([i64; 9], Option<&'static str>);
+
+fn hosting(outer: Pattern) -> Hosting {
+    let figs = outer.figures();
+    let mut e2 = [0; 9];
+    for (i, e2) in (0..).zip(&mut e2) {
+        let c = (i % 3, i / 3);
+        if let Some(&host) = figs.iter().find(|&&f| has(f, c)) {
+            *e2 = cells(padded(3) & !host)
+                .map(|q| dist2(c, q, INSET))
+                .min()
+                .expect("the ring is outside every host");
+        }
+    }
+    (e2, None)
+}
+
+/// The enclosure kind's deck.
+fn enclosure_deck() -> String {
+    deck(
+        &["met1", "via1"],
+        "min_enclosure",
+        "enclosure(via1, met1)",
+        "nm",
+        ENCLOSURE_LIMITS,
+    )
+}
+
+fn enclosures(depth: Depth) -> Vec<Fixture> {
+    let deck = enclosure_deck();
+    let hostings: Vec<Hosting> = (0..1 << 9)
+        .map(|bits| hosting(Pattern { n: 3, bits }))
+        .collect();
+    sample(depth, 1 << 18, "min_enclosure")
+        .into_iter()
+        .map(|bits| enclosure(&deck, bits, hostings[bits as usize & 0x1ff]))
+        .collect()
+}
+
+/// The outer pattern is the low nine bits, the inner the high nine.
+fn enclosure(deck: &str, bits: u32, (e2, known): Hosting) -> Fixture {
+    let outer = Pattern {
+        n: 3,
+        bits: bits & 0x1ff,
+    };
+    let inner = Pattern {
+        n: 3,
+        bits: bits >> 9,
+    };
+    let name = format!(
+        "bitmap/min_enclosure/3x3/{:03x}_in_{:03x}",
+        inner.bits, outer.bits
+    );
+    let layout = inner.draw(outer.draw(Layout::default(), "met1", 0), "via1", INSET);
+    let mut fixture = Fixture::new(&name, &["DRC-040"], deck, DRC).layout(layout);
+    let values: Vec<i64> = (0..9)
+        .filter(|i| inner.bits >> i & 1 == 1)
+        .map(|i| e2[i])
+        .collect();
+    for &limit in ENCLOSURE_LIMITS {
+        let findings = values.iter().filter_map(|&v| short(v, limit)).collect();
+        fixture = fixture.expect(Expect::rule(&rule_id("min_enclosure", limit), findings));
+    }
+    match known {
+        Some(finding) => fixture.known(finding),
+        None => fixture,
+    }
+}
+
+// ------------------------------------------------ min_extension and overlap ---
+
+/// A rectangle `[x0, x1] × [y0, y1]` in units of [`S`].
+type Rect = (i64, i64, i64, i64);
+
+/// Every rectangle with corners on the lattice `0..=4`: 100.
+fn rects() -> Vec<Rect> {
+    let spans: Vec<(i64, i64)> = (0..=4)
+        .flat_map(|lo| (lo + 1..=4).map(move |hi| (lo, hi)))
+        .collect();
+    spans
+        .iter()
+        .flat_map(|&(x0, x1)| spans.iter().map(move |&(y0, y1)| (x0, y0, x1, y1)))
+        .collect()
+}
+
+/// Both limits of the pair kinds; measurements are multiples of [`S`].
+const PAIR_LIMITS: &[i64] = &[150, 200];
+
+/// How A's span relates to B's along one axis.
+enum Rel {
+    /// Inside it, ends flush included.
+    Within,
+    /// Past it at both ends or past one and flush at the other.
+    Spans,
+    /// Past one end and short of the other.
+    Partial,
+}
+
+/// What a pair measures by the rule; `None` is no finding at any limit.
+struct Measures {
+    rule: Option<i64>,
+}
+
+/// One kind measured on pairs of rectangles.
+struct PairKind {
+    name: &'static str,
+    catalog: &'static str,
+    check: &'static str,
+    /// `None` for a pair the rule's words do not decide: it gets no fixture.
+    measure: fn(Rect, Rect) -> Option<Measures>,
+}
+
+const PAIRS: &[PairKind] = &[
+    PairKind {
+        name: "min_extension",
+        catalog: "DRC-045",
+        check: "extension(poly, diff)",
+        measure: extension,
+    },
+    PairKind {
+        name: "overlap",
+        catalog: "DRC-046",
+        check: "overlap(poly, diff)",
+        measure: |a, b| Some(overlap(a, b)),
+    },
+];
+
+/// `extension(A, B)`: "A not extending past B by the limit, as poly past
+/// diffusion", on one rectangle each. Along each axis A's span is within B's
+/// (equal included), strictly spans it, or is partly past one end.
+/// - Apart or touching only (no shared area): nothing; there is no gate to
+///   extend past (F41).
+/// - A within B on both axes: 0, it extends past nothing.
+/// - A spans one axis and lies within the other, not equal to it (a gate): the
+///   smaller protrusion along the spanned axis, a flush end measuring 0. With
+///   the other axis equal it is undecided which way A runs.
+/// - A partly past B on one axis and within it on the other: 0, A ends inside B.
+/// - A spans both, protruding on all four sides: the smallest protrusion.
+/// - Everything else (a corner overlap, partly past one axis and spanning the
+///   other, spanning both with a flush side): undecided.
+fn extension(a: Rect, b: Rect) -> Option<Measures> {
+    let protrusions = [b.0 - a.0, b.1 - a.1, a.2 - b.2, a.3 - b.3];
+    let overlaps = a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3;
+    let rel = |a0, a1, b0, b1| {
+        if a0 >= b0 && a1 <= b1 {
+            Rel::Within
+        } else if a0 <= b0 && a1 >= b1 {
+            Rel::Spans
+        } else {
+            Rel::Partial
+        }
+    };
+    let (rx, ry) = (rel(a.0, a.2, b.0, b.2), rel(a.1, a.3, b.1, b.3));
+    let (equal_x, equal_y) = ((a.0, a.2) == (b.0, b.2), (a.1, a.3) == (b.1, b.3));
+    if !overlaps {
+        return Some(Measures { rule: None });
+    }
+    let units = match (rx, ry) {
+        (Rel::Within | Rel::Partial, Rel::Within) | (Rel::Within, Rel::Partial) => 0,
+        (Rel::Spans, Rel::Within) if !equal_y => protrusions[0].min(protrusions[2]),
+        (Rel::Within, Rel::Spans) if !equal_x => protrusions[1].min(protrusions[3]),
+        (Rel::Spans, Rel::Spans) if protrusions.iter().all(|&p| p > 0) => {
+            protrusions.into_iter().min().expect("four sides")
+        }
+        _ => return None,
+    };
+    Some(Measures {
+        rule: Some(units * S),
+    })
+}
+
+/// `overlap(A, B)`: "A and B overlapping by less than the limit", on one
+/// rectangle each: the shorter side of their shared area; shapes sharing no
+/// area, touching included, do not overlap and are not measured.
+fn overlap(a: Rect, b: Rect) -> Measures {
+    let (ix, iy) = (a.2.min(b.2) - a.0.max(b.0), a.3.min(b.3) - a.1.max(b.1));
+    let rule = (ix > 0 && iy > 0).then(|| ix.min(iy) * S);
+    Measures { rule }
+}
+
+/// Every pair of rectangles the rule decides, or a sample of them.
+fn rect_pairs(kind: &PairKind, depth: Depth) -> Vec<Fixture> {
+    let deck = deck(&["poly", "diff"], kind.name, kind.check, "nm", PAIR_LIMITS);
+    let rects = rects();
+    let pairs = u32::try_from(rects.len().pow(2)).expect("few rectangles");
+    sample(depth, pairs, kind.name)
+        .into_iter()
+        .filter_map(|i| {
+            let i = i as usize;
+            rect_pair(&deck, kind, rects[i / rects.len()], rects[i % rects.len()])
+        })
+        .collect()
+}
+
+/// The fixture for one pair, if the rule decides it.
+fn rect_pair(deck: &str, kind: &PairKind, a: Rect, b: Rect) -> Option<Fixture> {
+    let Measures { rule } = (kind.measure)(a, b)?;
+    let name = format!(
+        "bitmap/{}/a{}{}{}{}_b{}{}{}{}",
+        kind.name, a.0, a.1, a.2, a.3, b.0, b.1, b.2, b.3
+    );
+    let layout = Layout::default()
+        .rect("poly", a.0 * S, a.1 * S, a.2 * S, a.3 * S)
+        .rect("diff", b.0 * S, b.1 * S, b.2 * S, b.3 * S);
+    let mut fixture = Fixture::new(&name, &[kind.catalog], deck, DRC).layout(layout);
+    for &limit in PAIR_LIMITS {
+        let findings = rule.and_then(|m| short(m * m, limit)).into_iter().collect();
+        fixture = fixture.expect(Expect::rule(&rule_id(kind.name, limit), findings));
+    }
+    Some(fixture)
+}

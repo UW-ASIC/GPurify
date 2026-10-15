@@ -10,22 +10,30 @@ use std::ops::{Add, Div, Mul, Sub};
 const MU0_OVER_4PI: f64 = 1e-7;
 
 /// A 3-D point or vector, metres.
+///
+/// `x` and `y` are the layout plane, `z` is height above the substrate.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vec3 {
+    /// Layout x.
     pub x: f64,
+    /// Layout y.
     pub y: f64,
+    /// Height.
     pub z: f64,
 }
 
 impl Vec3 {
+    /// Returns the vector with these components.
     pub const fn new(x: f64, y: f64, z: f64) -> Self {
         Vec3 { x, y, z }
     }
 
+    /// Returns the scalar product, summed x, y, z in that order.
     pub fn dot(self, o: Vec3) -> f64 {
         self.x * o.x + self.y * o.y + self.z * o.z
     }
 
+    /// Returns the right-handed cross product `self × o`.
     #[must_use]
     pub fn cross(self, o: Vec3) -> Vec3 {
         Vec3::new(
@@ -35,10 +43,12 @@ impl Vec3 {
         )
     }
 
+    /// Returns the Euclidean length.
     pub fn norm(self) -> f64 {
         self.dot(self).sqrt()
     }
 
+    /// Returns the Euclidean distance to `o`.
     pub fn dist(self, o: Vec3) -> f64 {
         (self - o).norm()
     }
@@ -81,13 +91,18 @@ impl Div<f64> for Vec3 {
 }
 
 /// A straight current filament of finite rectangular cross-section.
+///
+/// Current flows from `a` to `b`, uniform over the cross-section, which is
+/// what partial inductance assumes.
 #[derive(Debug, Clone, Copy)]
 pub struct Filament {
-    /// Centre-line start and end points.
+    /// Centre-line start point.
     pub a: Vec3,
+    /// Centre-line end point.
     pub b: Vec3,
-    /// Cross-section width and thickness, metres.
+    /// Cross-section width along `wdir`, metres.
     pub w: f64,
+    /// Cross-section thickness, perpendicular to both the axis and `wdir`, metres.
     pub t: f64,
     /// Unit width direction of the cross-section (⊥ axis).
     pub wdir: Vec3,
@@ -104,6 +119,9 @@ pub(crate) fn default_wdir(axis: Vec3) -> Vec3 {
 }
 
 impl Filament {
+    /// Returns the filament from `a` to `b` with the canonical width
+    /// direction: horizontal for any axis that is not near vertical, so `t`
+    /// is the vertical size of a wire in the layout plane.
     pub fn new(a: Vec3, b: Vec3, w: f64, t: f64) -> Self {
         let axis = (b - a).normalized();
         Filament {
@@ -116,13 +134,20 @@ impl Filament {
     }
 
     /// Construct with an explicit cross-section frame (width direction).
+    ///
+    /// `wdir` must be a unit vector perpendicular to `b − a`; it is not
+    /// checked, and a skewed frame makes the exact brick formula fall back to
+    /// the centre-line one.
     pub fn with_frame(a: Vec3, b: Vec3, w: f64, t: f64, wdir: Vec3) -> Self {
         Filament { a, b, w, t, wdir }
     }
+
+    /// Returns the centre-line length, metres.
     pub fn length(&self) -> f64 {
         (self.b - self.a).norm()
     }
 
+    /// Returns the unit axis from `a` to `b`, or zero for a zero-length filament.
     pub fn dir(&self) -> Vec3 {
         (self.b - self.a).normalized()
     }
@@ -390,11 +415,23 @@ pub(crate) fn mutual(f1: &Filament, f2: &Filament) -> f64 {
     }
 }
 
-/// Self partial inductance [H] of a straight rectangular bar of length `l`,
+/// Self partial inductance, in henries, of a straight rectangular bar of length `l`,
 /// width `w`, thickness `t` — the classical Grover/Rosa closed form:
 ///   L = (µ₀/2π) l [ ln(2l/(w+t)) + 1/2 + 0.2235 (w+t)/l ].
 /// Valid for l ≳ (w+t); accurate to a fraction of a percent for wire-like
 /// aspect ratios and the standard reference for straight-conductor inductance.
+///
+/// Lengths are in metres. A zero `l` or `w + t` gives a non-finite result.
+///
+/// # Examples
+///
+/// ```
+/// use gpurify_extract::field::filament::self_inductance_bar;
+///
+/// // A 100 µm wire, 1 µm wide and 0.5 µm thick: about 0.11 nH.
+/// let l = self_inductance_bar(100e-6, 1e-6, 0.5e-6);
+/// assert!((l - 1.08e-10).abs() < 0.01e-10);
+/// ```
 pub fn self_inductance_bar(l: f64, w: f64, t: f64) -> f64 {
     let wt = w + t;
     2.0 * MU0_OVER_4PI * l * ((2.0 * l / wt).ln() + 0.5 + 0.223_5 * wt / l)
@@ -422,6 +459,9 @@ mod tests {
 
     /// Touching collinear filaments (every adjacent segment pair in a path).
     /// Exact: M = (µ₀/4π)[(l+m)ln(l+m) − l·ln l − m·ln m].
+    ///
+    /// Oracle: closed form, the mutual inductance of two touching collinear
+    /// filaments above, to 1e-9.
     #[test]
     fn collinear_touching_matches_closed_form() {
         let (l, m) = (1e-3, 2e-3);
@@ -436,8 +476,11 @@ mod tests {
     }
 
     /// Perpendicular filaments: û₁·û₂ = 0 ⇒ M = 0 exactly.
+    ///
+    /// Oracle: closed form. The Neumann integral carries the factor `u1 . u2`,
+    /// which is exactly 0 for perpendicular filaments.
     #[test]
-    #[expect(
+    #[allow(
         clippy::float_cmp,
         reason = "û₁·û₂ is exactly 0.0, so the quadrature returns an exact 0.0"
     )]
@@ -450,6 +493,9 @@ mod tests {
     /// Touching non-parallel pair (45° elbow): GL8 cubature vs a subdivided
     /// reference (split each filament 16× and sum GL8 over sub-pairs — the
     /// singular corner contribution converges under subdivision).
+    ///
+    /// Oracle: differential against a 16 x 16 subdivision of the pair, which
+    /// converges on the singular corner, to 2 %.
     #[test]
     fn touching_elbow_quadrature_accuracy() {
         let l = 1e-3;
@@ -483,6 +529,10 @@ mod tests {
 
     /// Brick formula must reduce to the centreline formula when separation is
     /// large relative to the cross-section.
+    ///
+    /// Oracle: law: at a separation 250 times the width the cross-section no
+    /// longer matters, so the brick formula equals the centreline formula to
+    /// 1e-5.
     #[test]
     fn brick_matches_centerline_when_far() {
         let (l, w, t) = (1e-3, 2e-5, 1e-5);
@@ -500,6 +550,10 @@ mod tests {
     /// bundle — the case the centreline formula gets a few % wrong). Reference:
     /// subdivide each cross-section 16×16 into thin filaments and average the
     /// pairwise centreline mutuals (uniform-current definition of M).
+    ///
+    /// Oracle: differential against the uniform-current definition of M: the
+    /// average of centreline mutuals over a 16 x 16 subdivision of each
+    /// cross-section, to 0.2 %.
     #[test]
     fn brick_matches_cross_section_subdivision() {
         let (l, w, t) = (1e-3, 2e-5, 1e-5);

@@ -1,38 +1,86 @@
 //! The PDK deck: layers, derived layers, rules, connectivity, device recognisers, PEX stack.
 //!
-//! Data in: deck text (see `docs/deck.md`) and the layout's grid.
-//! Data out: [`Deck`], limits converted from physical nanometres to grid units exactly or refused.
-//! Rule kinds are interned verbatim and never interpreted here.
+//! Data in: deck text and the layout's grid. The language is
+//! [deck.md](https://github.com/UW-ASIC/GPurify/blob/main/docs/deck.md).
+//! Data out: [`Deck`], every limit converted from physical units to grid units
+//! exactly, or refused.
+//!
+//! Each rule's spelling (`space(met1) >= 140nm`) resolves to one engine kind
+//! name (`min_spacing`) with every parameter named, typed and converted;
+//! nothing here decides what a rule means. The DRC and ERC engines in
+//! `gpurify-check` read [`RuleSpec::kind`] and the parameters by name.
+//!
+//! # Examples
+//!
+//! ```
+//! use gpurify_geom::{Grid, StrTable};
+//! use gpurify_ingest::deck::{parse_deck, ParamValue};
+//!
+//! let text = "grid 5nm
+//! layer met1 = gds(68, 20)
+//! rule m1.1 width(met1) >= 140nm
+//! ";
+//! let mut strings = StrTable::default();
+//! // A 1 nm layout grid: 1000 database units per micrometre.
+//! let deck = parse_deck(text, Grid::new(1000)?, &mut strings)?;
+//!
+//! let rule = &deck.rules.spec[0];
+//! assert_eq!(strings.resolve(rule.kind), "min_width");
+//! let limit = strings.get("limit").and_then(|name| deck.rules.param(rule, name));
+//! assert!(matches!(limit, Some(ParamValue::Length(d)) if d.raw() == 140));
+//!
+//! // 142 nm is not on the deck's 5 nm grid: refused, never rounded.
+//! let off_grid = text.replace("140nm", "142nm");
+//! assert!(parse_deck(&off_grid, Grid::new(1000)?, &mut StrTable::default()).is_err());
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
-use crate::narrow;
 use gpurify_geom::LayerId;
+use gpurify_geom::{prefix, Qty, Temperature};
 use gpurify_geom::{Dbu, DbuArea};
 use gpurify_geom::{StrId, StrTable};
 
 mod kinds;
 mod lex;
 mod parse;
+mod print;
+mod source;
 
-pub use parse::{parse_deck, Diagnostic};
+pub use parse::{parse_deck, parse_source, Diagnostic};
+pub use print::{print, PrintError};
+pub use source::{
+    lower, ConnectivitySource, CornerSource, CornerValues, DeckSource, DerivedSource, DeviceSource,
+    LabelSource, ParamSource, RuleSource, StackSource, ViaSource,
+};
 
 /// Why a deck was rejected.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum DeckError {
-    /// Two statements that parse alone but contradict each other.
+    /// Statements that parse alone but contradict each other: a rule naming a
+    /// model no `device` declares, net spacing on a non-conductor, a global
+    /// layer also listed as a conductor, or a label row whose text layer is
+    /// derived or whose named layer is not a conductor.
     #[error("malformed deck: {0}")]
     Malformed(String),
+    /// The deck file could not be read. [`parse_deck`] never returns it; a
+    /// caller reading the file does.
     #[error("io: {0}")]
     Io(String),
-    /// The deck text did not parse; each diagnostic points at its span.
+    /// The deck text did not parse. Displays as `file:line:col: message`, the
+    /// line, and a caret under the span, for each diagnostic.
     #[error("{}", parse::render(.file, .diagnostics))]
     Invalid {
+        /// The path shown before each diagnostic; `<deck>` until
+        /// [`DeckError::in_file`] names it.
         file: String,
+        /// Every error found, at most 50: parsing continues past an error so
+        /// one pass reports them all.
         diagnostics: Vec<Diagnostic>,
     },
 }
 
 impl DeckError {
-    /// Name the file the diagnostics point into.
+    /// Names the file the diagnostics point into. Other variants pass through unchanged.
     #[must_use]
     pub fn in_file(mut self, path: &str) -> Self {
         if let Self::Invalid { file, .. } = &mut self {
@@ -42,18 +90,314 @@ impl DeckError {
     }
 }
 
-/// A parsed, validated, grid-resolved deck.
-#[derive(Debug, Default)]
+/// A parsed, validated, grid-resolved deck, built by [`parse_deck`] (or by
+/// [`lower`] from a [`DeckSource`]).
+///
+/// Every table refers to layers by [`LayerId`], and every name (layer, rule,
+/// model, parameter) is a [`StrId`] in the [`StrTable`] the deck was parsed
+/// with. Lengths are [`Dbu`] on the layout grid the deck was parsed against,
+/// so a deck is only meaningful with a layout on that grid.
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Deck {
+    /// Drawn and derived layers, and the stream pairs the deck ignores.
     pub layers: LayerTable,
+    /// Every `rule` statement, in deck order.
     pub rules: RuleTable,
+    /// The `connect` statements: what carries a net, and how layers join.
     pub connectivity: Connectivity,
+    /// The `device` statements.
     pub devices: DeviceRecognition,
+    /// The `pex` statements: the parasitic stack, per layer.
     pub stack: ProcessStack,
+    /// The `temperature` statement's operating temperature, absolute; `None`
+    /// when the deck states none. [`ProcessStack::sheet_res_ohm_sq`] is
+    /// already at it.
+    pub temperature: Option<Qty<Temperature, { prefix::BASE }>>,
+    /// The `extraction` statement: which parasitics PEX writes out.
+    pub extraction: Extraction,
+    /// The `corner` statements: each process corner's whole stack, in the
+    /// order the deck first names them. Empty: the nominal stack alone.
+    pub corners: Vec<ProcessCorner>,
+    /// The `stage` statements: the order a staged run checks the rules in.
+    pub stages: Stages,
+    /// The `waive` statements: each a rule and the layer whose shapes waive
+    /// that rule's violations, in deck order.
+    pub waivers: Vec<(StrId, LayerId)>,
+    /// The `temperature` statement and the `pex` rows' coefficients as
+    /// written, which [`ProcessStack::sheet_res_ohm_sq`] was computed from;
+    /// `None` when the deck states no temperature.
+    pub temperature_law: Option<TemperatureLaw>,
+    /// The `lvs` statements: how the comparison treats each device model.
+    pub lvs: LvsControls,
+    /// The parasitic models beyond the stack (`pex_fill`, …), as written.
+    pub pex_models: PexModels,
+    /// The layout edits the deck configures (`fill`, `widen`), as written.
+    pub edits: Edits,
 }
 
-/// Layer names and stream pairs to ids, and back. Derived layers take the ids after every base layer.
-#[derive(Debug, Default)]
+/// What `gpurify fill` and `gpurify enhance` draw, as the deck states it:
+/// by layer and net names as written, lengths in grid units. Neither is a
+/// check; each is an edit of the layout that the deck's own rules then
+/// check (catalog FLOW-007, FLOW-009).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Edits {
+    /// `fill` lines, in deck order.
+    pub fill: Vec<FillSpec>,
+    /// `widen` lines, in deck order.
+    pub widen: Vec<WidenSpec>,
+}
+
+/// `fill <layer> for <density layer> size <len> space <len> keep <len>
+/// avoid [<layer>, ..]`: square fill shapes `size` on a side, `space`
+/// apart, drawn on `layer` (a drawn layer) at least `keep` from every
+/// shape of the `avoid` layers, until each `density` and `global_density`
+/// rule on `density` holds its minimum without passing its maximum.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FillSpec {
+    /// The drawn layer the fill goes on.
+    pub layer: String,
+    /// The layer whose density rules the fill meets, usually the metal
+    /// and its fill together (`met1 or met1_fill`).
+    pub density: String,
+    /// A fill square's side; positive.
+    pub size: Dbu,
+    /// The gap between neighbouring fill squares; positive.
+    pub space: Dbu,
+    /// The least distance from a fill square to a shape of `avoid`.
+    pub keep: Dbu,
+    /// The layers fill keeps `keep` from: the drawn metal, a no-fill
+    /// region.
+    pub avoid: Vec<String>,
+}
+
+/// `widen <layer> net "<pattern>" by <len>`: each rectangle on `layer`
+/// whose net carries a label matching the glob `pattern` (a power strap)
+/// grows by `len` on each long side where that adds no finding.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WidenSpec {
+    /// The drawn layer the straps are on.
+    pub layer: String,
+    /// A glob over net names: `*` any run, `?` one character.
+    pub net: String,
+    /// How far each long side moves out; positive.
+    pub by: Dbu,
+}
+
+/// The parasitic models a deck states beyond the `pex` stack, by layer
+/// name as written, each checked against the deck's layers when it is
+/// lowered. Every value is the foundry's, supplied by the deck: no public
+/// deck states them, so none has a default.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PexModels {
+    /// `pex_fill <layer> floating|grounded|ignored`, in deck order: how a
+    /// net drawn only on that conductor (a metal fill piece) is extracted
+    /// (catalog PEX-012).
+    pub fill: Vec<(String, FillTreatment)>,
+    /// `pex_device "<model>" gate_contact_cap <c> gate_diffusion_cap <c>`,
+    /// in deck order: the device-region capacitances of a MOS model,
+    /// per µm of gate width (catalog PEX-011).
+    pub device: Vec<DeviceParasitics>,
+    /// `pex_tsv <cut layer> length <l> liner <t> liner_k <k>`, in deck
+    /// order: a through-silicon via layer's geometry (catalog PEX-015).
+    pub tsv: Vec<TsvModel>,
+    /// `pex_substrate ports [..] backside grounded|floating profile [..]`,
+    /// at most one: the silicon under the die, for the substrate network
+    /// (catalog PEX-013).
+    pub substrate: Option<SubstrateModel>,
+}
+
+/// The `pex_substrate` line: the silicon's layers and backside, and the
+/// layers whose shapes contact it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubstrateModel {
+    /// The port layers (taps, wells), as written.
+    pub ports: Vec<String>,
+    /// Whether the backside is a grounded contact; else it carries no
+    /// current.
+    pub grounded: bool,
+    /// Each layer's `(thickness nm, resistivity Ω·cm)`, top-down.
+    pub layers: Vec<(f64, f64)>,
+}
+
+/// One `pex_tsv` line: a through-silicon via cut layer, each cut a copper
+/// cylinder of the cut's area through the silicon, inside an oxide liner.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TsvModel {
+    /// The via cut layer, as written.
+    pub layer: String,
+    /// The via's length through the silicon, nm.
+    pub length_nm: f64,
+    /// The liner's thickness, nm.
+    pub liner_nm: f64,
+    /// The liner's relative permittivity.
+    pub liner_k: f64,
+}
+
+/// One `pex_device` line: the capacitances in a MOS device's region that
+/// its SPICE model leaves to extraction, each per µm of gate width and per
+/// side (source and drain).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceParasitics {
+    /// The device statement's model, as written.
+    pub model: String,
+    /// Gate to the source/drain contact, aF/µm.
+    pub gate_contact_af_um: f64,
+    /// Gate to the diffusion beside it (outer fringe), aF/µm.
+    pub gate_diffusion_af_um: f64,
+}
+
+/// How PEX treats metal fill (`pex_fill`), as `StarRC` and Quantus offer it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FillTreatment {
+    /// Each piece floats: a net's couplings through it are in series.
+    Floating,
+    /// Each piece is tied to ground.
+    Grounded,
+    /// The fill is left out of the extraction.
+    Ignored,
+}
+
+impl FillTreatment {
+    /// The word the deck writes.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Floating => "floating",
+            Self::Grounded => "grounded",
+            Self::Ignored => "ignored",
+        }
+    }
+}
+
+/// A deck's `temperature T nominal T0` and, per `pex` row, its sheet
+/// resistance at `T0` with its coefficients: the law the stack's sheet
+/// resistances were moved to `T` by, kept so the deck can be written again
+/// exactly.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemperatureLaw {
+    /// `T`, the operating temperature, kelvin.
+    pub operating_k: f64,
+    /// `T0`, the temperature the `sheet` values are stated at, kelvin.
+    pub nominal_k: f64,
+    /// Per `pex` row, its layer, its sheet resistance at `T0` in ohms per
+    /// square, and `(tc1, tc2)` per K and per K².
+    pub rows: Vec<(LayerId, f64, (f64, f64))>,
+}
+
+/// The layer table, for a reader that needs only the layers
+/// ([`flatten`](crate::layout::gds::Library::flatten)).
+impl AsRef<LayerTable> for Deck {
+    fn as_ref(&self) -> &LayerTable {
+        &self.layers
+    }
+}
+
+/// Itself, so a reader taking any holder of a layer table takes the table.
+impl AsRef<LayerTable> for LayerTable {
+    fn as_ref(&self) -> &LayerTable {
+        self
+    }
+}
+
+/// A staged deck's stages (`stage <name>` lines, each heading the rules
+/// written after it): a run checks them in order, and once a stage finds an
+/// error the later stages are not checked. The early, dirty-design run of
+/// Calibre `nmDRC-Recon` and IC Validator Explorer, with the subset written in
+/// the deck: Siemens' public description of Recon is a run of selected
+/// checks that leaves out those "runtime-intensive and/or unlikely to
+/// provide actionable results" on an early design.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Stages {
+    /// Each stage's name, in deck order. Empty: the deck is not staged.
+    pub name: Vec<StrId>,
+    /// Each staged rule's id and its stage, an index into [`Self::name`], in
+    /// deck order. A rule of a staged deck that no stage lists (one added in
+    /// Rust) is in the last stage.
+    pub of_rule: Vec<(StrId, u16)>,
+}
+
+impl Stages {
+    /// The stage `rule` is checked in: its own, or the last one for a rule
+    /// no stage lists; `None` when the deck is not staged.
+    pub fn of(&self, rule: StrId) -> Option<u16> {
+        let last = u16::try_from(self.name.len().checked_sub(1)?).unwrap_or(u16::MAX);
+        Some(
+            self.of_rule
+                .iter()
+                .find(|&&(id, _)| id == rule)
+                .map_or(last, |&(_, stage)| stage),
+        )
+    }
+}
+
+/// A process corner: the nominal stack ([`Deck::stack`]) with the values
+/// the deck's `corner` lines state for it in place of the nominal ones.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProcessCorner {
+    /// The corner's name, as the deck writes it (`cmax`, `rcworst`).
+    pub name: StrId,
+    /// Every layer's row at this corner, indexed as [`Deck::stack`] is, its
+    /// sheet resistances at the deck's temperature.
+    pub stack: ProcessStack,
+    /// The corner's lines as written, each a layer and the [`CornerSource`]
+    /// values it states, so the deck prints exactly.
+    pub stated: Vec<(LayerId, CornerValues)>,
+}
+
+/// The deck's `extraction` statement: which parasitics the output keeps.
+/// Without one, every element is kept (`rcc`) and no coupling is grounded.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Extraction {
+    /// The extraction type.
+    pub kind: ExtractionKind,
+    /// A coupling capacitance below this many attofarads is grounded: a
+    /// capacitance to ground of the same value at each of its two nodes
+    /// (`OpenRCX`'s `-coupling_threshold`). Zero grounds none; positive only
+    /// for a type that keeps coupling ([`ExtractionKind::keeps_coupling`]).
+    /// Attofarads, the deck's capacitance unit, so a printed deck reads back
+    /// to the same value.
+    pub coupling_threshold_af: f64,
+}
+
+/// An extraction type, as Calibre names them (Siemens, "How to use Calibre
+/// parasitic extraction tools", Calibre blog, 2026-02-17; the Calibre xRC-CB
+/// datasheet): which elements of the network the output keeps.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ExtractionKind {
+    /// `r`: resistance only (and a field-solved net's series and mutual
+    /// inductance, which sit with its resistance); no capacitance.
+    R,
+    /// `c`: lumped capacitance to ground, one node per net, every coupling
+    /// grounded; no resistance.
+    C,
+    /// `cc`: lumped capacitance, one node per net, with the coupling between
+    /// nets kept (Calibre's "C+CC"); no resistance.
+    Cc,
+    /// `rc`: distributed resistance and capacitance to ground, every
+    /// coupling grounded.
+    Rc,
+    /// `rcc`: distributed resistance, capacitance to ground and coupling
+    /// capacitance: the whole network.
+    #[default]
+    Rcc,
+}
+
+impl ExtractionKind {
+    /// Whether the type keeps coupling capacitance between nets (`cc` and
+    /// `rcc`); the others ground every coupling or drop capacitance.
+    pub fn keeps_coupling(self) -> bool {
+        matches!(self, Self::Cc | Self::Rcc)
+    }
+}
+
+/// Layer names and stream pairs to ids, and back.
+///
+/// Ids are dense from 0. Drawn layers (`layer x = gds(L, D)`) come first,
+/// ascending by name bytes; derived layers follow in declaration order, each
+/// computed only from lower ids. Each inner operation of a nested expression
+/// such as `(a or b) not c` adds a hidden derived layer (`x#1`, `x#2`, …), and
+/// a layer expression written inside a rule adds one named `<rule id>@k`. No
+/// deck text can name a hidden layer.
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct LayerTable {
     /// `LayerId(i)` is named `name[i]`.
     name: Vec<StrId>,
@@ -65,16 +409,26 @@ pub struct LayerTable {
     derived_start: u16,
     /// How each derived layer is computed, in id order. Operands fold left and only name lower ids.
     derived: Vec<(LayerId, DerivedOp, Vec<LayerId>)>,
-    /// The text patterns [`DerivedOp::WithText`] names, `*` any run, `?` one character.
+    /// The text patterns [`DerivedOp::WithText`] and the cell-name patterns
+    /// [`DerivedOp::InCells`] name, `*` any run, `?` one character.
     texts: Vec<String>,
+    /// Stream pairs the deck says to drop (`ignore gds(L, D)`), sorted; never a declared pair.
+    ignored: Vec<(u16, u16)>,
 }
 
 /// The placeholder stream pair of a derived layer. Ask [`LayerTable::is_derived`].
 const DERIVED_STREAM: (u16, u16) = (u16::MAX, u16::MAX);
 
 impl LayerTable {
+    /// Returns the number of layers, drawn, derived and hidden: the
+    /// `layer_count` a [`GeometryStore`](gpurify_geom::GeometryStore) for this
+    /// deck is built with.
     pub fn len(&self) -> usize {
         self.name.len()
+    }
+    /// Whether the deck declares no layer.
+    pub fn is_empty(&self) -> bool {
+        self.name.is_empty()
     }
     /// `None` for a name the deck does not define. Never interns.
     pub fn id(&self, strings: &StrTable, name: &str) -> Option<LayerId> {
@@ -82,7 +436,9 @@ impl LayerTable {
         let at = self.name.iter().position(|&n| n == wanted)?;
         Some(LayerId(u16::try_from(at).expect("LayerId is a u16")))
     }
-    /// The base layer a GDS layer/datatype pair maps to; the lowest id when two share it.
+    /// The drawn layer a GDS layer/datatype pair maps to; the lowest id when
+    /// two share it. `None` for a pair the deck does not declare, ignored or not.
+    /// `O(log n)`.
     pub fn of_stream(&self, layer: u16, datatype: u16) -> Option<LayerId> {
         let wanted = (layer, datatype);
         let at = self
@@ -92,19 +448,31 @@ impl LayerTable {
         (self.stream[found.idx()] == wanted).then_some(found)
     }
 
-    /// The GDS stream pair a layer writes to. A derived layer answers [`DERIVED_STREAM`];
+    /// The GDS stream pair a layer writes to. A derived layer answers `(65535, 65535)`;
     /// a writer should skip [`Self::is_derived`] rows, which would duplicate area.
     pub fn stream_of(&self, layer: LayerId) -> (u16, u16) {
         self.stream[layer.idx()]
     }
 
+    /// Whether the deck drops geometry on this stream pair (`ignore gds(L, D)`)
+    /// instead of refusing the layout for it. Never true of a declared pair.
+    pub fn is_ignored(&self, layer: u16, datatype: u16) -> bool {
+        self.ignored.binary_search(&(layer, datatype)).is_ok()
+    }
+
     /// Is this layer computed by the deck rather than drawn in the layout?
+    ///
+    /// Only a layer the table derives is: an id past the table, as a deck
+    /// built by hand with no layer rows gives every layer, is drawn.
     pub fn is_derived(&self, layer: LayerId) -> bool {
-        layer.0 >= self.derived_start
+        layer
+            .idx()
+            .checked_sub(usize::from(self.derived_start))
+            .is_some_and(|row| row < self.derived.len())
     }
 
     /// Is this an edge layer (directed segments, not polygons)? Only a check
-    /// that says it takes edges accepts one.
+    /// that says it takes edges accepts one. Panics on an id past [`Self::len`].
     pub fn is_edges(&self, layer: LayerId) -> bool {
         let Some(row) = layer.idx().checked_sub(usize::from(self.derived_start)) else {
             return false;
@@ -114,12 +482,13 @@ impl LayerTable {
             .unwrap_or_else(|| self.is_edges(operands[0]))
     }
 
-    /// How the derived layers are computed, in id order.
+    /// Returns the layer's name as the deck wrote it, or its hidden name.
+    /// Panics on an id past [`Self::len`].
     pub fn name(&self, layer: LayerId) -> StrId {
         self.name[layer.idx()]
     }
 
-    /// How a derived layer is computed; `None` for a base layer.
+    /// How a derived layer is computed; `None` for a drawn layer.
     pub fn op(&self, layer: LayerId) -> Option<DerivedOp> {
         layer
             .idx()
@@ -127,7 +496,8 @@ impl LayerTable {
             .map(|row| self.derived[row].1)
     }
 
-    /// The layers a derived layer is computed from; empty for a base layer.
+    /// The layers a derived layer is computed from, every one a lower id;
+    /// empty for a drawn layer. [`DerivedOp`] says what each position means.
     pub fn operands(&self, layer: LayerId) -> &[LayerId] {
         layer
             .idx()
@@ -135,13 +505,28 @@ impl LayerTable {
             .map_or(&[], |row| &self.derived[row].2)
     }
 
+    /// How the derived layers are computed, in id order.
     pub(crate) fn derived(&self) -> &[(LayerId, DerivedOp, Vec<LayerId>)] {
         &self.derived
     }
 
-    /// Text pattern `text` of a [`DerivedOp::WithText`].
+    /// Text pattern `text` of a [`DerivedOp::WithText`], or one of a
+    /// [`DerivedOp::InCells`]'s cell-name patterns: `*` matches any run of
+    /// characters, `?` one, anything else itself, case included. Panics on an
+    /// index no operation holds.
     pub fn text(&self, text: u32) -> &str {
         &self.texts[text as usize]
+    }
+
+    /// Each [`DerivedOp::InCells`]'s patterns, in id order: the `k`th is bit
+    /// `k` of a flattened shape's cell tag.
+    pub(crate) fn cell_selections(&self) -> impl Iterator<Item = &[String]> {
+        self.derived.iter().filter_map(|(_, op, _)| match *op {
+            DerivedOp::InCells { first, count, .. } => {
+                Some(&self.texts[first as usize..(first + count) as usize])
+            }
+            _ => None,
+        })
     }
 
     /// Add a derived layer above every existing id.
@@ -173,40 +558,182 @@ impl LayerTable {
             derived_start: count,
             derived: Vec::new(),
             texts: Vec::new(),
+            ignored: Vec::new(),
         }
     }
 }
 
-/// The operators a deck may spell over layers. `and`/`or`/`not` fold over
-/// every operand; a method takes its receiver, then its layer argument if any.
-/// Bounds are inclusive, in grid units (square grid units for an area).
+/// The operators a deck may spell over layers; the semantics are
+/// [deck.md's layer operations](https://github.com/UW-ASIC/GPurify/blob/main/docs/deck.md#layers).
+///
+/// [`LayerTable::operands`] holds the inputs. `And`, `Or` and `Not` fold left
+/// over every operand (`a not b not c` is one row of three). Every other
+/// operation takes its receiver as operand 0 and its layer argument, if it
+/// has one, as operand 1. Touching and overlapping shapes count as one shape
+/// before an operation reads them.
+///
+/// Bounds `(lo, hi)` are inclusive, in grid units (square grid units for an
+/// area); a strict `>` or `<` in the deck has already moved one unit, and an
+/// absent side is `i128::MIN` or `i128::MAX`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DerivedOp {
+    /// The area every operand covers. On edge layers, the parts of operand 0
+    /// that coincide with every other operand.
     And,
+    /// The area any operand covers. On edge layers, every operand's edges,
+    /// shared parts once.
     Or,
+    /// Operand 0's area minus every other operand's. On edge layers, the parts
+    /// of operand 0 that coincide with no other operand.
     Not,
-    /// Grow, or shrink when negative.
-    Sized(Dbu),
-    /// `interacting` (`true`) or `not_interacting`.
+    /// Every shape grown by `.0` left and right and `.1` above and below,
+    /// corners square (`KLayout`'s `sized(dx, dy)`; `sized(d)` is `(d, d)`);
+    /// shrunk when both are negative, a part no wider than twice the shrink
+    /// across that axis disappearing. The two never differ in sign.
+    Sized(Dbu, Dbu),
+    /// `interacting` (`true`): the shapes or edges of operand 0 that touch or
+    /// overlap a shape of operand 1, a shared corner counting. `false` is
+    /// `not_interacting`, the rest.
     Interacting(bool),
+    /// The shapes of operand 0 entirely covered by operand 1, touching its
+    /// boundary from inside allowed.
     Inside,
+    /// The shapes of operand 0 sharing no area with operand 1; touching is
+    /// outside. `KLayout`'s `outside`, and its `not_overlapping`.
     Outside,
+    /// `KLayout` `overlapping`: the shapes of operand 0 sharing area with
+    /// operand 1. Touching is not overlapping; [`DerivedOp::Outside`] is the
+    /// rest.
+    Overlapping,
+    /// `KLayout` `covering` (`true`): the shapes of operand 0 that hold a whole
+    /// shape of operand 1, which may touch the holder's boundary from inside.
+    /// `false` is `not_covering`, the rest.
+    Covering(bool),
+    /// Each hole of each shape, filled; a hole holding an island covers it.
     Holes,
+    /// The bounding box of each shape, one shape per box: boxes that overlap
+    /// are not merged.
     Extents,
+    /// The shapes whose area, holes excluded, lies in `lo..=hi` square grid units.
     WithArea(i128, i128),
+    /// The shapes whose narrowest width, as the `width` rule measures it (a
+    /// diagonal neck counts), has twice its square in `lo..=hi` square grid
+    /// units. Twice a squared width is a whole number even at 45 degrees, so
+    /// the deck's strict bounds are kept exactly: `with_width(> 70nm)` is
+    /// `9801..` and holds a `√5000` neck and a `99/√2` width,
+    /// `with_width(<= 70nm)` is `..=9800` and holds neither.
     WithWidth(i128, i128),
-    /// Polygons to their boundary edges.
-    Edges,
-    /// `inside_part` (`true`) or `outside_part`, on edges.
-    Part(bool),
-    WithLength(i128, i128),
-    /// `with_text` (`keep`) or `without_text`: the shapes holding a text on the
-    /// layer argument that matches [`LayerTable::text`] `text`.
-    WithText {
+    /// `with_bbox_max` (`longer`) or `with_bbox_min`: the shapes whose
+    /// bounding box's longer, or shorter, side lies in `lo..=hi` grid units,
+    /// as `KLayout`'s selections of those names. The longer side is a straight
+    /// feature's length.
+    WithBbox {
+        /// The longer side (`with_bbox_max`), else the shorter.
+        longer: bool,
+        /// The least side kept, in grid units.
+        lo: i128,
+        /// The greatest side kept, in grid units.
+        hi: i128,
+    },
+    /// `with_rect` (`keep`) or `without_rect`: the shapes that can, or
+    /// cannot, hold an axis-aligned box `w` x `h` grid units, either way
+    /// round, the box's boundary allowed on theirs (Calibre `ENCLOSE
+    /// RECTANGLE` as `KLayout` forum thread 2141 states it: "select all
+    /// polygons ... that can fit an X by Y rectangle", both orientations).
+    /// Shapes are read merged. Both sides are positive.
+    WithRect {
+        /// `true` keeps the shapes with room for the box, `false` the others.
         keep: bool,
+        /// One side of the box, in grid units.
+        w: Dbu,
+        /// The other side, in grid units.
+        h: Dbu,
+    },
+    /// `rectangles` (`keep`), `squares` (`keep` and `square`),
+    /// `non_rectangles` or `non_squares`: the shapes that are, or are not, one
+    /// axis-aligned box with no hole, a square having equal sides, as
+    /// `KLayout`'s selections of those names and LEF58 `RECTONLY` define them.
+    /// Shapes are read merged, so abutting pieces that make one box are a
+    /// rectangle, and two boxes meeting only at a corner are one shape that is
+    /// not.
+    Rectangles {
+        /// Squares only.
+        square: bool,
+        /// `true` keeps the matching shapes, `false` the others.
+        keep: bool,
+    },
+    /// Polygons to their boundary edges, each directed with the material on
+    /// its left. The result is an edge layer.
+    Edges,
+    /// `inside_part` (`true`) or `outside_part`: the parts of each edge of
+    /// operand 0 strictly inside, or strictly outside, operand 1's shapes.
+    /// Parts on the boundary are in neither.
+    Part(bool),
+    /// The edges whose length lies in `lo..=hi` grid units.
+    WithLength(i128, i128),
+    /// `vertical` (`true`) or `horizontal`: the edges of operand 0 running
+    /// along that axis, as `KLayout`'s `with_angle(90)` and `with_angle(0)`
+    /// select them. An edge layer is axis-aligned, so the two split it.
+    Oriented(bool),
+    /// `with_text` (`keep`) or `without_text`: the shapes of operand 0 that
+    /// hold, on their material or boundary, a `TEXT` drawn on operand 1 (always
+    /// a drawn layer) whose string matches [`LayerTable::text`] `text`.
+    WithText {
+        /// `true` keeps the shapes holding a match, `false` the others.
+        keep: bool,
+        /// Index of the pattern, for [`LayerTable::text`].
         text: u32,
     },
+    /// `texts_outside`: each `TEXT` drawn on operand 0 (a drawn layer) whose
+    /// anchor lies on no shape of operand 1, neither on its material nor on
+    /// its boundary, as a one-unit box from its anchor up and right; texts at
+    /// one point are one box each. `KLayout`'s
+    /// `texts.not_interacting(L)`, so a floating label (sky130 x.17) is a
+    /// shape `forbidden` reports.
+    TextsOutside,
+    /// `KLayout` `extended` on an edge layer: one box per edge, the edge
+    /// lengthened by `begin` before its start and `end` past its end, and
+    /// widened by `outside` away from its shape and `inside` into it. The
+    /// edge runs with its shape on its left, so its start is the corner it
+    /// leaves going counter-clockwise round an outer ring. Boxes are not
+    /// merged, as `KLayout`'s are not; each length is 0 or more, and
+    /// `outside + inside` is positive.
+    Extended {
+        /// Added before the edge's start.
+        begin: Dbu,
+        /// Added past the edge's end.
+        end: Dbu,
+        /// Away from the edge's shape (its right).
+        outside: Dbu,
+        /// Into the edge's shape (its left).
+        inside: Dbu,
+    },
+    /// `in_cells` (`keep`) or `not_in_cells`: the drawn shapes of operand 0
+    /// (always a drawn layer) placed under a cell whose name matches one of
+    /// the patterns, the cell holding the shape and every cell above it on
+    /// its placement path counting, the root included. `not_in_cells` keeps
+    /// the others, so the two split the layer. Shapes are taken as drawn,
+    /// before merging: a shape and a touching one from another cell are
+    /// selected apart. This is `KLayout`'s `source.select("-", "+p")`
+    /// (`keep`) and `select("-p")`, whose cell filter enables or disables a
+    /// cell with its subtree (DRC reference, `Source#select`).
+    ///
+    /// A pattern is a glob over the whole name, case included: `*` any run,
+    /// `?` one character. A store built in memory has no cells, so there
+    /// `in_cells` is empty and `not_in_cells` is the whole layer.
+    InCells {
+        /// `true` keeps the shapes under a matching cell, `false` the others.
+        keep: bool,
+        /// Index of the first pattern, for [`LayerTable::text`].
+        first: u32,
+        /// How many patterns follow it; a cell matching any one counts.
+        count: u32,
+    },
 }
+
+/// The most `in_cells` and `not_in_cells` selections a deck may hold: each is
+/// one bit of the 64-bit tag a flattened shape carries.
+pub const MAX_CELL_SELECTIONS: usize = 64;
 
 impl DerivedOp {
     /// Whether the result is edges: `Some` when the op decides, `None` when it
@@ -214,47 +741,72 @@ impl DerivedOp {
     pub(crate) fn makes_edges(self) -> Option<bool> {
         match self {
             Self::Edges => Some(true),
-            Self::Sized(_)
+            Self::Sized(..)
             | Self::Inside
             | Self::Outside
+            | Self::Overlapping
+            | Self::Covering(_)
             | Self::Holes
             | Self::Extents
             | Self::WithArea(..)
             | Self::WithWidth(..)
-            | Self::WithText { .. } => Some(false),
+            | Self::Rectangles { .. }
+            | Self::WithBbox { .. }
+            | Self::WithRect { .. }
+            | Self::WithText { .. }
+            | Self::TextsOutside
+            | Self::Extended { .. }
+            | Self::InCells { .. } => Some(false),
             Self::And
             | Self::Or
             | Self::Not
             | Self::Interacting(_)
             | Self::Part(_)
-            | Self::WithLength(..) => None,
+            | Self::WithLength(..)
+            | Self::Oriented(_) => None,
         }
     }
 }
 
 /// One rule as the deck states it, layers resolved and lengths already [`Dbu`].
-#[derive(Debug, Clone, Copy)]
+///
+/// Read its layers and parameters through [`RuleTable::layers_of`] and
+/// [`RuleTable::params_of`] rather than slicing by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuleSpec {
-    /// The rule's id, for reporting. Interned.
+    /// The rule's id, for reporting: the deck's text with every `{name}`
+    /// replaced. Interned; unique within a deck.
     pub id: StrId,
-    /// The rule kind, interned. `drc` matches this against its own kind list.
+    /// The engine kind the deck's spelling resolved to (`width(L) >=` is
+    /// `min_width`, `width(L) <=` is `max_width`), interned. `drc` and `erc`
+    /// match this against their own kind lists.
     pub kind: StrId,
-    /// `layer_ref[layer_start .. layer_start + layer_len]` in [`RuleTable`].
+    /// First of this rule's rows in [`RuleTable::layer_ref`].
     pub layer_start: u32,
+    /// Number of layer arguments.
     pub layer_len: u32,
-    /// `param[param_start .. param_start + param_len]` in [`RuleTable`].
+    /// First of this rule's rows in [`RuleTable::param`].
     pub param_start: u32,
+    /// Number of parameter rows.
     pub param_len: u32,
 }
 
-/// A rule parameter, already converted.
-#[derive(Debug, Clone, Copy)]
+/// A rule parameter, already converted to the unit the engines store.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ParamValue {
-    /// A length, converted against the grid. The common case.
+    /// A length in grid units, on the deck grid and exact on the layout grid.
+    /// The common case: every comparison limit on a length.
     Length(Dbu),
-    /// A dimensionless ratio — an antenna limit, a density fraction.
+    /// Any other real number, in its dimension's engine unit: a ratio,
+    /// exponent or fraction (`0..=1`, `%` already divided) bare; a voltage in
+    /// mV; a current in µA; a current per width in A/m (µA/µm); a resistance in
+    /// ohms; a temperature in kelvin (`C` already converted); an energy in eV;
+    /// a time in hours. The name says which.
     Ratio(f64),
+    /// A whole count (cuts, colours, drivers), or an angle in whole degrees.
     Count(u32),
+    /// `true`/`false`; `nets: same` (`true`) or `different`; `maximum`, which a
+    /// density rule's `<=` sets; or `warning`, on a rule written so.
     Flag(bool),
     /// An area, already in square grid units.
     Area(DbuArea),
@@ -265,24 +817,34 @@ pub enum ParamValue {
 }
 
 /// Every rule in the deck, `SoA`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct RuleTable {
+    /// One row per `rule` statement, in deck order (a `for` loop's rules in
+    /// iteration order).
     pub spec: Vec<RuleSpec>,
+    /// Every rule's layer arguments, back to back; a [`RuleSpec`] owns a run.
     pub layer_ref: Vec<LayerId>,
-    /// Parameter name and value, names interned.
+    /// Parameter name and value, names interned; a [`RuleSpec`] owns a run.
     pub param: Vec<(StrId, ParamValue)>,
 }
 
 impl RuleTable {
+    /// Returns a rule's layer arguments in the order its engine kind takes
+    /// them, which can differ from the deck's: `enclosure(inner, outer)` is
+    /// stored outer first.
     pub fn layers_of(&self, rule: &RuleSpec) -> &[LayerId] {
         let start = rule.layer_start as usize;
         &self.layer_ref[start..start + rule.layer_len as usize]
     }
+    /// Returns a rule's parameters. A list parameter (`models`, `allowed`, a
+    /// spacing table's cells) is one row per element under the same name, in
+    /// list order; a parameter written `none` has no row at all.
     pub fn params_of(&self, rule: &RuleSpec) -> &[(StrId, ParamValue)] {
         let start = rule.param_start as usize;
         &self.param[start..start + rule.param_len as usize]
     }
-    /// Look up one parameter by interned name.
+    /// Looks up one parameter by interned name: the first row for a list,
+    /// `None` when absent or written `none`.
     pub fn param(&self, rule: &RuleSpec, name: StrId) -> Option<ParamValue> {
         self.params_of(rule)
             .iter()
@@ -292,25 +854,34 @@ impl RuleTable {
 }
 
 /// What connects to what: conductors carry current, vias join two conductors.
-#[derive(Debug, Default)]
+///
+/// Rows of `via_cut` and `via_connects` pair by index, as do `label_layer`
+/// and `label_names`.
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Connectivity {
+    /// The layers that carry a net (`connect conductors [..]`), in the order
+    /// written. No global layer is among them.
     pub conductors: Vec<LayerId>,
-    /// One row per via layer: the cut layer and the two layers it joins.
+    /// One row per `connect via` statement: the cut layer...
     pub via_cut: Vec<LayerId>,
+    /// ...and the two layers it joins where it overlaps them.
     pub via_connects: Vec<(LayerId, LayerId)>,
-    /// Whether shapes on the same conductor layer connect by touching.
+    /// Whether shapes on the same conductor layer connect by touching
+    /// (`connect touch_within_layer`).
     pub intra_layer_touch: bool,
     /// Net-only layers, each one net however many shapes it holds (the
     /// substrate). Not conductors: they carry no modelled current and no
     /// parasitics, so they need no sheet resistance, nor do vias into them.
     pub global: Vec<LayerId>,
-    /// One row per net-label layer: the layer a `TEXT` is drawn on...
+    /// One row per `connect label` statement: the drawn layer a `TEXT` is on...
     pub label_layer: Vec<LayerId>,
-    /// ...and the one conductor whose shapes it names.
+    /// ...and the conductor whose shapes it names. When two rows share a text
+    /// layer, a label binds through the first row that finds a shape under it.
     pub label_names: Vec<LayerId>,
 }
 
-/// How to recognise a device from geometry.
+/// How to recognise a device from geometry: one row per `device` statement,
+/// in deck order.
 ///
 /// A terminal's role is its **position**, fixed per family:
 ///
@@ -319,333 +890,774 @@ pub struct Connectivity {
 /// | `Mos` | gate, source, drain, bulk |
 /// | `Bjt` | base, emitter, collector, then bulk if a fourth is declared |
 /// | `Resistor`, `Capacitor`, `Diode` | pin 0, pin 1 — symmetric, so the comparator may swap them |
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct DeviceRecognition {
-    /// One row per recogniser: each marker polygon is one device. Terminals are CSR.
+    /// The device family of each recogniser.
     pub kind: Vec<DeviceKind>,
+    /// The layer each of whose shapes is one device.
     pub marker: Vec<LayerId>,
+    /// Recogniser `i`'s terminal layers are
+    /// `terminal[terminal_start[i]..terminal_start[i + 1]]`: one longer than
+    /// `kind`, or empty when the deck declares no device.
     pub terminal_start: Vec<u32>,
+    /// Every recogniser's terminal layers, in role order (see above).
     pub terminal: Vec<LayerId>,
     /// Interned model name, for netlist comparison.
     pub model: Vec<StrId>,
+    /// What each recogniser states for its kind's value law, one row per
+    /// recogniser as the deck fills it. A table built by hand may leave it
+    /// short, and a recogniser past its end states nothing.
+    pub value: Vec<DeviceValue>,
 }
 
-/// The device families this tool recognises.
+/// The values a `device` statement may give. LVS computes a resistor's `r`
+/// and a capacitor's `c` from the coefficients and what is drawn: one left
+/// out is `None`, and the value it would give is then not computed, never
+/// taken as zero, so a reference that states it gets `lvs.undeclared_param`.
+/// ERC's voltage propagation reads a transistor's gate condition.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct DeviceValue {
+    /// `sheet`: a resistor body's resistance per square, in ohms. `r` is
+    /// `sheet * l / w`.
+    pub sheet_ohm_sq: Option<f64>,
+    /// `area_cap`: a capacitor's capacitance per area of its marker, aF/µm².
+    pub area_cap_af_um2: Option<f64>,
+    /// `fringe_cap`: a capacitor's capacitance per length of its marker's
+    /// perimeter, aF/µm. `c` is `area_cap * area + fringe_cap * perim`, of
+    /// the terms the statement gives.
+    pub fringe_cap_af_um: Option<f64>,
+    /// `inductance`: an inductor's inductance, nH: what every device of the
+    /// recogniser stands for, as a fixed inductor cell of a foundry's
+    /// library has one inductance. LVS compares it as `ind`.
+    pub inductance_nh: Option<f64>,
+    /// `on_gate_min`: a `mos` conducts only when its gate can reach this
+    /// voltage or more (an n-channel switch), mV. At most one of this and
+    /// `on_gate_max` is set; with neither, the channel always conducts.
+    pub on_gate_min_mv: Option<f64>,
+    /// `on_gate_max`: a `mos` conducts only when its gate can fall to this
+    /// voltage or less (a p-channel switch), mV.
+    pub on_gate_max_mv: Option<f64>,
+}
+
+/// The device families this tool recognises, in the deck as `mos`, `bjt`,
+/// `resistor`, `capacitor`, `diode` and `inductor`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceKind {
+    /// A MOS transistor; a SPICE `M` card.
     Mos,
+    /// A bipolar transistor; a SPICE `Q` card.
     Bjt,
+    /// A two-pin resistor; a SPICE `R` card.
     Resistor,
+    /// A two-pin capacitor; a SPICE `C` card.
     Capacitor,
+    /// A two-pin diode; a SPICE `D` card.
     Diode,
+    /// A two-pin inductor; a SPICE `L` card. Its ends are interchangeable,
+    /// as `KLayout`'s `DeviceClassInductor` declares them (catalog LVS-065).
+    Inductor,
+    /// A cell compared by its pins alone, its contents ignored: a placement
+    /// of a cell the deck's `lvs blackbox` names, and a reference `X` card
+    /// calling a subcircuit of that name (catalog LVS-033, LVS-067). Its
+    /// model is the cell's name and pin `k` is the subcircuit's port `k`;
+    /// no pin trades places with another, and it never merges. No `device`
+    /// statement declares one.
+    Cell,
+}
+
+/// The `lvs` statements: what the layout-versus-schematic comparison does
+/// with a device model beyond what its `device` statement says. Every column
+/// is empty when the deck has no `lvs` statement, and LVS then compares as
+/// `gpurify_check::lvs` documents.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct LvsControls {
+    /// `lvs tolerance`, one row per statement in deck order, at most one per
+    /// model and parameter (catalog LVS-014).
+    pub tolerance: Vec<LvsTolerance>,
+    /// `lvs ignore_parameter "model" param`: `(model, parameter)`, a
+    /// parameter that is not compared on that model, nor read by its merges,
+    /// as if no card stated it and the layout measured none (catalog
+    /// LVS-014). Never `m`, and never one with a tolerance row.
+    pub ignore_parameter: Vec<(StrId, StrId)>,
+    /// `lvs asymmetric "model"`: MOS models whose source and drain are not
+    /// interchangeable, `KLayout`'s DMOS (catalog LVS-031), each once.
+    pub asymmetric: Vec<StrId>,
+    /// `lvs permute "model" pin pin`: `(model, pin, pin)`, two pins of the
+    /// model's devices that are interchangeable (catalog LVS-030), each a
+    /// position in its `device` statement's terminal order (see
+    /// [`DeviceRecognition`]), the two distinct.
+    pub permute: Vec<(StrId, u8, u8)>,
+    /// `lvs ignore "model"`: models whose devices are left out of the
+    /// comparison on both sides, Netgen's `ignore class` (catalog LVS-034),
+    /// each once. The model need not be a deck device: a schematic may hold
+    /// devices no recogniser draws.
+    pub ignore: Vec<StrId>,
+    /// `lvs ignore_shorted "model"`: models whose devices with every
+    /// terminal on one net are left out on both sides, Netgen's `ignore
+    /// shorted` (catalog LVS-035), each once; any model name, as `ignore`.
+    pub ignore_shorted: Vec<StrId>,
+    /// `lvs ports_by_name`: each port of the reference's top cell pairs
+    /// only with the layout net its label names, `KLayout`'s
+    /// `flag_missing_ports` (catalog LVS-001, LVS-016).
+    pub ports_by_name: bool,
+    /// `lvs range "model" param >= min <= max`, one row per statement, at
+    /// most one per model and parameter (catalog LVS-068).
+    pub range: Vec<LvsRange>,
+    /// `lvs topology relaxed`: a passive or bipolar stating its value merges
+    /// in parallel by the value's law, Netgen's `property topology relaxed`
+    /// (catalog LVS-043, LVS-044, LVS-049); `lvs topology strict`, the
+    /// default, keeps a count instead.
+    pub relaxed: bool,
+    /// `lvs connect_implicit "pattern"`: label globs (`*` any run, `?` one
+    /// character; [`glob_matches`](crate::layout::glob_matches)). Layout nets
+    /// whose label matches one are joined for the comparison with every
+    /// other net of that label, `KLayout`'s `connect_implicit` ("must
+    /// connect" nets; catalog LVS-002).
+    pub connect_implicit: Vec<String>,
+    /// `lvs connect_explicit "a" "b" ...`: groups of labels, two or more
+    /// each, whose layout nets are joined for the comparison, `KLayout`'s
+    /// `connect_explicit` (catalog LVS-002).
+    pub connect_explicit: Vec<Vec<StrId>>,
+    /// `lvs max_res r`: resistors stating a resistance above `r` ohms are
+    /// left out of the comparison on both sides, as opens, `KLayout`'s
+    /// `max_res` (catalog LVS-034).
+    pub max_res: Option<f64>,
+    /// `lvs min_caps c`: capacitors stating a capacitance below `c`, in aF
+    /// as the deck states it (1e-18 F), are left out of the comparison on both sides, as opens, `KLayout`'s
+    /// `min_caps` (catalog LVS-034).
+    pub min_caps: Option<f64>,
+    /// `lvs same_nets "layout" "reference"`: `(layout label, reference net
+    /// name)`, two nets that must pair with each other, `KLayout`'s
+    /// `same_nets!` (catalog LVS-032), in deck order, each name once per
+    /// side.
+    pub same_nets: Vec<(StrId, StrId)>,
+    /// `lvs count "model" >= min <= max`, one row per statement, at most one
+    /// per model: bounds on how many devices of the model the layout holds
+    /// (catalog LVS-068).
+    pub count: Vec<LvsCount>,
+    /// `lvs lde "model" od <layer> max <length> [well <layer> scref
+    /// <length>]`: the layout-dependent effects measured on the model's
+    /// transistors (catalog LVS-074), one row per model.
+    pub lde: Vec<LvsLde>,
+    /// `lvs recognize_gates`: plain transistors in series or in parallel on
+    /// different gates of their own become one device with interchangeable
+    /// gates, so a NAND's or NOR's inputs may be wired in either order
+    /// (Silvaco Guardian's gate reduction; catalog LVS-047).
+    pub recognize_gates: bool,
+    /// `lvs blackbox "pattern"`: cell-name globs (`*` any run, `?` one
+    /// character, the whole name, case included), each once. A layout cell
+    /// placed under a matching name, and a reference subcircuit of one, is
+    /// compared by its pins alone, its contents ignored on both sides, as
+    /// `KLayout`'s `blank_circuit` and Netgen's black boxes are (catalog
+    /// LVS-033, LVS-067): one device of [`DeviceKind::Cell`] per placement.
+    /// No pattern matches a deck device model.
+    pub blackbox: Vec<String>,
+    /// `lvs filter_unused <option> ...`: the unused-transistor patterns
+    /// whose layout transistors leave the comparison (catalog LVS-048), each
+    /// once, in deck order.
+    pub filter_unused: Vec<UnusedFilter>,
+    /// `lvs supply "name" ...`: the power and ground net names, Calibre's
+    /// `LVS POWER NAME` and `LVS GROUND NAME` together, each once: what
+    /// `filter_unused c` holds a gate to. A layout net is one when its label
+    /// is.
+    pub supply: Vec<StrId>,
+}
+
+/// One pattern of `lvs filter_unused`: a layout transistor wired so that it
+/// does nothing is left out of the comparison, as Calibre's `LVS FILTER
+/// UNUSED OPTION <option> LAYOUT` filters it. The options and their
+/// one-line definitions are the ones US 8,751,985 B1 (GlobalFoundries,
+/// 2014, col. 7 ll. 44-62) quotes from the Calibre documentation; `C`'s
+/// power and ground are the LVS power and ground names (US 2010/0306720 A1
+/// [0162]: "Power net names can be used by a layout-versus-schematic
+/// operation in, for example, ... filtering of unused MOS transistors"),
+/// here the deck's `lvs supply` names. The others it lists (`K`, `P`, `Q`)
+/// need paths and pads no public source defines. A pin is floating when its
+/// net holds no other terminal and is no port (`KLayout`'s `purge_nets`: a
+/// net that "makes less than two connections").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnusedFilter {
+    /// `ae`: source, drain and gate all floating.
+    Ae,
+    /// `af`: source and drain tied together.
+    Af,
+    /// `ag`: every pin tied together, bulk included.
+    Ag,
+    /// `c`: gate on a supply net (`lvs supply`), and source or drain
+    /// floating.
+    C,
+    /// `u`: source and drain both floating.
+    U,
+}
+
+impl UnusedFilter {
+    /// Every option, in the order the deck spells them.
+    pub const ALL: [Self; 5] = [Self::Ae, Self::Af, Self::Ag, Self::C, Self::U];
+
+    /// The deck's spelling: Calibre's option letters, lowercase.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Ae => "ae",
+            Self::Af => "af",
+            Self::Ag => "ag",
+            Self::C => "c",
+            Self::U => "u",
+        }
+    }
+}
+
+/// One `lvs lde` statement: where a transistor's layout-dependent effects
+/// are measured from (catalog LVS-074). BSIM4 defines the instance
+/// parameters, `SA`/`SB` from the active-area (OD) edges and `SCA`, `SCB`,
+/// `SCC` from the well edges; the layers and the two lengths are the
+/// deck's, since no open PDK deck states them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LvsLde {
+    /// The transistor model, a `mos` device statement's.
+    pub model: StrId,
+    /// The active-area (OD) layer's name: `SA` and `SB` run from the gate's
+    /// edges to its edges.
+    pub od: StrId,
+    /// The farthest a distance is looked for, on the layout's grid; one
+    /// past it reads as it (Silvaco's `MAX_DISTANCE_VALUE`).
+    pub max: Dbu,
+    /// The well layer's name and the model's `SCREF`, on the layout's grid:
+    /// `SCA`, `SCB` and `SCC` follow from the distances to its edges.
+    pub well: Option<(StrId, Dbu)>,
+}
+
+/// One `lvs count` statement: the bounds, either or both, on the number of
+/// layout devices of a model, a count at a bound being legal, as a foundry
+/// limits a device per chip (IHP SG13G2's 4000 `npn13G2` emitters).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LvsCount {
+    /// The device model, which a `device` statement declares.
+    pub model: StrId,
+    /// The fewest devices legal, when stated.
+    pub min: Option<u32>,
+    /// The most devices legal, when stated.
+    pub max: Option<u32>,
+}
+
+/// One `lvs range` statement: the bounds a parameter measured on every
+/// layout device of a model must lie within, either or both, a value at a
+/// bound being legal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LvsRange {
+    /// The device model, which a `device` statement declares.
+    pub model: StrId,
+    /// The parameter, lowercase: a length (`w`, `l`, `perim`, `ps`, `pd`,
+    /// `pe`), an area (`area`, `as`, `ad`, `ae`) or the count `nf`.
+    pub param: StrId,
+    /// The least legal value, when stated.
+    pub min: Option<LvsLimit>,
+    /// The greatest legal value, when stated.
+    pub max: Option<LvsLimit>,
+}
+
+/// A bound of an `lvs range` row, on the layout's grid, of the kind its
+/// parameter is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LvsLimit {
+    /// A length, in database units.
+    Length(Dbu),
+    /// An area, in square database units.
+    Area(DbuArea),
+    /// A count.
+    Count(u32),
+}
+
+/// The names `lvs permute` gives the pins of a device of `kind`, in its
+/// `device` statement's terminal order: Netgen's pin names for the SPICE
+/// primitives, `end_a` and `end_b`, `top` and `bottom`, `anode` and
+/// `cathode`, and a transistor's `gate`, `source`, `drain` and `bulk` and a
+/// bipolar's `base`, `emitter` and `collector`.
+#[must_use]
+pub const fn pin_names(kind: DeviceKind) -> &'static [&'static str] {
+    match kind {
+        DeviceKind::Mos => &["gate", "source", "drain", "bulk"],
+        DeviceKind::Bjt => &["base", "emitter", "collector"],
+        DeviceKind::Resistor | DeviceKind::Inductor => &["end_a", "end_b"],
+        DeviceKind::Capacitor => &["top", "bottom"],
+        DeviceKind::Diode => &["anode", "cathode"],
+        DeviceKind::Cell => &[],
+    }
+}
+
+/// One `lvs tolerance` statement: how far apart one parameter of one model
+/// may be on the two sides and still agree. Two values `a` and `b` agree when
+/// `|a - b| <= absolute + relative * max(|a|, |b|)`, the two parts adding as
+/// `KLayout`'s `tolerance` does. The row replaces the run's tolerance for that
+/// parameter of that model, so a part it leaves out is zero.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LvsTolerance {
+    /// The device model, which a `device` statement declares.
+    pub model: StrId,
+    /// The parameter, lowercase, as LVS compares it (`w`, `l`, `r`, ...).
+    pub param: StrId,
+    /// The relative part, a fraction from 0 to 1 of the larger value.
+    pub relative: f64,
+    /// The absolute part, in the parameter's SI unit (metres, square
+    /// metres, ohms, farads, or a count), zero or more.
+    pub absolute: f64,
+    /// The absolute part as the deck states it, in the deck's unit for the
+    /// parameter ([`absolute_unit`]), so the deck prints back exactly.
+    pub stated: f64,
+}
+
+/// The unit an absolute tolerance on `param` is written in, and the factor
+/// from it to SI: a length in nm, an area in nm², a resistance in ohms, a
+/// capacitance in aF, a count. A parameter not listed has no known unit, so
+/// it takes a relative tolerance only.
+#[must_use]
+pub fn absolute_unit(param: &str) -> Option<(&'static str, f64)> {
+    match param {
+        "w" | "l" | "ps" | "pd" | "pe" | "perim" => Some(("nm", 1e-9)),
+        "area" | "as" | "ad" | "ae" => Some(("nm2", 1e-18)),
+        "r" => Some(("ohm", 1.0)),
+        "c" => Some(("aF", 1e-18)),
+        "ind" => Some(("nH", 1e-9)),
+        "m" | "nf" => Some(("", 1.0)),
+        _ => None,
+    }
 }
 
 /// Per-layer process parameters, for parasitic extraction, indexed by [`LayerId`].
-#[derive(Debug, Default)]
+///
+/// Every column is empty when the deck has no `pex` statement, and
+/// [`LayerTable::len`] long otherwise. A layer with no `pex` row reads `0.0`
+/// in every column, which means "not stated", not a measured zero.
+///
+/// A parsed row is physical: its thickness is positive, its dielectric
+/// positive when the row states one (a row may leave it out, and then reads
+/// `0.0`, not stated), and every other value zero or more (a zero again reads
+/// as "not stated"); the parser refuses anything else, naming the value. A
+/// stack built in code is not checked.
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ProcessStack {
+    /// Conductor thickness, nm.
     pub thickness_nm: Vec<f64>,
+    /// Height above the substrate, nm.
     pub height_nm: Vec<f64>,
+    /// Sheet resistance, ohms per square (per cut on a via layer), at the
+    /// deck's operating temperature ([`Deck::temperature`]): a row's `sheet`
+    /// is stated at the `nominal` temperature `T₀` and read at `T` as
+    /// `R(T) = R(T₀)·(1 + tc1·(T − T₀) + tc2·(T − T₀)²)`, the law of the
+    /// ngspice resistor model (ngspice manual, "Resistors", temperature
+    /// coefficients) and of the PDKs' published coefficients, such as
+    /// sky130's `tc1rm1`/`tc2rm1` at `tnom = 30` (`sky130_fd_pr` model file
+    /// `sky130_fd_pr__model__r+c.model.spice`). Catalog PEX-007.
     pub sheet_res_ohm_sq: Vec<f64>,
+    /// Area capacitance to substrate, aF/µm².
     pub area_cap_af_um2: Vec<f64>,
+    /// Fringe capacitance to substrate, aF/µm of edge.
     pub fringe_cap_af_um: Vec<f64>,
+    /// Relative permittivity of the surrounding dielectric; `0.0` where the
+    /// row leaves it out.
     pub dielectric_k: Vec<f64>,
 }
 
-/// Lower a parsed deck to a [`Deck`]. Base layers take ids ascending by name
-/// bytes; derived layers follow in declaration order. Strings are interned in
-/// section order, so the same deck text always yields the same [`StrId`]s. The
-/// parser has already checked every name and value; what fails here is a
-/// relation between statements.
-fn build(doc: &DeckSrc, strings: &mut StrTable) -> Result<Deck, DeckError> {
-    let mut layers = build_layers(&doc.layers, strings);
-    // First: any later section may name a derived layer.
-    for row in &doc.derived {
-        let operands = row
-            .layers
-            .iter()
-            .map(|name| layer_of(&layers, strings, name))
-            .collect();
-        layers.push_derived(strings.intern(&row.name), row.op, operands);
-    }
-    layers.texts.clone_from(&doc.texts);
-    // A misspelt model would match no device and silently check nothing.
-    for rule in &doc.rules {
-        for (_, stated) in &rule.params {
-            if let ParamSrc::Model(model) = stated {
-                if !doc.devices.iter().any(|device| device.model == *model) {
-                    return Err(DeckError::Malformed(format!(
-                        "rule {}: model \"{model}\" is not declared by any device statement",
-                        rule.id
-                    )));
-                }
-            }
-        }
-    }
-    let rules = build_rules(&doc.rules, &layers, strings);
-    let connectivity = build_connectivity(&doc.connectivity, &layers, strings)?;
-    // Only a conductor's shapes carry a net; any other layer would read as all
-    // different nets, or none the same.
-    for rule in doc.rules.iter().filter(|rule| rule.kind == "net_spacing") {
-        let layer = &rule.layers[0];
-        if !connectivity
-            .conductors
-            .contains(&layer_of(&layers, strings, layer))
-        {
-            return Err(DeckError::Malformed(format!(
-                "rule {}: net spacing on {layer}, which is not a conductor",
-                rule.id
-            )));
-        }
-    }
-    let devices = build_devices(&doc.devices, &layers, strings);
-    let stack = build_stack(&doc.pex, &layers, strings);
-
-    Ok(Deck {
-        layers,
-        rules,
-        connectivity,
-        devices,
-        stack,
-    })
-}
-
-/// A layer name the parser has already resolved.
-fn layer_of(layers: &LayerTable, strings: &StrTable, name: &str) -> LayerId {
-    layers
-        .id(strings, name)
-        .expect("the parser admits only declared layers")
-}
-
-/// Layer names to a [`LayerTable`], ids ascending by name *bytes*, not interning order.
-fn build_layers(declared: &[(String, (u16, u16))], strings: &mut StrTable) -> LayerTable {
-    let mut sorted: Vec<&(String, (u16, u16))> = declared.iter().collect();
-    sorted.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-    let entries: Vec<(StrId, u16, u16)> = sorted
-        .iter()
-        .map(|(name, (layer, datatype))| (strings.intern(name), *layer, *datatype))
-        .collect();
-    LayerTable::build(&entries)
-}
-
-/// The rules to a [`RuleTable`], in deck order.
-fn build_rules(declared: &[RuleSrc], layers: &LayerTable, strings: &mut StrTable) -> RuleTable {
-    let mut table = RuleTable {
-        spec: Vec::with_capacity(declared.len()),
-        ..RuleTable::default()
-    };
-    for rule in declared {
-        let id = strings.intern(&rule.id);
-        let layer_start = table.layer_ref.len();
-        for name in &rule.layers {
-            table.layer_ref.push(layer_of(layers, strings, name));
-        }
-        let param_start = table.param.len();
-        for (name, stated) in &rule.params {
-            let value = match *stated {
-                ParamSrc::Value(value) => value,
-                ParamSrc::Layer(ref layer) => ParamValue::Layer(layer_of(layers, strings, layer)),
-                ParamSrc::Model(ref model) => ParamValue::Model(strings.intern(model)),
-            };
-            table.param.push((strings.intern(name), value));
-        }
-        table.spec.push(RuleSpec {
-            id,
-            kind: strings.intern(rule.kind),
-            layer_start: narrow(layer_start),
-            layer_len: narrow(table.layer_ref.len() - layer_start),
-            param_start: narrow(param_start),
-            param_len: narrow(table.param.len() - param_start),
-        });
-    }
-    table
-}
-
-/// Connectivity, layers resolved; a label row must name a drawn layer and a conductor.
-fn build_connectivity(
-    declared: &ConnectivitySrc,
-    layers: &LayerTable,
-    strings: &StrTable,
-) -> Result<Connectivity, DeckError> {
-    let layer = |name: &str| layer_of(layers, strings, name);
-    let mut connectivity = Connectivity {
-        conductors: declared.conductors.iter().map(|name| layer(name)).collect(),
-        via_cut: declared.vias.iter().map(|via| layer(&via.layer)).collect(),
-        via_connects: declared
-            .vias
-            .iter()
-            .map(|via| (layer(&via.connects.0), layer(&via.connects.1)))
-            .collect(),
-        intra_layer_touch: declared.intra_layer_touch,
-        global: declared.global.iter().map(|name| layer(name)).collect(),
-        label_layer: Vec::with_capacity(declared.labels.len()),
-        label_names: Vec::with_capacity(declared.labels.len()),
-    };
-    if let Some(name) = declared
-        .global
-        .iter()
-        .find(|name| connectivity.conductors.contains(&layer(name)))
-    {
-        return Err(DeckError::Malformed(format!(
-            "connect global {name}: a global layer is net-only, not a conductor"
-        )));
-    }
-    for label in &declared.labels {
-        let names = layer(&label.names);
-        // Fail closed here rather than as `topology::port`'s `OrphanLabel`: at
-        // run time nothing can say which deck row was wrong.
-        if !connectivity.conductors.contains(&names) {
-            return Err(DeckError::Malformed(format!(
-                "connect label {} names {}, which is not a conductor",
-                label.layer, label.names
-            )));
-        }
-        let text = layer(&label.layer);
-        // A `TEXT` record carries a stream pair and a derived layer has none,
-        // so such a pairing can never bind a label — silently, at run time.
-        if layers.is_derived(text) {
-            return Err(DeckError::Malformed(format!(
-                "connect label {}: a derived layer carries no text records",
-                label.layer
-            )));
-        }
-        connectivity.label_layer.push(text);
-        connectivity.label_names.push(names);
-    }
-    Ok(connectivity)
-}
-
-/// Device recognisers, as the CSR [`DeviceRecognition`] holds. Terminal order
-/// is the role, and this preserves the deck's order.
-fn build_devices(
-    declared: &[DeviceSrc],
+/// The `lvs` statements, models interned. A control on a model no `device`
+/// statement declares is refused: it would change nothing, silently.
+fn build_lvs(
+    declared: &LvsSrc,
+    devices: &[DeviceSource],
     layers: &LayerTable,
     strings: &mut StrTable,
-) -> DeviceRecognition {
-    let mut devices = DeviceRecognition::default();
-    if declared.is_empty() {
-        // Sentinel included: a `terminal_start` of `[0]` would claim a
-        // recogniser row the empty `kind` column does not have.
-        return devices;
-    }
-    devices.terminal_start.push(0);
-    for device in declared {
-        devices.kind.push(device.kind);
-        devices
-            .marker
-            .push(layer_of(layers, strings, &device.marker));
-        devices.model.push(strings.intern(&device.model));
-        for name in &device.terminals {
-            devices.terminal.push(layer_of(layers, strings, name));
+) -> Result<LvsControls, DeckError> {
+    let known = |model: &str, control: &str| {
+        if devices.iter().any(|device| device.model == model) {
+            Ok(())
+        } else {
+            Err(DeckError::Malformed(format!(
+                "lvs {control}: model \"{model}\" is not declared by any device statement"
+            )))
         }
-        devices.terminal_start.push(narrow(devices.terminal.len()));
-    }
-    devices
-}
-
-/// The PEX stack, a column per parameter indexed by [`LayerId`].
-///
-/// Every column is `layers.len()` long once any `pex` row exists;
-/// `pex::stack_row` indexes it directly. A layer with no row keeps its zero.
-fn build_stack(
-    declared: &[(String, StackSrc)],
-    layers: &LayerTable,
-    strings: &StrTable,
-) -> ProcessStack {
-    if declared.is_empty() {
-        return ProcessStack::default();
-    }
-    let rows = layers.len();
-    let mut stack = ProcessStack {
-        thickness_nm: vec![0.0; rows],
-        height_nm: vec![0.0; rows],
-        sheet_res_ohm_sq: vec![0.0; rows],
-        area_cap_af_um2: vec![0.0; rows],
-        fringe_cap_af_um: vec![0.0; rows],
-        dielectric_k: vec![0.0; rows],
     };
-    for (name, row) in declared {
-        let at = layer_of(layers, strings, name).idx();
-        stack.thickness_nm[at] = row.thickness_nm;
-        stack.height_nm[at] = row.height_nm;
-        stack.sheet_res_ohm_sq[at] = row.sheet_res_ohm_sq;
-        stack.area_cap_af_um2[at] = row.area_cap_af_um2;
-        stack.fringe_cap_af_um[at] = row.fringe_cap_af_um;
-        stack.dielectric_k[at] = row.dielectric_k;
+    let mut lvs = LvsControls::default();
+    for (model, a, b) in &declared.permute {
+        known(model, "permute")?;
+        let kind = devices
+            .iter()
+            .find(|device| device.model == *model)
+            .map_or(DeviceKind::Mos, |device| device.kind);
+        let names = pin_names(kind);
+        let position = |pin: &str| {
+            names
+                .iter()
+                .position(|&name| name == pin)
+                .and_then(|at| u8::try_from(at).ok())
+                .ok_or_else(|| {
+                    DeckError::Malformed(format!(
+                        "lvs permute: \"{model}\" has no pin `{pin}`; its pins are {}",
+                        names.join(", ")
+                    ))
+                })
+        };
+        let (a, b) = (position(a)?, position(b)?);
+        if a == b {
+            return Err(DeckError::Malformed(format!(
+                "lvs permute: \"{model}\" permutes `{}` with itself",
+                names[usize::from(a)]
+            )));
+        }
+        let channel = kind == DeviceKind::Mos && a.min(b) == 1 && a.max(b) == 2;
+        if channel && declared.asymmetric.contains(model) {
+            return Err(DeckError::Malformed(format!(
+                "lvs permute: \"{model}\" is asymmetric, so its source and drain do not permute"
+            )));
+        }
+        lvs.permute.push((strings.intern(model), a, b));
     }
-    stack
+    for model in &declared.ignore {
+        lvs.ignore.push(strings.intern(model));
+    }
+    for model in &declared.ignore_shorted {
+        lvs.ignore_shorted.push(strings.intern(model));
+    }
+    lvs.ports_by_name = declared.ports_by_name;
+    lvs.recognize_gates = declared.recognize_gates;
+    for pattern in &declared.blackbox {
+        // A model is a device by its recogniser; one also boxed would be two
+        // things on the reference side.
+        if let Some(device) = devices
+            .iter()
+            .find(|device| crate::layout::glob_matches(pattern, &device.model))
+        {
+            return Err(DeckError::Malformed(format!(
+                "lvs blackbox: \"{pattern}\" matches the device model \"{}\"; a model is \
+                 compared as its device statement says",
+                device.model
+            )));
+        }
+    }
+    lvs.blackbox.clone_from(&declared.blackbox);
+    lvs.filter_unused.clone_from(&declared.filter_unused);
+    if lvs.filter_unused.contains(&UnusedFilter::C) && declared.supply.is_empty() {
+        return Err(DeckError::Malformed(
+            "lvs filter_unused c holds a gate to the supply nets, and no lvs supply names one"
+                .to_owned(),
+        ));
+    }
+    for name in &declared.supply {
+        lvs.supply.push(strings.intern(name));
+    }
+    lvs.relaxed = declared.topology == Some(true);
+    lvs.connect_implicit.clone_from(&declared.connect_implicit);
+    for group in &declared.connect_explicit {
+        lvs.connect_explicit
+            .push(group.iter().map(|name| strings.intern(name)).collect());
+    }
+    lvs.max_res = declared.max_res;
+    lvs.min_caps = declared.min_caps;
+    // A threshold is held to the value LVS computes from the drawing, which
+    // it computes only under an interned name.
+    if lvs.max_res.is_some() {
+        strings.intern("r");
+    }
+    if lvs.min_caps.is_some() {
+        strings.intern("c");
+    }
+    for (model, od, max, well) in &declared.lde {
+        known(model, "lde")?;
+        if devices
+            .iter()
+            .any(|device| device.model == *model && device.kind != DeviceKind::Mos)
+        {
+            return Err(DeckError::Malformed(format!(
+                "lvs lde: \"{model}\" is not a mos device; layout-dependent effects are a transistor's"
+            )));
+        }
+        let mut layer = |name: &str| {
+            if layers.id(strings, name).is_some() {
+                Ok(strings.intern(name))
+            } else {
+                Err(DeckError::Malformed(format!(
+                    "lvs lde \"{model}\": unknown layer {name}"
+                )))
+            }
+        };
+        let od = layer(od)?;
+        let well = match well {
+            Some((name, scref)) => Some((layer(name)?, *scref)),
+            None => None,
+        };
+        lvs.lde.push(LvsLde {
+            model: strings.intern(model),
+            od,
+            max: *max,
+            well,
+        });
+    }
+    for &(ref model, min, max) in &declared.count {
+        known(model, "count")?;
+        lvs.count.push(LvsCount {
+            model: strings.intern(model),
+            min,
+            max,
+        });
+    }
+    for (layout, reference) in &declared.same_nets {
+        lvs.same_nets
+            .push((strings.intern(layout), strings.intern(reference)));
+    }
+    for (model, param, min, max) in &declared.range {
+        known(model, "range")?;
+        lvs.range.push(LvsRange {
+            model: strings.intern(model),
+            param: strings.intern(param),
+            min: *min,
+            max: *max,
+        });
+    }
+    for model in &declared.asymmetric {
+        known(model, "asymmetric")?;
+        if devices
+            .iter()
+            .any(|device| device.model == *model && device.kind != DeviceKind::Mos)
+        {
+            return Err(DeckError::Malformed(format!(
+                "lvs asymmetric: \"{model}\" is not a mos device; only a transistor has a source and a drain"
+            )));
+        }
+        lvs.asymmetric.push(strings.intern(model));
+    }
+    for (model, param) in &declared.ignore_parameter {
+        known(model, "ignore_parameter")?;
+        if let Some(row) = declared
+            .tolerance
+            .iter()
+            .find(|row| row.model == *model && row.param == *param)
+        {
+            return Err(DeckError::Malformed(format!(
+                "lvs tolerance: `{}` of \"{}\" is ignored, so a tolerance on it means nothing",
+                row.param, row.model
+            )));
+        }
+        lvs.ignore_parameter
+            .push((strings.intern(model), strings.intern(param)));
+    }
+    for row in &declared.tolerance {
+        known(&row.model, "tolerance")?;
+        lvs.tolerance.push(LvsTolerance {
+            model: strings.intern(&row.model),
+            param: strings.intern(&row.param),
+            relative: row.relative,
+            absolute: row.absolute * absolute_unit(&row.param).map_or(1.0, |(_, to_si)| to_si),
+            stated: row.absolute,
+        });
+    }
+    Ok(lvs)
 }
 
-/// The deck as the parser states it: names unresolved, values converted.
-#[derive(Default)]
-struct DeckSrc {
-    /// Base layers in statement order, with their GDS pair.
-    layers: Vec<(String, (u16, u16))>,
-    /// In declaration order, which decides the ids they take.
-    derived: Vec<DerivedSrc>,
-    /// Text patterns, indexed by [`DerivedOp::WithText`].
-    texts: Vec<String>,
-    rules: Vec<RuleSrc>,
-    connectivity: ConnectivitySrc,
-    devices: Vec<DeviceSrc>,
-    pex: Vec<(String, StackSrc)>,
+/// The `lvs` statements as written, models unresolved: a deck source's
+/// [`DeckSource::lvs`], which [`lower`] resolves to [`LvsControls`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LvsSrc {
+    pub(crate) tolerance: Vec<ToleranceSrc>,
+    /// `(model, parameter)`, the parameter lowercase.
+    pub(crate) ignore_parameter: Vec<(String, String)>,
+    pub(crate) asymmetric: Vec<String>,
+    /// `(model, pin, pin)`, the pins as written.
+    pub(crate) permute: Vec<(String, String, String)>,
+    pub(crate) ignore: Vec<String>,
+    pub(crate) ignore_shorted: Vec<String>,
+    pub(crate) ports_by_name: bool,
+    /// `(model, parameter, min, max)`, the parameter lowercase.
+    pub(crate) range: Vec<(String, String, Option<LvsLimit>, Option<LvsLimit>)>,
+    /// `lvs topology`, once: `Some(true)` relaxed, `Some(false)` strict.
+    pub(crate) topology: Option<bool>,
+    pub(crate) connect_implicit: Vec<String>,
+    pub(crate) connect_explicit: Vec<Vec<String>>,
+    /// `lvs max_res`, in ohms.
+    pub(crate) max_res: Option<f64>,
+    /// `lvs min_caps`, in aF as the deck states it.
+    pub(crate) min_caps: Option<f64>,
+    /// `lvs same_nets`: `(layout label, reference net)`.
+    pub(crate) same_nets: Vec<(String, String)>,
+    /// `lvs count`: `(model, min, max)`.
+    pub(crate) count: Vec<(String, Option<u32>, Option<u32>)>,
+    /// `lvs recognize_gates`.
+    pub(crate) recognize_gates: bool,
+    /// `lvs blackbox`: cell-name patterns.
+    pub(crate) blackbox: Vec<String>,
+    /// `lvs filter_unused`: the options.
+    pub(crate) filter_unused: Vec<UnusedFilter>,
+    /// `lvs supply`: the supply net names.
+    pub(crate) supply: Vec<String>,
+    /// `lvs lde`: `(model, od layer, max, (well layer, scref))`.
+    pub(crate) lde: Vec<LdeSrc>,
 }
 
-struct RuleSrc {
-    id: String,
-    /// The engine kind name.
-    kind: &'static str,
-    layers: Vec<String>,
-    params: Vec<(&'static str, ParamSrc)>,
+/// One `lvs lde` statement as written: `(model, od layer, max, (well
+/// layer, scref))`, the lengths on the layout's grid.
+pub(crate) type LdeSrc = (String, String, Dbu, Option<(String, Dbu)>);
+
+/// `lvs tolerance "model" param relative r absolute a`, the absolute part
+/// in the deck's unit ([`absolute_unit`]).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ToleranceSrc {
+    pub(crate) model: String,
+    pub(crate) param: String,
+    pub(crate) relative: f64,
+    pub(crate) absolute: f64,
 }
 
-/// A converted value, or a layer still to resolve.
-enum ParamSrc {
-    Value(ParamValue),
-    Layer(String),
-    Model(String),
-}
+impl LvsSrc {
+    /// Adds `lvs blackbox "pattern"`. Refused, with the reason: an empty
+    /// pattern, one holding `[`, `]`, `{`, `}` or `\\` (which `KLayout`
+    /// reads as classes, alternatives and escapes, as `.in_cells` refuses
+    /// them), or one already stated.
+    ///
+    /// # Errors
+    ///
+    /// The reason, as the parser and the deck builder report it.
+    pub fn blackbox(&mut self, pattern: &str) -> Result<(), String> {
+        if pattern.is_empty() {
+            return Err("an empty pattern matches no cell".to_owned());
+        }
+        if pattern.contains(['[', ']', '{', '}', '\\']) {
+            return Err(
+                "a cell-name pattern takes `*` and `?` only; `[`, `]`, `{`, `}` and `\\` are refused"
+                    .to_owned(),
+            );
+        }
+        if self.blackbox.iter().any(|stated| stated == pattern) {
+            return Err(format!("\"{pattern}\" is already a black box"));
+        }
+        self.blackbox.push(pattern.to_owned());
+        Ok(())
+    }
 
-#[derive(Default)]
-struct ConnectivitySrc {
-    conductors: Vec<String>,
-    intra_layer_touch: bool,
-    global: Vec<String>,
-    vias: Vec<ViaSrc>,
-    labels: Vec<LabelSrc>,
-}
+    /// Adds `lvs supply` names. Refused, with the reason: none, or a name
+    /// already stated.
+    ///
+    /// # Errors
+    ///
+    /// The reason, as the parser and the deck builder report it.
+    pub fn supply(&mut self, names: &[&str]) -> Result<(), String> {
+        if names.is_empty() {
+            return Err("supply names one net or more, each in quotes".to_owned());
+        }
+        for (at, &name) in names.iter().enumerate() {
+            if names[..at].contains(&name) || self.supply.iter().any(|stated| stated == name) {
+                return Err(format!("\"{name}\" is already a supply"));
+            }
+        }
+        self.supply
+            .extend(names.iter().map(|&name| name.to_owned()));
+        Ok(())
+    }
 
-struct ViaSrc {
-    layer: String,
-    connects: (String, String),
-}
+    /// Sets `lvs filter_unused` to `options`, in their order. Refused, with
+    /// the reason: none, one given twice, or a second statement.
+    ///
+    /// # Errors
+    ///
+    /// The reason, as the parser and the deck builder report it.
+    pub fn filter_unused(&mut self, options: &[UnusedFilter]) -> Result<(), String> {
+        if !self.filter_unused.is_empty() {
+            return Err("the unused filters are already stated".to_owned());
+        }
+        if options.is_empty() {
+            return Err("filter_unused takes ae, af, ag, c or u, one or more".to_owned());
+        }
+        if let Some(twice) = options
+            .iter()
+            .enumerate()
+            .find(|&(at, option)| options[..at].contains(option))
+        {
+            return Err(format!("`{}` is given twice", twice.1.name()));
+        }
+        self.filter_unused = options.to_vec();
+        Ok(())
+    }
 
-/// `connect label <layer> names <conductor>`.
-struct LabelSrc {
-    layer: String,
-    names: String,
-}
-
-struct DeviceSrc {
-    kind: DeviceKind,
-    marker: String,
-    model: String,
-    terminals: Vec<String>,
-}
-
-/// `layer <name> = a op b op ..`, one operator folded left.
-struct DerivedSrc {
-    name: String,
-    op: DerivedOp,
-    layers: Vec<String>,
-}
-
-struct StackSrc {
-    thickness_nm: f64,
-    height_nm: f64,
-    sheet_res_ohm_sq: f64,
-    area_cap_af_um2: f64,
-    fringe_cap_af_um: f64,
-    dielectric_k: f64,
+    /// The statements that [`lower`] resolves to `controls`, for a deck
+    /// whose devices are `devices`: what a compiled deck decompiles to.
+    #[must_use]
+    pub fn from_controls(
+        controls: &LvsControls,
+        devices: &[DeviceSource],
+        strings: &StrTable,
+    ) -> Self {
+        let name = |id: StrId| strings.resolve(id).to_owned();
+        Self {
+            tolerance: controls
+                .tolerance
+                .iter()
+                .map(|row| ToleranceSrc {
+                    model: name(row.model),
+                    param: name(row.param),
+                    relative: row.relative,
+                    absolute: row.stated,
+                })
+                .collect(),
+            ignore_parameter: controls
+                .ignore_parameter
+                .iter()
+                .map(|&(model, param)| (name(model), name(param)))
+                .collect(),
+            asymmetric: controls.asymmetric.iter().map(|&id| name(id)).collect(),
+            permute: controls
+                .permute
+                .iter()
+                .map(|&(model, a, b)| {
+                    let model = name(model);
+                    let kind = devices
+                        .iter()
+                        .find(|device| device.model == model)
+                        .map_or(DeviceKind::Mos, |device| device.kind);
+                    let pin = |at: u8| pin_names(kind)[usize::from(at)].to_owned();
+                    (model, pin(a), pin(b))
+                })
+                .collect(),
+            ignore: controls.ignore.iter().map(|&id| name(id)).collect(),
+            ignore_shorted: controls.ignore_shorted.iter().map(|&id| name(id)).collect(),
+            ports_by_name: controls.ports_by_name,
+            recognize_gates: controls.recognize_gates,
+            blackbox: controls.blackbox.clone(),
+            filter_unused: controls.filter_unused.clone(),
+            supply: controls.supply.iter().map(|&id| name(id)).collect(),
+            lde: controls
+                .lde
+                .iter()
+                .map(|row| {
+                    (
+                        name(row.model),
+                        name(row.od),
+                        row.max,
+                        row.well.map(|(well, scref)| (name(well), scref)),
+                    )
+                })
+                .collect(),
+            range: controls
+                .range
+                .iter()
+                .map(|row| (name(row.model), name(row.param), row.min, row.max))
+                .collect(),
+            topology: controls.relaxed.then_some(true),
+            connect_implicit: controls.connect_implicit.clone(),
+            connect_explicit: controls
+                .connect_explicit
+                .iter()
+                .map(|group| group.iter().map(|&id| name(id)).collect())
+                .collect(),
+            max_res: controls.max_res,
+            min_caps: controls.min_caps,
+            same_nets: controls
+                .same_nets
+                .iter()
+                .map(|&(layout, reference)| (name(layout), name(reference)))
+                .collect(),
+            count: controls
+                .count
+                .iter()
+                .map(|row| (name(row.model), row.min, row.max))
+                .collect(),
+        }
+    }
 }
 
 /// Layer-table tests, and the fixture the layout tests borrow.
@@ -667,6 +1679,9 @@ pub(crate) mod tests {
     pub(crate) const ROWS: [(&str, u16, u16); 3] =
         [("met1", 68, 20), ("via1", 67, 44), ("poly", 66, 20)];
 
+    /// Oracle: construct-from-answer. The table is built from `ROWS`, so each
+    /// name resolves to its row index, and `met9`, interned but never declared,
+    /// and a name never interned resolve to nothing.
     #[test]
     fn a_name_the_deck_does_not_declare_resolves_to_no_layer_at_all() {
         let mut strings = StrTable::default();
@@ -702,6 +1717,9 @@ pub(crate) mod tests {
         );
     }
 
+    /// Oracle: construct-from-answer. Each `ROWS` pair maps to its row index;
+    /// 69/20 is undeclared, 68/21 shares only the layer number, and 66/44 mixes
+    /// two rows' halves, so none maps.
     #[test]
     fn stream_pairs_map_only_where_the_deck_declares_them() {
         let mut strings = StrTable::default();

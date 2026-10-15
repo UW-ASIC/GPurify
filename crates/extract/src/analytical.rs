@@ -1,13 +1,18 @@
 //! Closed-form extraction from the deck's process stack.
 //!
 //! Data in: every net's polygons, the conductor/via connectivity, the stack.
-//! Data out: a canonical [`ParasiticNetwork`] — per polygon a series R and a
-//! ground C, lateral and interlayer coupling C, and via R.
+//! Data out: a canonical [`ParasiticNetwork`] — per conductor region a series
+//! R and a ground C, lateral and interlayer coupling C, and via R. A region
+//! is one edge-connected piece of a net's merged shapes on one layer, so a
+//! wire reads the same however it was cut into polygons. The formulas and what
+//! they leave out are in the
+//! [crate docs](crate#the-closed-forms).
 
+use crate::conductor::Regions;
 use crate::network::{NodeId, Parasitic, ParasiticNetwork};
 use gpurify_check::topology::{NetId, NetTable};
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
-use gpurify_geom::{ops, Bbox, GeometryStore, LayerId, PolyId};
+use gpurify_geom::{ops, Bbox, GeometryStore, GeometryStoreBuilder, LayerId, PolyId};
 use gpurify_geom::{prefix, Capacitance, Dbu, DbuArea, Grid, Qty, Resistance, MAX_ABS_DBU};
 use gpurify_ingest::deck::{Connectivity, ProcessStack};
 
@@ -79,9 +84,84 @@ fn coupling_capacitance(
     Qty::new(coefficient_af_um * ratio / AF_PER_FF)
 }
 
-/// Extract the whole design into `out` (cleared), in canonical order.
+/// Why the closed forms refused a design. Each names the layer whose
+/// parasitics are unknown, rather than reading it as a perfect wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AnalyticalError {
+    /// A conductor layer holds a net's shapes, but no `pex` row gives it a
+    /// positive, finite sheet resistance: its resistance and capacitance are
+    /// unknown, never zero.
+    #[error("no pex row gives this conductor a positive sheet resistance")]
+    Undescribed(LayerId),
+    /// A via layer has a cut joining two conductor plates, but no `pex` row
+    /// gives it a positive, finite resistance per cut.
+    #[error("no pex row gives this via layer a positive resistance per cut")]
+    UndescribedVia(LayerId),
+    /// A conductor layer's shapes of one net do not validate as simple
+    /// rectilinear rings, so they cannot be merged into a conductor exactly.
+    #[error("not valid rectilinear geometry, so its conductors cannot be merged exactly")]
+    InvalidGeometry(LayerId),
+}
+
+impl AnalyticalError {
+    /// The layer the refusal names.
+    pub fn layer(self) -> LayerId {
+        match self {
+            Self::Undescribed(layer)
+            | Self::UndescribedVia(layer)
+            | Self::InvalidGeometry(layer) => layer,
+        }
+    }
+}
+
+/// Region marker for a rectangle store row that is a via cut.
+const CUT: u32 = u32::MAX;
+
+/// Extracts every net of the design into `out`, which is cleared first and
+/// left in canonical order.
 ///
-/// Both coupling terms are parallel-plate lower bounds (no fringing).
+/// `nets` must have been traced from `store` with `connectivity`, and `stack`
+/// is indexed by [`LayerId`]. Each net's shapes on a non-global layer are
+/// merged, and each piece of the merge whose parts share edges is one region
+/// (two pieces that meet only at a corner are two, though the merge joins
+/// them: a corner carries no current): a bar drawn as abutting or overlapping
+/// polygons is one region with the outline's area and perimeter. Net `k`'s
+/// nodes follow those of nets `0..k`; a net of `n` regions has `n + 1` nodes,
+/// its regions ascending by layer. Region `i` contributes a ground
+/// capacitance on node `i` and a resistor from node `i` to `i + 1`, and node
+/// `i` is that region's node. A net with no region (shapes on global layers only) has no node.
+/// Coupling is measured between the regions' rectangles and joins the
+/// regions' nodes. A via array, the cuts that land on the same two regions
+/// (the lowest region on each side, touching included), is one resistor
+/// between their nodes.
+///
+/// Both coupling terms are parallel-plate (no fringing), so lateral coupling
+/// is a lower bound, and neither is shielded by what lies between the plates.
+/// An element that comes out zero is left out, and so is a cut that does not
+/// land on both of its plates. Shapes on a global layer
+/// ([`Connectivity::global`]) carry no parasitics and need no stack row, nor
+/// do vias into them.
+///
+/// # Errors
+///
+/// [`AnalyticalError::Undescribed`] for the lowest conductor layer that holds
+/// a net's shape and has no positive, finite sheet resistance; then
+/// [`AnalyticalError::InvalidGeometry`] for the first net, in net order,
+/// whose shapes on a layer are not valid rectilinear rings; then
+/// [`AnalyticalError::UndescribedVia`] for the first via layer, in deck
+/// order, with a cut on both of its conductor plates and no positive, finite
+/// resistance per cut. `out` holds no usable network then.
+///
+/// # Panics
+///
+/// Panics if the nets or the nodes of the network outnumber a `u32`.
+///
+/// # Time complexity
+///
+/// A merge per net and layer, linear-logarithmic in that net's vertices, plus
+/// the spatial joins: each conductor layer against itself within ten
+/// thicknesses, each pair of conductor layers, and each via layer against
+/// its two plates.
 pub fn extract_into(
     store: &GeometryStore,
     nets: &NetTable,
@@ -89,18 +169,165 @@ pub fn extract_into(
     stack: &ProcessStack,
     grid: Grid,
     out: &mut ParasiticNetwork,
-) {
+) -> Result<(), AnalyticalError> {
     out.clear();
+    refuse_undescribed(store, nets, connectivity, stack)?;
 
-    // Ascending nets make `node_net` grouped-and-ascending.
+    let regions = regions(store, nets, connectivity)?;
+    let node_of = regions_into(&regions, stack, grid, out);
+    let (rects, owner) = rect_store(store, connectivity, &regions);
+    couple_into(
+        &rects,
+        &owner,
+        &regions,
+        connectivity,
+        stack,
+        grid,
+        &node_of,
+        out,
+    );
+    vias_into(&rects, &owner, connectivity, stack, &node_of, out)?;
+    out.sort_canonical();
+    out.debug_check();
+    // A zero element is left out and every resistance is a positive sheet
+    // or via value over a positive count.
+    debug_assert!(
+        out.value
+            .iter()
+            .all(|value| !matches!(*value, Parasitic::Resistance(r) if !(r.raw() > 0.0))),
+        "every closed-form resistance is positive"
+    );
+    Ok(())
+}
+
+/// The conductor rectangles behind the nodes [`extract_into`] allocates for
+/// the same `store`, `nets` and `connectivity`: each region's disjoint
+/// rectangles, tagged with the region's node, ascending by node. A net's
+/// closing node has none.
+///
+/// A node is a region, not a drawn polygon: a bar drawn as two abutting
+/// polygons is one node, and two pieces that meet only at a corner are two,
+/// whatever the polygon count. A caller that places the network's elements
+/// on geometry of its own (the Liberty circuit's rectangles) reads each
+/// node's place here.
+///
+/// # Errors
+///
+/// [`AnalyticalError::InvalidGeometry`], as [`extract_into`] gives for the
+/// same inputs; where `extract_into` succeeded, this does too.
+///
+/// # Time complexity
+///
+/// The merge per net and layer that [`extract_into`] does, and no spatial
+/// join.
+pub fn node_rects(
+    store: &GeometryStore,
+    nets: &NetTable,
+    connectivity: &Connectivity,
+) -> Result<Vec<(NodeId, Bbox)>, AnalyticalError> {
+    let regions = regions(store, nets, connectivity)?;
+    let mut out = Vec::with_capacity(regions.rects.len());
+    let mut node = 0u32;
+    for region in 0..regions.len() {
+        out.extend(regions.rects_of(region).iter().map(|&r| (NodeId(node), r)));
+        node += 1;
+        // A net's last region is followed by its closing node, as in
+        // `regions_into`.
+        if regions.net.get(region + 1) != Some(&regions.net[region]) {
+            node += 1;
+        }
+    }
+    Ok(out)
+}
+
+/// Every net's regions, in ascending [`NetId`], so the nodes `regions_into`
+/// allocates are grouped by net and ascending. A global layer makes none.
+fn regions(
+    store: &GeometryStore,
+    nets: &NetTable,
+    connectivity: &Connectivity,
+) -> Result<Regions, AnalyticalError> {
+    let mut regions = Regions::default();
     let net_count = u32::try_from(nets.net_count()).expect("a NetId is a u32");
     for net in 0..net_count {
-        extract_net_into(store, nets, NetId(net), stack, grid, out);
+        regions
+            .push_net(store, nets, NetId(net), |layer| {
+                !connectivity.global.contains(&layer)
+            })
+            .map_err(AnalyticalError::InvalidGeometry)?;
     }
-    let node_of = nodes_by_poly(store, nets);
-    couple_into(store, nets, connectivity, stack, grid, &node_of, out);
-    vias_into(store, connectivity, stack, &node_of, out);
-    out.sort_canonical();
+    Ok(regions)
+}
+
+/// Every region's rectangles on its layer and every via cut as drawn, in one
+/// store, so the spatial joins measure conductors rather than drawn polygons.
+/// `owner[row]` is a rectangle row's region, [`CUT`] for a cut.
+fn rect_store(
+    store: &GeometryStore,
+    connectivity: &Connectivity,
+    regions: &Regions,
+) -> (GeometryStore, Vec<u32>) {
+    let mut builder = GeometryStoreBuilder::with_capacity(regions.rects.len(), 0);
+    let mut arrival = Vec::with_capacity(regions.rects.len());
+    for region in 0..regions.len() {
+        let index = u32::try_from(region).expect("a region index is a u32");
+        for r in regions.rects_of(region) {
+            builder.push(
+                regions.layer[region],
+                &[r.xlo, r.xhi, r.xhi, r.xlo],
+                &[r.ylo, r.ylo, r.yhi, r.yhi],
+            );
+            arrival.push(index);
+        }
+    }
+    let mut cut_layers = connectivity.via_cut.clone();
+    cut_layers.sort_unstable();
+    cut_layers.dedup();
+    for layer in cut_layers {
+        for row in store.polys_on_layer(layer) {
+            let (xs, ys) = store.poly_verts(PolyId(row));
+            builder.push(layer, xs, ys);
+            arrival.push(CUT);
+        }
+    }
+    let (rects, permutation) = builder.finish(store.layer_count());
+    let owner = permutation
+        .iter()
+        .map(|&old| arrival[old as usize])
+        .collect();
+    (rects, owner)
+}
+
+/// The lowest non-global layer that holds a net's shape and is not
+/// [`described`].
+fn refuse_undescribed(
+    store: &GeometryStore,
+    nets: &NetTable,
+    connectivity: &Connectivity,
+    stack: &ProcessStack,
+) -> Result<(), AnalyticalError> {
+    for layer in 0..store.layer_count() {
+        let layer = LayerId(u16::try_from(layer).expect("a LayerId is a u16"));
+        if connectivity.global.contains(&layer) || described(stack, layer) {
+            continue;
+        }
+        let on_a_net = store
+            .polys_on_layer(layer)
+            .any(|row| nets.net_of(PolyId(row)) != NetId::NONE);
+        if on_a_net {
+            return Err(AnalyticalError::Undescribed(layer));
+        }
+    }
+    Ok(())
+}
+
+/// Whether the stack gives `layer` a positive, finite sheet resistance (Ω per
+/// cut on a via layer): the one value every stated row has, and that a layer
+/// with no row reads as zero.
+fn described(stack: &ProcessStack, layer: LayerId) -> bool {
+    stack_row(stack, layer)
+        .map(|row| stack.sheet_res_ohm_sq[row])
+        .is_some_and(|ohm| ohm > 0.0 && ohm.is_finite())
 }
 
 /// The run two same-layer boxes share and the gap across it; `None` for a
@@ -133,60 +360,49 @@ fn interlayer_gap_um(stack: &ProcessStack, lower: usize, upper: usize) -> Option
     (gap_nm > 0.0).then_some(gap_nm / NM_PER_UM)
 }
 
-/// One coupling element between polygons on different nets, lower [`NetId`]
+/// One coupling element between regions on different nets, lower [`NetId`]
 /// first. Non-positive or non-finite values are dropped.
 fn push_coupling(
-    nets: &NetTable,
+    regions: &Regions,
     node_of: &[NodeId],
-    a: PolyId,
-    b: PolyId,
+    a: u32,
+    b: u32,
     femtofarads: f64,
     out: &mut ParasiticNetwork,
 ) {
     if !(femtofarads > 0.0 && femtofarads.is_finite()) {
         return;
     }
-    let (lo, hi) = if nets.net_of(a) < nets.net_of(b) {
+    let (a, b) = (a as usize, b as usize);
+    let (lo, hi) = if regions.net[a] < regions.net[b] {
         (a, b)
     } else {
         (b, a)
     };
     out.push(
-        node_of[lo.idx()],
-        Some(node_of[hi.idx()]),
+        node_of[lo],
+        Some(node_of[hi]),
         Parasitic::CouplingCap(Qty::new(femtofarads)),
     );
 }
 
-/// Every polygon's node, by [`PolyId`], mirroring [`extract_net_into`]'s
-/// allocation. Polygons on no net get `u32::MAX`.
-fn nodes_by_poly(store: &GeometryStore, nets: &NetTable) -> Vec<NodeId> {
-    let mut node_of = vec![NodeId(u32::MAX); store.poly_count()];
-    let net_count = u32::try_from(nets.net_count()).expect("a NetId is a u32");
-    let mut next = 0u32;
-    for net in 0..net_count {
-        let polys = nets.polys_of(NetId(net));
-        for (offset, &poly) in polys.iter().enumerate() {
-            let node = next + u32::try_from(offset).expect("a net's polygon count is a u32");
-            node_of[poly.idx()] = NodeId(node);
-        }
-        next += u32::try_from(polys.len()).expect("a net's polygon count is a u32")
-            + u32::from(!polys.is_empty());
-    }
-    node_of
-}
-
 /// Lateral (same layer, within [`LATERAL_HALO_THICKNESSES`] × thickness) and
-/// interlayer (overlapping) coupling. Appends.
+/// interlayer (overlapping) coupling between the regions' rectangles in
+/// `rects` ([`rect_store`]). Appends.
 fn couple_into(
-    store: &GeometryStore,
-    nets: &NetTable,
+    rects: &GeometryStore,
+    owner: &[u32],
+    regions: &Regions,
     connectivity: &Connectivity,
     stack: &ProcessStack,
     grid: Grid,
     node_of: &[NodeId],
     out: &mut ParasiticNetwork,
 ) {
+    let store = rects;
+    let region = |poly: PolyId| owner[poly.idx()];
+    let same_net =
+        |a: PolyId, b: PolyId| regions.net[region(a) as usize] == regions.net[region(b) as usize];
     let mut index_a = SpatialIndex::default();
     let mut index_b = SpatialIndex::default();
     let mut pairs = Vec::new();
@@ -209,14 +425,14 @@ fn couple_into(
             SpatialIndex::build_into(store, layer, &mut index_a);
             candidate_pairs_into(store, &index_a, Dbu::new_unchecked(halo), &mut pairs);
             for &(a, b) in &pairs {
-                if nets.same_net(a, b) {
+                if same_net(a, b) {
                     continue;
                 }
                 let Some((run, gap)) = facing(store.poly_bbox(a), store.poly_bbox(b)) else {
                     continue;
                 };
                 let femtofarads = coupling_capacitance(coefficient, run, gap, grid).raw();
-                push_coupling(nets, node_of, a, b, femtofarads, out);
+                push_coupling(regions, node_of, region(a), region(b), femtofarads, out);
             }
         }
 
@@ -245,7 +461,7 @@ fn couple_into(
             SpatialIndex::build_into(store, upper_layer, &mut index_b);
             cross_layer_pairs_into(store, &index_a, &index_b, Dbu::new_unchecked(0), &mut pairs);
             for &(a, b) in &pairs {
-                if nets.same_net(a, b) {
+                if same_net(a, b) {
                     continue;
                 }
                 let (box_a, box_b) = (store.poly_bbox(a), store.poly_bbox(b));
@@ -259,7 +475,7 @@ fn couple_into(
                 let overlap = DbuArea::new(i128::from(wide) * i128::from(tall));
                 let femtofarads =
                     ground_capacitance(per_um2, 0.0, overlap, Dbu::new_unchecked(0), grid).raw();
-                push_coupling(nets, node_of, a, b, femtofarads, out);
+                push_coupling(regions, node_of, region(a), region(b), femtofarads, out);
             }
         }
     }
@@ -267,33 +483,35 @@ fn couple_into(
 
 /// Via resistance. Appends.
 ///
-/// Cuts are grouped by the sorted `(lower, upper)` plate pair they join; each
-/// group is one resistor at per-cut / count (parallel, not series).
+/// Cuts are grouped by the sorted `(lower, upper)` region pair they join; each
+/// group is one resistor at per-cut / count (parallel, not series). A cut
+/// lands on the lowest region whose rectangle shares a point with its box,
+/// touching included, as net extraction joins. A via into a global layer is
+/// skipped; any other via layer with a cut on both plates must be described.
 fn vias_into(
-    store: &GeometryStore,
+    rects: &GeometryStore,
+    owner: &[u32],
     connectivity: &Connectivity,
     stack: &ProcessStack,
     node_of: &[NodeId],
     out: &mut ParasiticNetwork,
-) {
-    const NO_POLY: PolyId = PolyId(u32::MAX);
+) -> Result<(), AnalyticalError> {
+    const NO_REGION: u32 = u32::MAX;
+    let store = rects;
 
     let mut cut_index = SpatialIndex::default();
     let mut plate_index = SpatialIndex::default();
     let mut pairs = Vec::new();
-    // Indexed by the cut's PolyId; a cut missing a plate keeps the sentinel.
-    let mut below = vec![NO_POLY; store.poly_count()];
-    let mut above = vec![NO_POLY; store.poly_count()];
-    let mut arrays: Vec<(PolyId, PolyId)> = Vec::new();
+    // Indexed by the cut's row; a cut missing a plate keeps the sentinel.
+    let mut below = vec![NO_REGION; store.poly_count()];
+    let mut above = vec![NO_REGION; store.poly_count()];
+    let mut arrays: Vec<(u32, u32)> = Vec::new();
 
     for row in 0..connectivity.via_cut.len() {
         let cut_layer = connectivity.via_cut[row];
         let (lower, upper) = connectivity.via_connects[row];
-        let Some(cut_row) = stack_row(stack, cut_layer) else {
-            continue;
-        };
-        let per_cut_ohm = stack.sheet_res_ohm_sq.get(cut_row).copied().unwrap_or(0.0);
-        if !(per_cut_ohm > 0.0 && per_cut_ohm.is_finite()) {
+        // A global layer has no regions, so a via into one joins nothing.
+        if connectivity.global.contains(&lower) || connectivity.global.contains(&upper) {
             continue;
         }
 
@@ -310,88 +528,98 @@ fn vias_into(
                 &mut pairs,
             );
             for &(cut, plate) in &pairs {
-                let slot = &mut landing[cut.idx()];
-                *slot = PolyId(slot.0.min(plate.0));
+                if store.poly_bbox(cut).overlaps(store.poly_bbox(plate)) {
+                    let slot = &mut landing[cut.idx()];
+                    *slot = (*slot).min(owner[plate.idx()]);
+                }
             }
         }
 
         arrays.clear();
         for cut in store.polys_on_layer(cut_layer) {
             let (lo, hi) = (below[cut as usize], above[cut as usize]);
-            if lo != NO_POLY && hi != NO_POLY {
+            if lo != NO_REGION && hi != NO_REGION {
                 arrays.push((lo, hi));
             }
-            below[cut as usize] = NO_POLY;
-            above[cut as usize] = NO_POLY;
+            below[cut as usize] = NO_REGION;
+            above[cut as usize] = NO_REGION;
         }
         arrays.sort_unstable();
+        if arrays.is_empty() {
+            continue;
+        }
+        if !described(stack, cut_layer) {
+            return Err(AnalyticalError::UndescribedVia(cut_layer));
+        }
+        let per_cut_ohm = stack.sheet_res_ohm_sq[cut_layer.idx()];
 
         for group in arrays.chunk_by(|a, b| a == b) {
             let key = group[0];
             let cuts = u32::try_from(group.len()).expect("a via array's cut count is a u32");
             let ohm = via_resistance(per_cut_ohm, cuts).raw();
-            if ohm > 0.0 && ohm.is_finite() {
-                let (from, to) = (node_of[key.0.idx()], node_of[key.1.idx()]);
-                out.push(from, Some(to), Parasitic::Resistance(Qty::new(ohm)));
-            }
+            let (from, to) = (node_of[key.0 as usize], node_of[key.1 as usize]);
+            out.push(from, Some(to), Parasitic::Resistance(Qty::new(ohm)));
         }
     }
+    Ok(())
 }
 
-/// One net's nodes and per-polygon R and ground C. Appends.
+/// Every region's node, R and ground C, net by net; returns each region's
+/// node. Appends.
 ///
-/// A net of `n` polygons gets `n + 1` boundary nodes; polygon `i` is a resistor
-/// from node `i` to `i + 1` plus a ground C on node `i`, chained in [`PolyId`]
-/// order (a comb's fingers come out in series; the net total is unchanged).
-/// Length and width are the sides of the rectangle with the ring's area and
-/// perimeter, the roots of `t² − (P/2)t + A`.
-fn extract_net_into(
-    store: &GeometryStore,
-    nets: &NetTable,
-    net: NetId,
+/// A net of `n` regions gets `n + 1` boundary nodes; region `i` is a resistor
+/// from node `i` to `i + 1` plus a ground C on node `i`, chained in region
+/// order (a comb's fingers on two layers come out in series; the net total is
+/// unchanged). Length and width are the sides of the rectangle with the
+/// region's area and perimeter, the roots of `t² − (P/2)t + A`.
+fn regions_into(
+    regions: &Regions,
     stack: &ProcessStack,
     grid: Grid,
     out: &mut ParasiticNetwork,
-) {
-    let polys = nets.polys_of(net);
-    let base = u32::try_from(out.node_net.len()).expect("a NodeId is a u32");
-    let count = u32::try_from(polys.len()).expect("a net's polygon count is a u32");
-    // Release check: a wrapped NodeId would alias another net's node.
-    base.checked_add(count + u32::from(!polys.is_empty()))
-        .expect("the node columns of one network fit a NodeId");
-
-    let mut node = NodeId(base);
-    let mut last_layer = LayerId(0);
-    for &poly in polys {
-        let layer = store.poly_layer(poly);
-        out.node_net.push(net);
-        out.node_layer.push(layer);
-        last_layer = layer;
-
-        // An undescribed layer reads zero coefficients; the guards below drop them.
-        let row = stack_row(stack, layer).unwrap_or(usize::MAX);
-        let sheet_ohm_sq = stack.sheet_res_ohm_sq.get(row).copied().unwrap_or(0.0);
-        let area_af_um2 = stack.area_cap_af_um2.get(row).copied().unwrap_or(0.0);
-        let fringe_af_um = stack.fringe_cap_af_um.get(row).copied().unwrap_or(0.0);
-
-        let (xs, ys) = store.poly_verts(poly);
-        let area = DbuArea::new(ops::area2(xs, ys).raw().abs() / 2);
-
-        // Seeded with the last vertex so the closing edge is counted.
-        let mut previous = (
-            xs.last().copied().unwrap_or(Dbu::new_unchecked(0)),
-            ys.last().copied().unwrap_or(Dbu::new_unchecked(0)),
-        );
-        let mut perimeter = Dbu::new_unchecked(0);
-        for (&x, &y) in xs.iter().zip(ys) {
-            // Widened: two coordinates can differ by 2^41.
-            let dx = i128::from(x.raw() - previous.0.raw());
-            let dy = i128::from(y.raw() - previous.1.raw());
-            perimeter = perimeter + ops::isqrt(DbuArea::new(dx * dx + dy * dy));
-            previous = (x, y);
+) -> Vec<NodeId> {
+    let mut node_of = Vec::with_capacity(regions.len());
+    let mut first = 0;
+    while first < regions.len() {
+        let net = regions.net[first];
+        let end = first + regions.net[first..].partition_point(|&other| other == net);
+        for region in first..end {
+            let node = NodeId(u32::try_from(out.node_net.len()).expect("a NodeId is a u32"));
+            out.node_net.push(net);
+            out.node_layer.push(regions.layer[region]);
+            node_of.push(node);
+            let next = NodeId(
+                node.0
+                    .checked_add(1)
+                    .expect("the node columns fit a NodeId"),
+            );
+            region_into(regions, region, stack, grid, node, next, out);
         }
+        // The closing boundary node.
+        out.node_net.push(net);
+        out.node_layer.push(regions.layer[end - 1]);
+        first = end;
+    }
+    node_of
+}
 
-        // A negative discriminant (too fat for a rectangle) lands on one square.
+/// One region's ground C on `node` and R from `node` to `next`. Appends.
+fn region_into(
+    regions: &Regions,
+    region: usize,
+    stack: &ProcessStack,
+    grid: Grid,
+    node: NodeId,
+    next: NodeId,
+    out: &mut ParasiticNetwork,
+) {
+    // A region's layer is described: `refuse_undescribed` ran first.
+    let sheet_ohm_sq = stack.sheet_res_ohm_sq[regions.layer[region].idx()];
+    let (area, perimeter) = (regions.area[region], regions.perimeter[region]);
+
+    {
+        // A rectilinear outline is never too fat for a rectangle:
+        // `(P/2)² ≥ 4A` holds for its bounding box and only grows from there.
         let half = perimeter.raw() / 2;
         let discriminant = i128::from(half) * i128::from(half) - 4 * area.raw();
         let spread = ops::isqrt(DbuArea::new(discriminant.max(0))).raw();
@@ -403,8 +631,7 @@ fn extract_net_into(
         } else {
             0.0
         };
-        let femtofarads =
-            ground_capacitance(area_af_um2, fringe_af_um, area, perimeter, grid).raw();
+        let femtofarads = region_ground_ff(regions, region, stack, grid);
 
         // Ground first is canonical order. Zero values are dropped: a zero-ohm
         // resistor is a short.
@@ -412,20 +639,24 @@ fn extract_net_into(
             out.push(node, None, Parasitic::GroundCap(Qty::new(femtofarads)));
         }
         if ohm > 0.0 && ohm.is_finite() {
-            out.push(
-                node,
-                Some(NodeId(node.0 + 1)),
-                Parasitic::Resistance(Qty::new(ohm)),
-            );
+            out.push(node, Some(next), Parasitic::Resistance(Qty::new(ohm)));
         }
-        node = NodeId(node.0 + 1);
     }
+}
 
-    // The closing boundary node.
-    if !polys.is_empty() {
-        out.node_net.push(net);
-        out.node_layer.push(last_layer);
-    }
+/// Region `region`'s capacitance to the substrate in fF, `Ca·A + Cf·P` from
+/// its layer's row (zero past the stack).
+pub(crate) fn region_ground_ff(
+    regions: &Regions,
+    region: usize,
+    stack: &ProcessStack,
+    grid: Grid,
+) -> f64 {
+    let row = regions.layer[region].idx();
+    let area_af_um2 = stack.area_cap_af_um2.get(row).copied().unwrap_or(0.0);
+    let fringe_af_um = stack.fringe_cap_af_um.get(row).copied().unwrap_or(0.0);
+    let (area, perimeter) = (regions.area[region], regions.perimeter[region]);
+    ground_capacitance(area_af_um2, fringe_af_um, area, perimeter, grid).raw()
 }
 
 /// A layer's process-stack row, or `None` past the stack.
@@ -720,6 +951,70 @@ mod tests {
             stack_row(&ProcessStack::default(), LayerId(0)),
             None,
             "an empty stack describes no layer"
+        );
+    }
+
+    /// Oracle: definition (testing-plan F93). Net `X` is a bar drawn as two
+    /// abutting pieces, one region, and a piece meeting the bar only at a
+    /// corner, a second region; so `X` has nodes 0 and 1 and closes on 2, and
+    /// `Y`, one bar, is node 3 and closes on 4. `node_rects` names each
+    /// region's rectangle by the node `extract_into` gave it, and no closing
+    /// node; read as one node per drawn polygon, `X`'s three polygons would
+    /// have put `Y`'s bar on node 4.
+    #[test]
+    fn node_rects_names_the_nodes_extract_into_allocates() {
+        use super::{extract_into, node_rects};
+        use crate::network::NodeId;
+        use crate::ParasiticNetwork;
+        use gpurify_check::topology::net::extract_nets_into;
+        use gpurify_check::topology::NetTable;
+        use gpurify_geom::{Bbox, GeometryStoreBuilder, PolyId};
+        use gpurify_ingest::deck::Connectivity;
+
+        let boxes = [(0, 0, 4, 1), (4, 0, 8, 1), (8, 1, 12, 2), (0, 3, 4, 4)];
+        let mut builder = GeometryStoreBuilder::default();
+        for (xlo, ylo, xhi, yhi) in boxes {
+            builder.push(
+                LayerId(0),
+                &[dbu(xlo), dbu(xhi), dbu(xhi), dbu(xlo)],
+                &[dbu(ylo), dbu(ylo), dbu(yhi), dbu(yhi)],
+            );
+        }
+        let (store, _) = builder.finish(1);
+        let connectivity = Connectivity {
+            conductors: vec![LayerId(0)],
+            intra_layer_touch: true,
+            ..Connectivity::default()
+        };
+        let mut nets = NetTable::default();
+        extract_nets_into(&store, &connectivity, &mut nets);
+        let stack = ProcessStack {
+            thickness_nm: vec![1.0],
+            height_nm: vec![1.0],
+            sheet_res_ohm_sq: vec![1.0],
+            area_cap_af_um2: vec![1.0],
+            fringe_cap_af_um: vec![1.0],
+            dielectric_k: vec![0.0],
+        };
+        let mut network = ParasiticNetwork::default();
+        extract_into(&store, &nets, &connectivity, &stack, grid(), &mut network)
+            .expect("described and rectilinear");
+        let (x, y) = (nets.net_of(PolyId(0)), nets.net_of(PolyId(3)));
+        assert_eq!(network.node_net, [x, x, x, y, y]);
+
+        let b = |xlo, ylo, xhi, yhi| Bbox {
+            xlo: dbu(xlo),
+            ylo: dbu(ylo),
+            xhi: dbu(xhi),
+            yhi: dbu(yhi),
+        };
+        assert_eq!(
+            node_rects(&store, &nets, &connectivity).expect("rectilinear"),
+            [
+                (NodeId(0), b(0, 0, 8, 1)),
+                (NodeId(1), b(8, 1, 12, 2)),
+                (NodeId(3), b(0, 3, 4, 4)),
+            ]
         );
     }
 }

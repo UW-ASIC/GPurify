@@ -1,19 +1,54 @@
-//! Partition refinement: the matching algorithm.
+//! Partition refinement: the matching algorithm, the iterative graph labelling
+//! of C. Ebeling, "`GeminiII`: a second generation layout validation program",
+//! ICCAD 1988, doi:10.1109/ICCAD.1988.122520.
 //!
 //! Data in: two graphs. Data out: a class per node on each side, plus per-class tallies.
 //! Classes split by a hash of their neighbours' classes until stable; a pass re-signs
 //! only the neighbours of nodes that changed class in the pass before. A balanced
 //! stall is broken by pairing the lowest layout node of the stalled class holding
 //! it with the reference node of that class whose parameters are closest (netgen's
-//! "resolving symmetries by property value"), the lowest such on a tie, one class
-//! per stall.
+//! "resolving symmetries by property value"), on a tie the net of the layout net's
+//! label (`KLayout`'s `consider_net_names`), then the lowest, one class per stall.
+//! A net has no parameters of its own: its closest is the one whose pairing puts
+//! the diffusions of the transistors already paired closest at each channel end,
+//! so symmetric channel nets pair the way the diffusions agree (testing-plan F98).
+//!
+//! Refinement cannot always split nodes that no relabelling exchanges, so the
+//! closest node can be the wrong one (testing-plan F58). A pairing is a trial
+//! while a match is still possible: refined until stable, it is kept when no
+//! class holds more reference nodes than layout nodes and every device pair it
+//! formed agrees on parameters; otherwise an undo log takes it back and the
+//! next closest is tried, up to [`TRIES`]. When none fits, the closest is kept
+//! and no later stall tries again, since a match is then out of reach.
 
+use crate::lvs::controls::bound;
 use crate::lvs::graph::{narrow, Graph};
+use crate::lvs::reduce::ParamNames;
 use crate::topology::TerminalRole;
-use gpurify_ingest::deck::DeviceKind;
+use gpurify_ingest::deck::{DeviceKind, LvsControls};
+use gpurify_ingest::StrId;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ClassId(pub(crate) u32);
+
+/// The most reference nodes a stall tries its layout node against.
+///
+/// ponytail: depth one, eight wide. A wrong pairing that refinement exposes
+/// only after a later tie-break is kept, and so is one whose right partner
+/// ranks past the eighth; a search over several stalls fixes both if a
+/// circuit ever needs it.
+pub(crate) const TRIES: usize = 8;
+
+/// One change a trial made, so a rejected trial can be taken back.
+#[derive(Debug, Clone, Copy)]
+enum Undo {
+    /// [`Partition::place`] swapped these two `member` slots.
+    Swap(u32, u32),
+    /// [`Partition::carve`] made the last class out of this one.
+    Carve(u32),
+    /// A pass moved this class's start from this offset.
+    Start(u32, u32),
+}
 
 /// Refinement state for both graphs. Node index is devices first, then nets;
 /// internally layout nodes come first and reference nodes follow them.
@@ -46,6 +81,61 @@ pub(crate) struct Partition {
     seen: Vec<u32>,
     /// `(offset, length)` of each part a class splits into.
     parts: Vec<(u32, u32)>,
+    /// Classes holding more reference nodes than layout nodes. Splitting such a
+    /// class leaves a part that still does, so once above zero no match is
+    /// left to find.
+    deficit: u32,
+    /// Every change since the current trial began, while `trial` is set.
+    log: Vec<Undo>,
+    trial: bool,
+    /// Set when a stall found no candidate that fits: a match is out of reach,
+    /// and later stalls take their closest without trying others.
+    hopeless: bool,
+}
+
+/// Debug-asserts the partition's invariants, with `$split` the first reference
+/// node: `member` is a permutation of the nodes that `slot` inverts; the
+/// classes, none empty, tile it with each member labelled by its own class;
+/// `layout_size` counts each class's layout members; and `deficit` counts the
+/// short classes. A macro, so the checks live only inside assertions, where
+/// cargo-mutants (which does not look inside macros) does not count them as
+/// code to test.
+macro_rules! debug_assert_partition {
+    ($partition:expr, $split:expr) => {{
+        let p: &Partition = $partition;
+        let split: u32 = $split;
+        let nodes = p.class.len();
+        debug_assert!(
+            p.member.len() == nodes
+                && p.slot.len() == nodes
+                && (0..nodes).all(|at| p.slot[p.member[at] as usize] as usize == at),
+            "`member` is a permutation of the nodes and `slot` its inverse"
+        );
+        debug_assert_eq!(
+            (0..p.start.len()).find(|&class| {
+                let from = p.start[class] as usize;
+                let run = &p.member[from..from + p.size[class] as usize];
+                run.is_empty()
+                    || run
+                        .iter()
+                        .any(|&node| p.class[node as usize] as usize != class)
+                    || run.iter().filter(|&&node| node < split).count()
+                        != p.layout_size[class] as usize
+            }),
+            None,
+            "every class is non-empty, holds only its own nodes, and counts its layout members"
+        );
+        debug_assert_eq!(
+            p.size.iter().map(|&size| size as usize).sum::<usize>(),
+            nodes,
+            "the classes tile the nodes, each node in one"
+        );
+        debug_assert_eq!(
+            p.deficit as usize,
+            (0..p.start.len()).filter(|&class| p.short(class)).count(),
+            "`deficit` counts the classes short of layout nodes"
+        );
+    }};
 }
 
 /// Splitmix64's finaliser.
@@ -56,7 +146,10 @@ const fn mix(mut z: u64) -> u64 {
 }
 
 /// A terminal's role as a signature number. Interchangeable roles share a code:
-/// MOS `Source`/`Drain` and every `Pin(_)`; `Emitter` and `Collector` never do.
+/// MOS `Source`/`Drain`, and a resistor's two ends (the graph builders write
+/// both as `Pin(0)`). `Emitter` and `Collector` never share, and neither do a
+/// diode's anode and cathode or a capacitor's plates, so a reversed diode is a
+/// mismatch (testing-plan F15).
 pub(crate) const fn role_code(role: TerminalRole) -> u64 {
     match role {
         TerminalRole::Gate => 0,
@@ -65,7 +158,10 @@ pub(crate) const fn role_code(role: TerminalRole) -> u64 {
         TerminalRole::Base => 4,
         TerminalRole::Emitter => 5,
         TerminalRole::Collector => 6,
-        TerminalRole::Pin(_) => 7,
+        // Each pin position its own code: a diode's anode is not its cathode.
+        // A resistor's ends are interchangeable, and the graph builders write
+        // both as `Pin(0)` so they share this code.
+        TerminalRole::Pin(position) => 16 + position as u64,
     }
 }
 
@@ -76,12 +172,14 @@ pub(crate) const fn kind_code(kind: DeviceKind) -> u64 {
         DeviceKind::Resistor => 2,
         DeviceKind::Capacitor => 3,
         DeviceKind::Diode => 4,
+        DeviceKind::Inductor => 5,
+        DeviceKind::Cell => 6,
     }
 }
 
 /// One neighbour's contribution; summed with `wrapping_add`, so order-free.
 const fn neighbour(role: TerminalRole, class: u32) -> u64 {
-    mix(0x21 ^ (role_code(role) << 8) ^ ((class as u64) << 16))
+    mix(0x21 ^ (role_code(role) << 8) ^ ((class as u64) << 24))
 }
 
 /// Both graphs as one node space: layout nodes `0 .. split`, reference nodes after.
@@ -90,6 +188,15 @@ struct Sides<'a> {
     layout: &'a Graph,
     reference: &'a Graph,
     split: u32,
+    /// Which names trade places with source and drain.
+    names: ParamNames,
+    /// The deck's per-parameter tolerances.
+    controls: &'a LvsControls,
+    /// Each node's seed, layout nodes first: nodes of one seed start in a
+    /// class of their own; `u32::MAX`, or a node past the end, has none.
+    seeds: &'a [u32],
+    /// Whether devices of one kind start in one class whatever their model.
+    models_aside: bool,
 }
 
 impl Sides<'_> {
@@ -117,10 +224,33 @@ impl Sides<'_> {
     }
 }
 
+/// `|a - b|` relative to the larger magnitude; zero when both are zero.
+fn relative(a: f64, b: f64) -> f64 {
+    let scale = a.abs().max(b.abs());
+    if scale == 0.0 {
+        0.0
+    } else {
+        (a - b).abs() / scale
+    }
+}
+
+/// Which channel end a role is, as an index into [`ParamNames::diffusion`]:
+/// 0 (`as`, `ps` at 2) for the source, 1 (`ad`, `pd` at 3) for the drain.
+const fn channel_end(role: TerminalRole) -> Option<usize> {
+    match role {
+        TerminalRole::Source => Some(0),
+        TerminalRole::Drain => Some(1),
+        _ => None,
+    }
+}
+
 impl Sides<'_> {
     /// How far apart the parameters of layout node `layout` and reference node
-    /// `reference` are: per name, the relative difference when both state it
-    /// and one when only one does, summed. Zero for nets.
+    /// `reference` are: per name the reference states, the relative difference
+    /// when the layout states it too and one when it does not, summed. A name
+    /// only the layout states is not compared (testing-plan F68). Zero for
+    /// nets. Which channel end is which is not known yet, so diffusions are
+    /// read both ways round and the closer taken.
     fn distance(self, layout: u32, reference: u32) -> f64 {
         let reference = reference - self.split;
         let (layout_devices, ref_devices) = (
@@ -134,35 +264,80 @@ impl Sides<'_> {
             self.layout.params_of(layout),
             self.reference.params_of(reference),
         );
-        let relative = |a: f64, b: f64| {
-            let scale = a.abs().max(b.abs());
-            if scale == 0.0 {
-                0.0
-            } else {
-                (a - b).abs() / scale
-            }
+        let apart = |crossed: bool| -> f64 {
+            theirs
+                .iter()
+                .map(|&(name, b)| {
+                    let read = self.read(name, crossed);
+                    mine.iter()
+                        .find(|&&(n, _)| Some(n) == read)
+                        .map_or(1.0, |&(_, a)| relative(a, b))
+                })
+                .sum()
         };
-        let one_sided = |from: &[(gpurify_ingest::StrId, f64)],
-                         to: &[(gpurify_ingest::StrId, f64)]| {
-            from.iter()
-                .filter(|(name, _)| !to.iter().any(|(n, _)| n == name))
-                .count()
-        };
-        let shared: f64 = mine
-            .iter()
-            .filter_map(|&(name, a)| {
-                theirs
-                    .iter()
-                    .find(|&&(n, _)| n == name)
-                    .map(|&(_, b)| relative(a, b))
+        apart(false).min(apart(true))
+    }
+
+    /// Whether layout node `layout` and reference node `reference` are other
+    /// than two nets of one name, the layout net's label being the reference
+    /// net's name. A symmetry between nets is broken toward the named one
+    /// first, as `KLayout`'s `consider_net_names` "will employ net names
+    /// to resolve ambiguities" (catalog LVS-032). Devices, and a layout net with
+    /// no label, are always apart.
+    fn named_apart(self, layout: u32, reference: u32) -> bool {
+        let reference = reference - self.split;
+        let (layout_devices, ref_devices) = (
+            narrow(self.layout.device_count()),
+            narrow(self.reference.device_count()),
+        );
+        if layout < layout_devices || reference < ref_devices {
+            return true;
+        }
+        let label = self.layout.net_name[(layout - layout_devices) as usize];
+        label.is_none() || label != self.reference.net_name[(reference - ref_devices) as usize]
+    }
+
+    /// The layout name a reference parameter `name` is read under: itself,
+    /// or, `crossed`, its other channel end's.
+    fn read(self, name: StrId, crossed: bool) -> Option<StrId> {
+        if crossed {
+            self.names.across(name)
+        } else {
+            Some(name)
+        }
+    }
+
+    /// Whether layout node `layout` and reference node `reference` would pass
+    /// the verdict's parameter comparison: every name the reference states
+    /// stated by the layout too, each value within its bound of the other
+    /// (the deck's row for the name, or `tolerance` relatively, a count
+    /// exactly; `NaN` never is), diffusions either way round. Nets always do.
+    fn agrees(self, layout: u32, reference: u32, tolerance: f64) -> bool {
+        let reference = reference - self.split;
+        if layout >= narrow(self.layout.device_count())
+            || reference >= narrow(self.reference.device_count())
+        {
+            return true;
+        }
+        let model = self.reference.device_model[reference as usize];
+        let (mine, theirs) = (
+            self.layout.params_of(layout),
+            self.reference.params_of(reference),
+        );
+        let agree = |crossed: bool| {
+            theirs.iter().all(|&(name, b)| {
+                let read = self.read(name, crossed);
+                let within = bound(
+                    self.controls,
+                    self.names.tolerance(name, tolerance),
+                    model,
+                    name,
+                );
+                mine.iter()
+                    .any(|&(other, a)| Some(other) == read && within.agree(a, b))
             })
-            .sum();
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "a device states a handful of parameters"
-        )]
-        let missing = (one_sided(mine, theirs) + one_sided(theirs, mine)) as f64;
-        shared + missing
+        };
+        agree(false) || agree(true)
     }
 }
 
@@ -172,13 +347,24 @@ impl Partition {
         let mut key: Vec<(u64, u32)> = Vec::new();
         for (graph, offset) in [(sides.layout, 0), (sides.reference, sides.split)] {
             for device in 0..graph.device_count() {
-                let identity = (kind_code(graph.device_kind[device]) << 32)
-                    | u64::from(graph.device_model[device].0);
+                let model = if sides.models_aside {
+                    0
+                } else {
+                    u64::from(graph.device_model[device].0)
+                };
+                let identity = (kind_code(graph.device_kind[device]) << 32) | model;
                 key.push((identity, offset + narrow(device)));
             }
             let devices = graph.device_count();
             for net in 0..graph.net_count() {
-                key.push((u64::MAX, offset + narrow(devices + net)));
+                let node = offset + narrow(devices + net);
+                // Below every unseeded net and above every device key.
+                let seed = sides.seeds.get(node as usize).copied();
+                let class = match seed {
+                    Some(seed) if seed != u32::MAX => u64::MAX - 1 - u64::from(seed),
+                    _ => u64::MAX,
+                };
+                key.push((class, node));
             }
         }
         key.sort_unstable();
@@ -209,6 +395,15 @@ impl Partition {
         self.dirty.extend(0..narrow(nodes));
         self.seen.clear();
         self.seen.resize(nodes, 0);
+        self.deficit = narrow((0..self.start.len()).filter(|&c| self.short(c)).count());
+        self.log.clear();
+        self.trial = false;
+        self.hopeless = false;
+    }
+
+    /// Whether `class` holds more reference nodes than layout nodes.
+    fn short(&self, class: usize) -> bool {
+        self.size[class] > 2 * self.layout_size[class]
     }
 
     /// Move `node` to position `to` of `member`, swapping out what was there.
@@ -218,12 +413,16 @@ impl Partition {
         self.member.swap(from as usize, to as usize);
         self.slot[other as usize] = from;
         self.slot[node as usize] = to;
+        if self.trial {
+            self.log.push(Undo::Swap(from, to));
+        }
     }
 
     /// Carve `member[from .. from + count]` out of `parent` into a new class
     /// whose nodes become dirty. The caller re-points `parent`'s range.
     fn carve(&mut self, parent: u32, from: u32, count: u32, split: u32) {
         let class = narrow(self.start.len());
+        let was_short = self.short(parent as usize);
         let mut layout = 0;
         for at in from..from + count {
             let node = self.member[at as usize];
@@ -236,6 +435,42 @@ impl Partition {
         self.layout_size.push(layout);
         self.size[parent as usize] -= count;
         self.layout_size[parent as usize] -= layout;
+        self.deficit = self.deficit - u32::from(was_short)
+            + u32::from(self.short(parent as usize))
+            + u32::from(self.short(class as usize));
+        if self.trial {
+            self.log.push(Undo::Carve(parent));
+        }
+    }
+
+    /// Take back every change the log holds, newest first, leaving the
+    /// partition as the trial found it but for `deficit`, which the caller
+    /// restores.
+    fn undo(&mut self) {
+        while let Some(change) = self.log.pop() {
+            match change {
+                Undo::Swap(a, b) => {
+                    self.member.swap(a as usize, b as usize);
+                    self.slot[self.member[a as usize] as usize] = a;
+                    self.slot[self.member[b as usize] as usize] = b;
+                }
+                Undo::Carve(parent) => {
+                    let class = self.start.len() - 1;
+                    let from = self.start[class] as usize;
+                    for at in from..from + self.size[class] as usize {
+                        self.class[self.member[at] as usize] = parent;
+                    }
+                    self.size[parent as usize] += self.size[class];
+                    self.layout_size[parent as usize] += self.layout_size[class];
+                    self.start.pop();
+                    self.size.pop();
+                    self.layout_size.pop();
+                }
+                Undo::Start(class, from) => self.start[class as usize] = from,
+            }
+        }
+        self.dirty.clear();
+        self.next_dirty.clear();
     }
 
     /// Re-sign every neighbour of a dirty node and split its class by signature.
@@ -298,6 +533,10 @@ impl Partition {
                 .enumerate()
                 .max_by_key(|&(at, &(_, length))| (length, std::cmp::Reverse(at)))
                 .map_or(0, |(at, _)| at);
+            if self.trial {
+                self.log
+                    .push(Undo::Start(parent, self.start[parent as usize]));
+            }
             self.start[parent as usize] = parts[keep].0;
             for (at, &(from, length)) in parts.iter().enumerate() {
                 if at != keep {
@@ -327,29 +566,121 @@ impl Partition {
         self.size[class] == layout || (layout == 1 && self.size[class] == 2)
     }
 
-    /// Pair `node` with the reference node of its class whose parameters are
-    /// closest, the lowest on a tie, as a new class of their own.
-    fn tie_break(&mut self, node: u32, sides: Sides) {
-        let split = sides.split;
-        let class = self.class[node as usize];
-        let (from, end) = (
-            self.start[class as usize],
-            self.start[class as usize] + self.size[class as usize],
-        );
-        // ponytail: O(class size) per stall; keep members sorted per class if a
-        // huge class of isolated nodes ever shows up in a profile. Greedy in
-        // layout order, not an optimal assignment: a class of sizes where the
-        // lowest layout node's closest mate starves a later one can still
-        // mismatch; a Hungarian solve per class fixes that if it ever shows up.
-        let mate = self.member[from as usize..end as usize]
+    /// The reference nodes of `node`'s class.
+    fn mates(&self, node: u32, split: u32) -> impl Iterator<Item = u32> + '_ {
+        let class = self.class[node as usize] as usize;
+        let from = self.start[class] as usize;
+        self.member[from..from + self.size[class] as usize]
             .iter()
             .copied()
-            .filter(|&member| member >= split)
+            .filter(move |&member| member >= split)
+    }
+
+    /// How far apart layout node `node` and reference node `mate` are:
+    /// their parameters' [distance](Sides::distance) for devices, and for
+    /// nets the diffusions pairing them would put at one channel end
+    /// ([`Self::end_distance`]).
+    fn apart(&self, node: u32, mate: u32, sides: Sides) -> f64 {
+        if node < narrow(sides.layout.device_count()) {
+            sides.distance(node, mate)
+        } else {
+            self.end_distance(node, mate, sides)
+        }
+    }
+
+    /// How far apart the diffusions are that pairing layout net `net` with
+    /// reference net `mate` puts at one channel end: for each source or
+    /// drain on `net` whose transistor a class already pairs one to one, and
+    /// whose mate has a source or drain on `mate`, each diffusion name the
+    /// mate states at that end against the layout's at its own, as
+    /// [`Sides::distance`] weighs them. Nothing else is told apart by a
+    /// net's pairing, so it is zero where no such transistor is.
+    fn end_distance(&self, net: u32, mate: u32, sides: Sides) -> f64 {
+        let ref_devices = narrow(sides.reference.device_count());
+        let ref_net = mate - sides.split - ref_devices;
+        let names = sides.names.diffusion;
+        let mut apart = 0.0;
+        sides.for_each_neighbour(net, |role, device| {
+            let class = self.class[device as usize] as usize;
+            let Some(mine) = channel_end(role) else {
+                return;
+            };
+            if self.size[class] != 2 || self.layout_size[class] != 1 {
+                return;
+            }
+            let from = self.start[class] as usize;
+            let other = self.member[from].max(self.member[from + 1]) - sides.split;
+            let (nets, roles) = sides.reference.terminals_of(other);
+            let Some(theirs) = nets
+                .iter()
+                .zip(roles)
+                .find_map(|(&at, &role)| channel_end(role).filter(|_| at == ref_net))
+            else {
+                return;
+            };
+            let (layout, reference) = (
+                sides.layout.params_of(device),
+                sides.reference.params_of(other),
+            );
+            // Area, then perimeter.
+            for k in [0, 2] {
+                let (Some(read), Some(stated)) = (names[mine + k], names[theirs + k]) else {
+                    continue;
+                };
+                if let Some(&(_, b)) = reference.iter().find(|&&(name, _)| name == stated) {
+                    let a = layout.iter().find(|&&(name, _)| name == read);
+                    apart += a.map_or(1.0, |&(_, a)| relative(a, b));
+                }
+            }
+        });
+        apart
+    }
+
+    /// The reference node of `node`'s class that is [closest](Self::apart);
+    /// on a tie, a net of the name `node` carries ([`Sides::named_apart`]),
+    /// then the lowest.
+    ///
+    /// ponytail: O(class size) per stall; keep members sorted per class if a
+    /// huge class of isolated nodes ever shows up in a profile.
+    fn closest(&self, node: u32, sides: Sides) -> u32 {
+        self.mates(node, sides.split)
             .min_by(|&a, &b| {
-                let (da, db) = (sides.distance(node, a), sides.distance(node, b));
-                da.total_cmp(&db).then(a.cmp(&b))
+                let (da, db) = (self.apart(node, a, sides), self.apart(node, b, sides));
+                let (na, nb) = (sides.named_apart(node, a), sides.named_apart(node, b));
+                da.total_cmp(&db).then(na.cmp(&nb)).then(a.cmp(&b))
             })
-            .expect("a stalled class holds reference nodes");
+            .expect("a stalled class holds reference nodes")
+    }
+
+    /// The next [`TRIES`] − 1 reference nodes of `node`'s class after
+    /// `closest`, in the same order: closest parameters first, then a net of
+    /// `node`'s name, then the lowest.
+    fn ranked(&self, node: u32, sides: Sides, closest: u32) -> Vec<u32> {
+        let mut ranked: Vec<(f64, bool, u32)> = self
+            .mates(node, sides.split)
+            .filter(|&mate| mate != closest)
+            .map(|mate| {
+                (
+                    self.apart(node, mate, sides),
+                    sides.named_apart(node, mate),
+                    mate,
+                )
+            })
+            .collect();
+        ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+        ranked.truncate(TRIES - 1);
+        ranked.into_iter().map(|(_, _, mate)| mate).collect()
+    }
+
+    /// Pair `node` with `mate`, a reference node of its class, as a new class
+    /// of their own whose two nodes are dirty.
+    fn pair(&mut self, node: u32, mate: u32, split: u32) {
+        let class = self.class[node as usize];
+        debug_assert!(
+            node < split && mate >= split && self.class[mate as usize] == class,
+            "a tie-break pairs a layout node with a reference node of its own class"
+        );
+        let end = self.start[class as usize] + self.size[class as usize];
         self.place(node, end - 2);
         self.place(mate, end - 1);
         self.next_dirty.clear();
@@ -357,8 +688,95 @@ impl Partition {
         std::mem::swap(&mut self.dirty, &mut self.next_dirty);
     }
 
+    /// Whether a settled trial can still be part of a match: no class short of
+    /// layout nodes, and every one-to-one device class it made, the classes
+    /// from `fresh` on and the ones they were carved from, agreeing on
+    /// parameters.
+    fn fits(&self, sides: Sides, tolerance: f64, fresh: usize) -> bool {
+        let carved = self.log.iter().filter_map(|change| match *change {
+            Undo::Carve(parent) => Some(parent as usize),
+            _ => None,
+        });
+        self.deficit == 0
+            && (fresh..self.start.len()).chain(carved).all(|class| {
+                if self.size[class] != 2 || self.layout_size[class] != 1 {
+                    return true;
+                }
+                let from = self.start[class] as usize;
+                let (a, b) = (self.member[from], self.member[from + 1]);
+                let (layout, reference) = (a.min(b), a.max(b));
+                sides.agrees(layout, reference, tolerance)
+            })
+    }
+
+    /// Pass until no class splits. Returns `false` when more than
+    /// `max_rounds` passes in a row split one.
+    fn settle(&mut self, sides: Sides, max_rounds: u32, pass: &mut u32) -> bool {
+        let mut rounds = 0u32;
+        while !self.dirty.is_empty() {
+            *pass += 1;
+            if self.pass(sides, *pass) {
+                if rounds == max_rounds {
+                    return false;
+                }
+                rounds += 1;
+            }
+        }
+        true
+    }
+
+    /// Break the stall at layout node `node`: pair it with its closest
+    /// reference node and settle, trying the next closest in turn while the
+    /// result does not [fit](Self::fits) and a match is still possible.
+    /// Returns `false` when a settle runs out of rounds.
+    fn resolve(
+        &mut self,
+        node: u32,
+        sides: Sides,
+        (max_rounds, tolerance): (u32, f64),
+        pass: &mut u32,
+    ) -> bool {
+        let closest = self.closest(node, sides);
+        if self.hopeless || self.deficit > 0 {
+            self.pair(node, closest, sides.split);
+            return self.settle(sides, max_rounds, pass);
+        }
+        let (deficit, fresh) = (self.deficit, self.start.len());
+        let mut ranked: Option<Vec<u32>> = None;
+        let mut tried = 0;
+        let mut mate = closest;
+        loop {
+            self.trial = true;
+            self.log.clear();
+            self.pair(node, mate, sides.split);
+            let settled = self.settle(sides, max_rounds, pass);
+            self.trial = false;
+            if !settled {
+                return false;
+            }
+            if self.fits(sides, tolerance, fresh) {
+                return true;
+            }
+            self.undo();
+            self.deficit = deficit;
+            debug_assert_partition!(self, sides.split);
+            let others = ranked.get_or_insert_with(|| self.ranked(node, sides, closest));
+            let Some(&next) = others.get(tried) else {
+                break;
+            };
+            tried += 1;
+            mate = next;
+        }
+        // Nothing tried fits, so no match is left to find: the closest, and
+        // no more trials.
+        self.hopeless = true;
+        self.pair(node, closest, sides.split);
+        self.settle(sides, max_rounds, pass)
+    }
+
     /// Per-class tallies and the layout classes, as the verdict reads them.
     fn publish(&mut self, split: u32) {
+        debug_assert_partition!(self, split);
         self.layout_tally.clone_from(&self.layout_size);
         self.ref_tally.clear();
         self.ref_tally.extend(
@@ -385,11 +803,16 @@ impl Partition {
 /// Refine until stable, leaving classes and tallies in `out`. Returns `false`
 /// when more than `max_rounds` passes in a row split a class without reaching a
 /// stall, which says nothing about whether the graphs match. The count restarts
-/// at each tie-break, so the number of symmetries does not spend it.
+/// at each tie-break and each trial of one, so the number of symmetries does
+/// not spend it. `tolerance` and the deck's `controls` are the verdict's,
+/// which a trial pairing's devices must meet. Nets sharing a `seeds` entry
+/// (indexed by node, layout nodes first) start in a class of their own, and
+/// with `models_aside` devices start one class per kind rather than per
+/// kind and model.
 pub(crate) fn refine_into(
-    layout: &Graph,
-    reference: &Graph,
-    max_rounds: u32,
+    (layout, reference): (&Graph, &Graph),
+    (max_rounds, tolerance): (u32, f64),
+    (names, controls, seeds, models_aside): (ParamNames, &LvsControls, &[u32], bool),
     out: &mut Partition,
 ) -> bool {
     let split = narrow(layout.device_count() + layout.net_count());
@@ -397,28 +820,27 @@ pub(crate) fn refine_into(
         layout,
         reference,
         split,
+        names,
+        controls,
+        seeds,
+        models_aside,
     };
     out.seed(sides);
 
-    let (mut rounds, mut pass, mut cursor) = (0u32, 0u32, 0u32);
+    let (mut pass, mut cursor) = (0u32, 0u32);
+    if !out.settle(sides, max_rounds, &mut pass) {
+        return false;
+    }
     loop {
-        if out.dirty.is_empty() {
-            while cursor < split && out.settled(cursor) {
-                cursor += 1;
-            }
-            let Some(node) = (cursor..split).find(|&node| out.stalled(node)) else {
-                out.publish(split);
-                return true;
-            };
-            out.tie_break(node, sides);
-            rounds = 0;
+        while cursor < split && out.settled(cursor) {
+            cursor += 1;
         }
-        pass += 1;
-        if out.pass(sides, pass) {
-            if rounds == max_rounds {
-                return false;
-            }
-            rounds += 1;
+        let Some(node) = (cursor..split).find(|&node| out.stalled(node)) else {
+            out.publish(split);
+            return true;
+        };
+        if !out.resolve(node, sides, (max_rounds, tolerance), &mut pass) {
+            return false;
         }
     }
 }

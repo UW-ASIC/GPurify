@@ -1,14 +1,19 @@
 //! The rule kinds, one function per kind, grouped by what they measure.
 //!
 //! Data in: one rule row's parameters, the store and a `Scratch`.
-//! Data out: violations appended to `out`, and the row's [`Verdict`].
-//! `Violation::at` is the midpoint of the thing measured (a vertex for off-grid
-//! and angle). A layer that fails to validate is `Refused`, never a clean `Ran`.
+//! Data out: violations appended to `out`, and the row's `Verdict`. Where each
+//! kind places [`Violation::at`](crate::report::Violation::at), and what it
+//! counts as examined, is documented on its [`Rule`](crate::drc::Rule)
+//! variant. Input a kind cannot represent exactly (a layer that fails to
+//! validate, a failed boolean, a non-axis-aligned edge) is `Refused`, never a
+//! clean `Ran`. The via and grid kinds read raw rows and never refuse.
 
 pub mod area;
 pub mod edge;
+pub mod facing;
 pub mod grid;
 pub mod overlay;
+pub mod pattern;
 pub mod patterning;
 pub mod presence;
 pub mod spacing;
@@ -18,10 +23,12 @@ pub mod width;
 use crate::report::Outcome;
 use crate::topology::net::{in_material, Holes};
 use fearless_simd::{dispatch, f64x4, Level, Simd, SimdBase};
+use gpurify_geom::boolean::union_into;
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
-use gpurify_geom::ops::{seg_seg_dist2, Point, Seg};
+use gpurify_geom::derive::{contains_scaled, interior_point8};
+use gpurify_geom::ops::{seg_seg_dist2, seg_seg_near2, seg_seg_twice2, Point, Seg};
 use gpurify_geom::rects::decompose_into;
-use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, ValidatedLayer};
+use gpurify_geom::{Bbox, GeometryStore, LayerId, PolyId, PolygonRef, ValidatedLayer};
 use gpurify_geom::{Dbu, DbuArea};
 
 /// How one rule row ended, and how many of its primitives it examined.
@@ -160,6 +167,99 @@ pub(crate) fn owners_of(figures: &ValidatedLayer, drawn: &LayerRects) -> Vec<Pol
         .collect()
 }
 
+/// The lowest drawn row inside each figure of `figures`, the merge of
+/// `drawn`, where either may hold edges at 45 degrees: each drawn polygon
+/// lies in exactly one figure, found by a point inside it. `PolyId(u32::MAX)`
+/// for a figure no drawn polygon lies in. The octilinear twin of
+/// [`owners_of`], which cuts into rectangles.
+pub(crate) fn owners_by_point(figures: &ValidatedLayer, drawn: &ValidatedLayer) -> Vec<PolyId> {
+    let mut owner = vec![PolyId(u32::MAX); figures.len()];
+    for (poly, home) in figures_holding(figures, drawn).into_iter().enumerate() {
+        if let Some(figure) = home {
+            let slot = &mut owner[figure as usize];
+            *slot = (*slot).min(
+                drawn
+                    .get(u32::try_from(poly).expect("a u32 index"))
+                    .provenance(),
+            );
+        }
+    }
+    owner
+}
+
+/// Per polygon of `drawn`: the figure of `figures` holding a point just
+/// inside it, near its lowest convex corner, or `None`. Where `figures` is
+/// the merge of a layer `drawn` lies in, that is the figure it lies in; for
+/// any other `drawn` it is the figure a covered polygon lies in.
+pub(crate) fn figures_holding(
+    figures: &ValidatedLayer,
+    drawn: &ValidatedLayer,
+) -> Vec<Option<u32>> {
+    if !(figures.is_octilinear() && drawn.is_octilinear()) {
+        // At any angle no point near a corner is safely inside at a small
+        // scale, and rounding moves boundaries: the figure sharing area.
+        return gpurify_geom::derive::holding_figures(figures, drawn);
+    }
+    let mut by_xlo: Vec<(Bbox, u32)> = figures.bboxes().iter().copied().zip(0..).collect();
+    by_xlo.sort_unstable_by_key(|&(b, _)| b.xlo);
+    let widest = by_xlo
+        .iter()
+        .map(|(b, _)| (b.xhi - b.xlo).raw())
+        .max()
+        .unwrap_or(0);
+    (0..u32::try_from(drawn.len()).expect("a layer indexes polygons with a u32"))
+        .map(|poly| {
+            let shape = drawn.get(poly);
+            let (x8, y8) = interior_point8(shape);
+            let b = shape.bbox();
+            // A figure holding the shape starts at or left of it and reaches past it.
+            let lo = by_xlo.partition_point(|&(f, _)| f.xlo.raw() < b.xhi.raw() - widest);
+            let hi = by_xlo.partition_point(|&(f, _)| f.xlo <= b.xlo);
+            by_xlo[lo..hi.max(lo)]
+                .iter()
+                .find(|&&(f, figure)| {
+                    f.contains(b) && contains_scaled(figures.get(figure), x8, y8, 8)
+                })
+                .map(|&(_, figure)| figure)
+        })
+        .collect()
+}
+
+/// A point of a figure's material for its marker: one step inside it from
+/// its lowest convex corner, floored to the grid; for a figure with an edge
+/// at an angle other than a multiple of 45 degrees, that corner itself (on
+/// its boundary, so within the figure, closed).
+pub(crate) fn figure_point(poly: PolygonRef<'_>) -> Point {
+    let (xs, ys) = poly.outer().coords();
+    let skew = ring_segs(xs, ys).any(|e| {
+        let (dx, dy) = ((e.b.x - e.a.x).raw(), (e.b.y - e.a.y).raw());
+        dx != 0 && dy != 0 && dx.abs() != dy.abs()
+    });
+    if skew {
+        let v = (0..xs.len())
+            .min_by_key(|&i| (ys[i], xs[i]))
+            .expect("a ring has vertices");
+        return Point { x: xs[v], y: ys[v] };
+    }
+    let (x8, y8) = interior_point8(poly);
+    Point {
+        x: Dbu::new_unchecked(x8.div_euclid(8)),
+        y: Dbu::new_unchecked(y8.div_euclid(8)),
+    }
+}
+
+/// A layer validated and merged; `None` when it does not validate.
+pub(crate) fn merged(
+    store: &GeometryStore,
+    layer: LayerId,
+    s: &mut crate::drc::Scratch,
+) -> Option<ValidatedLayer> {
+    let drawn = s.validated.get(store, layer)?;
+    let mut figures = ValidatedLayer::default();
+    union_into(drawn, &ValidatedLayer::default(), &mut figures).ok()?;
+    Some(figures)
+}
+
 /// One closed ring's edges, in vertex order, closing edge last.
 pub(crate) fn ring_segs<'a>(xs: &'a [Dbu], ys: &'a [Dbu]) -> impl Iterator<Item = Seg> + 'a {
     let n = xs.len();
@@ -192,7 +292,7 @@ pub(crate) const fn seg_bbox(s: Seg) -> Bbox {
 
 /// Squared distance between two boxes, zero where they touch or overlap; a
 /// lower bound on the distance between anything they contain.
-const fn bbox_gap2(a: Bbox, b: Bbox) -> DbuArea {
+pub(crate) const fn bbox_gap2(a: Bbox, b: Bbox) -> DbuArea {
     let dx = axis_gap(a.xlo, a.xhi, b.xlo, b.xhi);
     let dy = axis_gap(a.ylo, a.yhi, b.ylo, b.yhi);
     DbuArea::new(dx * dx + dy * dy)
@@ -217,8 +317,9 @@ const fn axis_gap(alo: Dbu, ahi: Dbu, blo: Dbu, bhi: Dbu) -> i128 {
     }
 }
 
-/// Exact squared distance between two store polygons' *boundaries*; zero exactly
-/// when they touch or cross. Quadratic in the two ring sizes.
+/// Squared distance between two store polygons' *boundaries*, as [`seg_dist2`]
+/// reads each pair of edges; zero exactly when they touch or cross. Quadratic
+/// in the two ring sizes.
 pub(crate) fn poly_dist2(store: &GeometryStore, a: PolyId, b: PolyId) -> DbuArea {
     let (axs, ays) = store.poly_verts(a);
     let (bxs, bys) = store.poly_verts(b);
@@ -232,11 +333,38 @@ pub(crate) fn poly_dist2(store: &GeometryStore, a: PolyId, b: PolyId) -> DbuArea
         }
         for sb in ring_segs(bxs, bys) {
             if bbox_gap2(box_a, seg_bbox(sb)) < best {
-                best = best.min(seg_seg_dist2(sa, sb));
+                best = best.min(seg_dist2(sa, sb));
             }
         }
     }
     best
+}
+
+/// Squared distance between two segments as the spacing family compares it.
+/// Exact for axis-parallel segments. Between segments at 45 degrees it can be
+/// a half unit (`7/√2` is `√24.5`); it is then floored, which compares
+/// against any whole squared limit exactly as the true value does (`24.5 <
+/// 25` and `24 < 25`), and a gap of `1/√2` reads 1, so only touching reads
+/// 0. At any other angle, a fraction, floored the same way
+/// ([`seg_seg_twice2`]), with the same exact comparison.
+pub(crate) fn seg_dist2(p: Seg, q: Seg) -> DbuArea {
+    let delta = |s: Seg| (s.b.x.raw() - s.a.x.raw(), s.b.y.raw() - s.a.y.raw());
+    let axis = |(dx, dy): (i64, i64)| dx == 0 || dy == 0;
+    let octilinear = |(dx, dy): (i64, i64)| dx == 0 || dy == 0 || dx.abs() == dy.abs();
+    let (dp, dq) = (delta(p), delta(q));
+    if axis(dp) && axis(dq) {
+        return seg_seg_dist2(p, q);
+    }
+    let (twice, inexact) = if octilinear(dp) && octilinear(dq) {
+        (seg_seg_near2(p, q).0, false)
+    } else {
+        seg_seg_twice2(p, q)
+    };
+    DbuArea::new(if twice == 0 && !inexact {
+        0
+    } else {
+        (twice / 2).max(1)
+    })
 }
 
 /// Squared boundary distance for every pair, into `dists`: exact wherever it is
@@ -476,6 +604,10 @@ mod tests {
 
     /// Differential: the capped path equals the exact i128 one below the cap,
     /// never reads under it above, and non-rectilinear pairs fall back.
+    ///
+    /// Oracle: differential against the exact i128 path (`GAP_CAP` itself as
+    /// the cap): equal below the cap, never under it above, over random
+    /// staircases and free rings.
     #[test]
     fn capped_distances_agree_with_poly_dist2() {
         let mut r = Rng(0x2545_f491_4f6c_dd1d);
@@ -512,8 +644,43 @@ mod tests {
         }
     }
 
+    fn seg(ax: i64, ay: i64, bx: i64, by: i64) -> Seg {
+        let p = |x, y| Point {
+            x: Dbu::new_unchecked(x),
+            y: Dbu::new_unchecked(y),
+        };
+        Seg {
+            a: p(ax, ay),
+            b: p(bx, by),
+        }
+    }
+
+    /// Oracle: `seg_dist2`'s contract, hand values. Two 45-degree lines `y =
+    /// x` and `y = x + 7` are `7/√2` apart, squared 24.5, floored to 24 (a
+    /// rounding up would read 25); `y = x + 1` is squared 0.5, read 1;
+    /// touching reads 0; axis-aligned segments 3 along and 4 across read 16.
+    /// Segments of slope 1/2 on `y = x/2` and `y = x/2 + 3` are `3/√1.25`
+    /// apart (the foot from `(0, 3)` is `(1.2, 0.6)`, inside the other),
+    /// squared `9 - 9/5 = 7.2`: any other angle is floored the same way, to 7
+    /// (a rounding up would read 8).
+    #[test]
+    fn seg_dist2_floors_45_degree_half_units_and_other_angles_alike() {
+        let diagonal = seg(0, 0, 10, 10);
+        let at = |p, q| seg_dist2(p, q).raw();
+        assert_eq!(at(diagonal, seg(0, 7, 10, 17)), 24);
+        assert_eq!(at(diagonal, seg(0, 1, 10, 11)), 1);
+        assert_eq!(at(diagonal, seg(10, 10, 20, 0)), 0);
+        assert_eq!(at(seg(0, 0, 10, 0), seg(13, 4, 23, 4)), 16 + 9);
+        assert_eq!(at(seg(0, 0, 10, 0), seg(3, 4, 13, 4)), 16);
+        let (p, q) = (seg(0, 0, 20, 10), seg(0, 3, 20, 13));
+        assert_eq!(at(p, q), 7);
+    }
+
     /// Differential: the SIMD kernel equals its scalar oracle for every edge
     /// count `0 ..= 3 * 4 + 1` on either side.
+    ///
+    /// Oracle: differential against `capped_dist2_scalar`, at every edge count
+    /// 0 to 13 on either side.
     #[test]
     fn capped_dist2_simd_matches_scalar() {
         let mut r = Rng(0x9e37_79b9_7f4a_7c15);
@@ -531,47 +698,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    /// `cargo test --release -p gpurify-check -- --ignored --nocapture bench_pair`
-    #[test]
-    #[ignore = "timing"]
-    fn bench_pair_distances() {
-        use std::hint::black_box;
-        use std::time::Instant;
-        let mut r = Rng(7);
-        let mut b = GeometryStoreBuilder::default();
-        for k in [2usize, 2, 2, 2, 3, 6, 12] {
-            for _ in 0..300 {
-                let c = (r.below(20_000), r.below(20_000));
-                let (xs, ys) = staircase(&mut r, k, c, 300);
-                b.push(LayerId(0), &xs, &ys);
-            }
-        }
-        let (store, _) = b.finish(1);
-        // Real candidate pairs: boxes within the limit, as the spacing rules see them.
-        let mut index = gpurify_geom::index::SpatialIndex::default();
-        gpurify_geom::index::SpatialIndex::build_into(&store, LayerId(0), &mut index);
-        let mut pairs = Vec::new();
-        let limit = Dbu::new_unchecked(100);
-        gpurify_geom::index::candidate_pairs_into(&store, &index, limit, &mut pairs);
-        let (mut exact, mut capped) = (Vec::new(), Vec::new());
-        let big = Dbu::new_unchecked(GAP_CAP);
-        let t = Instant::now();
-        pair_distances_into(&store, black_box(&pairs), big, &mut exact);
-        let slow = t.elapsed();
-        let t = Instant::now();
-        pair_distances_into(
-            &store,
-            black_box(&pairs),
-            Dbu::new_unchecked(100),
-            &mut capped,
-        );
-        let fast = t.elapsed();
-        assert_eq!(exact, capped);
-        eprintln!(
-            "{} pairs: exact i128 {slow:?}  capped simd {fast:?}",
-            pairs.len()
-        );
     }
 }

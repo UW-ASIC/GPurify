@@ -1,14 +1,16 @@
 //! Net extraction: which shapes are electrically the same conductor.
 //!
-//! Two shapes join if they are on the same conductor layer and touch, or if a
-//! via cut on the right layer overlaps both.
+//! Two shapes join if they are on the same conductor layer and touch (with
+//! `connect touch_within_layer`), or if a via cut on the right layer overlaps
+//! both. Every shape on a global layer is one net. Text labels join nothing:
+//! two shapes with the same label and no drawn connection are two nets.
 //! Data in: `GeometryStore` + `Connectivity`. Data out: `NetTable`.
 
 use crate::topology::csr_run;
 use gpurify_geom::connectivity::{components_into, ComponentLabel};
 use gpurify_geom::index::{candidate_pairs_into, cross_layer_pairs_into, SpatialIndex};
 use gpurify_geom::ops::{segments_intersect, winding_of, Point, Seg, Winding};
-use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
+use gpurify_geom::view::{validate_layer_with, Angles, ValidatedLayer};
 use gpurify_geom::Dbu;
 use gpurify_geom::{GeometryStore, LayerId, PolyId};
 use gpurify_ingest::deck::Connectivity;
@@ -32,6 +34,13 @@ impl NetId {
 }
 
 /// Which net each polygon belongs to, in both directions.
+///
+/// Filled by [`extract_nets_into`]. Nets are `NetId(0) .. NetId(net_count)`,
+/// numbered as [`NetId`] says; each net's polygons ascend. Only polygons on a
+/// conductor or global layer have a net: a cut, a marker or a label shape is
+/// on [`NetId::NONE`]. A polygon's hole, which the store keeps as a row of
+/// its own, is on the polygon's net (on a layer that fails validation it is
+/// left as drawn). The [`Default`] table has no nets and knows no polygon.
 #[derive(Debug, Default)]
 pub struct NetTable {
     /// Net of each polygon, indexed by [`PolyId`].
@@ -39,7 +48,10 @@ pub struct NetTable {
     /// `polys[net_start[n]..net_start[n + 1]]` is net `n`, ascending.
     net_start: Vec<u32>,
     polys: Vec<PolyId>,
-    /// Scratch, kept so a second extraction reuses the allocations.
+    /// Every join the last extraction made, `(a, b)` polygon rows: touching
+    /// shapes on one conductor, the two shapes a cut lands on, a global
+    /// layer's shapes, a polygon and its holes. Kept, so a second extraction
+    /// reuses the allocation and [`NetTable::path`] can walk them.
     edges: Vec<(u32, u32)>,
     labels: Vec<ComponentLabel>,
     scratch: EdgeScratch,
@@ -78,7 +90,9 @@ impl Holes {
                 let (xs, ys) = store.poly_verts(PolyId(row));
                 winding_of(xs, ys) == Some(Winding::Clockwise)
             });
-            if !clockwise || validate_layer_into(store, layer, &mut self.layer).is_err() {
+            if !clockwise
+                || validate_layer_with(store, layer, Angles::Octilinear, &mut self.layer).is_err()
+            {
                 continue;
             }
             for polygon in 0..u32::try_from(self.layer.len()).expect("a layer's polygons fit a u32")
@@ -140,6 +154,82 @@ impl NetTable {
         let (a, b) = (self.net_of(a), self.net_of(b));
         a != NetId::NONE && a == b
     }
+
+    /// The fewest polygons that join `from` to `to` through the joins the
+    /// extraction made (shapes touching on one conductor, the two shapes a
+    /// cut lands on, a global layer's shapes, a polygon and its holes; a cut
+    /// itself is no step), `from` first and `to` last, `[from]` when they
+    /// are one polygon. Of several such paths, the one a breadth-first walk
+    /// from `from` taking each polygon's neighbours lowest first reaches
+    /// `to` along, so the answer is the same on every run. `None` when the
+    /// two are on different nets or
+    /// on none, or the table holds no joins (a [`Default`] one). This is
+    /// where a short between two labelled nets runs (catalog LVS-005).
+    ///
+    /// Breadth first over the net's joins: O(joins) time and O(polygons)
+    /// memory per call. A polygon the table never saw has no path.
+    pub fn path(&self, from: PolyId, to: PolyId) -> Option<Vec<PolyId>> {
+        let (&net, &other) = (self.poly_net.get(from.idx())?, self.poly_net.get(to.idx())?);
+        if net == NetId::NONE || net != other {
+            return None;
+        }
+        if from == to {
+            return Some(vec![from]);
+        }
+        let rows = self.poly_net.len();
+        // The net's joins as CSR, each list ascending, so the walk is
+        // deterministic.
+        let on_net = |&&(a, b): &&(u32, u32)| {
+            self.poly_net.get(a as usize) == Some(&net)
+                && self.poly_net.get(b as usize) == Some(&net)
+        };
+        // Degrees, then their exclusive prefix sums: `start[row]` is where
+        // row's neighbours begin, `start[rows]` how many there are.
+        let mut start = vec![0u32; rows + 1];
+        for &(a, b) in self.edges.iter().filter(on_net) {
+            start[a as usize] += 1;
+            start[b as usize] += 1;
+        }
+        let mut sum = 0u32;
+        for slot in &mut start {
+            let degree = *slot;
+            *slot = sum;
+            sum += degree;
+        }
+        let mut next_free = start.clone();
+        let mut neighbour = vec![0u32; sum as usize];
+        for &(a, b) in self.edges.iter().filter(on_net) {
+            for (at, to) in [(a, b), (b, a)] {
+                neighbour[next_free[at as usize] as usize] = to;
+                next_free[at as usize] += 1;
+            }
+        }
+        for run in start.windows(2) {
+            neighbour[run[0] as usize..run[1] as usize].sort_unstable();
+        }
+        let mut parent = vec![u32::MAX; rows];
+        parent[from.idx()] = from.0;
+        let mut queue = std::collections::VecDeque::from([from.0]);
+        while let Some(at) = queue.pop_front() {
+            if at == to.0 {
+                let mut path = vec![to];
+                let mut step = at;
+                while step != from.0 {
+                    step = parent[step as usize];
+                    path.push(PolyId(step));
+                }
+                path.reverse();
+                return Some(path);
+            }
+            for &next in &neighbour[start[at as usize] as usize..start[at as usize + 1] as usize] {
+                if parent[next as usize] == u32::MAX {
+                    parent[next as usize] = at;
+                    queue.push_back(next);
+                }
+            }
+        }
+        None
+    }
 }
 
 /// Rebuild the reverse CSR index from a per-polygon net assignment.
@@ -176,8 +266,23 @@ fn rebuild_index(poly_net: &[NetId], net_start: &mut Vec<u32>, polys: &mut Vec<P
 
 /// Extract nets from geometry; caller owns `out`, cleared and refilled.
 ///
-/// Only polygons on a [`Connectivity::conductors`] layer get a net. A cut joins
-/// the two conductors it overlaps but does not belong to that net.
+/// Only polygons on a [`Connectivity::conductors`] or
+/// [`Connectivity::global`] layer get a net. Polygons join when:
+///
+/// - they are on one conductor layer and share at least one point, touching
+///   included, and [`Connectivity::intra_layer_touch`] is set;
+/// - a cut on a [`Connectivity::via_cut`] layer shares at least one point with
+///   both, one on each of the two layers that cut connects. The cut itself
+///   belongs to no net;
+/// - they are on one global layer, however far apart.
+///
+/// Bounding boxes only prune candidates; every join is an exact geometric
+/// test. Labels are not read here: see [`bind_ports_into`](crate::topology::bind_ports_into).
+///
+/// # Panics
+///
+/// Panics if a layer `connectivity` names is not in the store's layer table,
+/// or if the store holds `u32::MAX` or more polygons.
 pub fn extract_nets_into(store: &GeometryStore, connectivity: &Connectivity, out: &mut NetTable) {
     let rows = store.poly_count();
     let node_count = u32::try_from(rows).expect("a polygon index fits a PolyId");
@@ -244,6 +349,28 @@ pub fn extract_nets_into(store: &GeometryStore, connectivity: &Connectivity, out
     }
 
     rebuild_index(&out.poly_net, &mut out.net_start, &mut out.polys);
+    // Inside the assertion, so cargo-mutants does not count the check as code:
+    // every polygon with a net is listed once, under that net.
+    debug_assert!(
+        {
+            let mut listed = 0usize;
+            let mut least = None;
+            let nets_hold = (0..out.net_count()).all(|n| {
+                let net = NetId(u32::try_from(n).expect("a net id is a u32"));
+                let polys = out.polys_of(net);
+                listed += polys.len();
+                let first = polys.first().copied();
+                let holds = first > least
+                    && polys.windows(2).all(|w| w[0] < w[1])
+                    && polys.iter().all(|&p| out.net_of(p) == net);
+                least = first;
+                holds
+            });
+            nets_hold && listed == out.poly_net.iter().filter(|&&n| n != NetId::NONE).count()
+        },
+        "the nets partition the conductor shapes: each shape on exactly one net, \
+         each net's shapes ascending, nets numbered by their least shape"
+    );
     out.global_only.clear();
     out.global_only.resize(next as usize, true);
     for (row, &net) in (0u32..).zip(&out.poly_net) {
@@ -256,7 +383,7 @@ pub fn extract_nets_into(store: &GeometryStore, connectivity: &Connectivity, out
 /// Whether two of the store's polygons share at least one point, holes
 /// excluded. The exact re-test behind every bounding-box prune: merging on a
 /// box alone is fail-open. A hole row is never a polygon of its own here.
-fn polys_intersect(store: &GeometryStore, holes: &Holes, a: PolyId, b: PolyId) -> bool {
+pub(crate) fn polys_intersect(store: &GeometryStore, holes: &Holes, a: PolyId, b: PolyId) -> bool {
     if holes.is_hole(a) || holes.is_hole(b) {
         return false;
     }
@@ -569,6 +696,9 @@ mod tests {
     use gpurify_geom::Dbu;
     use gpurify_geom::PolyId;
 
+    /// Oracle: construct-from-answer. Polygons 1 and 4 are on net 0 and 0 and
+    /// 2 on net 1, so the index is two nets of two, each ascending; markers
+    /// alone give no net.
     #[test]
     fn a_stated_assignment_builds_the_reverse_index_it_implies() {
         let none = NetId::NONE;
@@ -617,6 +747,10 @@ mod tests {
 
     /// The sweep and the exhaustive scan compute one predicate, so they must
     /// agree on every input.
+    ///
+    /// Oracle: differential against `rings_meet_direct`, the exhaustive scan,
+    /// on star pairs either side of the pair budget, meeting and apart; and the
+    /// law that meeting is symmetric.
     #[test]
     fn the_sweep_and_the_exhaustive_scan_agree_on_every_ring_pair() {
         // The sizes below are chosen against the budget.
