@@ -429,9 +429,65 @@ impl<'a> Parser<'a> {
 
     /// Skip to the end of the current statement.
     fn recover(&mut self) {
-        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+        while !self.line_end() {
             self.bump();
         }
+    }
+
+    /// Whether the statement ends here.
+    fn line_end(&self) -> bool {
+        matches!(self.peek().tok, Tok::Newline | Tok::Eof)
+    }
+
+    /// `key value` pairs to the end of the line, each of `keys` at most
+    /// once. `read` reads the value of `keys[at]`, stores it, and returns
+    /// whether the key was not given before. `what` names a key in a syntax
+    /// error, `expected` lists them after an unknown one.
+    fn keyed(
+        &mut self,
+        statement: &str,
+        keys: &[&str],
+        what: &str,
+        expected: &str,
+        mut read: impl FnMut(&mut Self, usize, &str) -> R<bool>,
+    ) -> R<()> {
+        while !self.line_end() {
+            let (key, span) = self.ident(what)?;
+            let Some(at) = keys.iter().position(|&k| k == key) else {
+                return Err(self.err(
+                    span,
+                    &format!("unknown {statement} key `{key}`; expected {expected}"),
+                ));
+            };
+            if !read(self, at, &key)? {
+                return Err(self.err(span, &format!("`{key}` is given twice")));
+            }
+        }
+        Ok(())
+    }
+
+    /// `>= value` and `<= value` to the end of the line, each at most once,
+    /// `read` converting the value: a lower and an upper bound.
+    fn min_max<T>(
+        &mut self,
+        mut read: impl FnMut(&mut Self, &Val) -> R<T>,
+    ) -> R<(Option<T>, Option<T>)> {
+        let (mut min, mut max) = (None, None);
+        while !self.line_end() {
+            let t = self.peek();
+            let slot = if self.eat(">=") {
+                &mut min
+            } else if self.eat("<=") {
+                &mut max
+            } else {
+                return Err(self.err_tok(t, &format!("expected >= or <=, found {}", self.found(t))));
+            };
+            let value = self.value()?;
+            if slot.replace(read(self, &value)?).is_some() {
+                return Err(self.err_tok(t, "this bound is already given"));
+            }
+        }
+        Ok((min, max))
     }
 
     // ---- statements ----
@@ -514,19 +570,23 @@ impl<'a> Parser<'a> {
 
     /// Bind a name once; a name taken by a binding or a layer is an error.
     fn bind(&mut self, name: String, span: (u32, u32), value: Val) -> R<()> {
-        if self.env.iter().any(|(bound, _)| *bound == name) || self.layers.contains(&name) {
+        self.unbound(&name, span)?;
+        self.env.push((name, value));
+        Ok(())
+    }
+
+    /// Refuses a name a binding or a layer already takes.
+    fn unbound(&mut self, name: &str, span: (u32, u32)) -> R<()> {
+        if self.env.iter().any(|(bound, _)| bound == name) || self.layers.contains(name) {
             return Err(self.err(span, &format!("`{name}` is already bound")));
         }
-        self.env.push((name, value));
         Ok(())
     }
 
     fn layer(&mut self) -> R<()> {
         let (name, span) = self.ident("a layer name")?;
         self.expect("=")?;
-        if self.env.iter().any(|(bound, _)| *bound == name) || self.layers.contains(&name) {
-            return Err(self.err(span, &format!("`{name}` is already bound")));
-        }
+        self.unbound(&name, span)?;
         if self.is("gds") && self.peek_at(1).tok == Tok::Punct && self.text(self.peek_at(1)) == "("
         {
             self.bump();
@@ -836,9 +896,7 @@ impl<'a> Parser<'a> {
                 (DerivedOp::Oriented(op == "vertical"), Some(true), None)
             }
             "texts_outside" => {
-                let drawn = matches!(&receiver, LExpr::Layer(name)
-                    if self.out.layers.iter().any(|(drawn, _)| drawn == name));
-                if !drawn {
+                if !matches!(&receiver, LExpr::Layer(name) if self.is_drawn(name)) {
                     return Err(self.err(
                         span,
                         "`.texts_outside` reads the texts drawn on a `gds(..)` layer; apply it to one",
@@ -857,7 +915,7 @@ impl<'a> Parser<'a> {
                 self.expect("(")?;
                 let at = self.peek();
                 let texts = self.layer_word()?;
-                if !self.out.layers.iter().any(|(name, _)| *name == texts) {
+                if !self.is_drawn(&texts) {
                     return Err(self.err_tok(
                         at,
                         &format!("`{texts}` is derived; text is drawn on a GDS layer"),
@@ -865,19 +923,12 @@ impl<'a> Parser<'a> {
                 }
                 self.expect(",")?;
                 let t = self.peek();
-                if t.tok != Tok::Str {
-                    return Err(self.err_tok(
-                        t,
-                        &format!("expected a text pattern in quotes, found {}", self.found(t)),
-                    ));
-                }
-                self.bump();
-                let pattern = self.string(t)?;
+                let pattern = self.quoted("a text pattern in quotes")?;
                 if pattern.is_empty() {
                     return Err(self.err_tok(t, "an empty pattern matches no text"));
                 }
                 self.expect(")")?;
-                let text = u32::try_from(self.out.texts.len()).expect("a deck has few patterns");
+                let text = crate::narrow(self.out.texts.len());
                 self.out.texts.push(pattern);
                 let keep = op == "with_text";
                 (
@@ -887,29 +938,17 @@ impl<'a> Parser<'a> {
                 )
             }
             "in_cells" | "not_in_cells" => {
-                let drawn = matches!(&receiver, LExpr::Layer(name)
-                    if self.out.layers.iter().any(|(drawn, _)| drawn == name));
-                if !drawn {
+                if !matches!(&receiver, LExpr::Layer(name) if self.is_drawn(name)) {
                     return Err(self.err(
                         span,
                         &format!("`.{op}` selects a drawn layer's shapes by the cell they are drawn in; apply it to a `gds(..)` layer"),
                     ));
                 }
                 self.expect("(")?;
-                let first = u32::try_from(self.out.texts.len()).expect("a deck has few patterns");
+                let first = crate::narrow(self.out.texts.len());
                 loop {
                     let t = self.peek();
-                    if t.tok != Tok::Str {
-                        return Err(self.err_tok(
-                            t,
-                            &format!(
-                                "expected a cell-name pattern in quotes, found {}",
-                                self.found(t)
-                            ),
-                        ));
-                    }
-                    self.bump();
-                    let pattern = self.string(t)?;
+                    let pattern = self.quoted("a cell-name pattern in quotes")?;
                     if pattern.is_empty() {
                         return Err(self.err_tok(t, "an empty pattern matches no cell"));
                     }
@@ -927,8 +966,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.expect(")")?;
-                let count =
-                    u32::try_from(self.out.texts.len()).expect("a deck has few patterns") - first;
+                let count = crate::narrow(self.out.texts.len()) - first;
                 // Each selection is one bit of a placement's tag (`layout.rs`).
                 if self.cell_selections >= MAX_CELL_SELECTIONS {
                     return Err(self.err(
@@ -1042,7 +1080,7 @@ impl<'a> Parser<'a> {
         let header = self.for_header();
         if header.is_err() {
             // Skip the body: its names are unbound and would only add noise.
-            while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) && !self.is("{") {
+            while !self.line_end() && !self.is("{") {
                 self.bump();
             }
             if self.is("{") {
@@ -1229,7 +1267,7 @@ impl<'a> Parser<'a> {
         self.expect("terminals")?;
         let terminals = self.layer_list()?;
         let mut value = DeviceValue::default();
-        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+        while !self.line_end() {
             let (key, span) = self.ident("a device value")?;
             // A transistor is an n- or a p-channel switch, never both.
             let other = match key.as_str() {
@@ -1331,14 +1369,11 @@ impl<'a> Parser<'a> {
                 self.out.lvs.permute.push((model, a, b));
                 Ok(())
             }
-            "ignore" => {
-                let model = self.model()?;
-                if self.out.lvs.ignore.contains(&model) {
-                    return Err(self.err(span, &format!("\"{model}\" is already ignored")));
-                }
-                self.out.lvs.ignore.push(model);
-                Ok(())
-            }
+            "ignore" => self.model_once(
+                span,
+                |p| &mut p.out.lvs.ignore,
+                |model| format!("\"{model}\" is already ignored"),
+            ),
             "range" => self.lvs_range(),
             "connect_implicit" => {
                 let pattern = self.quoted("a label pattern in quotes")?;
@@ -1425,17 +1460,11 @@ impl<'a> Parser<'a> {
                 }
                 Ok(())
             }
-            "ignore_shorted" => {
-                let model = self.model()?;
-                if self.out.lvs.ignore_shorted.contains(&model) {
-                    return Err(self.err(
-                        span,
-                        &format!("shorted \"{model}\" devices are already ignored"),
-                    ));
-                }
-                self.out.lvs.ignore_shorted.push(model);
-                Ok(())
-            }
+            "ignore_shorted" => self.model_once(
+                span,
+                |p| &mut p.out.lvs.ignore_shorted,
+                |model| format!("shorted \"{model}\" devices are already ignored"),
+            ),
             "max_res" | "min_caps" => {
                 let value = self.value()?;
                 let (dim, slot) = if control == "max_res" {
@@ -1478,14 +1507,11 @@ impl<'a> Parser<'a> {
                 self.out.lvs.same_nets.push((layout, reference));
                 Ok(())
             }
-            "asymmetric" => {
-                let model = self.model()?;
-                if self.out.lvs.asymmetric.contains(&model) {
-                    return Err(self.err(span, &format!("\"{model}\" is already asymmetric")));
-                }
-                self.out.lvs.asymmetric.push(model);
-                Ok(())
-            }
+            "asymmetric" => self.model_once(
+                span,
+                |p| &mut p.out.lvs.asymmetric,
+                |model| format!("\"{model}\" is already asymmetric"),
+            ),
             _ => Err(self.err(
                 span,
                 &format!(
@@ -1500,6 +1526,22 @@ impl<'a> Parser<'a> {
     /// A device model name in quotes.
     fn model(&mut self) -> R<String> {
         self.quoted("a model name in quotes")
+    }
+
+    /// A model in quotes, added to the `list` of an lvs control that names
+    /// each model once; `twice` words the error at `span` for a repeat.
+    fn model_once(
+        &mut self,
+        span: (u32, u32),
+        list: fn(&mut Self) -> &mut Vec<String>,
+        twice: fn(&str) -> String,
+    ) -> R<()> {
+        let model = self.model()?;
+        if list(self).contains(&model) {
+            return Err(self.err(span, &twice(&model)));
+        }
+        list(self).push(model);
+        Ok(())
     }
 
     /// A string in quotes, `what` naming it in an error.
@@ -1545,26 +1587,13 @@ impl<'a> Parser<'a> {
                 &format!("`{param}` of \"{model}\" already has a range"),
             ));
         }
-        let (mut min, mut max) = (None, None);
-        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
-            let t = self.peek();
-            let slot = if self.eat(">=") {
-                &mut min
-            } else if self.eat("<=") {
-                &mut max
-            } else {
-                return Err(self.err_tok(t, &format!("expected >= or <=, found {}", self.found(t))));
-            };
-            let value = self.value()?;
-            let limit = match dim {
-                Dim::Length => LvsLimit::Length(self.length(&value, &param)?),
-                Dim::Area => LvsLimit::Area(self.area(&value, &param)?),
-                _ => LvsLimit::Count(self.count(&value, &param)?),
-            };
-            if slot.replace(limit).is_some() {
-                return Err(self.err_tok(t, "this bound is already given"));
-            }
-        }
+        let (min, max) = self.min_max(|p, value| {
+            Ok(match dim {
+                Dim::Length => LvsLimit::Length(p.length(value, &param)?),
+                Dim::Area => LvsLimit::Area(p.area(value, &param)?),
+                _ => LvsLimit::Count(p.count(value, &param)?),
+            })
+        })?;
         match (min, max) {
             (None, None) => {
                 let t = self.peek();
@@ -1590,31 +1619,28 @@ impl<'a> Parser<'a> {
             return Err(self.err_tok(span, &format!("\"{model}\" already has an lde row")));
         }
         let (mut od, mut max, mut well, mut scref) = (None, None, None, None);
-        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
-            let (key, at) = self.ident("od, max, well or scref")?;
-            let taken = match key.as_str() {
-                "od" => od.replace(self.layer_word()?).is_some(),
-                "well" => well.replace(self.layer_word()?).is_some(),
-                "max" | "scref" => {
-                    let value = self.value()?;
-                    let length = self.length(&value, &key)?;
-                    if length.raw() <= 0 {
-                        return Err(self.err(value.span(), &format!("`{key}` must be positive")));
+        let keys = "od, max, well or scref";
+        self.keyed(
+            "lde",
+            &["od", "max", "well", "scref"],
+            keys,
+            keys,
+            |p, at, key| {
+                Ok(match at {
+                    0 => od.replace(p.layer_word()?).is_none(),
+                    2 => well.replace(p.layer_word()?).is_none(),
+                    _ => {
+                        let value = p.value()?;
+                        let length = p.length(&value, key)?;
+                        if length.raw() <= 0 {
+                            return Err(p.err(value.span(), &format!("`{key}` must be positive")));
+                        }
+                        let slot = if at == 1 { &mut max } else { &mut scref };
+                        slot.replace(length).is_none()
                     }
-                    let slot = if key == "max" { &mut max } else { &mut scref };
-                    slot.replace(length).is_some()
-                }
-                _ => {
-                    return Err(self.err(
-                        at,
-                        &format!("unknown lde key `{key}`; expected od, max, well or scref"),
-                    ))
-                }
-            };
-            if taken {
-                return Err(self.err(at, &format!("`{key}` is given twice")));
-            }
-        }
+                })
+            },
+        )?;
         let (Some(od), Some(max)) = (od, max) else {
             let t = self.peek();
             return Err(self.err_tok(t, "an lde row needs od and max"));
@@ -1639,22 +1665,7 @@ impl<'a> Parser<'a> {
         if self.out.lvs.count.iter().any(|row| row.0 == model) {
             return Err(self.err_tok(span, &format!("\"{model}\" already has a count")));
         }
-        let (mut min, mut max) = (None, None);
-        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
-            let t = self.peek();
-            let slot = if self.eat(">=") {
-                &mut min
-            } else if self.eat("<=") {
-                &mut max
-            } else {
-                return Err(self.err_tok(t, &format!("expected >= or <=, found {}", self.found(t))));
-            };
-            let value = self.value()?;
-            let bound = self.count(&value, "count")?;
-            if slot.replace(bound).is_some() {
-                return Err(self.err_tok(t, "this bound is already given"));
-            }
-        }
+        let (min, max) = self.min_max(|p, value| p.count(value, "count"))?;
         match (min, max) {
             (None, None) => {
                 let t = self.peek();
@@ -1706,7 +1717,7 @@ impl<'a> Parser<'a> {
             ));
         }
         let (mut relative, mut absolute) = (None, None);
-        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+        while !self.line_end() {
             let (key, span) = self.ident("relative or absolute")?;
             let value = self.value()?;
             let (slot, number) = match key.as_str() {
@@ -1866,24 +1877,17 @@ impl<'a> Parser<'a> {
     /// can have; `None` for a key not given.
     fn pex_values(&mut self, layer: &str) -> R<[Option<f64>; PEX.len()]> {
         let mut row = [None::<f64>; PEX.len()];
-        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
-            let (key, span) = self.ident("a pex key")?;
-            let Some(at) = PEX.iter().position(|&(name, _)| name == key) else {
-                return Err(self.err(
-                    span,
-                    &format!("unknown pex key `{key}`; expected {}", pex_keys()),
-                ));
-            };
-            let value = self.value()?;
-            let dim = PEX[at].1;
-            let number = self.quantity(&value, dim, &key)?.f64();
+        let keys = PEX.map(|(name, _)| name);
+        self.keyed("pex", &keys, "a pex key", &pex_keys(), |p, at, key| {
+            let value = p.value()?;
+            let number = p.quantity(&value, PEX[at].1, key)?.f64();
             // A conductor has a thickness, and a dielectric that is stated
             // has a permittivity: both are positive. A temperature
             // coefficient takes either sign. Nothing else here can be below
             // zero, and a zero reads as "not stated" (`ProcessStack`); an
             // unstated dielectric is left out of the row instead. Past f64's
             // range a decimal reads as infinite, which no process has.
-            let (physical, bound) = match key.as_str() {
+            let (physical, bound) = match key {
                 "thickness" | "dielectric" => {
                     (number > 0.0 && number.is_finite(), "positive and finite")
                 }
@@ -1894,15 +1898,13 @@ impl<'a> Parser<'a> {
                 ),
             };
             if !physical {
-                return Err(self.err(
+                return Err(p.err(
                     value.span(),
                     &format!("pex `{layer}`: {key} must be {bound}"),
                 ));
             }
-            if row[at].replace(number).is_some() {
-                return Err(self.err(span, &format!("`{key}` is given twice")));
-            }
-        }
+            Ok(row[at].replace(number).is_none())
+        })?;
         Ok(row)
     }
 
@@ -1946,24 +1948,21 @@ impl<'a> Parser<'a> {
     fn pex_device(&mut self) -> R<()> {
         let model = self.model()?;
         let mut values = [None::<f64>; 2];
-        let keys = ["gate_contact_cap", "gate_diffusion_cap"];
-        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
-            let (key, span) = self.ident("gate_contact_cap or gate_diffusion_cap")?;
-            let Some(at) = keys.iter().position(|&k| k == key) else {
-                return Err(self.err(
-                    span,
-                    &format!("unknown pex_device key `{key}`; expected gate_contact_cap or gate_diffusion_cap"),
-                ));
-            };
-            let value = self.value()?;
-            let af = self.quantity(&value, Dim::CapPerLength, &key)?.f64();
-            if !(af >= 0.0 && af.is_finite()) {
-                return Err(self.err(value.span(), &format!("{key} must be zero or more")));
-            }
-            if values[at].replace(af).is_some() {
-                return Err(self.err(span, &format!("`{key}` is given twice")));
-            }
-        }
+        let keys = "gate_contact_cap or gate_diffusion_cap";
+        self.keyed(
+            "pex_device",
+            &["gate_contact_cap", "gate_diffusion_cap"],
+            keys,
+            keys,
+            |p, at, key| {
+                let value = p.value()?;
+                let af = p.quantity(&value, Dim::CapPerLength, key)?.f64();
+                if !(af >= 0.0 && af.is_finite()) {
+                    return Err(p.err(value.span(), &format!("{key} must be zero or more")));
+                }
+                Ok(values[at].replace(af).is_none())
+            },
+        )?;
         let [Some(gate_contact_af_um), Some(gate_diffusion_af_um)] = values else {
             let t = self.peek();
             return Err(self.err_tok(
@@ -1983,26 +1982,23 @@ impl<'a> Parser<'a> {
     /// via layer ([`super::TsvModel`]), every value required and positive.
     fn pex_tsv(&mut self) -> R<()> {
         let layer = self.layer_word()?;
-        let keys = ["length", "liner", "liner_k"];
         let mut values = [None::<f64>; 3];
-        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
-            let (key, span) = self.ident("length, liner or liner_k")?;
-            let Some(at) = keys.iter().position(|&k| k == key) else {
-                return Err(self.err(
-                    span,
-                    &format!("unknown pex_tsv key `{key}`; expected length, liner or liner_k"),
-                ));
-            };
-            let value = self.value()?;
-            let dim = if at == 2 { Dim::Scalar } else { Dim::Length };
-            let number = self.physical(&value, dim, &key)?;
-            if !(number > 0.0 && number.is_finite()) {
-                return Err(self.err(value.span(), &format!("{key} must be positive")));
-            }
-            if values[at].replace(number).is_some() {
-                return Err(self.err(span, &format!("`{key}` is given twice")));
-            }
-        }
+        let keys = "length, liner or liner_k";
+        self.keyed(
+            "pex_tsv",
+            &["length", "liner", "liner_k"],
+            keys,
+            keys,
+            |p, at, key| {
+                let value = p.value()?;
+                let dim = if at == 2 { Dim::Scalar } else { Dim::Length };
+                let number = p.physical(&value, dim, key)?;
+                if !(number > 0.0 && number.is_finite()) {
+                    return Err(p.err(value.span(), &format!("{key} must be positive")));
+                }
+                Ok(values[at].replace(number).is_none())
+            },
+        )?;
         let [Some(length_nm), Some(liner_nm), Some(liner_k)] = values else {
             let t = self.peek();
             return Err(self.err_tok(t, "pex_tsv states length, liner and liner_k"));
@@ -2025,76 +2021,71 @@ impl<'a> Parser<'a> {
             return Err(self.err(span, "pex_substrate is stated twice"));
         }
         let (mut ports, mut grounded, mut layers) = (None, None, None);
-        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
-            let (key, at) = self.ident("ports, backside or profile")?;
-            let fresh = match key.as_str() {
-                "ports" => ports.replace(self.layer_list()?).is_none(),
-                "backside" => {
-                    let (word, at) = self.ident("grounded or floating")?;
-                    let value = match word.as_str() {
-                        "grounded" => true,
-                        "floating" => false,
-                        _ => {
-                            return Err(self.err(
-                                at,
-                                &format!(
-                                    "unknown backside `{word}`; expected grounded or floating"
-                                ),
-                            ))
-                        }
-                    };
-                    grounded.replace(value).is_none()
-                }
-                "profile" => {
-                    let value = self.value()?;
-                    let Val::List(items, _) = &value else {
-                        return Err(self.err(
-                            value.span(),
-                            "expected a profile [(thickness, resistivity), ..]",
-                        ));
-                    };
-                    let mut rows = Vec::with_capacity(items.len());
-                    for item in items {
-                        let Val::Tuple(parts, span) = item else {
-                            return Err(self.err(
-                                item.span(),
-                                "expected a layer (thickness, resistivity in ohm·cm)",
+        let keys = "ports, backside or profile";
+        self.keyed(
+            "pex_substrate",
+            &["ports", "backside", "profile"],
+            keys,
+            keys,
+            |p, at, _| {
+                Ok(match at {
+                    0 => ports.replace(p.layer_list()?).is_none(),
+                    1 => {
+                        let (word, at) = p.ident("grounded or floating")?;
+                        let value = match word.as_str() {
+                            "grounded" => true,
+                            "floating" => false,
+                            _ => {
+                                return Err(p.err(
+                                    at,
+                                    &format!(
+                                        "unknown backside `{word}`; expected grounded or floating"
+                                    ),
+                                ))
+                            }
+                        };
+                        grounded.replace(value).is_none()
+                    }
+                    _ => {
+                        let value = p.value()?;
+                        let Val::List(items, _) = &value else {
+                            return Err(p.err(
+                                value.span(),
+                                "expected a profile [(thickness, resistivity), ..]",
                             ));
                         };
-                        let [thickness, resistivity] = &parts[..] else {
-                            return Err(self.err(
-                                *span,
-                                "a substrate layer is (thickness, resistivity in ohm·cm)",
-                            ));
-                        };
-                        let t = self.physical(thickness, Dim::Length, "thickness")?;
-                        let rho = self.physical(resistivity, Dim::Scalar, "resistivity")?;
-                        if !(t > 0.0 && t.is_finite() && rho > 0.0 && rho.is_finite()) {
-                            return Err(self.err(
-                                *span,
-                                "a substrate layer's thickness and resistivity are positive",
-                            ));
+                        let mut rows = Vec::with_capacity(items.len());
+                        for item in items {
+                            let Val::Tuple(parts, span) = item else {
+                                return Err(p.err(
+                                    item.span(),
+                                    "expected a layer (thickness, resistivity in ohm·cm)",
+                                ));
+                            };
+                            let [thickness, resistivity] = &parts[..] else {
+                                return Err(p.err(
+                                    *span,
+                                    "a substrate layer is (thickness, resistivity in ohm·cm)",
+                                ));
+                            };
+                            let t = p.physical(thickness, Dim::Length, "thickness")?;
+                            let rho = p.physical(resistivity, Dim::Scalar, "resistivity")?;
+                            if !(t > 0.0 && t.is_finite() && rho > 0.0 && rho.is_finite()) {
+                                return Err(p.err(
+                                    *span,
+                                    "a substrate layer's thickness and resistivity are positive",
+                                ));
+                            }
+                            rows.push((t, rho));
                         }
-                        rows.push((t, rho));
+                        if rows.is_empty() {
+                            return Err(p.err(value.span(), "a profile has at least one layer"));
+                        }
+                        layers.replace(rows).is_none()
                     }
-                    if rows.is_empty() {
-                        return Err(self.err(value.span(), "a profile has at least one layer"));
-                    }
-                    layers.replace(rows).is_none()
-                }
-                _ => {
-                    return Err(self.err(
-                        at,
-                        &format!(
-                        "unknown pex_substrate key `{key}`; expected ports, backside or profile"
-                    ),
-                    ))
-                }
-            };
-            if !fresh {
-                return Err(self.err(at, &format!("`{key}` is given twice")));
-            }
-        }
+                })
+            },
+        )?;
         let (Some(ports), Some(grounded), Some(layers)) = (ports, grounded, layers) else {
             let t = self.peek();
             return Err(self.err_tok(t, "pex_substrate states ports, backside and profile"));
@@ -2114,33 +2105,27 @@ impl<'a> Parser<'a> {
         let layer = self.layer_word()?;
         self.expect("for")?;
         let density = self.layer_word()?;
-        let keys = ["size", "space", "keep"];
         let mut lengths = [None::<Dbu>; 3];
         let mut avoid = None;
-        while !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
-            let (key, span) = self.ident("size, space, keep or avoid")?;
-            if key == "avoid" {
-                if avoid.replace(self.layer_list()?).is_some() {
-                    return Err(self.err(span, "`avoid` is given twice"));
+        let keys = "size, space, keep or avoid";
+        self.keyed(
+            "fill",
+            &["size", "space", "keep", "avoid"],
+            keys,
+            keys,
+            |p, at, key| {
+                if at == 3 {
+                    return Ok(avoid.replace(p.layer_list()?).is_none());
                 }
-                continue;
-            }
-            let Some(at) = keys.iter().position(|&k| k == key) else {
-                return Err(self.err(
-                    span,
-                    &format!("unknown fill key `{key}`; expected size, space, keep or avoid"),
-                ));
-            };
-            let value = self.value()?;
-            let length = self.length(&value, &key)?;
-            // `keep` may be zero (fill may touch what it avoids); the rest draw.
-            if length.raw() < 0 || (at < 2 && length.raw() == 0) {
-                return Err(self.err(value.span(), &format!("{key} must be positive")));
-            }
-            if lengths[at].replace(length).is_some() {
-                return Err(self.err(span, &format!("`{key}` is given twice")));
-            }
-        }
+                let value = p.value()?;
+                let length = p.length(&value, key)?;
+                // `keep` may be zero (fill may touch what it avoids); the rest draw.
+                if length.raw() < 0 || (at < 2 && length.raw() == 0) {
+                    return Err(p.err(value.span(), &format!("{key} must be positive")));
+                }
+                Ok(lengths[at].replace(length).is_none())
+            },
+        )?;
         let ([Some(size), Some(space), Some(keep)], Some(avoid)) = (lengths, avoid) else {
             let t = self.peek();
             return Err(self.err_tok(t, "fill states size, space, keep and avoid"));
@@ -2256,7 +2241,7 @@ impl<'a> Parser<'a> {
             }
         };
         let mut coupling_threshold_af = 0.0;
-        if !matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
+        if !self.line_end() {
             let (key, key_span) = self.ident("`coupling_threshold`")?;
             if key != "coupling_threshold" {
                 return Err(self.err(
@@ -2783,15 +2768,7 @@ impl<'a> Parser<'a> {
                 return Ok(());
             }
             Dim::AngleList => {
-                let Val::List(items, _) = value else {
-                    return Err(self.wrong(value, "a list of angles", label));
-                };
-                if items.is_empty() {
-                    return Err(
-                        self.err(value.span(), &format!("`{label}` needs at least one angle"))
-                    );
-                }
-                for item in items {
+                for item in self.list(value, "a list of angles", "angle", label)? {
                     let degrees = self.quantity(item, Dim::Angle, label)?;
                     let Some(whole) = degrees.integer().and_then(|d| u32::try_from(d).ok()) else {
                         return Err(self.err(
@@ -2809,16 +2786,8 @@ impl<'a> Parser<'a> {
                 } else {
                     ("name", "a name in quotes")
                 };
-                let Val::List(items, _) = value else {
-                    return Err(self.wrong(value, dim_name(param.dim), label));
-                };
-                if items.is_empty() {
-                    return Err(self.err(
-                        value.span(),
-                        &format!("`{label}` needs at least one {what}; write none for no {what}s"),
-                    ));
-                }
-                for item in items {
+                let none = format!("{what}; write none for no {what}s");
+                for item in self.list(value, dim_name(param.dim), &none, label)? {
                     let Val::Str(model, _) = item else {
                         return Err(self.wrong(item, one, label));
                     };
@@ -2849,13 +2818,8 @@ impl<'a> Parser<'a> {
                 return Ok(());
             }
             Dim::LengthPairList(second) => {
-                let Val::List(items, span) = value else {
-                    return Err(self.wrong(value, "a list of pairs `a x b` of lengths", label));
-                };
-                if items.is_empty() {
-                    return Err(self.err(*span, &format!("`{label}` needs at least one pair")));
-                }
-                for item in items {
+                let want = "a list of pairs `a x b` of lengths";
+                for item in self.list(value, want, "pair", label)? {
                     let Val::Pair(a, b, _) = item else {
                         return Err(self.wrong(item, "a pair `a x b` of lengths", label));
                     };
@@ -2867,26 +2831,14 @@ impl<'a> Parser<'a> {
                 return Ok(());
             }
             Dim::VoltageList => {
-                let Val::List(items, span) = value else {
-                    return Err(self.wrong(value, "a list of voltages", label));
-                };
-                if items.is_empty() {
-                    return Err(self.err(*span, &format!("`{label}` needs at least one voltage")));
-                }
-                for item in items {
+                for item in self.list(value, "a list of voltages", "voltage", label)? {
                     let millivolts = self.quantity(item, Dim::Voltage, label)?.f64();
                     out.push((engine, ParamSource::Value(ParamValue::Ratio(millivolts))));
                 }
                 return Ok(());
             }
             Dim::FrequencyList => {
-                let Val::List(items, span) = value else {
-                    return Err(self.wrong(value, "a list of frequencies", label));
-                };
-                if items.is_empty() {
-                    return Err(self.err(*span, &format!("`{label}` needs at least one frequency")));
-                }
-                for item in items {
+                for item in self.list(value, "a list of frequencies", "frequency", label)? {
                     let megahertz = self.quantity(item, Dim::Frequency, label)?.f64();
                     out.push((engine, ParamSource::Value(ParamValue::Ratio(megahertz))));
                 }
@@ -2894,13 +2846,7 @@ impl<'a> Parser<'a> {
             }
             Dim::CurrentPerWidthRows => {
                 let want = "a list of rows of currents per width";
-                let Val::List(rows, span) = value else {
-                    return Err(self.wrong(value, want, label));
-                };
-                if rows.is_empty() {
-                    return Err(self.err(*span, &format!("`{label}` needs at least one row")));
-                }
-                for row in rows {
+                for row in self.list(value, want, "row", label)? {
                     let Val::List(items, _) = row else {
                         return Err(self.wrong(row, want, label));
                     };
@@ -2912,13 +2858,7 @@ impl<'a> Parser<'a> {
                 return Ok(());
             }
             Dim::CountList | Dim::AreaList => {
-                let Val::List(items, span) = value else {
-                    return Err(self.wrong(value, dim_name(param.dim), label));
-                };
-                if items.is_empty() {
-                    return Err(self.err(*span, &format!("`{label}` needs at least one value")));
-                }
-                for item in items {
+                for item in self.list(value, dim_name(param.dim), "value", label)? {
                     let stated = if param.dim == Dim::CountList {
                         ParamValue::Count(self.count(item, label)?)
                     } else {
@@ -2929,13 +2869,7 @@ impl<'a> Parser<'a> {
                 return Ok(());
             }
             Dim::FractionList => {
-                let Val::List(items, span) = value else {
-                    return Err(self.wrong(value, "a list of fractions", label));
-                };
-                if items.is_empty() {
-                    return Err(self.err(*span, &format!("`{label}` needs at least one fraction")));
-                }
-                for item in items {
+                for item in self.list(value, "a list of fractions", "fraction", label)? {
                     let v = self.quantity(item, Dim::Fraction, label)?.f64();
                     if !(0.0..=1.0).contains(&v) {
                         return Err(self.err(
@@ -2948,13 +2882,7 @@ impl<'a> Parser<'a> {
                 return Ok(());
             }
             Dim::OptLengthList => {
-                let Val::List(items, span) = value else {
-                    return Err(self.wrong(value, "a list of lengths or none", label));
-                };
-                if items.is_empty() {
-                    return Err(self.err(*span, &format!("`{label}` needs at least one entry")));
-                }
-                for item in items {
+                for item in self.list(value, "a list of lengths or none", "entry", label)? {
                     let stated = if matches!(item, Val::Word { name, .. } if name == "none") {
                         ParamValue::Flag(false)
                     } else {
@@ -2977,14 +2905,8 @@ impl<'a> Parser<'a> {
             }
             Dim::AreaTable(second) => {
                 let want = "a list of (area, number) points";
-                let Val::List(items, span) = value else {
-                    return Err(self.wrong(value, want, label));
-                };
-                if items.is_empty() {
-                    return Err(self.err(*span, &format!("`{label}` needs at least one point")));
-                }
                 let mut previous: Option<DbuArea> = None;
-                for item in items {
+                for item in self.list(value, want, "point", label)? {
                     let Val::Tuple(parts, _) = item else {
                         return Err(self.wrong(item, want, label));
                     };
@@ -3029,13 +2951,20 @@ impl<'a> Parser<'a> {
 
     /// `[a, b, ..]`, a non-empty list of lengths.
     fn lengths(&mut self, value: &Val, label: &str) -> R<Vec<Dbu>> {
+        let items = self.list(value, "a list of lengths", "length", label)?;
+        items.iter().map(|item| self.length(item, label)).collect()
+    }
+
+    /// `value` as a non-empty list: `want` names a list in an error, and
+    /// `one` names an item when the list is empty.
+    fn list<'v>(&mut self, value: &'v Val, want: &str, one: &str, label: &str) -> R<&'v [Val]> {
         let Val::List(items, span) = value else {
-            return Err(self.wrong(value, "a list of lengths", label));
+            return Err(self.wrong(value, want, label));
         };
         if items.is_empty() {
-            return Err(self.err(*span, &format!("`{label}` needs at least one length")));
+            return Err(self.err(*span, &format!("`{label}` needs at least one {one}")));
         }
-        items.iter().map(|item| self.length(item, label)).collect()
+        Ok(items)
     }
 
     /// A spacing table is complete and monotone: `prl` and `width` start at
@@ -3365,6 +3294,11 @@ impl<'a> Parser<'a> {
             ));
         };
         items.iter().map(|item| self.layer_name(item)).collect()
+    }
+
+    /// Whether `name` is a drawn layer, one declared as `gds(..)`.
+    fn is_drawn(&self, name: &str) -> bool {
+        self.out.layers.iter().any(|(drawn, _)| drawn == name)
     }
 
     /// A declared polygon layer's name.
