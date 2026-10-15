@@ -141,6 +141,10 @@ impl NetTable {
     }
 
     /// The polygons on one net, ascending. Empty for [`NetId::NONE`].
+    ///
+    /// # Panics
+    ///
+    /// When `net` is neither [`NetId::NONE`] nor below the table's net count.
     pub fn polys_of(&self, net: NetId) -> &[PolyId] {
         if net == NetId::NONE {
             return &[];
@@ -150,6 +154,10 @@ impl NetTable {
     }
 
     /// Whether two polygons are the same net. False when either is on no net.
+    ///
+    /// # Panics
+    ///
+    /// When either polygon is past the store this table was extracted from.
     pub fn same_net(&self, a: PolyId, b: PolyId) -> bool {
         let (a, b) = (self.net_of(a), self.net_of(b));
         a != NetId::NONE && a == b

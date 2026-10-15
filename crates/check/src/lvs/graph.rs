@@ -88,7 +88,8 @@ pub struct Graph {
     pub terminal_net: Vec<u32>,
     /// The role of each terminal. Matching reads roles, never positions.
     pub terminal_role: Vec<TerminalRole>,
-    /// Device parameters in SI units, CSR into `param`.
+    /// Each device's run of `param`, CSR: one offset per device plus a
+    /// terminator.
     pub device_param_start: Vec<u32>,
     /// `(name, value)` per parameter: a lowercased, interned SPICE name, and a
     /// value in SI base units (metres, square metres, a plain count).

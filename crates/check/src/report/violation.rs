@@ -43,7 +43,8 @@ pub struct Violation {
     pub rule: StrId,
     /// The layer the finding is reported on; each DRC
     /// [`Rule`](crate::drc::Rule) variant says which of its layers.
-    /// `LayerId(u16::MAX)` for an LVS finding, which has none.
+    /// `LayerId(u16::MAX)` for an LVS or system finding,
+    /// which has none.
     pub layer: LayerId,
     /// Whether the finding fails the run.
     pub severity: Severity,
@@ -292,7 +293,8 @@ pub struct RuleRun {
     pub violations: u32,
 }
 
-/// Why a rule produced the result it did.
+/// Whether a rule executed; anything but [`Outcome::Ran`] fails the run,
+/// even with no violations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     /// Executed to completion.
@@ -304,7 +306,8 @@ pub enum Outcome {
     Refused,
 }
 
-/// Why a rule was skipped.
+/// Why a rule did not run; each reason fails the run, as
+/// [`Outcome::Refused`] does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkipReason {
     /// The rule needs design intent and none was supplied.

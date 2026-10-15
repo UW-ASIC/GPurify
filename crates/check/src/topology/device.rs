@@ -28,7 +28,7 @@ pub struct DeviceId(pub u32);
 /// |---|---|---|---|---|
 /// | `Mos` | `Gate` | `Source` | `Drain` | `Bulk` |
 /// | `Bjt` | `Base` | `Emitter` | `Collector` | — |
-/// | `Resistor`, `Capacitor`, `Diode` | `Pin(0)` | `Pin(1)` | — | — |
+/// | `Resistor`, `Capacitor`, `Diode`, `Inductor`, `Cell` | `Pin(0)` | `Pin(1)` | `Pin(2)` | `Pin(3)` |
 ///
 /// A position past its family's row is `Pin(position)`.
 ///
@@ -36,8 +36,9 @@ pub struct DeviceId(pub u32);
 /// SPICE card order instead, which
 /// [`from_reference`](crate::lvs::graph::from_reference) maps to the same
 /// roles. LVS pairs terminals by role and treats `Source` and `Drain` as one,
-/// and a resistor's two ends as one; a diode's anode (`Pin(0)`) and cathode
-/// (`Pin(1)`), and a capacitor's plates, stay distinct.
+/// and a resistor's or inductor's two ends as one; a diode's anode (`Pin(0)`)
+/// and cathode (`Pin(1)`), and a capacitor's plates, stay distinct unless
+/// the deck's `lvs permute` joins them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalRole {
     /// A MOS gate.
@@ -55,8 +56,10 @@ pub enum TerminalRole {
     /// A BJT collector.
     Collector,
     /// A passive's terminal by position: a resistor's end, a capacitor's
-    /// plate, a diode's anode (0) or cathode (1). LVS compares a resistor's two
-    /// ends as one and keeps every other position distinct.
+    /// plate, a diode's anode (0) or cathode (1), an inductor's or black-box
+    /// cell's pin. LVS compares a resistor's or inductor's two ends as one
+    /// and keeps every other position distinct unless `lvs permute` joins
+    /// them.
     Pin(u8),
 }
 

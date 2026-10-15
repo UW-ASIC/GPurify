@@ -270,10 +270,13 @@ impl ParamNames {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeKind {
     /// Devices on the same nets became one: a MOS's `W` and `nf` were summed,
-    /// or any other device's count `m`, a MOS with no `W` included.
+    /// or any other device's count `m`, a MOS with no `W` included; a
+    /// relaxed passive's value combined by its law; under
+    /// [`ParamNames::gates`], a gate's transistors kept as they were.
     Parallel,
-    /// Devices stacked through an internal net became one; `L` was summed and
-    /// the net was consumed.
+    /// Devices stacked through an internal net became one and the net was
+    /// consumed: `L` summed, a relaxed passive's value combined by its law,
+    /// or, under [`ParamNames::gates`], a gate's transistors kept.
     Series,
 }
 

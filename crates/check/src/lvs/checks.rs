@@ -416,7 +416,8 @@ pub struct UnpairedInstance {
     /// The row of the flattened reference's
     /// [`placements`](gpurify_ingest::netlist::Netlist::placements).
     pub placement: u32,
-    /// How many devices it placed, all unpaired.
+    /// How many of its devices the comparison kept, every one unpaired;
+    /// devices `lvs ignore` dropped are not counted.
     pub devices: u32,
 }
 
