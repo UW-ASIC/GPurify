@@ -270,8 +270,7 @@ fn fill4(e: f64, a: f64, d: f64) -> [f64; 4] {
 }
 
 #[inline]
-fn log_term(x: f64, xsq: f64, ysq: f64, zsq: f64, len: f64) -> f64 {
-    let _ = xsq;
+fn log_term(x: f64, ysq: f64, zsq: f64, len: f64) -> f64 {
     ((6.0 * zsq - ysq) * ysq - zsq * zsq) * x * ((x + len) / (ysq + zsq).sqrt()).ln()
 }
 
@@ -298,9 +297,9 @@ fn eval_eq(x: f64, y: f64, z: f64, ref_len: f64) -> f64 {
 
     if num_nearzero_sq < 2 {
         ret += (1.0 / 24.0)
-            * (log_term(x, xsq, ysq, zsq, len)
-                + log_term(y, ysq, xsq, zsq, len)
-                + log_term(z, zsq, xsq, ysq, len));
+            * (log_term(x, ysq, zsq, len)
+                + log_term(y, xsq, zsq, len)
+                + log_term(z, xsq, ysq, len));
     }
     if num_nearzero < 1 {
         ret -= (1.0 / 6.0)
