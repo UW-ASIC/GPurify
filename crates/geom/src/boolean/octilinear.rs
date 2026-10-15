@@ -43,11 +43,11 @@ impl Edge {
 
 /// One boundary segment of the result, directed with its material on the left.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Seg {
-    sx: i64,
-    sy: i64,
-    ex: i64,
-    ey: i64,
+pub(super) struct Seg {
+    pub(super) sx: i64,
+    pub(super) sy: i64,
+    pub(super) ex: i64,
+    pub(super) ey: i64,
 }
 
 impl Seg {
@@ -59,8 +59,15 @@ impl Seg {
         (self.ex, self.ey)
     }
 
-    fn dir(self) -> (i64, i64) {
-        ((self.ex - self.sx).signum(), (self.ey - self.sy).signum())
+    /// Whether `other` runs the same way as `self`: parallel, not opposite.
+    /// Exact at any angle; on the octilinear grid, equal unit steps.
+    fn same_way(self, other: Self) -> bool {
+        let (ax, ay) = (i128::from(self.ex - self.sx), i128::from(self.ey - self.sy));
+        let (bx, by) = (
+            i128::from(other.ex - other.sx),
+            i128::from(other.ey - other.sy),
+        );
+        ax * by == ay * bx && ax * bx + ay * by > 0
     }
 }
 
@@ -259,8 +266,8 @@ pub(super) fn combine_into(a: &Rings, b: &Rings, op: impl Fn(bool, bool) -> bool
 /// sector at a point apart and joins the material sectors there, which is the
 /// connected corner model at any angle (in rectilinear terms, the right turn
 /// at a pinch). A run of collinear segments through a point no other segment
-/// visits is one edge.
-fn link(segs: &[Seg], out: &mut Rings) {
+/// visits is one edge. Reads segments at any angle.
+pub(super) fn link(segs: &[Seg], out: &mut Rings) {
     let count = segs.len();
     let index = |i: usize| u32::try_from(i).expect("a boundary has under 2^32 segments");
     let mut by_head: Vec<u32> = (0..count).map(index).collect();
@@ -344,7 +351,7 @@ fn link(segs: &[Seg], out: &mut Rings) {
         for (k, &s) in cycle.iter().enumerate() {
             let before = cycle[(k + len - 1) % len] as usize;
             let seg = segs[s as usize];
-            if !(alone[before] && segs[before].dir() == seg.dir()) {
+            if !(alone[before] && segs[before].same_way(seg)) {
                 out.xs.push(seg.sx);
                 out.ys.push(seg.sy);
             }

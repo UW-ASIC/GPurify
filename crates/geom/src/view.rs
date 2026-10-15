@@ -1,4 +1,4 @@
-//! Validated geometry: rectilinear (or, on request, octilinear) rings, simple
+//! Validated geometry: rectilinear (or, on request, octilinear or any-angle) rings, simple
 //! but where a figure meets itself at a vertex, canonical winding, holes bound
 //! to their innermost containing outer.
 //!
@@ -16,7 +16,7 @@ use fearless_simd::{dispatch, i64x4, mask64x4, prelude::*, Level};
 /// Which edge directions [`validate_layer_with`] accepts.
 ///
 /// A consumer asks for the widest class it measures exactly. The booleans and
-/// the derived-layer operations take [`Angles::Octilinear`] input; what cuts a
+/// the derived-layer operations take [`Angles::Any`] input; what cuts a
 /// layer into rectangles ([`crate::rects::decompose_into`]) asserts
 /// [`ValidatedLayer::is_rectilinear`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -28,6 +28,10 @@ pub enum Angles {
     /// Also edges at 45 degrees (`|dx| == |dy|`); any other angle is
     /// [`ValidityError::NotOctilinear`].
     Octilinear,
+    /// Edges at every angle, as GDSII draws a curve: a polygon whose vertices
+    /// lie on the grid. [`ValidatedLayer::is_octilinear`] tells whether one
+    /// is at an angle other than a multiple of 45 degrees.
+    Any,
 }
 
 /// Why a polygon could not be validated; never a silently skipped row.
@@ -91,8 +95,10 @@ pub struct ValidatedLayer {
     poly_ring_start: Vec<u32>,
     poly_ring_len: Vec<u32>,
     poly_bbox: Vec<Bbox>,
-    /// Some ring has an edge at 45 degrees.
+    /// Some ring has an edge that is not horizontal or vertical.
     diagonal: bool,
+    /// Some ring has an edge at an angle other than a multiple of 45 degrees.
+    skew: bool,
 }
 
 impl ValidatedLayer {
@@ -125,6 +131,14 @@ impl ValidatedLayer {
         !self.diagonal
     }
 
+    /// Whether every edge is horizontal, vertical or at 45 degrees: always
+    /// so for a layer validated under [`Angles::Rectilinear`] or
+    /// [`Angles::Octilinear`] and for a boolean of such layers; a layer
+    /// validated under [`Angles::Any`] may hold an edge at any angle.
+    pub fn is_octilinear(&self) -> bool {
+        !self.skew
+    }
+
     /// Copies the polygons whose `keep` flag is set, in order, into `out`
     /// (cleared and refilled), keeping their store rows.
     ///
@@ -139,7 +153,9 @@ impl ValidatedLayer {
             let (start, len) = (self.poly_ring_start[idx], self.poly_ring_len[idx]);
             for ring in start..start + len {
                 let RingRef { xs, ys } = self.ring(ring);
-                out.diagonal |= has_diagonal(xs, ys);
+                let (diagonal, skew) = angle_flags(xs, ys);
+                out.diagonal |= diagonal;
+                out.skew |= skew;
                 out.push_ring(xs, ys, self.ring_poly[ring as usize]);
             }
             out.poly_ring_start.push(span_start);
@@ -295,8 +311,9 @@ pub fn validate_layer_with(
         for row in rows.clone() {
             let poly = PolyId(row);
             let (xs, ys) = store.poly_verts(poly);
-            let (winding, diagonal) = classify_ring(s, xs, ys, poly, angles, &mut edges)?;
+            let (winding, diagonal, skew) = classify_ring(s, xs, ys, poly, angles, &mut edges)?;
             out.diagonal |= diagonal;
+            out.skew |= skew;
             match winding {
                 Winding::CounterClockwise => {
                     outer_slot.push(u32::try_from(outers.len()).expect("outers fit a u32"));
@@ -448,6 +465,7 @@ impl ValidatedLayer {
         self.poly_ring_len.clear();
         self.poly_bbox.clear();
         self.diagonal = false;
+        self.skew = false;
     }
 
     /// Copy one ring's coordinates in and append its ring row.
@@ -481,8 +499,9 @@ pub fn ring_defect(xs: &[Dbu], ys: &[Dbu], poly: PolyId) -> Option<ValidityError
         .then_some(ValidityError::Degenerate(poly))
 }
 
-/// Validate one coordinate run and report its winding and whether it has an
-/// edge at 45 degrees. Check order is part of the answer: a bowtie is
+/// Validate one coordinate run and report its winding, whether it has an
+/// edge that is not horizontal or vertical, and whether it has one at an
+/// angle other than a multiple of 45 degrees. Check order is part of the answer: a bowtie is
 /// reported as self-intersecting, not as an edge outside `angles`.
 #[inline(always)]
 fn classify_ring<S: Simd>(
@@ -492,7 +511,7 @@ fn classify_ring<S: Simd>(
     poly: PolyId,
     angles: Angles,
     edges: &mut Vec<SweptEdge>,
-) -> Result<(Winding, bool), ValidityError> {
+) -> Result<(Winding, bool, bool), ValidityError> {
     if xs.len() < 3 {
         return Err(ValidityError::Degenerate(poly));
     }
@@ -510,16 +529,14 @@ fn classify_ring<S: Simd>(
     }
     // A run doubling back on itself has zero area: degenerate.
     let winding = winding_of(xs, ys).ok_or(ValidityError::Degenerate(poly))?;
-    Ok((winding, !rectilinear))
+    Ok((winding, !rectilinear, !octilinear))
 }
 
-/// Whether some edge of a closed run is neither horizontal nor vertical.
-fn has_diagonal(xs: &[Dbu], ys: &[Dbu]) -> bool {
-    let n = xs.len();
-    (0..n).any(|i| {
-        let j = if i + 1 < n { i + 1 } else { 0 };
-        xs[i] != xs[j] && ys[i] != ys[j]
-    })
+/// Whether some edge of a closed run is neither horizontal nor vertical, and
+/// whether some edge is at an angle other than a multiple of 45 degrees.
+fn angle_flags(xs: &[Dbu], ys: &[Dbu]) -> (bool, bool) {
+    let (_, rectilinear, octilinear) = edge_flags_scalar(xs, ys, xs[0], ys[0]);
+    (!rectilinear, !octilinear)
 }
 
 /// Four distinct vertices alternating vertical and horizontal edges: an axis

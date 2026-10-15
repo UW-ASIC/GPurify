@@ -15,8 +15,17 @@
 //! point; here every crossing of an axis edge with a 45-degree line, and every
 //! distance, is exact. Two 45-degree edges at right angles never pair, so no
 //! crossing between them is needed.
+//!
+//! At any other angle [`pair_threshold_any`] reads the same relation under
+//! the Euclidean metric: an edge is cut where it crosses the other's line, at
+//! a rational point, and the distance from there is a fraction compared in
+//! 256-bit integers, so it too is exact.
 
-use crate::ops::{point_seg_near2, seg_seg_near2, segments_intersect, Point, Seg};
+use crate::ops::{
+    point_seg_near2, point_seg_twice2, seg_seg_near2, seg_seg_twice2, segments_intersect, Point,
+    Seg,
+};
+use crate::wide::{twice_ratio, I256};
 use crate::Dbu;
 
 /// Which sides of the two edges face each other (`KLayout`'s
@@ -337,4 +346,138 @@ pub fn projected_reach2(relation: Relation, zero: Zero, a: Seg, b: Seg, v: Point
     let d = an.d();
     let along = sprod((i128::from(v.0 - an.p1.0), i128::from(v.1 - an.p1.1)), d);
     (0..=sprod(d, d)).contains(&along).then(|| perp2(an, v))
+}
+
+fn pt(p: P) -> Point {
+    Point {
+        x: Dbu::new_unchecked(p.0),
+        y: Dbu::new_unchecked(p.1),
+    }
+}
+
+/// The Euclidean distance, twice squared as `(floor, inexact)`, from `e` to
+/// the part of `other` on `e`'s inner side, at any angle: `None` when
+/// nothing of it is there. The part may end where `other` crosses `e`'s
+/// line, at a rational point `c = (X / W, Y / W)`; then the candidates are
+/// its whole end to `e`, `c` to `e`'s ends (`c` lies on `e`'s line, outside
+/// `e` unless the two meet), and `e`'s ends to the part.
+fn near_any(zero: Zero, e: E, other: E) -> Option<(i128, bool)> {
+    let g = inner_part_any(zero, e, other)?;
+    let Some((keep, (x, y, w))) = g else {
+        return Some(seg_seg_twice2(e.seg(), other.seg()));
+    };
+    if segments_intersect(e.seg(), other.seg()) {
+        return Some((0, false));
+    }
+    let wide = |v: i64| I256::from_i128(i128::from(v));
+    // Twice the squared distance from `c` to the grid point `p`.
+    let to_c = |p: P| {
+        let dx = x.sub(wide(p.0).mul(w));
+        let dy = y.sub(wide(p.1).mul(w));
+        twice_ratio(dx.mul(dx).add(dy.mul(dy)), w.mul(w))
+    };
+    // From `keep` toward `c`, along `other`.
+    let u = if keep == other.p1 {
+        other.d()
+    } else {
+        (-other.d().0, -other.d().1)
+    };
+    let along_c = x
+        .sub(wide(keep.0).mul(w))
+        .mul(I256::from_i128(u.0))
+        .add(y.sub(wide(keep.1).mul(w)).mul(I256::from_i128(u.1)));
+    let to_part = |p: P| {
+        let along = sprod((i128::from(p.0 - keep.0), i128::from(p.1 - keep.1)), u);
+        if along <= 0 {
+            return point_seg_twice2(pt(p), E { p1: keep, p2: keep }.seg());
+        }
+        if I256::from_i128(along).mul(w) >= along_c {
+            return to_c(p);
+        }
+        let side = I256::from_i128(u.0 * i128::from(p.1 - keep.1) - u.1 * i128::from(p.0 - keep.0));
+        twice_ratio(side.mul(side), I256::from_i128(sprod(u, u)))
+    };
+    let mut best = point_seg_twice2(pt(keep), e.seg())
+        .min(to_c(e.p1))
+        .min(to_c(e.p2))
+        .min(to_part(e.p1));
+    if !e.degenerate() {
+        best = best.min(to_part(e.p2));
+    }
+    Some(best)
+}
+
+/// [`inner_part`] at any angle: `None` when nothing of `other` is on `e`'s
+/// inner side, `Some(None)` when all of it is, and `Some(Some((keep, c)))`
+/// when the part runs from its end `keep` to `c`, where `other` crosses
+/// `e`'s line, as `(X, Y, W)` with `W > 0`.
+#[allow(clippy::type_complexity)]
+fn inner_part_any(zero: Zero, e: E, other: E) -> Option<Option<(P, (I256, I256, I256))>> {
+    let (s1, s2) = if e.degenerate() {
+        if segments_intersect(other.seg(), e.seg()) {
+            (0, 0)
+        } else {
+            (-1, -1)
+        }
+    } else {
+        (e.side_of(other.p1), e.side_of(other.p2))
+    };
+    let thr = if include_zero(zero, e, other) { 0 } else { -1 };
+    if s1 > thr && s2 > thr {
+        return None;
+    }
+    let keep = if s2 > thr {
+        other.p1
+    } else if s1 > thr {
+        other.p2
+    } else {
+        return Some(None);
+    };
+    // other.p1 + t·od on e's line: t = cross(ed, e.p1 - other.p1) / cross(ed, od).
+    let ((ex, ey), (ox, oy)) = (e.d(), other.d());
+    let (wx, wy) = (
+        i128::from(e.p1.0 - other.p1.0),
+        i128::from(e.p1.1 - other.p1.1),
+    );
+    let (mut num, mut den) = (ex * wy - ey * wx, ex * oy - ey * ox);
+    if den < 0 {
+        (num, den) = (-num, -den);
+    }
+    let w = I256::from_i128(den);
+    let at = |p: i64, d: i128| {
+        I256::from_i128(i128::from(p))
+            .mul(w)
+            .add(I256::from_i128(d).mul(I256::from_i128(num)))
+    };
+    Some(Some((keep, (at(other.p1.0, ox), at(other.p1.1, oy), w))))
+}
+
+/// [`pair_threshold2`] under the Euclidean metric at any angle, exact: the
+/// least distance at which `KLayout` reports the pair, twice squared, as its
+/// floor and whether the true value lies above it (a fraction where a skew
+/// edge is involved). On octilinear edges it is `(pair_threshold2(..), false)`.
+#[must_use]
+pub fn pair_threshold_any(relation: Relation, zero: Zero, a: Seg, b: Seg) -> Option<(i128, bool)> {
+    let (a, b) = (E::of(a), E::of(b));
+    let aa = if matches!(relation, Relation::Overlap | Relation::Inside) {
+        a.swapped()
+    } else {
+        a
+    };
+    if !a.degenerate() && !b.degenerate() && sprod(aa.d(), b.d()) >= 0 {
+        return None;
+    }
+    let an = if matches!(relation, Relation::Space | Relation::Inside) {
+        a.swapped()
+    } else {
+        a
+    };
+    let bn = if matches!(relation, Relation::Space | Relation::Overlap) {
+        b.swapped()
+    } else {
+        b
+    };
+    let second = near_any(zero, an, bn)?;
+    let first = near_any(zero, bn, an)?;
+    Some(first.max(second))
 }

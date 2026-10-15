@@ -474,6 +474,50 @@ pub fn point_seg_near2(p: Point, seg: Seg) -> (i128, (i64, i64)) {
     (2 * d2, (scaled(ax, vx), scaled(ay, vy)))
 }
 
+/// Twice the squared distance from `p` to the closed segment `seg`, at any
+/// angle, exactly: its floor and whether the true value lies above it. Twice
+/// a squared distance to a skew line is a fraction; its floor compares
+/// against a whole bound `B` as the true value does under `<` (`v < B` iff
+/// `floor(v) < B`), its ceiling (`floor + inexact`) under `<=` and `>`, and
+/// floored it gives the floored length. On axis and 45-degree segments it is
+/// whole: `(point_seg_near2(p, seg).0, false)`.
+#[must_use]
+pub fn point_seg_twice2(p: Point, seg: Seg) -> (i128, bool) {
+    let (ax, ay) = (seg.a.x.raw(), seg.a.y.raw());
+    let (vx, vy) = (
+        i128::from(seg.b.x.raw() - ax),
+        i128::from(seg.b.y.raw() - ay),
+    );
+    let (wx, wy) = (i128::from(p.x.raw() - ax), i128::from(p.y.raw() - ay));
+    let along = vx * wx + vy * wy;
+    let len2 = vx * vx + vy * vy;
+    let to = |x: Dbu, y: Dbu| {
+        let (dx, dy) = (i128::from((p.x - x).raw()), i128::from((p.y - y).raw()));
+        (2 * (dx * dx + dy * dy), false)
+    };
+    if along <= 0 {
+        return to(seg.a.x, seg.a.y);
+    }
+    if along >= len2 {
+        return to(seg.b.x, seg.b.y);
+    }
+    let side = crate::wide::I256::from_i128(cross(seg.a, seg.b, p));
+    crate::wide::twice_ratio(side.mul(side), crate::wide::I256::from_i128(len2))
+}
+
+/// [`point_seg_twice2`] between two closed segments: `(0, false)` when they
+/// touch or cross.
+#[must_use]
+pub fn seg_seg_twice2(p: Seg, q: Seg) -> (i128, bool) {
+    if segments_intersect(p, q) {
+        return (0, false);
+    }
+    point_seg_twice2(p.a, q)
+        .min(point_seg_twice2(p.b, q))
+        .min(point_seg_twice2(q.a, p))
+        .min(point_seg_twice2(q.b, p))
+}
+
 /// Twice the squared distance between two closed segments, with a nearest
 /// point on each, doubled: `(twice d², on p, on q)`. Zero, at a shared point,
 /// when they touch or cross. Exact for horizontal, vertical and 45-degree

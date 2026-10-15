@@ -1,5 +1,6 @@
-//! Exact booleans of rectilinear and octilinear layers by an x-sweep with
-//! nonzero-winding occupancy.
+//! Booleans of layers at any angle by an x-sweep with nonzero-winding
+//! occupancy: exact on rectilinear and octilinear layers, snap-rounded at
+//! any other angle.
 //!
 //! Data in: [`ValidatedLayer`] operands (or one raw GDS ring for [`canonical_rings_into`]).
 //! Data out: a [`ValidatedLayer`], outer rings CCW, holes CW; its rows are the
@@ -10,8 +11,9 @@
 //! edge at 45 degrees take a trapezoid sweep (the private `octilinear` module)
 //! at doubled scale, where every crossing is an integer; a result vertex that lies
 //! between grid points is then snapped onto the grid by the rule
-//! [`union_into`] states. Edges at other angles never reach a boolean: a layer
-//! holding one does not validate ([`crate::view::Angles`]).
+//! [`union_into`] states. Operands with an edge at any other angle take a
+//! snap-rounded sweep (the private `anyangle` module), whose rounding
+//! [`union_into`] states too.
 
 use core::cmp::Ordering;
 
@@ -20,6 +22,7 @@ use crate::store::GeometryStoreBuilder;
 use crate::view::{validate_layer_with, Angles, ValidatedLayer, ValidityError};
 use crate::{Dbu, MAX_ABS_DBU};
 
+mod anyangle;
 mod octilinear;
 
 /// Why a boolean could not be computed.
@@ -29,10 +32,6 @@ pub enum BooleanError {
     /// ([`crate::derive::extended_into`]) was given a 45-degree edge.
     #[error("a 45-degree edge cannot be extended into an axis-parallel box")]
     NotRectilinear,
-    /// A raw ring given to [`canonical_rings_into`] has an edge that is not
-    /// horizontal, vertical or at 45 degrees.
-    #[error("input is not octilinear; only edges at multiples of 45 degrees are supported")]
-    NotOctilinear,
     /// Growing a shape ([`crate::derive::sized_into`]) would put a coordinate
     /// past `±`[`MAX_ABS_DBU`].
     #[error("a sized coordinate leaves the representable range")]
@@ -73,6 +72,19 @@ pub enum BooleanError {
 /// geometries"). `KLayout` instead rounds such a point to the nearest grid
 /// point, which leaves its edges slightly off 45 degrees; the two results
 /// differ only inside the unit square around the point.
+///
+/// **At any other angle, crossings are rounded.** Where either operand has
+/// an edge at an angle other than a multiple of 45 degrees, a point where two
+/// edges cross is rounded to its nearest grid point, a half away from zero,
+/// as `KLayout` rounds it, and every edge passing within that point's pixel
+/// (the points that round to it) is bent through it: snap rounding (Hobby
+/// 1999; Guibas and Marimont 1998), so rounding moves no boundary across a
+/// rounded point and creates no crossing. An edge end lying in a bent edge's
+/// pixel span bends it too, as `KLayout` makes such an end an attractor; an
+/// edge no rounding bends keeps its shape exactly, so merging shapes that do
+/// not cross returns them as drawn. Every boundary point moves less than half
+/// a unit along each axis. The 45-degree tip cutting above does not apply on
+/// this path.
 ///
 /// The result's store rows name a scratch store, not a layout shape
 /// ([`crate::view::PolygonRef::provenance`]).
@@ -730,7 +742,7 @@ fn emit_rings(
     }
 
     let (store, _permutation) = builder.finish(1);
-    let valid = validate_layer_with(&store, RESULT_LAYER, Angles::Octilinear, out);
+    let valid = validate_layer_with(&store, RESULT_LAYER, Angles::Any, out);
     // An error here is an internal fault (see `union_into`): crash where a
     // fuzzer can see it rather than refuse a rule.
     debug_assert!(
@@ -771,7 +783,8 @@ fn octilinear_rings(a: &Rings, b: &Rings, op: impl Fn(bool, bool) -> bool, out: 
 }
 
 /// Apply a set operation to two operands over one shared sweep axis: the
-/// rectilinear sweep when both are rectilinear, else the octilinear one.
+/// rectilinear sweep when both are rectilinear, the octilinear one when both
+/// are octilinear, else the snap-rounded one.
 fn combine_into(
     a: &ValidatedLayer,
     b: &ValidatedLayer,
@@ -781,6 +794,19 @@ fn combine_into(
     let mut sweep = Sweep::default();
     let mut ra = Rings::default();
     let mut rb = Rings::default();
+    if !(a.is_octilinear() && b.is_octilinear()) {
+        collect_rings(a, &mut ra);
+        collect_rings(b, &mut rb);
+        let mut result = Rings::default();
+        anyangle::combine_into(&ra, &rb, op, &mut result);
+        return emit_rings(
+            &result.xs,
+            &result.ys,
+            &result.start,
+            (&mut sweep.col_x, &mut sweep.col_y),
+            out,
+        );
+    }
     if !(a.is_rectilinear() && b.is_rectilinear()) {
         collect_doubled(a, &mut ra);
         collect_doubled(b, &mut rb);
@@ -824,13 +850,14 @@ fn combine_into(
     emit(&xs, &result, &mut sweep, out)
 }
 
-/// The canonical rings of one raw octilinear GDS ring: outers CCW, holes CW.
+/// The canonical rings of one raw GDS ring: outers CCW, holes CW.
 ///
 /// GDSII writes a polygon with holes as one weakly simple *keyhole* ring, which
 /// [`crate::view::validate_layer_into`] refuses as self-intersecting. Retracing
 /// it through the sweep cancels the slit and yields the outer and holes, for
 /// any number of holes. A ring with an edge at 45 degrees takes the octilinear
-/// sweep, and a vertex where its edges cross between grid points is snapped as
+/// sweep, one with an edge at any other angle the snap-rounded one, and a
+/// vertex where its edges cross between grid points is snapped as
 /// [`union_into`] states.
 ///
 /// `xs`/`ys` are one open ring in raw file coordinates. The rings come out
@@ -841,8 +868,8 @@ fn combine_into(
 ///
 /// # Errors
 ///
-/// [`BooleanError::NotOctilinear`] for an edge at an angle other than a
-/// multiple of 45 degrees, the closing edge included.
+/// None at present: every angle is read. The `Result` is kept for callers
+/// that already handle a refusal.
 ///
 /// # Panics
 ///
@@ -877,15 +904,20 @@ pub fn canonical_rings_into(
         let (dx, dy) = delta(i);
         dx != 0 && dy != 0 && dx.abs() != dy.abs()
     });
-    if steep {
-        return Err(BooleanError::NotOctilinear);
-    }
-
     let mut rings = Rings::default();
     rings.start.push(0);
     rings.xs.extend_from_slice(xs);
     rings.ys.extend_from_slice(ys);
     rings.start.push(ring_mark(rings.xs.len()));
+
+    if steep {
+        let mut result = Rings::default();
+        anyangle::combine_into(&rings, &Rings::default(), |p, _| p, &mut result);
+        out_xs.clone_from(&result.xs);
+        out_ys.clone_from(&result.ys);
+        out_start.clone_from(&result.start);
+        return Ok(());
+    }
 
     if skew {
         for c in rings.xs.iter_mut().chain(rings.ys.iter_mut()) {
