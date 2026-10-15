@@ -105,6 +105,39 @@ fn assert_says(doc: &str, name: &str, sentence: &str) {
     assert!(doc.contains(sentence), "{name} should say: {sentence:?}");
 }
 
+/// Oracle: `docs/check-catalog.tsv` itself: each domain's rows counted by
+/// status, which README's status table must state, so the table cannot drift
+/// from the catalog it summarises.
+#[test]
+fn the_readme_status_table_is_the_catalog() {
+    let readme = read("README.md");
+    let catalog = read("docs/check-catalog.tsv");
+    for (domain, prefix) in [
+        ("DRC", "DRC-"),
+        ("LVS", "LVS-"),
+        ("ERC", "ERC-"),
+        ("PEX", "PEX-"),
+        ("Flow", "FLOW-"),
+    ] {
+        let count = |status: &str| {
+            catalog
+                .lines()
+                .skip(1)
+                .filter(|row| row.starts_with(prefix) && row.split('\t').nth(6) == Some(status))
+                .count() as u64
+        };
+        let want: Vec<u64> = ["implemented", "expressible", "partial", "missing"]
+            .iter()
+            .map(|status| count(status))
+            .collect();
+        assert_eq!(
+            numbers(line(&readme, "README.md", &format!("| {domain} |"))),
+            want,
+            "README.md: the {domain} status row"
+        );
+    }
+}
+
 /// Oracle: the code's own kind tables, `drc::ruleset::KINDS` and
 /// `erc::ruleset::KINDS`, counted into the sentence README must hold.
 #[test]

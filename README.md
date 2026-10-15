@@ -1,5 +1,10 @@
 # GPurify
 
+[![CI](https://github.com/UW-ASIC/GPurify/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/UW-ASIC/GPurify/actions/workflows/ci.yml)
+[![Nightly](https://github.com/UW-ASIC/GPurify/actions/workflows/nightly.yml/badge.svg?branch=main)](https://github.com/UW-ASIC/GPurify/actions/workflows/nightly.yml)
+[![Open issues](https://img.shields.io/github/issues/UW-ASIC/GPurify)](https://github.com/UW-ASIC/GPurify/issues)
+![Rust 2021](https://img.shields.io/badge/rust-2021-orange)
+
 Physical verification for integrated circuits: DRC, LVS, ERC and PEX, in one
 tool.
 
@@ -10,6 +15,42 @@ a tool that cannot tell those apart will eventually sign off a chip it did not
 check. GPurify reports both. Every rule says whether it ran and how many shapes
 it examined, and a run that could not check everything you asked it to check
 does not pass.
+
+## Status
+
+| Domain | Implemented | Expressible | Partial | Missing |
+|---|---:|---:|---:|---:|
+| DRC | 56 | 6 | 42 | 2 |
+| LVS | 31 | 1 | 15 | 1 |
+| ERC | 63 | 4 | 11 | 3 |
+| PEX | 9 | 0 | 7 | 0 |
+| Flow | 2 | 0 | 8 | 0 |
+
+Each row of [docs/check-catalog.tsv](docs/check-catalog.tsv) is one check a
+commercial verification tool performs, with its public source. *Expressible*
+means the existing rule kinds can write it; *partial* rows say what is still
+missing; work not yet started is in the
+[issues](https://github.com/UW-ASIC/GPurify/issues). The table is recomputed
+from the catalog by `tests/doc_counts.rs`, so it cannot drift.
+
+Every check is tested against an answer derived independently of the code
+(hand-worked values, closed forms, published examples), and wherever an
+open-source tool performs the same check, against that tool too:
+
+| Checked against | What |
+|---|---|
+| KLayout | design rules on the corpus, every exhaustive fixture and random layouts (rectilinear, 45-degree, any angle); antenna ratios; layout XOR; fill |
+| Foundry KLayout decks | the shipped sky130, gf180mcu and IHP SG13G2 decks, rule by rule, on the foundries' test structures and standard cells |
+| Netgen | LVS on every small circuit with every single fault, black boxes, multi-die stacks |
+| Magic | analytical resistance and capacitance |
+| FastCap, FastHenry | field-solved capacitance and inductance |
+| OpenROAD | antenna (`check_antennas`), IR drop and currents (PDNSim), route-level extraction (OpenRCX), LEF/DEF reading |
+| Yosys | floating gates |
+| ngspice | Liberty timing and power tables |
+
+The KLayout, foundry and open-tool comparisons run nightly; fuzzing (10
+input formats), mutation testing and a coverage floor run with them. How each
+is set up is in [docs/testing-plan.md](docs/testing-plan.md).
 
 ## Install
 
@@ -61,6 +102,10 @@ though nothing was found.
 | `all` | Everything | a missing input marks its check skipped, never passed |
 | `lib` | Nothing: writes a hard macro's Liberty `.lib` per corner, and its Verilog blackbox | `--spec <file>`; ngspice above `interface` accuracy |
 | `xor` | Two layouts against each other, layer by layer | a second layout: `gpurify xor <layout> <other> --deck <deck>` |
+| `fill` | Nothing: writes the layout with density fill added, then reports DRC on it | the deck's `fill` lines; `gpurify fill <layout> <output.gds> --deck <deck>` |
+| `enhance` | Nothing: writes the layout with redundant cuts and widened straps, then reports DRC on it | the deck's `via_redundancy` rules and `widen` lines; `gpurify enhance <layout> <output.gds> --deck <deck>` |
+| `system` | Several dies as one assembly: bump bonding, LVS and system ESD | a system file and netlist: `gpurify system <stack.json> --reference <netlist>` |
+| `compare` | Two parasitic netlists (SPEF or DSPF), net by net | `gpurify compare <reference> <candidate>`; no layout or deck |
 
 Every option, the report format and the design intent file are described in
 [docs/usage.md](docs/usage.md).
@@ -119,7 +164,9 @@ GPurify is tested against 167 GDSII cells, drawn with sky130 layer names on a
 synthetic deck, each containing a deliberate defect at a known coordinate with
 a measurement worked out by hand. All 167 agree with their expected answer.
 The shipped foundry decks are tested separately, on hand-drawn layouts at each
-rule's limit; they have not been run on foundry test structures yet.
+rule's limit, and nightly against the foundries' own KLayout decks on their test
+structures and standard cells; every difference is recorded rule by rule in
+[docs/xcheck/](docs/xcheck).
 
 ```
 DRC   ██████████████████████████████████████  94
@@ -258,10 +305,10 @@ what.
 
 This is a working tool that has not been proven against foundry signoff on
 production silicon. Do not tape out on its verdict alone. On a layout with
-45-degree edges only width, notch, space, area, hole area, edge length and
-forbidden shapes are measured (the other rules refuse such a layer), several rules measure less than
-a foundry deck does, and the
-shipped decks are incomplete. [docs/limitations.md](docs/limitations.md) lists
+edges at 45 degrees or any other angle, width, notch, space, area, hole area,
+edge length, forbidden shapes, inside, contains and enclosure are measured;
+the other rules refuse such a layer. Several rules measure less than a foundry
+deck does, and the shipped decks are incomplete. [docs/limitations.md](docs/limitations.md) lists
 every known gap.
 
 There is no licence file yet.
@@ -274,6 +321,9 @@ There is no licence file yet.
 | [docs/deck.md](docs/deck.md) | Writing a deck, and what every rule checks. |
 | [docs/liberty.md](docs/liberty.md) | Liberty for a hard macro: accuracy levels, the macro spec, how each number is measured. |
 | [docs/limitations.md](docs/limitations.md) | What GPurify cannot check yet. |
+| [docs/check-catalog.tsv](docs/check-catalog.tsv), [docs/check-sources.md](docs/check-sources.md) | Every check a commercial tool performs, its public source and GPurify's status. |
+| [docs/klayout-mirror.md](docs/klayout-mirror.md) | How each rule kind maps onto KLayout, and where the two differ. |
+| [docs/testing-plan.md](docs/testing-plan.md) | How GPurify is tested: oracles, tiers, findings. |
 | [tests/fixtures/README.md](tests/fixtures/README.md) | The test corpus and how each expected answer was derived. |
 
 ```sh
