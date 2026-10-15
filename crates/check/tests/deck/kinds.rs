@@ -16,8 +16,8 @@ use gpurify_check::deck::rules::{
     tip_spacing_table, total_area, two_width_spacing_table, via_redundancy, via_stack,
 };
 use gpurify_check::deck::{compile, Bound, CompiledDeck, DeckBuilder};
-use gpurify_check::drc::ruleset::{DfmCheck, EolParallel};
-use gpurify_check::drc::{StepKind, StepNeighbour, WireBand};
+use gpurify_check::drc::ruleset::{DfmCheck, EolParallel, SideLength};
+use gpurify_check::drc::{Eol58, StepKind, StepNeighbour, WireBand};
 use gpurify_geom::{Dbu, DbuArea, StrTable};
 use gpurify_ingest::deck::StackSource;
 
@@ -73,6 +73,7 @@ rule sl.except span_length(m; x: [100nm, 200nm], y: [150nm], x_except: 300nm, y_
 rule fsp forbidden_space(m; min: 40nm, max: 50nm, prl: 0nm)
 rule eol.w eol_space(m; eol_width: 60nm, within: 20nm, parallel: none, end_to_end: none) >= 80nm
 rule eol.p eol_space(m; eol_width: 60nm, within: 20nm, parallel: (space: 120nm, within: 50nm, two_edges: true), end_to_end: 70nm) >= 80nm
+rule eol.58 eol_space(m; eol_width: 60nm, within: 20nm, parallel: (space: 120nm, within: 50nm, two_edges: true), end_to_end: 70nm, side_length: (length: 100nm, maximum: false, two_sides: true), opposite_width: 80nm, parallel_more: (subtract_eol_width: true, min_length: 90nm), end_prl: (space: 100nm, prl: 30nm), wrong_dir: (space: 90nm, horizontal: true), extension: 10nm, enclose_cut: (cut: v, within: 40nm, space: 110nm, all_cuts: true)) >= 80nm
 rule ko eol_keep_out(m; eol_width: 60nm, backward: 0nm, side: 30nm, forward: 90nm)
 rule or origin(r)
 rule mca critical_area(m; radii: [50nm, 100nm, 200nm], weights: [0.6, 0.3, 0.1]) <= 1um2
@@ -237,6 +238,26 @@ fn build(strings: &mut StrTable) -> CompiledDeck {
     d.rule(
         "eol.p",
         eol_within_spacing(m, nm(60), nm(20), Some(parallel), Some(nm(70)), nm(80)),
+    );
+    d.rule(
+        "eol.58",
+        eol_within_spacing(m, nm(60), nm(20), Some(parallel), Some(nm(70)), nm(80)).eol58(
+            Eol58 {
+                side_length: Some(SideLength {
+                    length: nm(100),
+                    maximum: false,
+                    two_sides: true,
+                }),
+                opposite_width: Some(nm(80)),
+                subtract_eol_width: true,
+                parallel_min_length: Some(nm(90)),
+                end_prl: Some((nm(100), nm(30))),
+                wrong_dir: Some((nm(90), true)),
+                extension: Some(nm(10)),
+                enclose_cut: None,
+            },
+            Some((v, nm(40), nm(110), true)),
+        ),
     );
     d.rule("ko", eol_keep_out(m, nm(60), nm(0), nm(30), nm(90)));
     d.rule("or", origin(r));

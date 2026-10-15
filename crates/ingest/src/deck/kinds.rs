@@ -410,6 +410,35 @@ const EOL_PARALLEL: &[Param] = &[
     p("within", "par_within", Dim::Length),
     p("two_edges", "two_edges", Dim::Bool),
 ];
+/// `LEF58_SPACING ENDOFLINE`'s `MINLENGTH [TWOSIDES]` / `MAXLENGTH`.
+const EOL_SIDE_LENGTH: &[Param] = &[
+    p("length", "side_length", Dim::Length),
+    p("maximum", "side_length_maximum", Dim::Bool),
+    p("two_sides", "side_length_two_sides", Dim::Bool),
+];
+/// `PARALLELEDGE [SUBTRACTEOLWIDTH] .. [MINLENGTH minLength]`.
+const EOL_PARALLEL_MORE: &[Param] = &[
+    p("subtract_eol_width", "par_subtract_eol_width", Dim::Bool),
+    opt("min_length", "par_min_length", Dim::Length),
+];
+/// `ENDPRLSPACING endPrlSpace PRL endPrl`.
+const EOL_END_PRL: &[Param] = &[
+    p("space", "end_prl_space", Dim::Length),
+    p("prl", "end_prl", Dim::Length),
+];
+/// `WRONGDIRSPACING wrongDirSpace`, with the layer's preferred direction.
+const EOL_WRONG_DIR: &[Param] = &[
+    p("space", "wrong_dir_space", Dim::Length),
+    p("horizontal", "wrong_dir_horizontal", Dim::Bool),
+];
+/// `ENCLOSECUT [BELOW | ABOVE] encloseDist CUTSPACING cutToMetalSpace
+/// [ALLCUTS]`, the cut layer named.
+const EOL_ENCLOSE_CUT: &[Param] = &[
+    p("cut", "enclose_cut_layer", Dim::Layer),
+    p("within", "enclose_cut_within", Dim::Length),
+    p("space", "enclose_cut_space", Dim::Length),
+    p("all_cuts", "enclose_cut_all", Dim::Bool),
+];
 const CMP_MODEL: &[Param] = &[
     p("target", "cmp_target_density", Dim::Fraction),
     p("sensitivity", "cmp_thickness_sensitivity", Dim::Length),
@@ -555,6 +584,27 @@ pub(crate) const KINDS: &[Kind] = &[
             p("within", "eol_within", Dim::Length),
             opt("parallel", "", Dim::Group(EOL_PARALLEL)),
             opt("end_to_end", "end_to_end", Dim::Length),
+        ],
+    ),
+    // With the `LEF58_SPACING ENDOFLINE` qualifiers, each `none` or stated.
+    drc(
+        "eol_space",
+        Cmp::Ge,
+        "eol_within_spacing",
+        &[0],
+        LIMIT,
+        &[
+            p("eol_width", "eol_width", Dim::Length),
+            p("within", "eol_within", Dim::Length),
+            opt("parallel", "", Dim::Group(EOL_PARALLEL)),
+            opt("end_to_end", "end_to_end", Dim::Length),
+            opt("side_length", "", Dim::Group(EOL_SIDE_LENGTH)),
+            opt("opposite_width", "opposite_width", Dim::Length),
+            opt("parallel_more", "", Dim::Group(EOL_PARALLEL_MORE)),
+            opt("end_prl", "", Dim::Group(EOL_END_PRL)),
+            opt("wrong_dir", "", Dim::Group(EOL_WRONG_DIR)),
+            opt("extension", "eol_extension", Dim::Length),
+            opt("enclose_cut", "", Dim::Group(EOL_ENCLOSE_CUT)),
         ],
     ),
     drc(

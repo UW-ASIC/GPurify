@@ -1240,7 +1240,10 @@ the space when the facing edge is an end of line too. `TritonRoute` defines the 
 (`FlexGC_eol.cpp`), but it is not run as a differential. The oracles: the LEF 5.8 worked example
 (Example 1-18, Figures 1-23 and 1-24; SE), the keep-out's depth, sideways reach, parallel space and
 parallel reach each swept one step either side, and both-sides and end-to-end cases, hand-derived
-under the square's symmetries (SY, MR).
+under the square's symmetries (SY, MR). The `LEF58_SPACING ENDOFLINE` qualifiers (side lengths,
+opposite width, the parallel-edge search, end PRL, wrong direction, end-to-end extension, enclosed
+cut) are not mirrored either; their oracle is the LEF/DEF 5.7 text and figures, or `TritonRoute`'s
+reading where no text defines them, each swept one step either side (fixtures `eol58/*`).
 
 ### 50. eol_keep_out — NONE: KLayout has no end-of-line keep-out box
 

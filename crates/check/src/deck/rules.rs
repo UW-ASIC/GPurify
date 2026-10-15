@@ -161,6 +161,62 @@ impl RuleRow {
         self
     }
 
+    /// An [`eol_within_spacing`] row with the `LEF58_SPACING ENDOFLINE`
+    /// qualifiers of [`Eol58`](crate::drc::Eol58), the deck's `side_length:`,
+    /// `end_prl:`, `wrong_dir:` and `extension:`, and `enclose_cut:` as
+    /// `(cut, within, space, all_cuts)`, each `None` when not stated.
+    ///
+    /// # Panics
+    ///
+    /// On a row of any other kind.
+    #[must_use]
+    pub fn eol58(
+        mut self,
+        lef58: crate::drc::Eol58,
+        enclose_cut: Option<(LayerRef, Dbu, Dbu, bool)>,
+    ) -> Self {
+        assert_eq!(
+            self.kind, "eol_within_spacing",
+            "{} has no LEF58 end-of-line qualifiers",
+            self.kind
+        );
+        assert!(
+            lef58.enclose_cut.is_none(),
+            "the enclose-cut layer is a name, given as `enclose_cut`"
+        );
+        if let Some(side) = lef58.side_length {
+            side.length.put("side_length", &mut self.params);
+            side.maximum.put("side_length_maximum", &mut self.params);
+            side.two_sides
+                .put("side_length_two_sides", &mut self.params);
+        }
+        lef58.opposite_width.put("opposite_width", &mut self.params);
+        if lef58.subtract_eol_width || lef58.parallel_min_length.is_some() {
+            lef58
+                .subtract_eol_width
+                .put("par_subtract_eol_width", &mut self.params);
+            lef58
+                .parallel_min_length
+                .put("par_min_length", &mut self.params);
+        }
+        if let Some((space, prl)) = lef58.end_prl {
+            space.put("end_prl_space", &mut self.params);
+            prl.put("end_prl", &mut self.params);
+        }
+        if let Some((space, horizontal)) = lef58.wrong_dir {
+            space.put("wrong_dir_space", &mut self.params);
+            horizontal.put("wrong_dir_horizontal", &mut self.params);
+        }
+        lef58.extension.put("eol_extension", &mut self.params);
+        if let Some((cut, within, space, all)) = enclose_cut {
+            cut.put("enclose_cut_layer", &mut self.params);
+            within.put("enclose_cut_within", &mut self.params);
+            space.put("enclose_cut_space", &mut self.params);
+            all.put("enclose_cut_all", &mut self.params);
+        }
+        self
+    }
+
     /// An [`allowed_width`] row whose last width is open: it and every wider
     /// width are legal (the deck's `open_last: true`, LEF58 `WIDTHTABLE`).
     ///

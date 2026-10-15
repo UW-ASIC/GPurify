@@ -6,7 +6,7 @@
 
 use crate::common::{A, RULE};
 use gpurify_check::drc::ruleset::{ClassTable, EolParallel, SpanTable};
-use gpurify_check::drc::{DrcError, Rule, RuleSet};
+use gpurify_check::drc::{DrcError, Eol58, Rule, RuleSet};
 use gpurify_check::report::{Measurement, Outcome, RuleRun, Violations};
 use gpurify_geom::{Dbu, DbuArea, GeometryStore, Grid};
 use gpurify_ingest::deck::parse_deck;
@@ -245,6 +245,7 @@ fn lef_eol(parallel: Option<EolParallel>, end_to_end: Option<i64>) -> Rule {
         parallel,
         end_to_end: end_to_end.map(dbu),
         limit: dbu(1200),
+        lef58: Eol58::NONE,
     }
 }
 
@@ -788,6 +789,7 @@ fn the_deck_spells_each_kind_s_parameters() {
                 parallel: Some(parallel_edge(true)),
                 end_to_end: Some(dbu(1400)),
                 limit: dbu(1200),
+                lef58: Eol58::NONE,
             },
             Rule::EolWithinSpacing {
                 layer: A,
@@ -796,6 +798,7 @@ fn the_deck_spells_each_kind_s_parameters() {
                 parallel: None,
                 end_to_end: None,
                 limit: dbu(1200),
+                lef58: Eol58::NONE,
             },
             Rule::EolKeepOut {
                 layer: A,
