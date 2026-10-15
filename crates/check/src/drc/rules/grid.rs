@@ -87,11 +87,7 @@ pub(crate) fn angle(
     out: &mut Violations,
 ) -> Verdict {
     let mut examined = 0u64;
-    let polys: Box<dyn Iterator<Item = PolyId>> = match layer {
-        Some(layer) => Box::new(store.polys_on_layer(layer).map(PolyId)),
-        None => Box::new(drawn_rows(store, drawn)),
-    };
-    for poly in polys {
+    for poly in rows_of(store, (layer, drawn)) {
         let (xs, ys) = store.poly_verts(poly);
         for seg in ring_segs(xs, ys) {
             let (dx, dy) = (seg.b.x.raw() - seg.a.x.raw(), seg.b.y.raw() - seg.a.y.raw());

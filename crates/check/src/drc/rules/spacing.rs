@@ -223,7 +223,7 @@ pub(super) fn spacing_violation(
 /// Validate, index, prune at `limit`, measure every candidate pair, and label
 /// the layer's merged figures (pairs at distance zero). `false` is `Refused`,
 /// as is a layer with 45-degree edges.
-fn prepare(store: &GeometryStore, layer: LayerId, limit: Dbu, s: &mut Scratch) -> bool {
+pub(super) fn prepare(store: &GeometryStore, layer: LayerId, limit: Dbu, s: &mut Scratch) -> bool {
     s.validated.get(store, layer).is_some() && prepare_any(store, layer, limit, s)
 }
 
@@ -604,15 +604,21 @@ type Facing = (u32, u32, i64, i64);
 /// Every two edges of the merged layer `s.layer_out`, in different figures,
 /// that face each other across a gap of at most `within` and run alongside
 /// each other for a positive length, sorted by figure pair. A
-/// figure is labelled as [`prepare`] labelled the drawn rows under it
-/// (`s.rects_a`, built from the layer). Facing: parallel, out of their
-/// material toward each other, the one facing up below the one facing down.
-fn facing_runs(store: &GeometryStore, layer: LayerId, within: Dbu, s: &Scratch) -> Vec<Facing> {
+/// figure is labelled as [`prepare`] labelled its owner, the drawn row
+/// `owners` names (`owners_of` over `s.rects_a`, built from the layer).
+/// Facing: parallel, out of their material toward each other, the one
+/// facing up below the one facing down.
+fn facing_runs(
+    store: &GeometryStore,
+    layer: LayerId,
+    within: Dbu,
+    owners: &[PolyId],
+    s: &Scratch,
+) -> Vec<Facing> {
     let first_row = store.polys_on_layer(layer).start;
-    let owners = owners_of(&s.layer_out, &s.rects_a);
     // Per orientation, the edges whose material lies below (facing up) and above.
     let (mut up, mut down) = (Vec::new(), Vec::new());
-    for (figure, owner) in (0..).zip(owners) {
+    for (figure, &owner) in (0..).zip(owners) {
         let label = s.labels[(owner.0 - first_row) as usize].0;
         for ring in s.layer_out.poly_rings(figure) {
             let (xs, ys) = ring.coords();
@@ -992,13 +998,14 @@ pub(crate) fn spacing_table(
             Dbu::new_unchecked(0),
         ));
     }
-    let runs = facing_runs(store, layer, widest, s);
+    let owners = owners_of(&s.layer_out, &s.rects_a);
+    let runs = facing_runs(store, layer, widest, &owners, s);
     let polys = &s.rects_a;
     let poly_of = |row: PolyId| polys.poly_of_row[(row.0 - first_row) as usize] as usize;
     let label = |row: PolyId| s.labels[(row.0 - first_row) as usize];
     // The merged figure of each component label, for the runs of wide parts.
     let mut figure_of: Vec<(u32, u32)> = (0..)
-        .zip(owners_of(&s.layer_out, &s.rects_a))
+        .zip(owners)
         .filter(|&(_, owner)| owner.0 != u32::MAX)
         .map(|(figure, owner)| (label(owner).0, figure))
         .collect();
@@ -1258,7 +1265,13 @@ pub(crate) fn two_width_table(
             Dbu::new_unchecked(0),
         ));
     }
-    let runs = facing_runs(store, layer, widest, s);
+    let runs = facing_runs(
+        store,
+        layer,
+        widest,
+        &owners_of(&s.layer_out, &s.rects_a),
+        s,
+    );
     let polys = &s.rects_a;
     let poly_of = |row: PolyId| polys.poly_of_row[(row.0 - first_row) as usize] as usize;
     let label = |row: PolyId| s.labels[(row.0 - first_row) as usize];
@@ -1324,7 +1337,7 @@ pub(crate) fn prl_spacing(
         .get(store, layer)
         .expect("`prepare` validated it");
     s.rects_a.build(store, layer, drawn);
-    let runs = facing_runs(store, layer, limit, s);
+    let runs = facing_runs(store, layer, limit, &owners_of(&s.layer_out, &s.rects_a), s);
     let first_row = store.polys_on_layer(layer).start;
     let label = |row: PolyId| s.labels[(row.0 - first_row) as usize];
     let examined = judged_pairs(

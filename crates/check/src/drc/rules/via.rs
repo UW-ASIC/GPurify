@@ -7,8 +7,8 @@
 use super::spacing::whole_at;
 use super::width::{rects_layer, wide_rects_into};
 use super::{
-    bbox_gap2, centre, join_nested, label_pairs_into, merged, pair_distances_into, SortedRects,
-    Verdict, REFUSED,
+    bbox_gap2, centre, figure_rects, join_nested, label_pairs_into, merged, pair_distances_into,
+    SortedRects, Verdict, REFUSED,
 };
 use crate::drc::ruleset::CutAreaBands;
 use crate::drc::{CutClassTable, Scratch};
@@ -380,23 +380,6 @@ pub(crate) fn cut_class_spacing(
         }
     }
     (Outcome::Ran, examined)
-}
-
-/// A merged layer's rectangles, each labelled with its figure.
-fn figure_rects(figures: &ValidatedLayer) -> SortedRects<u32> {
-    let (mut rects, mut start) = (Vec::new(), Vec::new());
-    decompose_into(figures, &mut rects, &mut start);
-    SortedRects::new(
-        start
-            .windows(2)
-            .zip(0u32..)
-            .flat_map(|(span, f)| {
-                rects[span[0] as usize..span[1] as usize]
-                    .iter()
-                    .map(move |&r| (r, f))
-            })
-            .collect(),
-    )
 }
 
 /// LEF `MINIMUMCUT`: every via held by the wide part of `wide` (where a

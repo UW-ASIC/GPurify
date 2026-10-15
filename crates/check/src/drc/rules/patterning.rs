@@ -7,14 +7,13 @@
 //! two masks by bipartiteness (never gives up), three or more by DSATUR with
 //! backtracking under a budget. Running out of budget is `Refused`, never clean.
 
-use super::{
-    centre, gap_midpoint, join_nested, label_pairs_into, owners_of, pair_distances_into, Verdict,
-};
+use super::facing::merged_owners;
+use super::spacing::prepare;
+use super::{centre, gap_midpoint, Verdict};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, SkipReason, Violation, Violations};
 use gpurify_geom::boolean::union_into;
 use gpurify_geom::derive::overlapping_flags;
-use gpurify_geom::index::{candidate_pairs_into, SpatialIndex};
 use gpurify_geom::view::ValidatedLayer;
 use gpurify_geom::width::{narrowest_facing, narrowest_width};
 use gpurify_geom::{Bbox, Dbu, GeometryStore, LayerId, PolyId};
@@ -347,24 +346,12 @@ fn conflict_graph(
     s: &mut Scratch,
 ) -> Option<Vec<u32>> {
     let shapes = store.polys_on_layer(layer);
-    let (first_row, node_count) = (shapes.start, shapes.end - shapes.start);
-    s.validated.get(store, layer)?;
-    SpatialIndex::build_into(store, layer, &mut s.index_a);
-    candidate_pairs_into(store, &s.index_a, spacing, &mut s.pairs);
-    pair_distances_into(store, &s.pairs, spacing, &mut s.dists);
-    s.holes.build(store, [layer]);
-    join_nested(store, &s.holes, &s.pairs, &mut s.dists);
+    let first_row = shapes.start;
     // Touching rows print as one shape: merge them (skipping this could create
     // an odd cycle). A figure is named by its lowest row.
-    label_pairs_into(
-        first_row,
-        node_count,
-        &s.pairs,
-        &s.dists,
-        |d2| d2.raw() == 0,
-        &mut s.edges,
-        &mut s.labels,
-    );
+    if !prepare(store, layer, spacing, s) {
+        return None;
+    }
 
     // Conflict edges between distinct figures closer than `spacing`.
     let limit2 = spacing.mul_wide(spacing);
@@ -379,11 +366,9 @@ fn conflict_graph(
     // A figure whose own notch is narrower than `spacing` holds two parts
     // closer than one mask allows (Calibre's self-conflict, "an odd cycle
     // of one"): a loop on its node, which no palette colours.
-    let drawn = s.validated.get(store, layer)?;
-    union_into(drawn, &ValidatedLayer::default(), &mut s.layer_out).ok()?;
-    s.rects_a.build(store, layer, drawn);
+    let owners = merged_owners(store, layer, s)?;
     let mut figure_node = Vec::with_capacity(s.layer_out.len());
-    for (idx, owner) in (0..).zip(owners_of(&s.layer_out, &s.rects_a)) {
+    for (idx, owner) in (0..).zip(owners) {
         let node = s.labels[(owner.0 - first_row) as usize].0;
         figure_node.push(node);
         let notch = narrowest_facing(s.layer_out.get(idx), false, &mut s.facing);

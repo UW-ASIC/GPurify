@@ -127,7 +127,7 @@ pub(crate) struct Scratch {
     rect_start: Vec<u32>,
     edges: Vec<(u32, u32)>,
     labels: Vec<ComponentLabel>,
-    /// Per-row flags (wide shapes), per-node colours.
+    /// Per-node mask colours of a conflict graph.
     bytes: Vec<u8>,
     facing: gpurify_geom::width::FacingScratch,
     rects_a: rules::LayerRects,
@@ -147,20 +147,8 @@ impl Validated {
     /// has an edge at 45 degrees (the rule is `Refused`): for a rule not yet
     /// proved on 45-degree geometry.
     pub(crate) fn get(&mut self, store: &GeometryStore, layer: LayerId) -> Option<&ValidatedLayer> {
-        self.get_octilinear(store, layer)
-            .filter(|validated| validated.is_rectilinear())
-    }
-
-    /// `layer` validated with edges at 45 degrees allowed, or `None` when it
-    /// does not validate or has an edge at another angle (the rule is
-    /// `Refused`): for a rule proved on octilinear geometry.
-    pub(crate) fn get_octilinear(
-        &mut self,
-        store: &GeometryStore,
-        layer: LayerId,
-    ) -> Option<&ValidatedLayer> {
         self.get_any(store, layer)
-            .filter(|validated| validated.is_octilinear())
+            .filter(|validated| validated.is_rectilinear())
     }
 
     /// `layer` validated with edges at any angle allowed, or `None` when it

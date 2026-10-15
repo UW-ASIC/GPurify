@@ -12,13 +12,12 @@
 //! stretch its two nearest offending edges face each other over.
 
 use super::spacing::{line_of, nearest, on_line, spacing_violation};
-use super::{centre, merged, mid, owners_of, ring_segs, SortedRects, Verdict, REFUSED};
+use super::{centre, figure_rects, merged, mid, owners_of, ring_segs, Verdict, REFUSED};
 use crate::drc::ruleset::{ClassTable, EncloseCut, Eol58, EolParallel, SpanTable};
 use crate::drc::Scratch;
 use crate::report::{Measurement, Outcome, Severity, Violation, Violations};
 use gpurify_geom::derive::merge_into;
 use gpurify_geom::ops::{isqrt, Point, Seg};
-use gpurify_geom::rects::decompose_into;
 use gpurify_geom::{
     Bbox, Dbu, DbuArea, GeometryStore, LayerId, PolyId, ValidatedLayer, MAX_ABS_DBU,
 };
@@ -520,19 +519,7 @@ pub(crate) fn eol_keep_out(
         }
         vertices.sort_unstable();
     }
-    let (mut rects, mut start) = (Vec::new(), Vec::new());
-    decompose_into(&s.layer_out, &mut rects, &mut start);
-    let material = SortedRects::new(
-        start
-            .windows(2)
-            .zip(0u32..)
-            .flat_map(|(span, figure)| {
-                rects[span[0] as usize..span[1] as usize]
-                    .iter()
-                    .map(move |&r| (r, figure))
-            })
-            .collect(),
-    );
+    let material = figure_rects(&s.layer_out);
     let mut examined = 0u64;
     for end in edges
         .iter()
