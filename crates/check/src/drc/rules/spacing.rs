@@ -345,9 +345,8 @@ pub(crate) fn min_spacing_diff(
     {
         return REFUSED;
     }
-    SpatialIndex::build_into(store, a_layer, &mut s.index_a);
     SpatialIndex::build_into(store, b_layer, &mut s.index_b);
-    cross_layer_pairs_into(store, &s.index_a, &s.index_b, limit, &mut s.pairs);
+    cross_layer_pairs_into(store, a_layer, &s.index_b, limit, &mut s.pairs);
     pair_distances_into(store, &s.pairs, limit, &mut s.dists);
     s.holes.build(store, [a_layer, b_layer]);
     join_nested(store, &s.holes, &s.pairs, &mut s.dists);
@@ -437,9 +436,8 @@ pub(crate) fn projection_spacing(
     if s.validated.get(store, a_layer).is_none() || s.validated.get(store, b_layer).is_none() {
         return REFUSED;
     }
-    SpatialIndex::build_into(store, a_layer, &mut s.index_a);
     SpatialIndex::build_into(store, b_layer, &mut s.index_b);
-    cross_layer_pairs_into(store, &s.index_a, &s.index_b, limit, &mut s.pairs);
+    cross_layer_pairs_into(store, a_layer, &s.index_b, limit, &mut s.pairs);
     pair_distances_into(store, &s.pairs, limit, &mut s.dists);
     s.holes.build(store, [a_layer, b_layer]);
     join_nested(store, &s.holes, &s.pairs, &mut s.dists);
@@ -842,9 +840,8 @@ pub(crate) fn stack_spacing(
             .map(|(_, net)| net)
             .min()
     };
-    SpatialIndex::build_into(store, a, &mut s.index_a);
     SpatialIndex::build_into(store, b, &mut s.index_b);
-    cross_layer_pairs_into(store, &s.index_a, &s.index_b, limit, &mut s.pairs);
+    cross_layer_pairs_into(store, a, &s.index_b, limit, &mut s.pairs);
     pair_distances_into(store, &s.pairs, limit, &mut s.dists);
     s.holes.build(store, [a, b]);
     join_nested(store, &s.holes, &s.pairs, &mut s.dists);
@@ -925,9 +922,8 @@ fn pair_spacing_by_net(
             if s.validated.get(store, a).is_none() || s.validated.get(store, b).is_none() {
                 return REFUSED;
             }
-            SpatialIndex::build_into(store, a, &mut s.index_a);
             SpatialIndex::build_into(store, b, &mut s.index_b);
-            cross_layer_pairs_into(store, &s.index_a, &s.index_b, widest, &mut s.pairs);
+            cross_layer_pairs_into(store, a, &s.index_b, widest, &mut s.pairs);
             pair_distances_into(store, &s.pairs, widest, &mut s.dists);
             s.holes.build(store, [a, b]);
             join_nested(store, &s.holes, &s.pairs, &mut s.dists);

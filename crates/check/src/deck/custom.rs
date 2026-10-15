@@ -222,15 +222,13 @@ impl<'a> CustomCtx<'a> {
     /// within `distance`, exactly; ascending.
     pub fn pairs_within(&self, a: usize, b: usize, distance: Dbu) -> Vec<(PolyId, PolyId)> {
         let (a, b) = (self.inputs[a], self.inputs[b]);
-        let mut index_a = SpatialIndex::default();
-        SpatialIndex::build_into(self.store, a, &mut index_a);
+        let mut index = SpatialIndex::default();
+        SpatialIndex::build_into(self.store, b, &mut index);
         let mut pairs = Vec::new();
         if a == b {
-            candidate_pairs_into(self.store, &index_a, distance, &mut pairs);
+            candidate_pairs_into(self.store, &index, distance, &mut pairs);
         } else {
-            let mut index_b = SpatialIndex::default();
-            SpatialIndex::build_into(self.store, b, &mut index_b);
-            cross_layer_pairs_into(self.store, &index_a, &index_b, distance, &mut pairs);
+            cross_layer_pairs_into(self.store, a, &index, distance, &mut pairs);
         }
         let limit = distance.mul_wide(distance);
         pairs.retain(|&(p, q)| poly_dist2(self.store, p, q) <= limit);

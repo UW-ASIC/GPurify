@@ -300,7 +300,6 @@ pub fn recognise_into(
         role.extend((0..width).map(|position| role_at(recognition.kind[row], position)));
     }
 
-    let mut marker_index = SpatialIndex::default();
     // One index per terminal layer, shared by every recogniser naming it, and
     // that layer's polygons touching another of it, once a recogniser
     // measures a terminal there.
@@ -331,7 +330,6 @@ pub fn recognise_into(
         if marker_count == 0 {
             continue;
         }
-        SpatialIndex::build_into(store, recognition.marker[row], &mut marker_index);
 
         // `bind[m * width + k]`: the net position `k` of marker `m` landed on,
         // `NONE` when unfilled or poisoned.
@@ -409,7 +407,7 @@ pub fn recognise_into(
                 *pieced = Some(touched);
             }
             let (index, pieced) = (&*index, pieced.as_deref().unwrap_or_default());
-            cross_layer_pairs_into(store, &marker_index, index, touching, &mut pairs);
+            cross_layer_pairs_into(store, recognition.marker[row], index, touching, &mut pairs);
             // Box-only hits must not bind: a spurious low-id pair would win.
             retain_intersecting_into(store, &nets.holes, &pairs, &mut exact);
 

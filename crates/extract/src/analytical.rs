@@ -457,9 +457,14 @@ fn couple_into(
             }
             let per_um2 = EPSILON0_AF_PER_UM * k / gap_um;
 
-            SpatialIndex::build_into(store, lower_layer, &mut index_a);
             SpatialIndex::build_into(store, upper_layer, &mut index_b);
-            cross_layer_pairs_into(store, &index_a, &index_b, Dbu::new_unchecked(0), &mut pairs);
+            cross_layer_pairs_into(
+                store,
+                lower_layer,
+                &index_b,
+                Dbu::new_unchecked(0),
+                &mut pairs,
+            );
             for &(a, b) in &pairs {
                 if same_net(a, b) {
                     continue;
@@ -499,7 +504,6 @@ fn vias_into(
     const NO_REGION: u32 = u32::MAX;
     let store = rects;
 
-    let mut cut_index = SpatialIndex::default();
     let mut plate_index = SpatialIndex::default();
     let mut pairs = Vec::new();
     // Indexed by the cut's row; a cut missing a plate keeps the sentinel.
@@ -515,14 +519,13 @@ fn vias_into(
             continue;
         }
 
-        SpatialIndex::build_into(store, cut_layer, &mut cut_index);
         // Pairs come out `(cut, plate)`; the lowest plate wins, independent of
         // emission order.
         for (plate_layer, landing) in [(lower, &mut below), (upper, &mut above)] {
             SpatialIndex::build_into(store, plate_layer, &mut plate_index);
             cross_layer_pairs_into(
                 store,
-                &cut_index,
+                cut_layer,
                 &plate_index,
                 Dbu::new_unchecked(0),
                 &mut pairs,

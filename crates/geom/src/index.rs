@@ -261,40 +261,33 @@ pub fn candidate_pairs_into(
     distance: Dbu,
     out: &mut Vec<(PolyId, PolyId)>,
 ) {
-    out.clear();
-    let layer = built(index);
-    if index.is_empty() {
-        return;
-    }
-    prune_pairs::<true>(store, index, layer, distance, out);
+    prune_pairs::<true>(store, index, built(index), distance, out);
 }
 
 /// Every pair between two *different* layers whose boxes are within
-/// `distance`, `a` from `a_index`'s layer and `b` from `b_index`'s, into `out`
+/// `distance`, `a` from `a_layer` and `b` from `b_index`'s layer, into `out`
 /// (cleared and refilled), ascending and deduplicated. The same superset
-/// contract as [`candidate_pairs_into`].
+/// contract as [`candidate_pairs_into`]. Only the `b` side needs an index:
+/// each row of `a_layer` is looked up in it.
 ///
 /// # Panics
 ///
-/// When either index was never built.
+/// When `b_index` was never built, or `a_layer` is past
+/// [`GeometryStore::layer_count`].
 pub fn cross_layer_pairs_into(
     store: &GeometryStore,
-    a_index: &SpatialIndex,
+    a_layer: LayerId,
     b_index: &SpatialIndex,
     distance: Dbu,
     out: &mut Vec<(PolyId, PolyId)>,
 ) {
-    out.clear();
-    let a_layer = built(a_index);
     built(b_index);
-    if a_index.is_empty() || b_index.is_empty() {
-        return;
-    }
     prune_pairs::<false>(store, b_index, a_layer, distance, out);
 }
 
 /// Gather every row `index` can reach from each row of `layer`, keep the pairs
-/// whose boxes are `within` distance, then sort and dedup. `SAME` means `index`
+/// whose boxes are `within` distance, then sort and dedup, into `out`
+/// (cleared and refilled). `SAME` means `index`
 /// holds `layer` itself, so only `a < b` is emitted. Filtering before the sort is
 /// the fast order: the gathered superset is ~100x what survives.
 fn prune_pairs<const SAME: bool>(
@@ -468,11 +461,11 @@ mod tests {
     #[test]
     fn cross_layer_pairs_equal_the_all_pairs_scan() {
         let store = corpus(93, 10);
-        let (a_index, b_index) = (indexed(&store, A), indexed(&store, B));
+        let b_index = indexed(&store, B);
         let mut out = Vec::new();
         for distance in [0i64, 30, 400] {
             let d = Dbu::new_unchecked(distance);
-            cross_layer_pairs_into(&store, &a_index, &b_index, d, &mut out);
+            cross_layer_pairs_into(&store, A, &b_index, d, &mut out);
             let mut want = Vec::new();
             for a in store.polys_on_layer(A) {
                 for b in store.polys_on_layer(B) {
