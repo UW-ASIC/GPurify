@@ -22,6 +22,7 @@ use gpurify_geom::view::{validate_layer_into, ValidatedLayer};
 use gpurify_geom::{Bbox, LayerId, PolyId};
 use gpurify_geom::{Dbu, DbuArea, Grid, MAX_ABS_DBU};
 use gpurify_ingest::deck::Connectivity;
+use gpurify_ingest::lefdef::AntennaKind;
 
 /// What an [`AntennaTable`] row counts as collecting area. A deck row states
 /// one measure for all of its collectors.
@@ -95,6 +96,90 @@ impl Stack {
     }
 }
 
+/// A placed macro pin's antenna data, which stands for what the macro's
+/// abstract hides: the gates, diffusion and wiring inside it behind the
+/// pin (LEF/DEF 5.8 Appendix C, "Calculations for Hierarchical Designs";
+/// catalog ERC-A14). The engine reads one per placed pin of a DEF's
+/// component whose LEF `PIN` states any `ANTENNA*` value and whose net the
+/// DEF names.
+///
+/// From the stage at which the pin's conductor is etched, the pin is on
+/// its polygon's net, and every row counts on that net:
+///
+/// - `ANTENNAGATEAREA` as a gate of that area, judged like a drawn one: a
+///   value stated for a layer is the gate area joined through that layer
+///   and those below, so a stage reads the value of the highest stated
+///   layer standing, else the one stated for every layer. The pin's
+///   gate is reported at its polygon.
+/// - `ANTENNADIFFAREA` the same way, as diode area, in a row that names a
+///   `diode` layer.
+/// - `ANTENNAPARTIALMETALAREA` (`ANTENNAPARTIALMETALSIDEAREA` in a
+///   sidewall row, `ANTENNAPARTIALCUTAREA` on a cut) as collecting area of
+///   the layer it names (or every layer), "adding the pin's geometric
+///   metal area and the ANTENNAPARTIALMETALAREA value" (p. 142).
+/// - `ANTENNAMAXAREACAR` (`ANTENNAMAXSIDEAREACAR`, `ANTENNAMAXCUTCAR`), in
+///   a row of more than one collector (a cumulative ratio), as the ratio
+///   the pin's own gate has gathered inside the macro when its layer is
+///   etched: Example 1's `CAR(M1, G1) = PAR(M1, G1) + PIN A's CAR`.
+///
+/// Every row counts the pin's default oxide model (`OXIDE1`): a deck with
+/// a row per oxide class holds the pin's gate to each.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MacroPinAntenna {
+    /// One of the pin's polygons in the store, on a conductor.
+    pub poly: PolyId,
+    /// What the LEF states, on which deck layer (`None`: every layer), and
+    /// the value: an area in square database units, or a ratio.
+    pub values: Vec<(AntennaKind, Option<LayerId>, f64)>,
+}
+
+impl MacroPinAntenna {
+    /// A gate or diffusion area joined to the pin when `stage` is etched,
+    /// doubled: the value of the highest stated layer standing, else the
+    /// value stated for every layer, else 0. With no stages (`None`), the
+    /// value for every layer, else the largest stated.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "an area in square database units, far below 2^63"
+    )]
+    fn joined(&self, kind: AntennaKind, stack: &Stack, stage: Option<usize>) -> i128 {
+        let mut layered: Option<(usize, f64)> = None;
+        let mut every = None;
+        for &(what, layer, value) in &self.values {
+            if what != kind {
+                continue;
+            }
+            match layer {
+                None => every = Some(value),
+                Some(layer) => {
+                    let at = stack.standing(layer).unwrap_or(usize::MAX);
+                    let fits = stage.is_none_or(|top| at <= top);
+                    let higher = layered.is_none_or(|(best, v)| match stage {
+                        Some(_) => at >= best,
+                        None => value > v,
+                    });
+                    if fits && higher {
+                        layered = Some((at, value));
+                    }
+                }
+            }
+        }
+        let value = layered.map(|(_, v)| v).or(every).unwrap_or(0.0);
+        (2.0 * value).round() as i128
+    }
+
+    /// A value stated for `layer`, else for every layer, else 0.
+    fn on(&self, kind: AntennaKind, layer: LayerId) -> f64 {
+        let find = |want: Option<LayerId>| {
+            self.values
+                .iter()
+                .find(|&&(what, l, _)| what == kind && l == want)
+                .map(|v| v.2)
+        };
+        find(Some(layer)).or_else(|| find(None)).unwrap_or(0.0)
+    }
+}
+
 /// A first-order CMP model: finished thickness linear in local density, off
 /// its nominal by `sensitivity * (density - target)`. Only that excursion is
 /// limited, so the nominal thickness itself is not stated. Deck:
@@ -151,6 +236,10 @@ pub struct CmpModel {
 ///   limit with a protection diode (IHP Ant.b without, Ant.e with) writes it
 ///   as another row. This is [KLayout] `antenna_check` with a diode layer and
 ///   no factor: "the respective network is skipped".
+/// - a placed macro pin's LEF antenna data ([`MacroPinAntenna`]) counts on
+///   its net: its gate area as a gate, its diffusion as diode area, its
+///   partial areas as collecting area and, in a cumulative row, its
+///   maximum CAR as the ratio its gate brings (ERC-A14).
 /// - an oxide class is a gate layer of its own, one row each: LEF's
 ///   `ANTENNAMODEL OXIDE1-4` gives each model its own gate area and limits,
 ///   and gf180 states ANT.1-ANT.15 per "related gate oxide area".
@@ -180,7 +269,7 @@ pub struct CmpModel {
 ///   layer) is [`AntennaElectricalTable`]'s.
 ///
 /// Catalog: ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A9, ERC-A11,
-/// ERC-A12, ERC-A13 in the [check catalog]. Defined by
+/// ERC-A12, ERC-A13, ERC-A14 in the [check catalog]. Defined by
 /// [LEF/DEF 5.8] Appendix C (PAR, CAR, `ANTENNAMODEL`); [GF180MCU] ANT.1-ANT.15;
 /// [IHP SG13G2] Ant.a-Ant.f; [SKY130] antenna rules, licon.1 and via.1;
 /// [KLayout] `antenna_check` (diodes). Source tags are in [check-sources.md].
@@ -278,7 +367,7 @@ pub struct AntennaTable {
 /// credit another (sky130's `AntennaDiode` excludes the `pAntennaShort`).
 ///
 /// Catalog: ERC-A4, ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A9, ERC-A12,
-/// ERC-A13 in the [check catalog]. Defined by [SKY130] antenna EGAR, .ar.1
+/// ERC-A13, ERC-A14 in the [check catalog]. Defined by [SKY130] antenna EGAR, .ar.1
 /// and Table Ig, and the sky130 technology LEF's PWL tables; [LEF/DEF 5.8]
 /// `ANTENNACUMROUTINGPLUSCUT`, `ANTENNAAREAFACTOR`, `ANTENNAAREAMINUSDIFF`,
 /// `ANTENNAGATEPLUSDIFF`, `ANTENNAAREADIFFREDUCEPWL`, `ANTENNADIFFAREARATIO`
@@ -714,6 +803,7 @@ fn pwl(points: &[(DbuArea, f64)], area: i128) -> f64 {
 )]
 fn antenna_row(
     design: Design<'_>,
+    pins: &[MacroPinAntenna],
     head: (&RuleHead, usize),
     (gate_layer, collectors, diode): (LayerId, &[LayerId], Option<LayerId>),
     exempt: Option<LayerId>,
@@ -728,7 +818,15 @@ fn antenna_row(
     // With no gate there is nothing to measure, whatever the collectors hold
     // (a collector that cannot merge refuses only a row that would read it).
     let gates = merged(design, gate_layer, scratch)?;
-    if gates.len() == 0 {
+    let gate_pins: Vec<&MacroPinAntenna> = pins
+        .iter()
+        .filter(|pin| {
+            pin.values
+                .iter()
+                .any(|&(kind, _, v)| kind == AntennaKind::Gate && v > 0.0)
+        })
+        .collect();
+    if gates.len() == 0 && gate_pins.is_empty() {
         return Some(0);
     }
     // A collector named twice collects once, with its first measure.
@@ -768,13 +866,17 @@ fn antenna_row(
     stages.sort_unstable();
     stages.dedup();
 
-    // Per gate figure: the summed ratio, its net at each stage (stage-major),
-    // and the doubled diode area on its net at the row's stage.
+    // Per gate, the figures then the macro pins' gates: the summed ratio,
+    // its net at each stage (stage-major), and the doubled diode area on
+    // its net at the row's stage.
     let n = gates.len();
-    let mut ratio = vec![0.0f64; n];
-    let mut key = vec![NetId::NONE; n * stages.len()];
-    let mut diode_area = vec![0i128; n];
-    let mut exempted = vec![false; n];
+    let total = n + gate_pins.len();
+    let cumulative = read.len() > 1;
+    let is_cut = |layer: LayerId| stack.vias.iter().any(|via| via.0 == layer);
+    let mut ratio = vec![0.0f64; total];
+    let mut key = vec![NetId::NONE; total * stages.len()];
+    let mut diode_area = vec![0i128; total];
+    let mut exempted = vec![false; total];
     let mut net_of = vec![NetId::NONE; store.poly_count()];
     let mut staged = std::mem::take(&mut scratch.staged_nets);
     for (s, &stage) in stages.iter().enumerate() {
@@ -786,6 +888,7 @@ fn antenna_row(
         layers.push(gate_layer);
         layers.extend(diode);
         layers.extend(exempt.filter(|_| last));
+        layers.extend(pins.iter().map(|pin| store.poly_layer(pin.poly)));
         layers.sort_unstable();
         layers.dedup();
         let Some(count) = stage_nets(
@@ -802,18 +905,32 @@ fn antenna_row(
         };
 
         let mut gate_area = vec![0i128; count];
-        let gate_net = &mut key[s * n..(s + 1) * n];
-        for (g, net) in gate_net.iter_mut().enumerate() {
+        let gate_net = &mut key[s * total..(s + 1) * total];
+        for (g, net) in gate_net[..n].iter_mut().enumerate() {
             *net = gates.net(g, &net_of);
             if *net != NetId::NONE {
                 gate_area[net.idx()] += gates.area2[g];
             }
         }
+        let pin_net = |pin: &MacroPinAntenna| net_of[pin.poly.idx()];
+        for (net, pin) in gate_net[n..].iter_mut().zip(&gate_pins) {
+            *net = pin_net(pin);
+            if *net != NetId::NONE {
+                gate_area[net.idx()] += pin.joined(AntennaKind::Gate, stack, stage);
+            }
+        }
         // The doubled diode area on each net as this stage stands.
-        let on_net = diodes.as_ref().map_or_else(
+        let mut on_net = diodes.as_ref().map_or_else(
             || vec![0i128; count],
             |figures| figures.area_per_net(&net_of, count),
         );
+        if diode.is_some() {
+            for pin in pins {
+                if pin_net(pin) != NetId::NONE {
+                    on_net[pin_net(pin).idx()] += pin.joined(AntennaKind::Diff, stack, stage);
+                }
+            }
+        }
         let exempt_on = match (&exempts, last) {
             (Some(figures), true) => figures.area_per_net(&net_of, count),
             _ => vec![0i128; count],
@@ -833,13 +950,41 @@ fn antenna_row(
                     };
                 }
             }
+            // The macro pins' partial areas on this layer, and the ratio a
+            // pin's gate has gathered inside its macro.
+            let (partial, car) = match (is_cut(read[c].0), read[c].1) {
+                (true, _) => (AntennaKind::PartialCut, AntennaKind::MaxCutCar),
+                (false, AntennaMeasure::Area) => {
+                    (AntennaKind::PartialMetal, AntennaKind::MaxAreaCar)
+                }
+                (false, AntennaMeasure::Sidewall { .. }) => {
+                    (AntennaKind::PartialMetalSide, AntennaKind::MaxSideAreaCar)
+                }
+            };
+            for pin in pins {
+                if pin_net(pin) != NetId::NONE {
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        reason = "an area in square database units, far below 2^63"
+                    )]
+                    let doubled = (2.0 * pin.on(partial, read[c].0)).round() as i128;
+                    mine[pin_net(pin).idx()] += doubled;
+                }
+            }
+            if cumulative {
+                for (i, pin) in gate_pins.iter().enumerate() {
+                    if gate_net[n + i] != NetId::NONE {
+                        ratio[n + i] += pin.on(car, read[c].0);
+                    }
+                }
+            }
             let Some(par) = par else {
                 for (sum, area) in collect.iter_mut().zip(&mine) {
                     *sum += area;
                 }
                 continue;
             };
-            let factor = if stack.vias.iter().any(|via| via.0 == read[c].0) {
+            let factor = if is_cut(read[c].0) {
                 par.cut_factor
             } else {
                 1.0
@@ -878,8 +1023,10 @@ fn antenna_row(
     // Gates on a net at the row's stage, grouped by their net at every stage,
     // the row's stage first.
     let top = stages.len() - 1;
-    let net_at = |g: usize, s: usize| key[s * n + g];
-    let mut order: Vec<usize> = (0..n).filter(|&g| net_at(g, top) != NetId::NONE).collect();
+    let net_at = |g: usize, s: usize| key[s * total + g];
+    let mut order: Vec<usize> = (0..total)
+        .filter(|&g| net_at(g, top) != NetId::NONE)
+        .collect();
     let cmp = |a: &usize, b: &usize| {
         (0..=top)
             .rev()
@@ -895,7 +1042,9 @@ fn antenna_row(
         if exempted[first] {
             continue;
         }
-        let Some((value, limit)) = judge(ratio[first], DbuArea::new(diode_area[first] / 2)) else {
+        // A macro pin's gate brings its own inside ratio: the group's worst.
+        let worst = group.iter().map(|&g| ratio[g]).fold(f64::MIN, f64::max);
+        let Some((value, limit)) = judge(worst, DbuArea::new(diode_area[first] / 2)) else {
             continue;
         };
         let limit = Measurement::Ratio(limit);
@@ -905,12 +1054,18 @@ fn antenna_row(
         }
         let poly = group
             .iter()
-            .map(|&g| gates.rows(g)[0])
+            .map(|&g| {
+                if g < n {
+                    gates.rows(g)[0]
+                } else {
+                    gate_pins[g - n].poly
+                }
+            })
             .min()
             .expect("a group has a gate");
         out.push(Violation {
             rule: head.0.rule[head.1],
-            layer: gate_layer,
+            layer: store.poly_layer(poly),
             severity: head.0.severity[head.1],
             at: centre(store.poly_bbox(poly)),
             measured: Measurement::Ratio(value),
@@ -936,6 +1091,7 @@ fn antenna_row(
 /// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_antenna(
     design: Design<'_>,
+    pins: &[MacroPinAntenna],
     table: &AntennaTable,
     scratch: &mut Scratch,
     out: &mut Violations,
@@ -947,6 +1103,7 @@ pub fn check_antenna(
         let span = table.collector_start[row] as usize..table.collector_start[row + 1] as usize;
         let examined = antenna_row(
             design,
+            pins,
             (&table.head, row),
             (
                 table.gate[row],
@@ -979,6 +1136,7 @@ pub fn check_antenna(
 /// Panics if `table`'s columns break the [table invariants](super#tables).
 pub fn check_antenna_electrical(
     design: Design<'_>,
+    pins: &[MacroPinAntenna],
     grid: Grid,
     table: &AntennaElectricalTable,
     scratch: &mut Scratch,
@@ -998,6 +1156,7 @@ pub fn check_antenna_electrical(
         let span = table.collector_start[row] as usize..table.collector_start[row + 1] as usize;
         let examined = antenna_row(
             design,
+            pins,
             (&table.head, row),
             (
                 table.gate[row],

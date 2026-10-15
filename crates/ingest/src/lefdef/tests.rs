@@ -225,7 +225,7 @@ fn every_orientation_places_the_pin_where_the_reference_says() {
         let got = flatten(&d, &lef()).expect("flattens");
         assert_eq!(got[0].shape.bbox(), pin, "{orient}");
         assert_eq!(got[0].net.as_deref(), Some("n"));
-        assert_eq!(got[0].origin, Origin::MacroPin(0));
+        assert_eq!(got[0].origin, Origin::MacroPin(0, 0));
         // The obstruction, the upper-right unit square, stays in the cell box.
         let (x0, y0, x1, y1) = got[1].shape.bbox();
         let (w, h) = if matches!(orient, "W" | "E" | "FW" | "FE") {
@@ -405,4 +405,55 @@ fn the_written_stream_reads_back_shape_for_shape() {
         &strings
     )
     .is_err());
+}
+
+/// A pin's antenna statements read as the reference's Example 1-32 and its
+/// hierarchical sample state them: areas and ratios with their layer or
+/// none, the `OXIDE2` model's gate area and ratios skipped while its
+/// diffusion and partial areas (which no oxide model governs) are kept,
+/// and a statement repeated for one layer read as its last value.
+///
+/// Oracle: LEF/DEF 5.8 pp. 140-142 ("the ANTENNAMODEL statement does not
+/// affect ANTENNAPARTIAL*AREA and ANTENNADIFFAREA"; "if an ANTENNA
+/// statement occurs twice for the same oxide model, the last value
+/// specified is used"; ANTENNAMAX*CAR takes `LAYER layerName`), the
+/// values copied from the statements.
+#[test]
+fn a_pins_antenna_statements_read_as_the_reference_states_them() {
+    let pin = "MACRO g\n  SIZE 1 BY 1 ;\n  PIN IN1\n\
+               ANTENNADIFFAREA 1.0 ;\n\
+               ANTENNAMODEL OXIDE1 ;\n\
+               ANTENNAGATEAREA 1.0 ;\n\
+               ANTENNAMAXAREACAR 50.0 LAYER m1 ;\n\
+               ANTENNAMAXAREACAR 60.0 LAYER m1 ;\n\
+               ANTENNAPARTIALMETALAREA 10.0 LAYER METAL3 ;\n\
+               ANTENNAMODEL OXIDE2 ;\n\
+               ANTENNAGATEAREA 3.0 ;\n\
+               ANTENNAMAXCUTCAR 5.0 LAYER VIA34 ;\n\
+               ANTENNAPARTIALCUTAREA 0.1 LAYER VIA34 ;\n\
+               PORT\n LAYER M1 ;\n RECT 0 0 1 1 ;\n END\n  END IN1\nEND g\n";
+    let mut lef = Lef::default();
+    read_lef_into(pin, 1000, &mut lef).expect("it reads");
+    let got: Vec<(AntennaKind, f64, Option<&str>)> = lef.macros[0].pins[0]
+        .antenna
+        .iter()
+        .map(|a| (a.kind, a.value, a.layer.as_deref()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (AntennaKind::Diff, 1.0, None),
+            (AntennaKind::Gate, 1.0, None),
+            (AntennaKind::MaxAreaCar, 60.0, Some("m1")),
+            (AntennaKind::PartialMetal, 10.0, Some("METAL3")),
+            (AntennaKind::PartialCut, 0.1, Some("VIA34")),
+        ]
+    );
+    let refused = read_lef_into(
+        &pin.replace("50.0 LAYER m1", "50.0"),
+        1000,
+        &mut Lef::default(),
+    )
+    .expect_err("a CAR names its layer");
+    assert!(refused.message.contains("LAYER"), "{refused}");
 }

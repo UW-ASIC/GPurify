@@ -126,8 +126,8 @@
 //!
 //! | Deck | Kind | Checked by | Flags | Catalog |
 //! |---|---|---|---|---|
-//! | `antenna(gate, collectors..; max_ratio, sidewall, diode)` | `antenna` | [`erc::RuleSet::antenna`] | collector area above `max_ratio` times the gate area, a gate on a `diode` net skipped | ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A9, ERC-A11, ERC-A12, ERC-A13 |
-//! | `antenna_electrical(gate, collectors..; ..)` | `antenna_electrical` | [`erc::RuleSet::antenna_electrical`] | the cumulative ratio, with diode credit | ERC-A4, ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A9, ERC-A12, ERC-A13 |
+//! | `antenna(gate, collectors..; max_ratio, sidewall, diode)` | `antenna` | [`erc::RuleSet::antenna`] | collector area above `max_ratio` times the gate area, a gate on a `diode` net skipped | ERC-A1, ERC-A2, ERC-A3, ERC-A4, ERC-A8, ERC-A9, ERC-A11, ERC-A12, ERC-A13, ERC-A14 |
+//! | `antenna_electrical(gate, collectors..; ..)` | `antenna_electrical` | [`erc::RuleSet::antenna_electrical`] | the cumulative ratio, with diode credit | ERC-A4, ERC-A5, ERC-A6, ERC-A7, ERC-A8, ERC-A9, ERC-A12, ERC-A13, ERC-A14 |
 //! | `conditional_tie(region, tap, well, other; within, spacing, max_distance)` | `conditional_tie` | [`erc::RuleSet::conditional_tie`] | a region too far from a tap for the band its neighbours' well spacing puts it in | ERC-D1a |
 //! | `density_cmp(L; window, step, ..)` | `density_cmp` | [`erc::RuleSet::density_cmp`] | metal density, or CMP thickness, out of range | DRC-071, DRC-113, ERC-B1 |
 //! | `electromigration(layers..; ..)` | `electromigration` | [`erc::RuleSet::electromigration`] | a wire or cut above its rated current at temperature | ERC-E4, ERC-E5, ERC-E6 |

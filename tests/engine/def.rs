@@ -2,7 +2,7 @@
 //! deck's layers, checked and extracted like a GDS.
 
 use gpurify::engine::pipeline::{load, Inputs, LoadError};
-use gpurify::engine::run::{run, Checks, RunOptions};
+use gpurify::engine::run::{run, Checks, RunOptions, StageStatus};
 use gpurify_extract::Parasitic;
 use std::path::PathBuf;
 
@@ -595,4 +595,208 @@ fn two_taps_on_a_floating_backside_are_one_resistor_between_their_nets() {
     assert!(ohms > 0.0);
     assert!(spef.contains("// substrate a:0 b:0 "), "{spef}");
     assert!(dspf.contains("R1 a:0 b:0 "), "{dspf}");
+}
+
+/// LEF/DEF 5.8 Appendix C's Figure C-20 at the top level, its two gates
+/// behind macro pins: cell A's pin `A` (G1) and cell B's pin `B` (G2 with
+/// its diode D1), each as the manual's Example 1 writes them, and
+/// `extra` added to pin `A`.
+fn c20_lef(extra: &str) -> String {
+    format!(
+        "VERSION 5.8 ;\nUNITS DATABASE MICRONS 1000 ; END UNITS\n\
+         LAYER met1 TYPE ROUTING ; WIDTH 0.2 ; END met1\n\
+         LAYER via1 TYPE CUT ; END via1\n\
+         LAYER met2 TYPE ROUTING ; WIDTH 0.2 ; END met2\n\
+         LAYER via2 TYPE CUT ; END via2\n\
+         LAYER met3 TYPE ROUTING ; WIDTH 0.2 ; END met3\n\
+         MACRO CELLA\n  CLASS CORE ;\n  ORIGIN 0 0 ;\n  SIZE 1 BY 1 ;\n  PIN A\n    DIRECTION INPUT ;\n\
+         \x20   ANTENNAGATEAREA 1.0 LAYER met1 ;\n    ANTENNAMAXAREACAR 1.0 LAYER met1 ;\n{extra}\
+         \x20   PORT\n      LAYER met1 ;\n        RECT 0 0 0.2 0.2 ;\n    END\n  END A\nEND CELLA\n\
+         MACRO CELLB\n  CLASS CORE ;\n  ORIGIN 0 0 ;\n  SIZE 1 BY 1 ;\n  PIN B\n    DIRECTION INPUT ;\n\
+         \x20   ANTENNAGATEAREA 2.0 LAYER met1 ;\n    ANTENNADIFFAREA 0.5 LAYER met1 ;\n\
+         \x20   ANTENNAMAXAREACAR 1.0 LAYER met1 ;\n\
+         \x20   PORT\n      LAYER met1 ;\n        RECT 0 0 0.2 0.2 ;\n    END\n  END B\nEND CELLB\n\
+         END LIBRARY\n"
+    )
+}
+
+/// Figure C-20's metal and cuts (`erc.rs`'s `lef_c20`, 4 µm to the right):
+/// M1,1 = 1, M1,2 = 2, M1,3 = 3, M2,1 = 4, M2,2 = 5, M3,1 = 6, M3,2 = 9
+/// µm², every cut 0.1 µm²; pin A inside M1,2 and pin B inside M1,3, so
+/// they add no area.
+const C20_DEF: &str = "VERSION 5.8 ;\nDESIGN top ;\nUNITS DISTANCE MICRONS 1000 ;\n\
+    DIEAREA ( 0 0 ) ( 20000 20000 ) ;\n\
+    COMPONENTS 2 ;\n- a CELLA + PLACED ( 5500 1400 ) N ;\n- b CELLB + PLACED ( 10000 1500 ) N ;\n\
+    END COMPONENTS\n\
+    SPECIALNETS 1 ;\n- n ( a A ) ( b B )\n\
+    + RECT met1 ( 4000 1250 ) ( 8000 1750 ) + RECT met1 ( 1000 1250 ) ( 2000 2250 )\n\
+    + RECT met1 ( 9000 1250 ) ( 12000 2250 )\n\
+    + RECT via1 ( 4750 1400 ) ( 5150 1650 ) + RECT via1 ( 7000 1400 ) ( 7400 1650 )\n\
+    + RECT via1 ( 1300 1600 ) ( 1700 1850 ) + RECT via1 ( 9200 1900 ) ( 9600 2150 )\n\
+    + RECT met2 ( 1200 1400 ) ( 5200 2400 ) + RECT met2 ( 6900 1300 ) ( 11900 2300 )\n\
+    + RECT via2 ( 2000 1900 ) ( 2400 2150 ) + RECT via2 ( 8000 1900 ) ( 8400 2150 )\n\
+    + RECT met3 ( 1000 1400 ) ( 4000 3400 ) + RECT met3 ( 7000 1300 ) ( 10000 4300 ) ;\n\
+    END SPECIALNETS\nEND DESIGN\n";
+
+/// One `antenna_electrical` row over `collectors`, flagging every ratio
+/// above a millionth.
+fn electrical(id: &str, collectors: &str, diode: &str, minus: f64) -> String {
+    format!(
+        "rule {id} antenna_electrical(gate, {collectors}; max_ratio: 1e-6, sidewall: none, \
+         cut_factor: 10, diode: {diode}, diode_credit: 0, diode_bonus: 0, \
+         area_minus_diode: {minus}, gate_plus_diode: 0, diode_reduce: none, \
+         diode_max_ratio: none, exempt: none)\n"
+    )
+}
+
+/// One antenna finding: its rule, its ratio, and where it is.
+type Finding = (String, f64, (i64, i64));
+
+/// ERC on [`C20_DEF`] with the [`c20_lef`] of `extra`: its findings, and
+/// the stage's status.
+fn c20_findings(tag: &str, extra: &str) -> (Vec<Finding>, StageStatus) {
+    let all = "met1, via1, met2, via2, met3";
+    let deck = format!(
+        "grid 1nm\nlayer met1 = gds(1, 0)\nlayer via1 = gds(2, 0)\nlayer met2 = gds(3, 0)\n\
+         layer via2 = gds(4, 0)\nlayer met3 = gds(5, 0)\nlayer gate = gds(6, 0)\n\
+         layer dio = gds(7, 0)\n\
+         connect conductors [met1, met2, met3]\nconnect touch_within_layer\n\
+         connect via via1 [met1, met2]\nconnect via via2 [met2, met3]\n\
+         connect label met1 names met1\nconnect label met2 names met2\n\
+         connect label met3 names met3\n\
+         {}{}{}\
+         rule par1 antenna(gate, met1; max_ratio: 1e-6, sidewall: none, diode: none)\n\
+         rule par2 antenna(gate, met2; max_ratio: 1e-6, sidewall: none, diode: none)\n",
+        electrical("ex1", all, "none", 0.0),
+        electrical("ex2", all, "dio", 100.0),
+        electrical("ex2v1", "met1, via1", "dio", 100.0),
+    );
+    let mut inputs = inputs(tag, C20_DEF);
+    std::fs::write(&inputs.deck, deck).expect("writable");
+    inputs.lef = vec![{
+        let path = inputs.lef[0].with_file_name("c20.lef");
+        std::fs::write(&path, c20_lef(extra)).expect("writable");
+        path
+    }];
+    let options = RunOptions {
+        checks: Checks {
+            drc: false,
+            erc: true,
+            lvs: false,
+            pex: false,
+        },
+        lvs: gpurify_check::lvs::CompareOptions::default(),
+        quasistatic_nets: Vec::new(),
+    };
+    let (loaded, _, outputs, summary) = run(&inputs, &options).expect("the DEF runs");
+    let v = &outputs.violations;
+    let found = (0..v.len())
+        .map(|k| {
+            let gpurify_check::report::Measurement::Ratio(r) = v.measured[k] else {
+                panic!("an antenna ratio")
+            };
+            (
+                loaded.strings.resolve(v.rule[k]).to_owned(),
+                r,
+                (v.at[k].x.raw(), v.at[k].y.raw()),
+            )
+        })
+        .collect();
+    (found, summary.erc)
+}
+
+/// The ratio `rule` reports at `at`, if any.
+fn ratio_at(found: &[Finding], rule: &str, at: (i64, i64)) -> Option<f64> {
+    found
+        .iter()
+        .find(|(r, _, p)| r == rule && *p == at)
+        .map(|f| f.1)
+}
+
+/// Pin A (G1) and pin B (G2) report at their pins' centres.
+const PIN_A: (i64, i64) = (5600, 1500);
+const PIN_B: (i64, i64) = (10100, 1600);
+
+/// LEF/DEF 5.8 Appendix C's Example 1 and Example 2, the gates behind
+/// macro pins (ERC-A14): a top-level net's ratio counts each pin's
+/// `ANTENNAGATEAREA`, `ANTENNADIFFAREA` and `ANTENNAMAXAREACAR`.
+///
+/// Oracle: the manual's steps, hand-derived (Example 1, cut factor 10):
+/// G1's CAR is PIN A's CAR 1.0 plus PAR(M1) 2/1, PAR(V1) 10 · 0.2 / 1,
+/// PAR(M2) 9/3, PAR(V2) 10 · 0.2/3 and PAR(M3) 15/3: 13⅔ (the manual's
+/// steps 3-15; its "12.34" in step 15 is a slip for 5 + 8.67, its "13.67"
+/// in step 16). G2's is PIN B's 1.0 plus 3/2, 10 · 0.1/2, 3, ⅔ and 5:
+/// 11⅔. A single-layer row is a PAR, no pin CAR in it: 2.0 and 1.5 at
+/// met1, 3.0 at met2. Example 2 subtracts 100 × diff: G1's CAR is still
+/// 5.0 through via1, every later sum truncates to 0, and G2, whose pin
+/// carries D1's 0.5 µm² from met1 up, is 0 from met1 on.
+#[test]
+fn macro_pin_antenna_data_follows_lef_appendix_c_examples_1_and_2() {
+    let (found, erc) = c20_findings("a14-c20", "");
+    assert_eq!(erc, StageStatus::Ran);
+    let close = |got: Option<f64>, want: f64| got.is_some_and(|g| (g - want).abs() < 1e-9 * want);
+    assert!(
+        close(ratio_at(&found, "ex1", PIN_A), 13.0 + 2.0 / 3.0),
+        "{found:?}"
+    );
+    assert!(
+        close(ratio_at(&found, "ex1", PIN_B), 11.0 + 2.0 / 3.0),
+        "{found:?}"
+    );
+    assert!(close(ratio_at(&found, "par1", PIN_A), 2.0), "{found:?}");
+    assert!(close(ratio_at(&found, "par1", PIN_B), 1.5), "{found:?}");
+    assert!(close(ratio_at(&found, "par2", PIN_A), 3.0), "{found:?}");
+    assert!(close(ratio_at(&found, "ex2v1", PIN_A), 5.0), "{found:?}");
+    // Truncated to 0: nothing above the limit, and G1 and G2 once each.
+    assert!(found.iter().all(|f| f.0 != "ex2"), "{found:?}");
+    assert_eq!(found.iter().filter(|f| f.0 == "ex2v1").count(), 1);
+    assert_eq!(found.len(), 6, "{found:?}");
+}
+
+/// A pin's partial metal area adds to its layer's collecting area, and a
+/// gate area stated per layer is the one joined through that layer.
+///
+/// Oracle: LEF/DEF 5.8 p. 142 ("Metal area is calculated by adding the
+/// pin's geometric metal area and the ANTENNAPARTIALMETALAREA value") and
+/// p. 140 (`ANTENNAGATEAREA value LAYER`: the gate area connected to the
+/// pin on that layer), hand-derived: 1.0 µm² of partial met1 on pin A
+/// makes its met1 PAR (2 + 1)/1 = 3.0; a gate area of 3.0 on met2 makes
+/// the met2 PAR 9/(3 + 2) = 1.8 for both gates, met1's still 2.0.
+#[test]
+fn a_pins_partial_area_and_per_layer_gate_area_count() {
+    let (found, _) = c20_findings(
+        "a14-partial",
+        "    ANTENNAPARTIALMETALAREA 1.0 LAYER met1 ;\n",
+    );
+    assert!(
+        ratio_at(&found, "par1", PIN_A).is_some_and(|r| (r - 3.0).abs() < 1e-9),
+        "{found:?}"
+    );
+    let (found, _) = c20_findings("a14-layered", "    ANTENNAGATEAREA 3.0 LAYER met2 ;\n");
+    assert!(
+        ratio_at(&found, "par1", PIN_A).is_some_and(|r| (r - 2.0).abs() < 1e-9),
+        "{found:?}"
+    );
+    assert!(
+        ratio_at(&found, "par2", PIN_A).is_some_and(|r| (r - 1.8).abs() < 1e-9),
+        "{found:?}"
+    );
+}
+
+/// A pin's antenna statement on a layer the deck lacks refuses ERC, naming
+/// the macro, the pin and the layer, rather than dropping the value.
+///
+/// Oracle: `run_erc`'s refusal (a value no row can place is unknown, not
+/// zero).
+#[test]
+fn a_pin_antenna_value_on_a_layer_the_deck_lacks_refuses_erc() {
+    let (found, erc) = c20_findings("a14-nolayer", "    ANTENNAMAXCUTCAR 1.0 LAYER cont ;\n");
+    assert!(found.is_empty());
+    let StageStatus::Refused(why) = erc else {
+        panic!("{erc:?}")
+    };
+    assert!(
+        why.contains("CELLA") && why.contains("pin A") && why.contains("cont"),
+        "{why}"
+    );
 }

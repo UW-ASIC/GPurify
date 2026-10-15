@@ -13,7 +13,7 @@
 //!
 //! | File | Read | Skipped (no geometry, no connectivity) |
 //! |---|---|---|
-//! | LEF | `UNITS DATABASE MICRONS`, `MANUFACTURINGGRID`, `LAYER` (`TYPE`, `WIDTH`, `DIRECTION`, `PITCH`), `VIA` (fixed and `VIARULE`-generated), `SITE` (`SIZE`), `NONDEFAULTRULE` (`LAYER … WIDTH`), `MACRO` (`CLASS`, `ORIGIN`, `SIZE`, `PIN … PORT`, `OBS`: `LAYER`, `RECT`, `POLYGON`, `VIA`) | every other statement: antenna, spacing, properties, `VIARULE`, `SPACING`, `PROPERTYDEFINITIONS` |
+//! | LEF | `UNITS DATABASE MICRONS`, `MANUFACTURINGGRID`, `LAYER` (`TYPE`, `WIDTH`, `DIRECTION`, `PITCH`), `VIA` (fixed and `VIARULE`-generated), `SITE` (`SIZE`), `NONDEFAULTRULE` (`LAYER … WIDTH`), `MACRO` (`CLASS`, `ORIGIN`, `SIZE`, `PIN … PORT`, `OBS`: `LAYER`, `RECT`, `POLYGON`, `VIA`; a pin's `ANTENNA*` statements, [`PinAntenna`]) | every other statement: layer antenna rules, spacing, properties, `VIARULE`, `SPACING`, `PROPERTYDEFINITIONS` |
 //! | DEF | `UNITS`, `DESIGN`, `DIEAREA`, `ROW`, `TRACKS`, `VIAS`, `NONDEFAULTRULES`, `COMPONENTS`, `PINS`, `NETS` and `SPECIALNETS` (connections, `ROUTED`/`FIXED`/`COVER`/`NOSHIELD` wiring, `RECT`, `POLYGON`, `VIA`, `NONDEFAULTRULE`), `FILLS` | `PROPERTYDEFINITIONS`, `REGIONS`, `GROUPS`, `SCANCHAINS`, `BLOCKAGES`, `GCELLGRID`, `HISTORY`, `BEGINEXT`, `PINPROPERTIES`, `SLOTS`, `STYLES`; per item: `SOURCE`, `WEIGHT`, `HALO`, `PROPERTY`, antenna data, `USE`, `DIRECTION` |
 //!
 //! Refused, with the line: a LEF `PATH` or `ITERATE` geometry, a wire
@@ -56,7 +56,7 @@ mod lex;
 
 pub use def::{def_units, read_def, Component, Def, DefPin, Net, Row, Track, ViaAt, Wire};
 pub use gds_out::to_gds;
-pub use lef::{read_lef_into, LayerKind, Lef, LefLayer, Macro, MacroPin};
+pub use lef::{read_lef_into, AntennaKind, LayerKind, Lef, LefLayer, Macro, MacroPin, PinAntenna};
 
 /// Why a LEF or DEF file could not be read, or its design not flattened.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -74,7 +74,7 @@ pub struct LefDefError {
 pub type Pt = (i64, i64);
 
 /// A DEF and the LEF library it was read against.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Design {
     /// The design.
     pub def: Def,
@@ -187,8 +187,9 @@ pub enum Origin {
     Route,
     /// A DEF pin's port, outside every component.
     Pin,
-    /// A component's macro pin, by component index.
-    MacroPin(u32),
+    /// A component's macro pin: the component's index, and the pin's in
+    /// its macro.
+    MacroPin(u32, u32),
     /// A component's macro obstruction, by component index.
     Obstruction(u32),
     /// A `FILLS` shape.
@@ -414,7 +415,7 @@ pub fn flatten(def: &Def, lef: &Lef) -> Result<Vec<FlatShape>, LefDefError> {
             let shifted = shape.moved(Orient::N, model.origin);
             shifted.moved(orient, shift)
         };
-        for pin in &model.pins {
+        for (pin_index, pin) in (0u32..).zip(&model.pins) {
             let net = pin_net
                 .get(&(comp.name.as_str(), pin.name.as_str()))
                 .or_else(|| every_net.get(pin.name.as_str()))
@@ -423,7 +424,7 @@ pub fn flatten(def: &Def, lef: &Lef) -> Result<Vec<FlatShape>, LefDefError> {
                 out.push(FlatShape {
                     shape: place(shape),
                     net: net.clone(),
-                    origin: Origin::MacroPin(index),
+                    origin: Origin::MacroPin(index, pin_index),
                 });
             }
             for (name, p) in &pin.vias {
@@ -431,7 +432,7 @@ pub fn flatten(def: &Def, lef: &Lef) -> Result<Vec<FlatShape>, LefDefError> {
                     out.push(FlatShape {
                         shape: place(&shape.moved(Orient::N, *p)),
                         net: net.clone(),
-                        origin: Origin::MacroPin(index),
+                        origin: Origin::MacroPin(index, pin_index),
                     });
                 }
             }

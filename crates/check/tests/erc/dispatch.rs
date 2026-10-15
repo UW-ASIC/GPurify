@@ -560,6 +560,7 @@ impl Cell {
                 connectivity: &self.connectivity,
             },
             operating_temperature: operating_temperature(),
+            antenna_pins: &[],
         }
     }
 }

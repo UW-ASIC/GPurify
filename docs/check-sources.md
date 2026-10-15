@@ -64,7 +64,7 @@ feature tag (`deck:`, `drc:`, `erc:`, `lvs:`, `pex:`, `ingest:`, `lib:`).
 |---|---:|---:|---:|---:|---:|---:|
 | DRC | 56 | 6 | 42 | 2 | 0 | 0 |
 | LVS | 31 | 1 | 12 | 4 | 0 | 0 |
-| ERC | 63 | 4 | 10 | 4 | 0 | 0 |
+| ERC | 63 | 4 | 11 | 3 | 0 | 0 |
 | PEX | 9 | 0 | 7 | 0 | 0 | 0 |
 | Flow | 2 | 0 | 5 | 3 | 0 | 0 |
 
@@ -285,8 +285,10 @@ All are `missing` or `partial` in the catalog.
 6. **Shape-class and count selection**: rectangles and squares, exact or
    maximum count, aspect ratio, channel W/L (DRC-005, 011, 022, 049). sky130,
    gf180 and IHP each leave rules out of the shipped decks for lack of these.
-7. **Antenna hierarchy**: LEF's macro-pin antenna values (ERC-A14) need a
-   LEF reader and abstract cells. The credit models (sky130's EGAR per µm²,
+7. **Antenna hierarchy**: LEF's macro-pin antenna values (ERC-A14) are read
+   with a DEF's LEFs, the default oxide model's; DEF's top-down
+   `ANTENNAPIN*` budgets and the other oxide models are left. The credit
+   models (sky130's EGAR per µm²,
    gf180's additive model, LEF's PWL and minus/plus factors, IHP's minimum
    diode, ERC-A5–A7, A9) are in `antenna_electrical`.
 8. **LVS equivalence controls**: black boxes, ignore class, shorted dummies,

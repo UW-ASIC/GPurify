@@ -211,6 +211,9 @@ pub struct RunInputs<'a> {
     /// The applied sign-off temperature, absolute; distinct from each row's
     /// characterisation temperature.
     pub operating_temperature: Qty<Temperature, { prefix::BASE }>,
+    /// The placed macro pins' LEF antenna data, for the antenna rows; empty
+    /// for a GDS layout.
+    pub antenna_pins: &'a [antenna::MacroPinAntenna],
 }
 
 /// The dielectric between two layers of the `pex` stack, nm: the upper
@@ -1908,6 +1911,7 @@ impl RuleSet {
             die,
             process,
             operating_temperature,
+            antenna_pins,
         } = inputs;
         let grid = process.grid;
 
@@ -1953,9 +1957,10 @@ impl RuleSet {
         );
         supply::check_mixed_tag(design, &self.mixed_tag, out, runs);
 
-        antenna::check_antenna(design, &self.antenna, scratch, out, runs);
+        antenna::check_antenna(design, antenna_pins, &self.antenna, scratch, out, runs);
         antenna::check_antenna_electrical(
             design,
+            antenna_pins,
             grid,
             &self.antenna_electrical,
             scratch,
